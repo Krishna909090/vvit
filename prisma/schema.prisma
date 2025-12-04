@@ -1,0 +1,892 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  AGENT
+  STUDENT
+  INVIGILATOR
+  STAFF
+}
+
+
+enum AdmissionStatus {
+  REGISTERED 
+  TEST_FEE_PAID 
+  HALL_TICKET_GENERATED 
+  EXAM_ATTENDED 
+  DOCUMENTS_UPLOADED 
+  SEAT_ALLOTTED 
+  ADMISSION_CONFIRMED 
+  CANCELLED 
+}
+
+enum FeeStatus {
+  PENDING
+  PARTIAL
+  FULL
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum PaymentComponent {
+  APPLICATION_FEE
+  TUITION
+  HOSTEL
+  TRANSPORT
+  OTHER
+}
+
+enum AccommodationType {
+  HOSTEL
+  TRANSPORT
+  NONE
+}
+
+enum HostelType {
+  SHARING_4
+  SHARING_8
+}
+
+enum DiscountStatus {
+  REQUESTED
+  FORWARDED_TO_SUPER_ADMIN
+  APPROVED
+  REJECTED
+}
+
+enum CancellationStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+}
+
+enum FileKind {
+  PROFILE
+  AADHAR
+  MARKSHEET
+  TC
+  CASTE
+  HALL_TICKET
+  OTHER
+}
+
+enum RequestStatus {
+  REQUESTED
+  FORWARDED
+  APPROVED
+  REJECTED
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  DETAINED
+  ALUMNI
+  SUSPENDED
+  DROPPED_OUT
+}
+
+enum StudentDocumentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum HostelAllocationStatus {
+  ACTIVE
+  VACATED
+}
+
+enum TransportAllocationStatus {
+  ACTIVE
+  CANCELLED
+}
+
+enum AgentCommissionStatus {
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+}
+
+enum OfflineUploadBatchStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+
+
+model User {
+  id        String    @id @default(uuid())
+  name      String?
+  email     String?   @unique
+  phone     String    @unique
+  role      Role      @default(STUDENT)
+  otp       String?
+  otpExpiry DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  updatedBy String?
+
+  
+  agentStudents     Student[]          @relation("AgentStudents")
+  agentCommissions  AgentCommission[]
+  adminActivityLogs AdminActivityLog[]
+  notifications     Notification[]
+}
+
+
+
+model Department {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  code      String    @unique 
+  programs  Program[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+model Program {
+  id            String         @id @default(uuid())
+  name          String 
+  departmentId  String
+  department    Department     @relation(fields: [departmentId], references: [id])
+  batches       Batch[]
+  feeStructures FeeStructure[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  createdBy     String?
+  updatedBy     String?
+
+  @@unique([name, departmentId])
+}
+
+model Batch {
+  id        String    @id @default(uuid())
+  name      String 
+  programId String
+  program   Program   @relation(fields: [programId], references: [id])
+  sections  Section[]
+  startDate DateTime
+  endDate   DateTime
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+model Section {
+  id        String              @id @default(uuid())
+  name      String 
+  batchId   String
+  batch     Batch               @relation(fields: [batchId], references: [id])
+  students  StudentEnrollment[]
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+
+model AcademicYear {
+  id        String   @id @default(uuid())
+  code      String   @unique 
+  startDate DateTime
+  endDate   DateTime
+  isActive  Boolean  @default(true)
+
+  enrollments   StudentEnrollment[]
+  feeStructures FeeStructure[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+
+model StudentEnrollment {
+  id              String           @id @default(uuid())
+  studentId       String           @unique
+  student         Student          @relation(fields: [studentId], references: [id])
+  sectionId       String
+  section         Section          @relation(fields: [sectionId], references: [id])
+  rollNumber      String           @unique
+  currentSemester Int              @default(1)
+  academicYearId  String
+  academicYear    AcademicYear     @relation(fields: [academicYearId], references: [id])
+  status          EnrollmentStatus @default(ACTIVE)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  createdBy       String?
+  updatedBy       String?
+
+  @@index([studentId])
+  @@index([rollNumber])
+}
+
+
+
+model Student {
+  id            String @id @default(uuid())
+  applicationId String @unique 
+
+  
+  name            String
+  fatherName      String
+  motherName      String
+  gender          String
+  dob             DateTime
+  phone           String
+  email           String   @unique
+  aadharNumber    String
+  category        String
+  country         String
+  address         String
+  address2        String?
+  city            String
+  state           String
+  pincode         String
+  profilePhotoUrl String 
+
+  isOffline Boolean @default(false)
+
+  
+  courseType String? 
+
+  
+  pref1 String?
+  pref2 String?
+  pref3 String?
+
+  
+  agentId String?
+  agent   User?   @relation("AgentStudents", fields: [agentId], references: [id])
+
+  examDetails      StudentExam?
+  admissionDetails StudentAdmission?
+  documents        StudentDocument[]
+
+  academicQualifications AcademicQualification[]
+  branchChangeLogs       BranchChangeLog[]
+  discountRequests       DiscountRequest[]
+  cancellationRequests   CancellationRequest[]
+  branchChangeRequests   BranchChangeRequest[]
+  agentCommissions       AgentCommission[]
+  seatAllocations        SeatAllocation[]
+  hallTickets            HallTicket[]
+  attendanceRecords      AttendanceRecord[]
+  payments               Payment[]
+  fileUploads            FileUpload[]
+
+  
+  enrollment          StudentEnrollment?
+  hostelAllocation    HostelAllocation?
+  transportAllocation TransportAllocation?
+  feeDemands          StudentFeeDemand[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+
+
+model StudentExam {
+  id        String  @id @default(uuid())
+  studentId String  @unique
+  student   Student @relation(fields: [studentId], references: [id])
+
+  hallTicketUrl String?
+  testDate      DateTime?
+  testCenter    String?
+  examAttended  Boolean   @default(false)
+  examScore     Float?
+  isQualified   Boolean?  @default(false)
+
+  examSlotId String?
+  examSlot   ExamSlot? @relation(fields: [examSlotId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([studentId])
+}
+
+model StudentAdmission {
+  id        String  @id @default(uuid())
+  studentId String  @unique
+  student   Student @relation(fields: [studentId], references: [id])
+
+  status AdmissionStatus @default(REGISTERED)
+
+  
+  allottedBranch String?
+
+  
+  totalFee  Float     @default(0)
+  paidFee   Float     @default(0)
+  feeStatus FeeStatus @default(PENDING)
+
+  
+  accommodationType AccommodationType @default(NONE)
+  hostelType        HostelType?
+  hostelId          String?
+  hostel            Hostel?           @relation(fields: [hostelId], references: [id])
+  transportRouteId  String?
+  transportRoute    TransportRoute?   @relation(fields: [transportRouteId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([studentId])
+  @@index([status])
+}
+
+model StudentDocument {
+  id        String  @id @default(uuid())
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id])
+
+  documentKey String 
+  url         String
+  status      StudentDocumentStatus @default(PENDING)
+  remarks     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, documentKey])
+  @@index([studentId])
+}
+
+model Branch {
+  id          String   @id @default(uuid())
+  code        String   @unique 
+  name        String
+  totalSeats  Int
+  filledSeats Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String?
+  updatedBy   String?
+}
+
+
+
+model Hostel {
+  id       String     @id @default(uuid())
+  name     String
+  type     HostelType
+  capacity Int
+  filled   Int        @default(0)
+  cost     Float
+
+  
+  blockName  String?
+  roomNumber String?
+
+  studentAdmissions StudentAdmission[] 
+  blocks            HostelBlock[] 
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+model HostelBlock {
+  id        String       @id @default(uuid())
+  hostelId  String
+  hostel    Hostel       @relation(fields: [hostelId], references: [id])
+  name      String 
+  type      String 
+  rooms     HostelRoom[]
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+model HostelRoom {
+  id        String      @id @default(uuid())
+  blockId   String
+  block     HostelBlock @relation(fields: [blockId], references: [id])
+  number    String
+  capacity  Int
+  type      String 
+  beds      HostelBed[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+model HostelBed {
+  id         String            @id @default(uuid())
+  roomId     String
+  room       HostelRoom        @relation(fields: [roomId], references: [id])
+  number     String
+  isOccupied Boolean           @default(false)
+  allocation HostelAllocation?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  createdBy  String?
+  updatedBy  String?
+}
+
+model HostelAllocation {
+  id        String                 @id @default(uuid())
+  studentId String                 @unique
+  student   Student                @relation(fields: [studentId], references: [id])
+  bedId     String                 @unique
+  bed       HostelBed              @relation(fields: [bedId], references: [id])
+  startDate DateTime
+  endDate   DateTime?
+  status    HostelAllocationStatus @default(ACTIVE)
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+  createdBy String?
+  updatedBy String?
+
+  @@index([studentId])
+}
+
+
+
+model Vehicle {
+  id          String           @id @default(uuid())
+  number      String           @unique
+  capacity    Int
+  driverName  String
+  driverPhone String
+  routes      TransportRoute[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  createdBy   String?
+  updatedBy   String?
+}
+
+model TransportRoute {
+  id   String @id @default(uuid())
+  name String 
+  cost Float
+
+  
+  busNumber String?
+  capacity  Int     @default(0)
+  filled    Int     @default(0)
+
+  
+  vehicleId   String?
+  vehicle     Vehicle?              @relation(fields: [vehicleId], references: [id])
+  stops       TransportStop[]
+  allocations TransportAllocation[]
+
+  studentAdmissions StudentAdmission[] 
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+model TransportStop {
+  id          String                @id @default(uuid())
+  routeId     String
+  route       TransportRoute        @relation(fields: [routeId], references: [id])
+  name        String
+  sequence    Int
+  pickupTime  DateTime
+  dropTime    DateTime
+  allocations TransportAllocation[]
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  createdBy   String?
+  updatedBy   String?
+}
+
+model TransportAllocation {
+  id        String                    @id @default(uuid())
+  studentId String                    @unique
+  student   Student                   @relation(fields: [studentId], references: [id])
+  routeId   String
+  route     TransportRoute            @relation(fields: [routeId], references: [id])
+  stopId    String
+  stop      TransportStop             @relation(fields: [stopId], references: [id])
+  startDate DateTime
+  endDate   DateTime?
+  status    TransportAllocationStatus @default(ACTIVE)
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+  createdBy String?
+  updatedBy String?
+
+  @@index([studentId])
+}
+
+
+
+model FeeHead {
+  id          String         @id @default(uuid())
+  name        String 
+  description String?
+  structures  FeeStructure[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  createdBy   String?
+  updatedBy   String?
+}
+
+model FeeStructure {
+  id             String             @id @default(uuid())
+  programId      String
+  program        Program            @relation(fields: [programId], references: [id])
+  feeHeadId      String
+  feeHead        FeeHead            @relation(fields: [feeHeadId], references: [id])
+  amount         Float
+  currency       String             @default("INR")
+  academicYearId String
+  academicYear   AcademicYear       @relation(fields: [academicYearId], references: [id])
+  demands        StudentFeeDemand[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  createdBy      String?
+  updatedBy      String?
+
+  @@index([programId, academicYearId])
+}
+
+model StudentFeeDemand {
+  id             String       @id @default(uuid())
+  studentId      String
+  student        Student      @relation(fields: [studentId], references: [id])
+  feeStructureId String
+  feeStructure   FeeStructure @relation(fields: [feeStructureId], references: [id])
+  amount         Float
+  dueDate        DateTime
+  status         FeeStatus 
+  payments       Payment[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  createdBy      String?
+  updatedBy      String?
+
+  @@index([studentId, status])
+}
+
+model Payment {
+  id         String           @id @default(uuid())
+  studentId  String
+  student    Student          @relation(fields: [studentId], references: [id])
+  amount     Float
+  currency   String           @default("INR")
+  status     PaymentStatus    @default(PENDING)
+  method     String?
+  providerTx String?
+  component  PaymentComponent
+  metadata   Json?
+
+  
+  feeDemandId String?
+  feeDemand   StudentFeeDemand? @relation(fields: [feeDemandId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+
+  @@index([studentId, status])
+}
+
+
+
+model AcademicQualification {
+  id               String  @id @default(uuid())
+  studentId        String
+  student          Student @relation(fields: [studentId], references: [id])
+  level            String 
+  board            String
+  yearOfPassing    String
+  hallTicketNumber String
+  gpaOrMarks       String 
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+
+  @@index([studentId])
+}
+
+model BranchChangeLog {
+  id         String   @id @default(uuid())
+  studentId  String
+  student    Student  @relation(fields: [studentId], references: [id])
+  oldBranch  String
+  newBranch  String
+  approvedBy String 
+  date       DateTime @default(now())
+  createdBy  String?
+  updatedBy  String?
+
+  @@index([studentId])
+}
+
+model DiscountRequest {
+  id          String         @id @default(uuid())
+  studentId   String
+  student     Student        @relation(fields: [studentId], references: [id])
+  reason      String
+  documentUrl String?
+  status      DiscountStatus @default(REQUESTED)
+  remarks     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+
+  @@index([studentId, status])
+}
+
+model CancellationRequest {
+  id           String             @id @default(uuid())
+  studentId    String
+  student      Student            @relation(fields: [studentId], references: [id])
+  reason       String
+  refundAmount Float?
+  status       CancellationStatus @default(REQUESTED)
+  approvedBy   String? 
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+
+  @@index([studentId, status])
+}
+
+model FileUpload {
+  id         String   @id @default(uuid())
+  studentId  String?
+  student    Student? @relation(fields: [studentId], references: [id])
+  uploadedBy String? 
+  url        String
+  kind       FileKind
+  fileName   String?
+  mime       String?
+  size       Int?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  createdBy  String?
+  updatedBy  String?
+
+  @@index([studentId])
+}
+
+model ExamDate {
+  id                String             @id @default(uuid())
+  name              String?
+  date              DateTime
+  startTime         DateTime?
+  endTime           DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  attendanceRecords AttendanceRecord[]
+  createdBy         String?
+  updatedBy         String?
+}
+
+model ExamCenter {
+  id        String     @id @default(uuid())
+  name      String
+  address   String?
+  city      String?
+  capacity  Int?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  examSlots ExamSlot[]
+  createdBy String?
+  updatedBy String?
+}
+
+model ExamSlot {
+  id           String        @id @default(uuid())
+  examCenterId String
+  examCenter   ExamCenter    @relation(fields: [examCenterId], references: [id])
+  date         DateTime
+  startTime    DateTime
+  endTime      DateTime
+  capacity     Int
+  filled       Int           @default(0)
+  studentExams StudentExam[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  createdBy    String?
+  updatedBy    String?
+}
+
+model HallTicket {
+  id          String   @id @default(uuid())
+  studentId   String
+  student     Student  @relation(fields: [studentId], references: [id])
+  fileId      String? 
+  url         String?
+  qrHash      String?
+  generatedAt DateTime @default(now())
+  createdBy   String?
+  updatedBy   String?
+
+  @@index([studentId])
+}
+
+model InvigilatorCredential {
+  id         String   @id @default(uuid())
+  adminId    String 
+  token      String
+  validFrom  DateTime
+  validUntil DateTime
+  createdAt  DateTime @default(now())
+  createdBy  String?
+  updatedBy  String?
+}
+
+model AttendanceRecord {
+  id            String    @id @default(uuid())
+  studentId     String
+  student       Student   @relation(fields: [studentId], references: [id])
+  examDateId    String?
+  examDate      ExamDate? @relation(fields: [examDateId], references: [id])
+  invigilatorId String?
+  scannedAt     DateTime  @default(now())
+  createdBy     String?
+  updatedBy     String?
+
+  @@index([studentId])
+}
+
+model SeatAllocation {
+  id          String   @id @default(uuid())
+  studentId   String
+  student     Student  @relation(fields: [studentId], references: [id])
+  oldBranch   String?
+  newBranch   String?
+  allocatedBy String? 
+  allocatedAt DateTime @default(now())
+  notes       String?
+  createdBy   String?
+  updatedBy   String?
+
+  @@index([studentId])
+}
+
+model BranchChangeRequest {
+  id          String        @id @default(uuid())
+  studentId   String
+  student     Student       @relation(fields: [studentId], references: [id])
+  fromBranch  String
+  toBranch    String
+  reason      String
+  status      RequestStatus @default(REQUESTED)
+  forwardedTo String?
+  actionedBy  String?
+  actionedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  createdBy   String?
+  updatedBy   String?
+
+  @@index([studentId, status])
+}
+
+model AgentCommission {
+  id        String                @id @default(uuid())
+  agentId   String
+  agent     User                  @relation(fields: [agentId], references: [id])
+  studentId String
+  student   Student               @relation(fields: [studentId], references: [id])
+  amount    Float
+  component String
+  status    AgentCommissionStatus @default(PENDING)
+  createdAt DateTime              @default(now())
+  createdBy String?
+  updatedBy String?
+
+  @@index([agentId])
+  @@index([studentId, status])
+}
+
+model AdminActivityLog {
+  id           String   @id @default(uuid())
+  adminId      String
+  admin        User     @relation(fields: [adminId], references: [id])
+  action       String
+  resourceType String?
+  resourceId   String?
+  details      Json?
+  createdAt    DateTime @default(now())
+  createdBy    String?
+  updatedBy    String?
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  recipientId String
+  recipient   User     @relation(fields: [recipientId], references: [id])
+  type        String
+  title       String
+  body        String
+  link        String?
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  createdBy   String?
+  updatedBy   String?
+}
+
+model OfflineUploadBatch {
+  id            String                   @id @default(uuid())
+  agentId       String?
+  uploadedBy    String?
+  sourceFileUrl String?
+  status        OfflineUploadBatchStatus @default(PENDING)
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  createdBy     String?
+  updatedBy     String?
+}
+
+model DocumentRequirement {
+  id           String   @id @default(uuid())
+  courseType   String 
+  documentName String 
+  documentKey  String 
+  isRequired   Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdBy    String?
+  updatedBy    String?
+
+  @@unique([courseType, documentKey])
+}

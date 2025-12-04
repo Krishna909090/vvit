@@ -1,0 +1,57 @@
+# Node modules
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# PM2 runtime data
+pids/
+*.pid
+*.pid.lock
+.pm2/
+
+# Environment / Secrets
+.env
+.env.*
+.env.local
+.env.*.local
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.vscode/
+.idea/
+
+# TypeScript
+*.tsbuildinfo
+
+# Test / Coverage
+coverage/
+.nyc_output/
+jest-debug.log
+
+# Docker overrides
+docker-compose.override.yml
+
+# Cache / Temp
+.cache/
+.tmp/
+
+# Ignore all Markdown files
+*.md
+openapi.json
+openapi.yaml
+
+deploy.zip
+
+scripts/
