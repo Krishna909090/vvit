@@ -1,3 +1,6 @@
+// controllers/examController.ts
+// Express controllers for exam-related APIs, using services for business logic.
+
 import { Request, Response, NextFunction } from 'express';
 import * as examService from '../services/examService';
 import logger from '../utils/logger';
@@ -10,155 +13,373 @@ import { MESSAGES } from '../constants/messages';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 
-export const createExamDate = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[createExamDate] request by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[createExamDate] payload=${JSON.stringify(req.body)}`);
+/* -------------------------------------------------------------------------- */
+/*                               CONTROLLER APIS                              */
+/* -------------------------------------------------------------------------- */
 
-    const examDate = await examService.createExamDate(req.body);
-    logger.info(`[createExamDate] created id=${examDate.id}`);
-    sendResponse({
-        res,
-        statusCode: 201,
-        success: true,
-        message: MESSAGES.SUCCESS.EXAM_DATE_CREATED,
-        data: examDate
-    });
-});
+/**
+ * Controller: Create a new exam center.
+ * Route: POST /exam/centers
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const createExamCenter = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[createExamCenter] request by=${req.user?.userId || 'anonymous'}`);
+        logger.debug && logger.debug(`[createExamCenter] payload=${JSON.stringify(req.body)}`);
 
-export const createExamCenter = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[createExamCenter] request by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[createExamCenter] payload=${JSON.stringify(req.body)}`);
-
-    const examCenter = await examService.createExamCenter(req.body);
-    logger.info(`[createExamCenter] created id=${examCenter.id}`);
-    sendResponse({
-        res,
-        statusCode: 201,
-        success: true,
-        message: MESSAGES.SUCCESS.EXAM_CENTER_CREATED,
-        data: examCenter
-    });
-});
-
-export const generateInvigilatorCredentials = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const adminId = req.user?.userId;
-    if (!adminId) {
-        logger.warn('[generateInvigilatorCredentials] unauthorized access attempt');
-        throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
+        const examCenter = await examService.createExamCenter(req.body, req.user?.userId);
+        logger.info(`[createExamCenter] created id=${examCenter.id}`);
+        sendResponse({
+            res,
+            statusCode: 201,
+            success: true,
+            message: MESSAGES.SUCCESS.EXAM_CENTER_CREATED,
+            data: examCenter,
+        });
     }
+);
 
-    // Extra role check for safety (route should already guard)
-    if (req.user?.role !== 'ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
-        logger.warn(`[generateInvigilatorCredentials] forbidden user=${adminId} role=${req.user?.role}`);
-        throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+/**
+ * Controller: Generate invigilator credentials (tokens) for attendance.
+ * Route: POST /exam/invigilators/credentials
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const generateInvigilatorCredentials = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        const adminId = req.user?.userId;
+        if (!adminId) {
+            logger.warn('[generateInvigilatorCredentials] unauthorized access attempt');
+            throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
+        }
+
+        if (req.user?.role !== 'ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
+            logger.warn(
+                `[generateInvigilatorCredentials] forbidden user=${adminId} role=${req.user?.role}`
+            );
+            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
+
+        logger.info(`[generateInvigilatorCredentials] admin=${adminId}`);
+        logger.debug &&
+            logger.debug(
+                `[generateInvigilatorCredentials] payload=${JSON.stringify(req.body)}`
+            );
+
+        const result = await examService.generateInvigilatorCredentials(adminId, req.body);
+        logger.info('[generateInvigilatorCredentials] generated credentials');
+        sendResponse({
+            res,
+            statusCode: 201,
+            success: true,
+            message: MESSAGES.SUCCESS.INVIGILATOR_CREDENTIALS_GENERATED,
+            data: result,
+        });
     }
+);
 
-    logger.info(`[generateInvigilatorCredentials] admin=${adminId}`);
-    logger.debug && logger.debug(`[generateInvigilatorCredentials] payload=${JSON.stringify(req.body)}`);
+/**
+ * Controller: Invigilator login using token, returns JWT with role=INVIGILATOR.
+ * Route: POST /exam/invigilators/login
+ * Roles: PUBLIC (token-based)
+ */
+export const loginInvigilator = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info('[loginInvigilator] attempt');
+        logger.debug && logger.debug(`[loginInvigilator] payload=${JSON.stringify(req.body)}`);
 
-    const result = await examService.generateInvigilatorCredentials(adminId, req.body);
-    logger.info('[generateInvigilatorCredentials] generated credentials');
-    sendResponse({
-        res,
-        statusCode: 201,
-        success: true,
-        message: MESSAGES.SUCCESS.INVIGILATOR_CREDENTIALS_GENERATED,
-        data: result
-    });
-});
+        const { token } = req.body;
+        const credential = await examService.verifyInvigilatorToken(token);
 
-export const loginInvigilator = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info('[loginInvigilator] attempt');
-    logger.debug && logger.debug(`[loginInvigilator] payload=${JSON.stringify(req.body)}`);
+        const jwtToken = jwt.sign(
+            { userId: credential.id, role: 'INVIGILATOR' as Role },
+            JWT_SECRET,
+            { expiresIn: '12h' }
+        );
 
-    const { token } = req.body;
-    const credential = await examService.verifyInvigilatorToken(token);
-
-    const jwtToken = jwt.sign(
-        { userId: credential.id, role: 'INVIGILATOR' },
-        JWT_SECRET,
-        { expiresIn: '12h' }
-    );
-
-    logger.info(`[loginInvigilator] success invigilator=${credential.id}`);
-    sendResponse({
-        res,
-        statusCode: 200,
-        success: true,
-        message: MESSAGES.SUCCESS.LOGIN_SUCCESS,
-        data: { token: jwtToken }
-    });
-});
-
-export const scanAttendance = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const invigilatorId = req.user?.userId;
-    if (!invigilatorId) {
-        logger.warn('[scanAttendance] unauthorized attempt');
-        throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
+        logger.info(`[loginInvigilator] success invigilator=${credential.id}`);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.LOGIN_SUCCESS,
+            data: { token: jwtToken },
+        });
     }
+);
 
-    if (req.user?.role !== 'INVIGILATOR') {
-        logger.warn(`[scanAttendance] forbidden user=${invigilatorId} role=${req.user?.role}`);
-        throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+/**
+ * Controller: Mark attendance for a student by QR scan.
+ * Route: POST /exam/attendance/scan
+ * Roles: INVIGILATOR
+ */
+export const scanAttendance = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        const invigilatorId = req.user?.userId;
+        if (!invigilatorId) {
+            logger.warn('[scanAttendance] unauthorized attempt');
+            throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
+        }
+
+        if (req.user?.role !== 'INVIGILATOR') {
+            logger.warn(`[scanAttendance] forbidden user=${invigilatorId} role=${req.user?.role}`);
+            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
+
+        const { qrHash } = req.body;
+
+        logger.info(`[scanAttendance] invigilator=${invigilatorId} scanning`);
+        const result = await examService.markAttendanceByScan(qrHash, invigilatorId);
+
+        logger.info('[scanAttendance] attendance marked');
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.ATTENDANCE_MARKED,
+            data: result,
+        });
     }
+);
 
-    const { qrHash } = req.body;
-    if (!qrHash) {
-        logger.warn('[scanAttendance] missing qrHash');
-        throw new AppError(MESSAGES.ERROR.QR_HASH_REQUIRED, 400);
+/**
+ * Controller: Create a new exam slot for a center.
+ * Route: POST /exam/slots
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const createExamSlot = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[createExamSlot] by=${req.user?.userId || 'anonymous'}`);
+        logger.debug && logger.debug(`[createExamSlot] payload=${JSON.stringify(req.body)}`);
+
+        const slot = await examService.createExamSlot(req.body, req.user?.userId);
+        sendResponse({
+            res,
+            statusCode: 201,
+            success: true,
+            message: MESSAGES.SUCCESS.EXAM_SLOT_CREATED,
+            data: slot,
+        });
     }
+);
 
-    logger.info(`[scanAttendance] invigilator=${invigilatorId} scanning`);
-    const result = await examService.markAttendanceByScan(qrHash, invigilatorId);
-
-    logger.info(`[scanAttendance] attendance marked`);
-    sendResponse({
-        res,
-        statusCode: 200,
-        success: true,
-        message: MESSAGES.SUCCESS.ATTENDANCE_MARKED,
-        data: result
-    });
-});
-
-export const createExamSlot = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[createExamSlot] by=${req.user?.userId || 'anonymous'}`);
-    const slot = await examService.createExamSlot(req.body);
-    sendResponse({
-        res,
-        statusCode: 201,
-        success: true,
-        message: MESSAGES.SUCCESS.EXAM_SLOT_CREATED,
-        data: slot
-    });
-});
-
-export const getAvailableSlots = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[getAvailableSlots] by=${req.user?.userId || 'anonymous'}`);
-    const slots = await examService.getAvailableSlots();
-    sendResponse({
-        res,
-        statusCode: 200,
-        success: true,
-        data: slots
-    });
-});
-
-export const bookExamSlot = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[bookExamSlot] by=${req.user?.userId || 'anonymous'}`);
-    const { slotId } = req.body;
-    const studentId = req.params.studentId;
-
-    if (!studentId || !slotId) {
-        throw new AppError(MESSAGES.ERROR.STUDENT_ID_SLOT_ID_REQUIRED, 400);
+/**
+ * Controller: Get available exam slots (future & booking-enabled & not full).
+ * Route: GET /exam/slots/available
+ * Roles: typically STUDENT
+ */
+export const getAvailableSlots = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[getAvailableSlots] by=${req.user?.userId || 'anonymous'}`);
+        const slots = await examService.getAvailableSlots();
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: slots,
+        });
     }
+);
 
-    const result = await examService.bookExamSlot(studentId, slotId);
-    sendResponse({
-        res,
-        statusCode: 200,
-        success: true,
-        message: MESSAGES.SUCCESS.SLOT_BOOKED,
-        data: result
-    });
-});
+/**
+ * Controller: Book an exam slot for a specific student.
+ * Route: POST /students/:studentId/exam/slots
+ * Roles: STUDENT (or ADMIN in special flows)
+ */
+export const bookExamSlot = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[bookExamSlot] by=${req.user?.userId || 'anonymous'}`);
+        const { slotId } = req.body;
+        const { studentId } = req.params;
+
+        const result = await examService.bookExamSlot(studentId, slotId, req.user?.userId);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.SLOT_BOOKED,
+            data: result,
+        });
+    }
+);
+
+/**
+ * Controller: Toggle booking status (enable/disable) for an exam slot.
+ * Route: PATCH /exam/slots/:slotId/booking
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const toggleSlotBooking = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[toggleSlotBooking] by=${req.user?.userId || 'anonymous'}`);
+        const { slotId } = req.params;
+        const { isBookingEnabled } = req.body;
+
+        const result = await examService.toggleSlotBooking(
+            slotId,
+            isBookingEnabled,
+            req.user?.userId
+        );
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: isBookingEnabled ? 'Slot booking enabled' : 'Slot booking disabled',
+            data: result,
+        });
+    }
+);
+
+/**
+ * Controller: Fetch all exam centers (with slots).
+ * Route: GET /exam/centers
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const getExamCenters = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[getExamCenters] by=${req.user?.userId || 'anonymous'}`);
+        const centers = await examService.getExamCenters();
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.EXAM_CENTERS_FETCHED,
+            data: centers,
+        });
+    }
+);
+
+/**
+ * Controller: Update an exam center.
+ * Route: PUT /exam/centers/:id
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const updateExamCenter = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[updateExamCenter] by=${req.user?.userId || 'anonymous'}`);
+        const { id } = req.params;
+        const center = await examService.updateExamCenter(id, req.body, req.user?.userId);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.EXAM_CENTER_UPDATED,
+            data: center,
+        });
+    }
+);
+
+/**
+ * Controller: Delete an exam center.
+ * Route: DELETE /exam/centers/:id
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const deleteExamCenter = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[deleteExamCenter] by=${req.user?.userId || 'anonymous'}`);
+        const { id } = req.params;
+        await examService.deleteExamCenter(id);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.EXAM_CENTER_DELETED,
+        });
+    }
+);
+
+/**
+ * Controller: Fetch all exam slots (for admin management UI).
+ * Route: GET /exam/slots
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const getExamSlots = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[getExamSlots] by=${req.user?.userId || 'anonymous'}`);
+        const slots = await examService.getExamSlots();
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.EXAM_SLOTS_FETCHED,
+            data: slots,
+        });
+    }
+);
+
+/**
+ * Controller: Fetch slots for a particular center.
+ * Route: GET /exam/centers/:centerId/slots
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const getExamSlotsByCenter = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[getExamSlotsByCenter] by=${req.user?.userId || 'anonymous'}`);
+        const { centerId } = req.params;
+        const slots = await examService.getExamSlotsByCenter(centerId);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.EXAM_SLOTS_FETCHED,
+            data: slots,
+        });
+    }
+);
+
+/**
+ * Controller: Fetch a single exam slot.
+ * Route: GET /exam/slots/:id
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const getExamSlot = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[getExamSlot] by=${req.user?.userId || 'anonymous'}`);
+        const { id } = req.params;
+        const slot = await examService.getExamSlot(id);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.EXAM_SLOT_FETCHED,
+            data: slot,
+        });
+    }
+);
+
+/**
+ * Controller: Update a slot's timing/capacity/status.
+ * Route: PUT /exam/slots/:id
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const updateExamSlot = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[updateExamSlot] by=${req.user?.userId || 'anonymous'}`);
+        const { id } = req.params;
+        const slot = await examService.updateExamSlot(id, req.body, req.user?.userId);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.EXAM_SLOT_UPDATED,
+            data: slot,
+        });
+    }
+);
+
+/**
+ * Controller: Delete an exam slot (only if not booked).
+ * Route: DELETE /exam/slots/:id
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const deleteExamSlot = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[deleteExamSlot] by=${req.user?.userId || 'anonymous'}`);
+        const { id } = req.params;
+        await examService.deleteExamSlot(id);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: MESSAGES.SUCCESS.EXAM_SLOT_DELETED,
+        });
+    }
+);

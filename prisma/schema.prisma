@@ -138,18 +138,35 @@ model User {
   email     String?   @unique
   phone     String    @unique
   role      Role      @default(STUDENT)
-  otp       String?
-  otpExpiry DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   createdBy String?
   updatedBy String?
 
-  
+  otps UserOtp[]
+
+  studentProfile    Student?           @relation("StudentUser")
   agentStudents     Student[]          @relation("AgentStudents")
   agentCommissions  AgentCommission[]
   adminActivityLogs AdminActivityLog[]
   notifications     Notification[]
+}
+
+model UserOtp {
+  id          String   @id @default(uuid())
+  userId      String
+  type        String   // e.g. "LOGIN", "PASSWORD_RESET"
+  otpHash     String
+  expiresAt   DateTime
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(5)
+  used        Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, type, used, expiresAt])
 }
 
 
@@ -267,8 +284,10 @@ model Student {
   state           String
   pincode         String
   profilePhotoUrl String 
+  documentFolderPath String? // S3 Key prefix for student docs
 
   isOffline Boolean @default(false)
+  isKycVerified Boolean @default(false)
 
   
   courseType String? 
@@ -278,6 +297,8 @@ model Student {
   pref2 String?
   pref3 String?
 
+  userId String? @unique
+  user   User?   @relation("StudentUser", fields: [userId], references: [id])
   
   agentId String?
   agent   User?   @relation("AgentStudents", fields: [agentId], references: [id])
@@ -375,6 +396,8 @@ model StudentDocument {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
 
   @@unique([studentId, documentKey])
   @@index([studentId])
@@ -733,19 +756,20 @@ model ExamCenter {
 }
 
 model ExamSlot {
-  id           String        @id @default(uuid())
-  examCenterId String
-  examCenter   ExamCenter    @relation(fields: [examCenterId], references: [id])
-  date         DateTime
-  startTime    DateTime
-  endTime      DateTime
-  capacity     Int
-  filled       Int           @default(0)
-  studentExams StudentExam[]
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  createdBy    String?
-  updatedBy    String?
+  id               String        @id @default(uuid())
+  examCenterId     String
+  examCenter       ExamCenter    @relation(fields: [examCenterId], references: [id])
+  date             DateTime
+  startTime        DateTime
+  endTime          DateTime
+  capacity         Int
+  filled           Int           @default(0)
+  isBookingEnabled Boolean       @default(false)  // Admin controls this
+  studentExams     StudentExam[]
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  createdBy        String?
+  updatedBy        String?
 }
 
 model HallTicket {

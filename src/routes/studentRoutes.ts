@@ -4,7 +4,8 @@ import {
     payTestFee,
     getHallTicket,
     uploadDocumentsAndPreferences,
-    payCollegeFee
+    payCollegeFee,
+    getStudentDetails
 } from '../controllers/studentController';
 import { authenticate, authorize } from '../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
@@ -411,5 +412,19 @@ import { deleteStudentDocument } from '../controllers/deleteDocumentController';
  *         description: Document deleted successfully
  */
 router.delete('/:studentId/document', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), deleteStudentDocument);
+
+/**
+ * @swagger
+ * /student/details:
+ *   get:
+ *     summary: Get logged-in student details
+ *     tags: [Student]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Student details retrieved
+ */
+router.get('/details', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getStudentDetails);
 
 export default router;

@@ -21,3 +21,16 @@ export const verifyOtpSchema = z.object({
         path: ["phone"]
     }),
 });
+
+export const generateAadhaarOtpSchema = z.object({
+    body: z.object({
+        id_number: z.string().min(12, "Aadhaar number must be at least 12 digits").max(12, "Aadhaar number must be at most 12 digits"),
+    }),
+});
+
+export const submitAadhaarOtpSchema = z.object({
+    body: z.object({
+        request_id: z.string().or(z.number()),
+        otp: z.string().min(1, "OTP is required"),
+    }),
+});

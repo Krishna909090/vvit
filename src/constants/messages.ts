@@ -26,6 +26,9 @@ export const MESSAGES = {
         ONLY_SUPER_ADMIN_APPROVE_BRANCH: 'Only Super Admin can approve branch changes',
         ONLY_SUPER_ADMIN_APPROVE_DISCOUNT: 'Only Super Admin can approve discounts',
         USER_NOT_FOUND: 'User not found',
+        PHONE_OR_EMAIL_REQUIRED: 'Phone or Email is required',
+        STUDENT_LOGIN_PHONE_ONLY: 'Students must login using Phone Number',
+        OTP_MAX_ATTEMPTS: 'Too many incorrect OTP attempts. Please request a new OTP.',
 
         // Student
         INVALID_AADHAR: 'Invalid Aadhar Number (Verification Failed)',
@@ -44,6 +47,8 @@ export const MESSAGES = {
         SLOT_FULL: 'Slot is full',
         SCORE_CUTOFF_REQUIRED: 'Score and cutoff are required',
         STUDENT_ID_SLOT_ID_REQUIRED: 'studentId and slotId are required',
+        SLOT_ID_REQUIRED: 'Slot ID is required',
+        INVALID_BOOKING_STATUS: 'Invalid booking status',
 
         // Admin
         ATTENDED_BOOLEAN: 'attended must be a boolean',
@@ -92,6 +97,39 @@ export const MESSAGES = {
         VEHICLE_NOT_FOUND: 'Vehicle not found',
         TRANSPORT_STOP_NOT_FOUND: 'Transport Stop not found',
         REQUIREMENT_NOT_FOUND: 'Document Requirement not found',
+
+        // Conflicts
+        DEPARTMENT_EXISTS: 'Department with this code or name already exists',
+        PROGRAM_EXISTS: 'Program with this name already exists in this department',
+        BATCH_EXISTS: 'Batch with this name already exists in this program',
+        SECTION_EXISTS: 'Section with this name already exists in this batch',
+        HOSTEL_EXISTS: 'Hostel with this name already exists',
+        BRANCH_EXISTS: 'Branch with this code already exists',
+        FEE_HEAD_EXISTS: 'Fee Head with this name already exists',
+        FEE_STRUCTURE_EXISTS: 'Fee Structure for this combination already exists',
+        ACADEMIC_YEAR_EXISTS: 'Academic Year with this code already exists',
+        TRANSPORT_ROUTE_EXISTS: 'Transport Route with this name or bus number already exists',
+        VEHICLE_EXISTS: 'Vehicle with this number already exists',
+        TRANSPORT_STOP_EXISTS: 'Transport Stop with this name already exists in this route',
+        DUPLICATE_ENTRY: 'Duplicate entry found',
+        BRANCH_CHANGE_ALREADY_REQUESTED: 'Branch change request already pending',
+        EXAM_DATE_EXISTS: 'Exam date already exists',
+        EXAM_CENTER_EXISTS: 'Exam center already exists in this city',
+        EXAM_SLOT_EXISTS: 'Exam slot already exists for this time',
+        SLOT_ALREADY_BOOKED: 'Student already has a slot booked',
+        DOCUMENT_REQUIREMENT_EXISTS: 'Document requirement already exists for this course',
+        EXAM_CENTER_NOT_FOUND: 'Exam center not found',
+        CENTER_NAME_REQUIRED: 'Center name is required',
+        CITY_REQUIRED: 'City is required',
+        INVALID_DATE_RANGE: 'validFrom must be before validUntil',
+        INVALID_TIME_RANGE: 'startTime must be before endTime',
+        EXAM_CENTER_ID_REQUIRED: 'Exam center id is required',
+        SLOT_IN_PAST: 'Cannot book a slot in the past',
+        CAPACITY_REDUCTION_ERROR: 'Cannot reduce capacity below filled count',
+        SLOT_HAS_BOOKINGS: 'Cannot delete slot with booked students',
+
+        // Not Modified
+        NO_CHANGES_DETECTED: 'No changes detected',
     },
     SUCCESS: {
         STUDENT_REGISTERED: 'Student registered successfully',
@@ -178,5 +216,14 @@ export const MESSAGES = {
         BRANCH_CHANGE_PROCESSED: 'Branch change request processed',
         DISCOUNT_PROCESSED: 'Discount request processed',
         CANCELLATION_PROCESSED: 'Cancellation request processed',
+        EXAM_CENTER_UPDATED: 'Exam center updated successfully',
+        EXAM_CENTER_DELETED: 'Exam center deleted successfully',
+        EXAM_SLOT_UPDATED: 'Exam slot updated successfully',
+        EXAM_SLOT_DELETED: 'Exam slot deleted successfully',
+        USER_DETAILS_FETCHED: 'User details fetched successfully',
+        STUDENT_DETAILS_FETCHED: 'Student details fetched successfully',
+        EXAM_CENTERS_FETCHED: 'Exam centers fetched successfully',
+        EXAM_SLOTS_FETCHED: 'Exam slots fetched successfully',
+        EXAM_SLOT_FETCHED: 'Exam slot fetched successfully',
     }
 };

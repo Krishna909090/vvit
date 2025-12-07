@@ -3,7 +3,7 @@ import { catchAsync } from '../utils/catchAsync';
 import { AppError } from '../utils/AppError';
 import prisma from '../config/prisma';
 import logger from '../utils/logger';
-import { AdmissionStatus, DiscountStatus, Role, CancellationStatus, AccommodationType, HostelType, FeeStatus, RequestStatus, StudentDocumentStatus, AgentCommissionStatus } from '@prisma/client';
+import { AdmissionStatus, DiscountStatus, Role, CancellationStatus, AccommodationType, HostelType, FeeStatus, RequestStatus, StudentDocumentStatus, AgentCommissionStatus, Prisma } from '@prisma/client';
 import { MESSAGES } from '../constants/messages';
 import Papa from 'papaparse';
 import { registerStudent } from '../services/studentService';
@@ -13,6 +13,7 @@ import path from 'path';
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 import { sendResponse } from '../utils/response';
+import { maskPhone, maskEmail } from "../utils/mask";
 
 // Phase 3: Mark Attendance
 export const markAttendance = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -76,7 +77,7 @@ export const verifyAndAllotSeat = catchAsync(async (req: Request, res: Response,
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         await tx.studentAdmission.update({
             where: { studentId },
             data: {
@@ -176,7 +177,7 @@ export const approveBranchChange = catchAsync(async (req: Request, res: Response
 
     const status = approved ? RequestStatus.APPROVED : RequestStatus.REJECTED;
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // Update Request
         await tx.branchChangeRequest.update({
             where: { id: requestId },
@@ -319,6 +320,10 @@ export const getDashboardStats = catchAsync(async (req: Request, res: Response, 
     const paidApplications = await prisma.studentAdmission.count({ where: { feeStatus: FeeStatus.FULL } });
     const pendingPayment = await prisma.studentAdmission.count({ where: { feeStatus: { not: FeeStatus.FULL } } });
 
+    // Online vs Offline
+    const onlineStudents = await prisma.student.count({ where: { isOffline: false } });
+    const offlineStudents = await prisma.student.count({ where: { isOffline: true } });
+
     // Last 7 days summary
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -343,7 +348,7 @@ export const getDashboardStats = catchAsync(async (req: Request, res: Response, 
         dayWiseSummary[dateStr] = 0;
     }
 
-    recentApplications.forEach(app => {
+    recentApplications.forEach((app: any) => {
         const dateStr = app.createdAt.toISOString().split('T')[0];
         if (dayWiseSummary[dateStr] !== undefined) {
             dayWiseSummary[dateStr]++;
@@ -361,6 +366,8 @@ export const getDashboardStats = catchAsync(async (req: Request, res: Response, 
             totalApplications,
             paidApplications,
             pendingPayment,
+            onlineStudents,
+            offlineStudents,
             dayWiseSummary: summaryArray
         }
     });
@@ -392,11 +399,36 @@ export const getAllApplications = catchAsync(async (req: Request, res: Response,
             orderBy: { createdAt: 'desc' },
             include: {
                 admissionDetails: true,
-                examDetails: true
+                examDetails: true,
+                documents: true,
             }
         }),
         prisma.student.count({ where })
     ]);
+
+    // Fetch requirements to check pending docs
+    // Note: This matches requirements by courseType.
+    // Optimization: Fetch all requirements at once or distinct courseTypes.
+    const requirements = await prisma.documentRequirement.findMany({ where: { isRequired: true } });
+    const reqMap: Record<string, string[]> = {};
+    requirements.forEach((r: any) => {
+        if (!reqMap[r.courseType]) reqMap[r.courseType] = [];
+        reqMap[r.courseType].push(r.documentKey);
+    });
+
+    const enhancedStudents = students.map((student: any) => {
+        const uploadedKeys = student.documents.map((d: any) => d.documentKey);
+        const requiredKeys = reqMap[student.courseType || ''] || [];
+        const pendingDocs = requiredKeys.filter(key => !uploadedKeys.includes(key));
+
+        return {
+            ...student,
+            documentsUploaded: student.documents.length,
+            pendingDocs,
+            isAllDocsUploaded: pendingDocs.length === 0,
+            s3FolderKey: (student as any).documentFolderPath || `students/${student.id}/documents/` // Default fallback
+        };
+    });
 
     sendResponse({
         res,
@@ -404,7 +436,7 @@ export const getAllApplications = catchAsync(async (req: Request, res: Response,
         success: true,
         message: MESSAGES.SUCCESS.DATA_FETCHED,
         data: {
-            students,
+            students: enhancedStudents,
             pagination: {
                 total,
                 page: Number(page),
@@ -473,7 +505,7 @@ export const uploadBulkApplications = catchAsync(async (req: Request, res: Respo
                 profilePhotoUrl: studentData.profile_photo_url || 'https://via.placeholder.com/150', // Placeholder if missing
             };
 
-            const student = await registerStudent(mappedData, null);
+            const student = await registerStudent(mappedData, null, null, req.user?.userId || null);
             results.push({ email: student.email, status: 'Success', id: student.applicationId });
         } catch (err: any) {
             results.push({ email: studentData.email, status: 'Failed', error: err.message });
@@ -556,7 +588,7 @@ export const approveCancellation = catchAsync(async (req: Request, res: Response
 
     const status = approved ? CancellationStatus.APPROVED : CancellationStatus.REJECTED;
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         await tx.cancellationRequest.update({
             where: { id: requestId },
             data: { status, approvedBy: adminId }
@@ -612,7 +644,7 @@ export const getStudentCertificates = catchAsync(async (req: Request, res: Respo
     const docs = {
         profilePhotoUrl: student.profilePhotoUrl,
         hallTicketUrl: student.examDetails?.hallTicketUrl,
-        ...student.documents.reduce((acc: any, doc) => {
+        ...student.documents.reduce((acc: any, doc: any) => {
             acc[doc.documentKey] = doc.url;
             return acc;
         }, {})
@@ -682,7 +714,7 @@ export const downloadStudentDocuments = catchAsync(async (req: Request, res: Res
     const documents = [
         { name: 'profile_photo', url: student.profilePhotoUrl },
         { name: 'hall_ticket', url: student.examDetails?.hallTicketUrl },
-        ...student.documents.map(doc => ({ name: doc.documentKey, url: doc.url })),
+        ...student.documents.map((doc: any) => ({ name: doc.documentKey, url: doc.url })),
         { name: 'discount_doc', url: (await prisma.discountRequest.findFirst({ where: { studentId } }))?.documentUrl }
     ].filter(doc => doc.url);
 
@@ -741,6 +773,19 @@ export const createTransportRoute = catchAsync(async (req: Request, res: Respons
         throw new AppError(MESSAGES.ERROR.TRANSPORT_FIELDS_REQUIRED, 400);
     }
 
+    const existingRoute = await prisma.transportRoute.findFirst({
+        where: {
+            OR: [
+                { name: { equals: name, mode: 'insensitive' } },
+                { busNumber: { equals: busNumber, mode: 'insensitive' } }
+            ]
+        }
+    });
+
+    if (existingRoute) {
+        throw new AppError(MESSAGES.ERROR.TRANSPORT_ROUTE_EXISTS, 409);
+    }
+
     const route = await prisma.transportRoute.create({
         data: {
             name,
@@ -794,7 +839,7 @@ export const updateAdmissionDetails = catchAsync(async (req: Request, res: Respo
     const admission = student.admissionDetails;
     let totalFee = 125000; // Fixed Fees: Tuition(100k) + Admission(10k) + Skill(10k) + Book(5k)
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // 1. Release previous allocation if exists
         if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelId) {
             // If changing to something else or a different hostel
@@ -923,38 +968,130 @@ export const getFeeStatistics = catchAsync(async (req: Request, res: Response, n
     });
 });
 
-// Add Admin (Super Admin)
-export const addAdmin = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { phone, name, email } = req.body;
-    // Check if user exists
-    let user = await prisma.user.findUnique({ where: { phone } });
-    if (user) {
-        await prisma.user.update({
-            where: { id: user.id },
-            data: {
-                role: Role.ADMIN,
-                name: name || user.name,
-                email: email || user.email
-            }
-        });
-    } else {
-        // Create new admin user
-        user = await prisma.user.create({
-            data: {
-                phone,
-                name,
-                email,
-                role: Role.ADMIN
-            }
-        });
+
+// Controller: Creates or updates a user as an admin/staff role based on phone.
+export const addAdmin = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[addAdmin] by=${req.user?.userId || "anonymous"}`);
+
+    const { phone, name, email, role } = req.body as {
+      phone?: string;
+      name?: string;
+      email?: string;
+      role?: Role; // coming from validated schema (ADMIN | SUPER_ADMIN | STAFF)
+    };
+
+    if (!phone) {
+      logger.warn("[addAdmin] missing phone in request");
+      throw new AppError("Phone number is required", 400);
     }
-    sendResponse({
-        res,
-        statusCode: 200,
-        success: true,
-        message: MESSAGES.SUCCESS.ADMIN_ADDED
+
+    if (!role) {
+      logger.warn("[addAdmin] missing role in request");
+      throw new AppError("Role is required", 400);
+    }
+
+    const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF];
+    if (!allowedRoles.includes(role)) {
+      logger.warn(
+        `[addAdmin] invalid role assignment attempt: role=${role}, phone=${maskPhone(
+          phone
+        )}, by=${req.user?.userId || "anonymous"}`
+      );
+      throw new AppError("Invalid role for admin creation", 400);
+    }
+
+    const normalizedPhone = phone.trim();
+    const normalizedEmail = email?.trim().toLowerCase();
+
+    logger.info(
+      `[addAdmin] request: phone=${maskPhone(
+        normalizedPhone
+      )}, email=${maskEmail(normalizedEmail)}, role=${role}`
+    );
+
+    let user = await prisma.user.findUnique({
+      where: { phone: normalizedPhone },
     });
-});
+
+    // 🚫 If user already exists, do NOT change their role
+    if (user) {
+      if (user.role !== role) {
+        logger.warn(
+          `[addAdmin] role conflict for userId=${user.id}. Existing role=${user.role}, requested role=${role}`
+        );
+        throw new AppError(
+          `User already exists with role ${user.role}. Cannot change role to ${role}.`,
+          400
+        );
+      }
+
+      logger.info(
+        `[addAdmin] User found with phone=${maskPhone(
+          normalizedPhone
+        )}, same role=${role}. Updating basic details.`
+      );
+
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          name: name ?? user.name,
+          email: normalizedEmail ?? user.email,
+        },
+      });
+    } else {
+      // ✅ Optional: enforce only one SUPER_ADMIN in the whole system
+      if (role === Role.SUPER_ADMIN) {
+        const existingSuperAdmin = await prisma.user.findFirst({
+          where: { role: Role.SUPER_ADMIN },
+        });
+
+        if (existingSuperAdmin) {
+          logger.warn(
+            `[addAdmin] SUPER_ADMIN already exists: id=${existingSuperAdmin.id}, phone=${maskPhone(
+              existingSuperAdmin.phone
+            )}`
+          );
+          throw new AppError(
+            "A SUPER_ADMIN already exists. Cannot create another SUPER_ADMIN.",
+            400
+          );
+        }
+      }
+
+      logger.info(
+        `[addAdmin] Creating new user with role=${role} and phone=${maskPhone(
+          normalizedPhone
+        )}`
+      );
+
+      user = await prisma.user.create({
+        data: {
+          phone: normalizedPhone,
+          name,
+          email: normalizedEmail,
+          role,
+        },
+      });
+    }
+
+    logger.info(
+      `[addAdmin] Admin user persisted successfully: id=${user.id}, role=${user.role}, phone=${maskPhone(
+        user.phone
+      )}, email=${maskEmail(user.email)}`
+    );
+
+    sendResponse({
+      res,
+      statusCode: 200,
+      success: true,
+      message: MESSAGES.SUCCESS.ADMIN_ADDED,
+      data: user,
+    });
+  }
+);
+
+
 
 // Generate Invigilator Credentials
 export const generateInvigilatorCredentials = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -1057,6 +1194,14 @@ export const createHostel = catchAsync(async (req: Request, res: Response, next:
 
     if (!name || !type || !capacity || !cost) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
+    const existingHostel = await prisma.hostel.findFirst({
+        where: { name: { equals: name, mode: 'insensitive' } }
+    });
+
+    if (existingHostel) {
+        throw new AppError(MESSAGES.ERROR.HOSTEL_EXISTS, 409);
+    }
+
     const hostel = await prisma.hostel.create({
         data: {
             name,
@@ -1084,6 +1229,11 @@ export const createBranch = catchAsync(async (req: Request, res: Response, next:
     const adminId = req.user?.userId;
 
     if (!code || !name || !totalSeats) throw new AppError(MESSAGES.ERROR.CODE_NAME_SEATS_REQUIRED, 400);
+
+    const existingBranch = await prisma.branch.findUnique({ where: { code } });
+    if (existingBranch) {
+        throw new AppError(MESSAGES.ERROR.BRANCH_EXISTS, 409);
+    }
 
     const branch = await prisma.branch.create({
         data: {
@@ -1137,6 +1287,20 @@ export const updateHostel = catchAsync(async (req: Request, res: Response, next:
 export const createDepartment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, code } = req.body;
     const adminId = req.user?.userId;
+
+    const existingDept = await prisma.department.findFirst({
+        where: {
+            OR: [
+                { code: { equals: code, mode: 'insensitive' } },
+                { name: { equals: name, mode: 'insensitive' } }
+            ]
+        }
+    });
+
+    if (existingDept) {
+        throw new AppError(MESSAGES.ERROR.DEPARTMENT_EXISTS, 409);
+    }
+
     const department = await prisma.department.create({
         data: { name, code, createdBy: adminId }
     });
@@ -1152,6 +1316,18 @@ export const createDepartment = catchAsync(async (req: Request, res: Response, n
 export const createProgram = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, departmentId } = req.body;
     const adminId = req.user?.userId;
+
+    const existingProgram = await prisma.program.findFirst({
+        where: {
+            name: { equals: name, mode: 'insensitive' },
+            departmentId
+        }
+    });
+
+    if (existingProgram) {
+        throw new AppError(MESSAGES.ERROR.PROGRAM_EXISTS, 409);
+    }
+
     const program = await prisma.program.create({
         data: { name, departmentId, createdBy: adminId }
     });
@@ -1167,6 +1343,18 @@ export const createProgram = catchAsync(async (req: Request, res: Response, next
 export const createBatch = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, programId, startDate, endDate } = req.body;
     const adminId = req.user?.userId;
+
+    const existingBatch = await prisma.batch.findFirst({
+        where: {
+            name: { equals: name, mode: 'insensitive' },
+            programId
+        }
+    });
+
+    if (existingBatch) {
+        throw new AppError(MESSAGES.ERROR.BATCH_EXISTS, 409);
+    }
+
     const batch = await prisma.batch.create({
         data: {
             name,
@@ -1188,6 +1376,18 @@ export const createBatch = catchAsync(async (req: Request, res: Response, next: 
 export const createSection = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, batchId } = req.body;
     const adminId = req.user?.userId;
+
+    const existingSection = await prisma.section.findFirst({
+        where: {
+            name: { equals: name, mode: 'insensitive' },
+            batchId
+        }
+    });
+
+    if (existingSection) {
+        throw new AppError(MESSAGES.ERROR.SECTION_EXISTS, 409);
+    }
+
     const section = await prisma.section.create({
         data: { name, batchId, createdBy: adminId }
     });
@@ -1248,6 +1448,12 @@ export const createHostelRoom = catchAsync(async (req: Request, res: Response, n
 export const createVehicle = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { number, capacity, driverName, driverPhone } = req.body;
     const adminId = req.user?.userId;
+
+    const existingVehicle = await prisma.vehicle.findUnique({ where: { number } });
+    if (existingVehicle) {
+        throw new AppError(MESSAGES.ERROR.VEHICLE_EXISTS, 409);
+    }
+
     const vehicle = await prisma.vehicle.create({
         data: { number, capacity: Number(capacity), driverName, driverPhone, createdBy: adminId }
     });
@@ -1263,6 +1469,18 @@ export const createVehicle = catchAsync(async (req: Request, res: Response, next
 export const createTransportStop = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { routeId, name, sequence, pickupTime, dropTime } = req.body;
     const adminId = req.user?.userId;
+
+    const existingStop = await prisma.transportStop.findFirst({
+        where: {
+            routeId,
+            name: { equals: name, mode: 'insensitive' }
+        }
+    });
+
+    if (existingStop) {
+        throw new AppError(MESSAGES.ERROR.TRANSPORT_STOP_EXISTS, 409);
+    }
+
     const stop = await prisma.transportStop.create({
         data: {
             routeId,
@@ -1287,6 +1505,11 @@ export const createAcademicYear = catchAsync(async (req: Request, res: Response,
     const { code, startDate, endDate, isActive } = req.body;
     const adminId = req.user?.userId;
 
+    const existingYear = await prisma.academicYear.findUnique({ where: { code } });
+    if (existingYear) {
+        throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_EXISTS, 409);
+    }
+
     const academicYear = await prisma.academicYear.create({
         data: {
             code,
@@ -1310,6 +1533,15 @@ export const createAcademicYear = catchAsync(async (req: Request, res: Response,
 export const createFeeHead = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, description } = req.body;
     const adminId = req.user?.userId;
+
+    const existingFeeHead = await prisma.feeHead.findFirst({
+        where: { name: { equals: name, mode: 'insensitive' } }
+    });
+
+    if (existingFeeHead) {
+        throw new AppError(MESSAGES.ERROR.FEE_HEAD_EXISTS, 409);
+    }
+
     const feeHead = await prisma.feeHead.create({
         data: { name, description, createdBy: adminId }
     });
@@ -1325,6 +1557,19 @@ export const createFeeHead = catchAsync(async (req: Request, res: Response, next
 export const createFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { programId, feeHeadId, amount, academicYearId } = req.body;
     const adminId = req.user?.userId;
+
+    const existingStructure = await prisma.feeStructure.findFirst({
+        where: {
+            programId,
+            feeHeadId,
+            academicYearId
+        }
+    });
+
+    if (existingStructure) {
+        throw new AppError(MESSAGES.ERROR.FEE_STRUCTURE_EXISTS, 409);
+    }
+
     const feeStructure = await prisma.feeStructure.create({
         data: {
             programId,
@@ -1399,6 +1644,10 @@ export const updateDepartment = catchAsync(async (req: Request, res: Response, n
     const department = await prisma.department.findUnique({ where: { id } });
     if (!department) throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
 
+    if (department.name === name && department.code === code) {
+        throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+    }
+
     const updatedDepartment = await prisma.department.update({
         where: { id },
         data: { name, code, updatedBy: req.user?.userId }
@@ -1435,6 +1684,10 @@ export const updateProgram = catchAsync(async (req: Request, res: Response, next
     const program = await prisma.program.findUnique({ where: { id } });
     if (!program) throw new AppError(MESSAGES.ERROR.PROGRAM_NOT_FOUND, 404);
 
+    if (program.name === name && program.departmentId === departmentId) {
+        throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+    }
+
     const updatedProgram = await prisma.program.update({
         where: { id },
         data: { name, departmentId, updatedBy: req.user?.userId }
@@ -1463,6 +1716,10 @@ export const updateBranch = catchAsync(async (req: Request, res: Response, next:
     const branch = await prisma.branch.findUnique({ where: { id } });
     if (!branch) throw new AppError(MESSAGES.ERROR.BRANCH_NOT_FOUND, 404);
 
+    if (branch.code === code && branch.name === name && branch.totalSeats === Number(totalSeats)) {
+        throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+    }
+
     const updatedBranch = await prisma.branch.update({
         where: { id },
         data: { code, name, totalSeats: Number(totalSeats), updatedBy: req.user?.userId }
@@ -1490,6 +1747,10 @@ export const updateFeeHead = catchAsync(async (req: Request, res: Response, next
     const { name, description } = req.body;
     const feeHead = await prisma.feeHead.findUnique({ where: { id } });
     if (!feeHead) throw new AppError(MESSAGES.ERROR.FEE_HEAD_NOT_FOUND, 404);
+
+    if (feeHead.name === name && feeHead.description === description) {
+        throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+    }
 
     const updatedFeeHead = await prisma.feeHead.update({
         where: { id },
@@ -1520,6 +1781,13 @@ export const updateFeeStructure = catchAsync(async (req: Request, res: Response,
     const { programId, feeHeadId, amount, academicYearId } = req.body;
     const feeStructure = await prisma.feeStructure.findUnique({ where: { id } });
     if (!feeStructure) throw new AppError(MESSAGES.ERROR.FEE_STRUCTURE_NOT_FOUND, 404);
+
+    if (feeStructure.programId === programId &&
+        feeStructure.feeHeadId === feeHeadId &&
+        feeStructure.amount === Number(amount) &&
+        feeStructure.academicYearId === academicYearId) {
+        throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+    }
 
     const updatedFeeStructure = await prisma.feeStructure.update({
         where: { id },
@@ -1559,6 +1827,17 @@ export const updateAcademicYear = catchAsync(async (req: Request, res: Response,
 
     const academicYear = await prisma.academicYear.findUnique({ where: { id } });
     if (!academicYear) throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_NOT_FOUND, 404);
+
+    const newStartDate = startDate ? new Date(startDate) : academicYear.startDate;
+    const newEndDate = endDate ? new Date(endDate) : academicYear.endDate;
+    const newIsActive = isActive !== undefined ? isActive : academicYear.isActive;
+
+    if (academicYear.code === code &&
+        academicYear.startDate.getTime() === newStartDate.getTime() &&
+        academicYear.endDate.getTime() === newEndDate.getTime() &&
+        academicYear.isActive === newIsActive) {
+        throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+    }
 
     const updatedAcademicYear = await prisma.academicYear.update({
         where: { id },
@@ -1794,4 +2073,39 @@ export const deleteTransportStop = catchAsync(async (req: Request, res: Response
 
     await prisma.transportStop.delete({ where: { id } });
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.TRANSPORT_STOP_DELETED });
+});
+
+// Get User Details (Admin/Super Admin search)
+export const getUserDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getUserDetails] by=${req.user?.userId || 'anonymous'}`);
+    const { phone, email } = req.query;
+
+    if (!phone && !email) {
+        throw new AppError(MESSAGES.ERROR.INVALID_REQUEST, 400);
+    }
+
+    const searchConditions = [];
+    if (phone) searchConditions.push({ phone: String(phone) });
+    if (email) searchConditions.push({ email: String(email) });
+
+    const user = await prisma.user.findFirst({
+        where: {
+            OR: searchConditions
+        },
+        include: {
+            agentStudents: { select: { id: true, name: true, applicationId: true } }
+        }
+    });
+
+    if (!user) {
+        throw new AppError(MESSAGES.ERROR.USER_NOT_FOUND, 404);
+    }
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.USER_DETAILS_FETCHED,
+        data: user
+    });
 });

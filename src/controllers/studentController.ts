@@ -3,7 +3,7 @@ import prisma from '../config/prisma';
 import logger from '../utils/logger';
 import { Role, AdmissionStatus, RequestStatus } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
-import { registerStudent as registerStudentService, payTestFee as payTestFeeService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, payCollegeFee as payCollegeFeeService, requestDiscount as requestDiscountService, addAcademicDetails as addAcademicDetailsService } from '../services/studentService';
+import { registerStudent as registerStudentService, payTestFee as payTestFeeService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, payCollegeFee as payCollegeFeeService, requestDiscount as requestDiscountService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService } from '../services/studentService';
 import { bookExamSlot } from '../services/examService';
 import QRCode from 'qrcode';
 import { catchAsync } from '../utils/catchAsync';
@@ -16,8 +16,10 @@ export const registerStudent = catchAsync(async (req: Request, res: Response, ne
     logger.info(`[registerStudent] attempt by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[registerStudent] payload=${JSON.stringify(req.body)}`);
 
-    const agentId = req.user?.role === Role.AGENT ? req.user.userId : null;
-    const student = await registerStudentService(req.body, agentId);
+    const agentId = req.user?.role === Role.AGENT ? (req.user?.userId || null) : null;
+    const userId = req.user?.role === Role.STUDENT ? (req.user?.userId || null) : null;
+    const currentUserId = req.user?.userId || null;
+    const student = await registerStudentService(req.body, agentId, userId, currentUserId);
 
     logger.info(`[registerStudent] success applicationId=${student.applicationId}`);
     sendResponse({
@@ -37,7 +39,8 @@ export const payTestFee = catchAsync(async (req: Request, res: Response, next: N
     const { studentId } = req.params;
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-    const student = await payTestFeeService(studentId);
+    const currentUserId = req.user?.userId || null;
+    const student = await payTestFeeService(studentId, currentUserId);
 
     logger.info(`[payTestFee] initiated for studentId=${studentId}`);
     sendResponse({
@@ -76,7 +79,8 @@ export const uploadDocumentsAndPreferences = catchAsync(async (req: Request, res
     const { studentId } = req.params;
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-    const updatedStudent = await uploadDocsService(studentId, req.body);
+    const currentUserId = req.user?.userId || null;
+    const updatedStudent = await uploadDocsService(studentId, req.body, currentUserId);
 
     logger.info(`[uploadDocumentsAndPreferences] success for studentId=${studentId}`);
     sendResponse({
@@ -96,7 +100,8 @@ export const payCollegeFee = catchAsync(async (req: Request, res: Response, next
     const { studentId } = req.params;
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-    const student = await payCollegeFeeService(studentId);
+    const currentUserId = req.user?.userId || null;
+    const student = await payCollegeFeeService(studentId, currentUserId);
 
     logger.info(`[payCollegeFee] initiated for studentId=${studentId}`);
     sendResponse({
@@ -117,7 +122,8 @@ export const requestDiscount = catchAsync(async (req: Request, res: Response, ne
     const { reason, documentUrl } = req.body;
     if (!studentId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_REASON_REQUIRED, 400);
 
-    const discountRequest = await requestDiscountService(studentId, reason, documentUrl);
+    const currentUserId = req.user?.userId || null;
+    const discountRequest = await requestDiscountService(studentId, reason, documentUrl, currentUserId);
 
     logger.info(`[requestDiscount] created for studentId=${studentId}`);
     sendResponse({
@@ -175,6 +181,17 @@ export const requestBranchChange = catchAsync(async (req: Request, res: Response
         throw new AppError(MESSAGES.ERROR.NO_BRANCH_ALLOTTED, 400);
     }
 
+    const existingRequest = await prisma.branchChangeRequest.findFirst({
+        where: {
+            studentId,
+            status: { in: [RequestStatus.REQUESTED, RequestStatus.FORWARDED] }
+        }
+    });
+
+    if (existingRequest) {
+        throw new AppError(MESSAGES.ERROR.BRANCH_CHANGE_ALREADY_REQUESTED || 'Branch change request already pending', 409);
+    }
+
     const request = await prisma.branchChangeRequest.create({
         data: {
             studentId,
@@ -182,7 +199,8 @@ export const requestBranchChange = catchAsync(async (req: Request, res: Response
             toBranch: newBranch,
             reason,
             status: RequestStatus.REQUESTED,
-            forwardedTo: 'SUPER_ADMIN' // Direct to Super Admin as per requirement
+            forwardedTo: 'SUPER_ADMIN', // Direct to Super Admin as per requirement
+            createdBy: req.user?.userId || null
         }
     });
 
@@ -209,7 +227,8 @@ export const addAcademicDetails = catchAsync(async (req: Request, res: Response,
         throw new AppError(MESSAGES.ERROR.DETAILS_ARRAY_REQUIRED, 400);
     }
 
-    const result = await addAcademicDetailsService(studentId, details);
+    const currentUserId = req.user?.userId || null;
+    const result = await addAcademicDetailsService(studentId, details, currentUserId);
 
     logger.info(`[addAcademicDetails] added for student=${studentId}`);
     sendResponse({
@@ -220,3 +239,31 @@ export const addAcademicDetails = catchAsync(async (req: Request, res: Response,
         data: result
     });
 });
+
+// Get Student Details (Comprehensive)
+// Get Student Details (Logged-in User)
+export const getStudentDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getStudentDetails] by=${req.user?.userId || 'anonymous'}`);
+
+    const userId = req.user?.userId;
+    if (!userId) {
+        throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
+    }
+
+    const student = await getStudentByUserIdService(userId);
+
+    if (!student) {
+        throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+    }
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.STUDENT_DETAILS_FETCHED,
+        data: student
+    });
+});
+
+
+

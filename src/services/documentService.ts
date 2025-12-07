@@ -5,6 +5,17 @@ import { AppError } from '../utils/AppError';
 import { MESSAGES } from '../constants/messages';
 
 export const createDocumentRequirement = async (data: any) => {
+    const existingRequirement = await prisma.documentRequirement.findFirst({
+        where: {
+            courseType: data.courseType,
+            documentKey: data.documentKey
+        }
+    });
+
+    if (existingRequirement) {
+        throw new AppError(MESSAGES.ERROR.DOCUMENT_REQUIREMENT_EXISTS || 'Document requirement already exists for this course', 409);
+    }
+
     const requirement = await prisma.documentRequirement.create({
         data: {
             courseType: data.courseType,
@@ -31,6 +42,15 @@ export const updateDocumentRequirement = async (id: string, data: any) => {
     const existing = await prisma.documentRequirement.findUnique({ where: { id } });
     if (!existing) {
         throw new AppError(MESSAGES.ERROR.REQUIREMENT_NOT_FOUND, 404);
+    }
+
+    // Check if there are actual changes
+    const hasChanges = Object.keys(data).some(key => {
+        return data[key] !== undefined && existing[key as keyof typeof existing] !== data[key];
+    });
+
+    if (!hasChanges) {
+        throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
     }
 
     const requirement = await prisma.documentRequirement.update({

@@ -1,22 +1,33 @@
 import prisma from '../config/prisma';
-import { AdmissionStatus, StudentDocumentStatus, AgentCommissionStatus, FeeStatus, Prisma } from '@prisma/client';
+import {
+    AdmissionStatus,
+    StudentDocumentStatus,
+    AgentCommissionStatus,
+    FeeStatus,
+    Prisma
+} from '@prisma/client';
 import logger from '../utils/logger';
 import { AppError } from '../utils/AppError';
 import { verifyAadhar } from './integrationService';
 import { deleteFileFromS3 } from '../utils/s3Utils';
 import { MESSAGES } from '../constants/messages';
 
-export const registerStudent = async (data: any, agentId: string | null) => {
+export const registerStudent = async (data: any, agentId: string | null, userId: string | null, currentUserId: string | null) => {
     // Check for duplicate registration
     const dobDate = data.dob ? new Date(data.dob) : undefined;
 
+    const orConditions: any[] = [
+        { email: data.email },
+        { aadharNumber: data.aadharNumber }
+    ];
+
+    if (userId) {
+        orConditions.push({ userId });
+    }
+
     const existingStudent = await prisma.student.findFirst({
         where: {
-            OR: [
-                { email: data.email },
-                { aadharNumber: data.aadharNumber },
-                ...(dobDate ? [{ dob: dobDate }] : [])
-            ]
+            OR: orConditions
         }
     });
 
@@ -54,7 +65,7 @@ export const registerStudent = async (data: any, agentId: string | null) => {
     const applicationId = `${prefix}${nextIdNumber}`;
 
     // Transaction to create Student and related tables
-    const student = await prisma.$transaction(async (tx) => {
+    const student = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const newStudent = await tx.student.create({
             data: {
                 applicationId,
@@ -80,6 +91,10 @@ export const registerStudent = async (data: any, agentId: string | null) => {
                 pref1: data.pref1,
                 pref2: data.pref2,
                 pref3: data.pref3,
+                userId: userId,
+                isKycVerified: data.isKycVerified,
+                createdBy: currentUserId,
+                updatedBy: currentUserId
             }
         });
 
@@ -101,11 +116,43 @@ export const registerStudent = async (data: any, agentId: string | null) => {
         return newStudent;
     });
 
+    const fullStudentDetails = await prisma.student.findUnique({
+        where: { id: student.id },
+        select: {
+            name: true,
+            fatherName: true,
+            motherName: true,
+            gender: true,
+            dob: true,
+            phone: true,
+            email: true,
+            aadharNumber: true,
+            category: true,
+            country: true,
+            address: true,
+            address2: true,
+            city: true,
+            state: true,
+            pincode: true,
+            profilePhotoUrl: true,
+            isKycVerified: true,
+            pref1: true,
+            pref2: true,
+            pref3: true,
+            courseType: true,
+            applicationId: true // Needed for logger and likely client
+        }
+    });
+
+    if (!fullStudentDetails) {
+        throw new AppError("Failed to retrieve registered student details", 500);
+    }
+
     logger.info(`Student registered: ${student.applicationId}`);
-    return student;
+    return fullStudentDetails;
 };
 
-export const payTestFee = async (studentId: string) => {
+export const payTestFee = async (studentId: string, currentUserId: string | null) => {
     // Update Admission Status
     const studentExists = await prisma.student.findUnique({ where: { id: studentId } });
     if (!studentExists) {
@@ -113,7 +160,12 @@ export const payTestFee = async (studentId: string) => {
     }
 
     // Update Admission Status
-    const admission = await prisma.studentAdmission.update({
+    const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
+    if (admission?.feeStatus !== FeeStatus.PENDING && admission?.status === AdmissionStatus.TEST_FEE_PAID) {
+        throw new AppError(MESSAGES.ERROR.ALREADY_PAID, 400);
+    }
+
+    const updatedAdmission = await prisma.studentAdmission.update({
         where: { studentId },
         data: { status: AdmissionStatus.TEST_FEE_PAID }
     });
@@ -172,7 +224,7 @@ export const getHallTicket = async (studentId: string) => {
     return student.examDetails.hallTicketUrl;
 };
 
-export const uploadDocumentsAndPreferences = async (studentId: string, data: any) => {
+export const uploadDocumentsAndPreferences = async (studentId: string, data: any, currentUserId: string | null) => {
     const { id, applicationId, email, phone, pref1, pref2, pref3, ...documentData } = data;
 
     const studentExists = await prisma.student.findUnique({ where: { id: studentId } });
@@ -184,7 +236,7 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
     if (pref1 || pref2 || pref3) {
         await prisma.student.update({
             where: { id: studentId },
-            data: { pref1, pref2, pref3 }
+            data: { pref1, pref2, pref3, updatedBy: currentUserId }
         });
     }
 
@@ -201,13 +253,16 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
                 update: {
                     url: documentData[key],
                     status: StudentDocumentStatus.PENDING,
-                    remarks: null
+                    remarks: null,
+                    updatedBy: currentUserId
                 },
                 create: {
                     studentId,
                     documentKey: key,
                     url: documentData[key],
-                    status: StudentDocumentStatus.PENDING
+                    status: StudentDocumentStatus.PENDING,
+                    createdBy: currentUserId,
+                    updatedBy: currentUserId
                 }
             });
         }
@@ -289,10 +344,14 @@ export const verifyDocument = async (studentId: string, documentKey: string, sta
     return doc;
 };
 
-export const payCollegeFee = async (studentId: string) => {
+export const payCollegeFee = async (studentId: string, currentUserId: string | null) => {
     const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
     if (admission?.status !== AdmissionStatus.SEAT_ALLOTTED) {
         throw new AppError(MESSAGES.ERROR.SEAT_NOT_ALLOTTED, 400);
+    }
+
+    if (admission.feeStatus === FeeStatus.FULL) {
+        throw new AppError(MESSAGES.ERROR.ALREADY_PAID, 400);
     }
 
     const updatedAdmission = await prisma.studentAdmission.update({
@@ -332,24 +391,37 @@ export const payCollegeFee = async (studentId: string) => {
     return updatedAdmission;
 };
 
-export const requestDiscount = async (studentId: string, reason: string, documentUrl: string) => {
+export const requestDiscount = async (studentId: string, reason: string, documentUrl: string, currentUserId: string | null) => {
     const studentExists = await prisma.student.findUnique({ where: { id: studentId } });
     if (!studentExists) {
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+    }
+
+    const existingRequest = await prisma.discountRequest.findFirst({
+        where: {
+            studentId,
+            status: { in: ['REQUESTED', 'FORWARDED_TO_SUPER_ADMIN'] }
+        }
+    });
+
+    if (existingRequest) {
+        throw new AppError(MESSAGES.ERROR.DISCOUNT_ALREADY_REQUESTED, 409);
     }
 
     const discountRequest = await prisma.discountRequest.create({
         data: {
             studentId,
             reason,
-            documentUrl
+            documentUrl,
+            createdBy: currentUserId,
+            updatedBy: currentUserId
         }
     });
     logger.info(`Discount requested for student: ${studentId}`);
     return discountRequest;
 };
 
-export const addAcademicDetails = async (studentId: string, details: any[]) => {
+export const addAcademicDetails = async (studentId: string, details: any[], currentUserId: string | null) => {
     // Validate student exists
     const student = await prisma.student.findUnique({ where: { id: studentId } });
     if (!student) {
@@ -366,7 +438,9 @@ export const addAcademicDetails = async (studentId: string, details: any[]) => {
                     board: detail.board,
                     yearOfPassing: detail.yearOfPassing,
                     hallTicketNumber: detail.hallTicketNumber,
-                    gpaOrMarks: detail.gpaOrMarks
+                    gpaOrMarks: detail.gpaOrMarks,
+                    createdBy: currentUserId,
+                    updatedBy: currentUserId
                 }
             })
         )
@@ -374,4 +448,36 @@ export const addAcademicDetails = async (studentId: string, details: any[]) => {
 
     logger.info(`Academic details added for student: ${studentId}`);
     return result;
+};
+
+export const getStudentByUserId = async (userId: string) => {
+    const student = await prisma.student.findUnique({
+        where: { userId },
+        select: {
+            name: true,
+            fatherName: true,
+            motherName: true,
+            gender: true,
+            dob: true,
+            phone: true,
+            email: true,
+            aadharNumber: true,
+            category: true,
+            country: true,
+            address: true,
+            address2: true,
+            city: true,
+            state: true,
+            pincode: true,
+            profilePhotoUrl: true,
+            isKycVerified: true,
+            pref1: true,
+            pref2: true,
+            pref3: true,
+            courseType: true,
+            applicationId: true // Generally useful
+        }
+    });
+
+    return student;
 };

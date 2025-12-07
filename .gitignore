@@ -48,10 +48,13 @@ docker-compose.override.yml
 .tmp/
 
 # Ignore all Markdown files
-*.md
+
 openapi.json
 openapi.yaml
 
 deploy.zip
 
 scripts/
+
+*.md
+*.txt

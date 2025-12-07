@@ -3,17 +3,24 @@ import { authenticate, authorize } from '../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
 import { validateRequest } from '../middlewares/validationMiddleware';
 import {
-    createExamDate,
     createExamCenter,
+    getExamCenters,
+    updateExamCenter,
+    deleteExamCenter,
     generateInvigilatorCredentials,
     loginInvigilator,
     scanAttendance,
     createExamSlot,
+    getExamSlots,
+    getExamSlot,
+    updateExamSlot,
+    deleteExamSlot,
     getAvailableSlots,
-    bookExamSlot
+    bookExamSlot,
+    toggleSlotBooking,
+    getExamSlotsByCenter
 } from '../controllers/examController';
 import {
-    createExamDateSchema,
     createExamCenterSchema,
     generateInvigilatorCredentialSchema,
     invigilatorLoginSchema,
@@ -25,32 +32,6 @@ import {
 const router = Router();
 
 // Admin Routes
-/**
- * @swagger
- * /exam/dates:
- *   post:
- *     summary: Create exam date
- *     tags: [Exam]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - date
- *             properties:
- *               date:
- *                 type: string
- *                 format: date-time
- *     responses:
- *       201:
- *         description: Exam date created
- */
-router.post('/dates', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createExamDateSchema), createExamDate);
-
 /**
  * @swagger
  * /exam/centers:
@@ -155,6 +136,133 @@ router.post('/invigilators/generate', authenticate, authorize([Role.ADMIN, Role.
  *         description: Exam slot created
  */
 router.post('/slots', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createExamSlotSchema), createExamSlot);
+
+/**
+ * @swagger
+ * /exam/slots/{slotId}/toggle-booking:
+ *   put:
+ *     summary: Enable or disable slot booking
+ *     tags: [Exam]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slotId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - isBookingEnabled
+ *             properties:
+ *               isBookingEnabled:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Slot booking status updated
+ */
+router.put('/slots/:slotId/toggle-booking', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), toggleSlotBooking);
+
+
+/**
+ * @swagger
+ * /exam/centers:
+ *   get:
+ *     summary: Get all exam centers
+ *     tags: [Exam]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of exam centers
+ */
+router.get('/centers', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getExamCenters);
+
+/**
+ * @swagger
+ * /exam/centers/{id}:
+ *   put:
+ *     summary: Update exam center
+ *     tags: [Exam]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Exam center updated
+ */
+router.put('/centers/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateExamCenter);
+
+/**
+ * @swagger
+ * /exam/centers/{id}:
+ *   delete:
+ *     summary: Delete exam center
+ *     tags: [Exam]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Exam center deleted
+ */
+router.delete('/centers/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteExamCenter);
+
+// Exam Slots Admin CRUD
+
+/**
+ * @swagger
+ * /exam/all-slots:
+ *   get:
+ *     summary: Get all exam slots (Admin)
+ *     tags: [Exam]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of all exam slots
+ */
+router.get('/all-slots', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getExamSlots);
+
+/**
+ * @swagger
+ * /exam/centers/{centerId}/slots:
+ *   get:
+ *     summary: Get all exam slots for a specific center
+ *     tags: [Exam]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: centerId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of exam slots for the center
+ */
+router.get('/centers/:centerId/slots', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getExamSlotsByCenter);
+
+router.get('/slots/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getExamSlot);
+router.put('/slots/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateExamSlot);
+router.delete('/slots/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteExamSlot);
+
 
 // Student/Public Routes
 /**

@@ -50,7 +50,8 @@ import {
     getHostelBlocks, updateHostelBlock, deleteHostelBlock,
     getHostelRooms, updateHostelRoom, deleteHostelRoom,
     getVehicles, updateVehicle, deleteVehicle,
-    getTransportStops, updateTransportStop, deleteTransportStop
+    getTransportStops, updateTransportStop, deleteTransportStop,
+    getUserDetails
 } from '../controllers/adminController';
 import { authenticate, authorize } from '../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
@@ -1430,5 +1431,28 @@ router.delete('/vehicle/:id', authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteV
 router.get('/transport-stop', authorize([Role.ADMIN, Role.SUPER_ADMIN]), getTransportStops);
 router.put('/transport-stop/:id', authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateTransportStop);
 router.delete('/transport-stop/:id', authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteTransportStop);
+
+/**
+ * @swagger
+ * /admin/user-details:
+ *   get:
+ *     summary: Get user details by phone or email
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: phone
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: email
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: User details retrieved
+ */
+router.get('/user-details', authorize([Role.ADMIN, Role.SUPER_ADMIN]), getUserDetails);
 
 export default router;
