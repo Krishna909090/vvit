@@ -336,6 +336,7 @@ export const createExamSlot = async (data: any, userId?: string) => {
  * Get all future and booking-enabled slots that are not full.
  */
 export const getAvailableSlots = async () => {
+    // 1. Fetch available slots (future date, booking enabled)
     const slots = await prisma.examSlot.findMany({
         where: {
             date: {
@@ -351,10 +352,40 @@ export const getAvailableSlots = async () => {
         },
     });
 
+    // 2. Filter out full slots
     const availableSlots = slots.filter((slot: any) => slot.filled < slot.capacity);
 
-    logger.info(`Retrieved ${availableSlots.length} available exam slots`);
-    return availableSlots;
+    // 3. Group by Exam Center
+    const centerMap = new Map();
+    availableSlots.forEach((slot: any) => {
+        const centerId = slot.examCenterId;
+
+        if (!centerMap.has(centerId)) {
+            centerMap.set(centerId, {
+                id: slot.examCenter.id,
+                name: slot.examCenter.name,
+                city: slot.examCenter.city,
+                address: slot.examCenter.address,
+                availableSlots: []
+            });
+        }
+
+        const centerData = centerMap.get(centerId);
+        centerData.availableSlots.push({
+            id: slot.id,
+            date: formatDate(slot.date),
+            startTime: formatTime(slot.startTime),
+            endTime: formatTime(slot.endTime),
+            capacity: slot.capacity,
+            filled: slot.filled,
+            seatsAvailable: slot.capacity - slot.filled,
+            isBookingEnabled: slot.isBookingEnabled
+        });
+    });
+
+    const result = Array.from(centerMap.values());
+    logger.info(`Retrieved ${availableSlots.length} available slots across ${result.length} centers`);
+    return result;
 };
 
 /**

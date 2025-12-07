@@ -27,7 +27,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
 
     const existingStudent = await prisma.student.findFirst({
         where: {
-            OR: orConditions
+            OR: orConditions    
         }
     });
 
@@ -119,6 +119,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
     const fullStudentDetails = await prisma.student.findUnique({
         where: { id: student.id },
         select: {
+            id:true,
             name: true,
             fatherName: true,
             motherName: true,
@@ -454,6 +455,7 @@ export const getStudentByUserId = async (userId: string) => {
     const student = await prisma.student.findUnique({
         where: { userId },
         select: {
+            id:true,
             name: true,
             fatherName: true,
             motherName: true,
