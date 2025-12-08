@@ -39,6 +39,7 @@ This document provides a consolidated tabular view of all User Interface fields 
 | | Assign Vehicle | Dropdown | API: `GET /vehicles` | Required | Links bus to route |
 | | Annual Cost | Currency | N/A | Required | Fee added to student bill |
 | | Start Time | Time | N/A | Required | Route start time |
+| | City | City | N/A | Required | Route start time |
 | **Add Stop** | Select Route | Dropdown | API: `GET /routes` | Required | Parent Route |
 | | Stop Name | Text | N/A | Required | Pickup point name |
 | | Sequence | Number | N/A | Required | Order (1, 2, 3...) |
