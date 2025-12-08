@@ -1,119 +1,61 @@
-# User Interface Field Specifications
+# UI Field Specifications (Master Tables)
 
-This document defines the required **Form Fields**, **Dropdown Options**, and **Validation Rules** for the frontend UI implementation of the Facility Management modules.
+This document provides a consolidated tabular view of all User Interface fields required for the Facility Management modules.
 
----
+## 1. Branch Management Module
 
-## 1. Branch Management UI
+| Screen / Action | Field Name | Input Type | Options / Data Source | Validation Rules | Logic / Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Create/Edit Branch** | Branch Name | Text | N/A | Required, Min 3 chars | Full name (e.g., "Computer Science") |
+| | Branch Code | Text | N/A | Required, Unique, Uppercase | Short code (e.g., "CSE") |
+| | Total Seats | Number | N/A | Required, Min 1 | Max intake capacity |
+| | Description | Text Area | N/A | Optional | Internal notes |
 
-### Screen: "Manage Branches"
-**Action:** Add / Edit Branch
+## 2. Hostel Management Module
 
-| Field Label | Input Type | Validation / Constraints | Helper Text |
-| :--- | :--- | :--- | :--- |
-| **Branch Name** | Text Input | Required, Min 3 chars | e.g., "Computer Science & Engineering" |
-| **Branch Code** | Text Input | Required, Uppercase, Unique | e.g., "CSE" |
-| **Total Seats** | Number Input | Required, Min 1 | Total intake capacity |
-| **HOD Name** | Text Input | Optional | Head of Department Name |
+| Screen / Action | Field Name | Input Type | Options / Data Source | Validation Rules | Logic / Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Create Hostel** | Hostel Name | Text | N/A | Required | Name of building |
+| | Hostel Type | Dropdown | `Boys`, `Girls` | Required | Restricts allocation by gender |
+| | Total Capacity | Number | N/A | Required | Total beds in building |
+| | Warden Name | Text | N/A | Optional | |
+| **Create Block** | Select Hostel | Dropdown | API: `GET /hostels` | Required | Parent Hostel |
+| | Block Name | Text | N/A | Required | e.g., "A-Block" |
+| **Create Room** | Select Block | Dropdown | API: `GET /blocks` | Required | Parent Block |
+| | Room Number | Text | N/A | Required | e.g., "101" |
+| | Room Type | Dropdown | `AC`, `Non-AC` | Required | Affects Fee |
+| | Sharing Mode | Dropdown | `2`, `4`, `8` | Required | Affects Fee |
+| | Capacity | Number | Auto-filled (readonly) | Derived from Sharing Mode | |
 
----
+## 3. Transport Management Module
 
-## 2. Hostel Management UI
+| Screen / Action | Field Name | Input Type | Options / Data Source | Validation Rules | Logic / Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Add Vehicle** | Bus Number | Text | N/A | Required, Regex (Plate) | Physical Vehicle ID |
+| | Capacity | Number | N/A | Required, Max 60 | Max seats |
+| | Driver Name | Text | N/A | Required | |
+| | Driver Mobile | Phone | N/A | Required, 10 digits | |
+| **Create Route** | Route Name | Text | N/A | Required | e.g., "Route 5 - City" |
+| | Assign Vehicle | Dropdown | API: `GET /vehicles` | Required | Links bus to route |
+| | Annual Cost | Currency | N/A | Required | Fee added to student bill |
+| | Start Time | Time | N/A | Required | Route start time |
+| **Add Stop** | Select Route | Dropdown | API: `GET /routes` | Required | Parent Route |
+| | Stop Name | Text | N/A | Required | Pickup point name |
+| | Sequence | Number | N/A | Required | Order (1, 2, 3...) |
+| | Pickup Time | Time | N/A | Optional | |
 
-### Screen: "Create Hostel Building"
-**Action:** Add New Hostel
+## 4. Student Allocation (Counseling) Screen
 
-| Field Label | Input Type | Validation / Constraints | Helper Text |
-| :--- | :--- | :--- | :--- |
-| **Hostel Name** | Text Input | Required | e.g., "Krishna Boys Hostel" |
-| **Hostel Type** | Dropdown | Required | Options: `Boys`, `Girls` |
-| **Total Capacity** | Number Input | Required | Total beds in the building |
-| **Warden Name** | Text Input | Optional | |
-| **Contact Number** | Phone Input | Optional, 10 digits | Warden's contact |
-
-### Screen: "Add Room"
-**Action:** Add Room to Block
-
-| Field Label | Input Type | Validation / Constraints | Helper Text |
-| :--- | :--- | :--- | :--- |
-| **Select Hostel** | Dropdown | Required | Lists existing hostels |
-| **Select Block** | Dropdown | Required | Lists blocks in selected hostel |
-| **Room Number** | Text Input | Required | e.g., "101", "A-202" |
-| **Room Type** | Dropdown | Required | `AC`, `Non-AC` |
-| **Sharing Type** | Dropdown | Required | `2-Sharing`, `4-Sharing`, `8-Sharing` |
-| **Room Capacity** | Number Input | Auto-filled based on Sharing Type | |
-
----
-
-## 3. Transport Management UI
-
-### Screen: "Fleet Management"
-**Action:** Add Vehicle
-
-| Field Label | Input Type | Validation / Constraints | Helper Text |
-| :--- | :--- | :--- | :--- |
-| **Bus Number** | Text Input | Required, License Plate Format | e.g., "TS09 UA 1234" |
-| **Vehicle Type** | Dropdown | Required | `Bus`, `Minivan` |
-| **Seating Capacity** | Number Input | Required, Max 60 | |
-| **Driver Name** | Text Input | Required | |
-| **Driver Phone** | Phone Input | Required | |
-
-### Screen: "Route Configuration"
-**Action:** Define Route
-
-| Field Label | Input Type | Validation / Constraints | Helper Text |
-| :--- | :--- | :--- | :--- |
-| **Route Name** | Text Input | Required | e.g., "Route 5 - City Center" |
-| **Assigned Vehicle** | Dropdown | Required | Lists available buses |
-| **Cost (Annual)** | Currency | Required | e.g., 25000 |
-| **Start Time** | Time Picker | Required | e.g., 07:30 AM |
-
-### Screen: "Manage Stops" (Repeater Field)
-**Parent:** Route Configuration
-
-| Field Label | Input Type | Details |
-| :--- | :--- | :--- |
-| **Stop Name** | Text Input | e.g., "Main Circle" |
-| **Pickup Time** | Time Picker | e.g., 07:45 AM |
-| **Drop Time** | Time Picker | e.g., 04:30 PM |
-| **Sequence** | Number | Order of the stop (1, 2, 3...) |
-
----
-
-## 4. Student Allocation UI (The "Counseling" Screen)
-
-### Screen: "Update Admission & Facilities"
-**Context:** Admin viewing a Student Profile
-
-#### Section A: Core Admission
-| Field Label | Input Type | Logic |
-| :--- | :--- | :--- |
-| **Allotted Branch** | Dropdown | Lists all Branches. Shows Available Seats in bracket. e.g. "CSE (2 left)" |
-| **Admission Status** | Read-Only | e.g., "Seat Allotted" |
-
-#### Section B: Facility Selector
-**Toggle Switch:** `[ ] Opt for Facility`
-
-**If Toggle ON -> Select Type:**
-*   ( ) **Hostel**
-*   ( ) **Transport**
-
-**If "Hostel" Selected:**
-| Field Label | Input Type | Data Source |
-| :--- | :--- | :--- |
-| **Hostel Type** | Dropdown | `SHARING_4`, `SHARING_8` |
-| **Select Building** | Dropdown | Filtered by Student Gender (e.g., Only Boys Hostels) |
-| **Select Room** | (V2 Advanced) | Shows Available Rooms |
-
-**If "Transport" Selected:**
-| Field Label | Input Type | Data Source |
-| :--- | :--- | :--- |
-| **Select Route** | Dropdown | Lists Routes. Shows "Filled/Capacity" e.g "Route A (35/40)" |
-| **Pickup Point** | Dropdown | Lists Stops for the selected route |
-
-#### Section C: Fee Summary (Auto-Calulated)
-| Label | Value |
-| :--- | :--- |
-| **Tuition Fee** | ₹ 1,25,000 |
-| **Facility Fee** | ₹ {Dynamic based on Selection} |
-| **Total Payable** | ₹ {Sum} |
+| Section | Field Name | Input Type | Options / Data Source | Validation Rules | Logic / Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Admission** | Allotted Branch | Dropdown | API: `GET /branches` | Required | Shows available seats count |
+| **Facility Toggle** | Need Facility? | Switch/Checkbox | `Yes` / `No` | N/A | Reveals Facility options |
+| **Facility Type** | Accommodation | Radio Button | `Hostel`, `Transport` | Required if Toggle=Yes | Determines next fields |
+| **If Hostel** | Hostel Type | Dropdown | `SHARING_4`, `SHARING_8` | Required | Filters buildings |
+| | Select Hostel | Dropdown | API: `GET /hostels` (Filtered by Gender) | Required | Select Building |
+| | Select Room | Dropdown | API: `GET /rooms` (Filtered by Vacancy) | Optional (V2) | Specific bed allocation |
+| **If Transport** | Select Route | Dropdown | API: `GET /routes` | Required | Select Bus Route |
+| | Select Stop | Dropdown | API: `GET /stops` (Filtered by Route) | Required | Pickup point |
+| **Fee Summary** | Tuition Fee | Read-only | Fixed | N/A | Base Fee |
+| | Facility Fee | Read-only | Dynamic | N/A | Derived from Hostel/Route |
+| | **Total** | Read-only | Calculated Sum | N/A | Final Amount to Pay |
