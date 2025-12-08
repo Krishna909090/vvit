@@ -1,0 +1,119 @@
+# User Interface Field Specifications
+
+This document defines the required **Form Fields**, **Dropdown Options**, and **Validation Rules** for the frontend UI implementation of the Facility Management modules.
+
+---
+
+## 1. Branch Management UI
+
+### Screen: "Manage Branches"
+**Action:** Add / Edit Branch
+
+| Field Label | Input Type | Validation / Constraints | Helper Text |
+| :--- | :--- | :--- | :--- |
+| **Branch Name** | Text Input | Required, Min 3 chars | e.g., "Computer Science & Engineering" |
+| **Branch Code** | Text Input | Required, Uppercase, Unique | e.g., "CSE" |
+| **Total Seats** | Number Input | Required, Min 1 | Total intake capacity |
+| **HOD Name** | Text Input | Optional | Head of Department Name |
+
+---
+
+## 2. Hostel Management UI
+
+### Screen: "Create Hostel Building"
+**Action:** Add New Hostel
+
+| Field Label | Input Type | Validation / Constraints | Helper Text |
+| :--- | :--- | :--- | :--- |
+| **Hostel Name** | Text Input | Required | e.g., "Krishna Boys Hostel" |
+| **Hostel Type** | Dropdown | Required | Options: `Boys`, `Girls` |
+| **Total Capacity** | Number Input | Required | Total beds in the building |
+| **Warden Name** | Text Input | Optional | |
+| **Contact Number** | Phone Input | Optional, 10 digits | Warden's contact |
+
+### Screen: "Add Room"
+**Action:** Add Room to Block
+
+| Field Label | Input Type | Validation / Constraints | Helper Text |
+| :--- | :--- | :--- | :--- |
+| **Select Hostel** | Dropdown | Required | Lists existing hostels |
+| **Select Block** | Dropdown | Required | Lists blocks in selected hostel |
+| **Room Number** | Text Input | Required | e.g., "101", "A-202" |
+| **Room Type** | Dropdown | Required | `AC`, `Non-AC` |
+| **Sharing Type** | Dropdown | Required | `2-Sharing`, `4-Sharing`, `8-Sharing` |
+| **Room Capacity** | Number Input | Auto-filled based on Sharing Type | |
+
+---
+
+## 3. Transport Management UI
+
+### Screen: "Fleet Management"
+**Action:** Add Vehicle
+
+| Field Label | Input Type | Validation / Constraints | Helper Text |
+| :--- | :--- | :--- | :--- |
+| **Bus Number** | Text Input | Required, License Plate Format | e.g., "TS09 UA 1234" |
+| **Vehicle Type** | Dropdown | Required | `Bus`, `Minivan` |
+| **Seating Capacity** | Number Input | Required, Max 60 | |
+| **Driver Name** | Text Input | Required | |
+| **Driver Phone** | Phone Input | Required | |
+
+### Screen: "Route Configuration"
+**Action:** Define Route
+
+| Field Label | Input Type | Validation / Constraints | Helper Text |
+| :--- | :--- | :--- | :--- |
+| **Route Name** | Text Input | Required | e.g., "Route 5 - City Center" |
+| **Assigned Vehicle** | Dropdown | Required | Lists available buses |
+| **Cost (Annual)** | Currency | Required | e.g., 25000 |
+| **Start Time** | Time Picker | Required | e.g., 07:30 AM |
+
+### Screen: "Manage Stops" (Repeater Field)
+**Parent:** Route Configuration
+
+| Field Label | Input Type | Details |
+| :--- | :--- | :--- |
+| **Stop Name** | Text Input | e.g., "Main Circle" |
+| **Pickup Time** | Time Picker | e.g., 07:45 AM |
+| **Drop Time** | Time Picker | e.g., 04:30 PM |
+| **Sequence** | Number | Order of the stop (1, 2, 3...) |
+
+---
+
+## 4. Student Allocation UI (The "Counseling" Screen)
+
+### Screen: "Update Admission & Facilities"
+**Context:** Admin viewing a Student Profile
+
+#### Section A: Core Admission
+| Field Label | Input Type | Logic |
+| :--- | :--- | :--- |
+| **Allotted Branch** | Dropdown | Lists all Branches. Shows Available Seats in bracket. e.g. "CSE (2 left)" |
+| **Admission Status** | Read-Only | e.g., "Seat Allotted" |
+
+#### Section B: Facility Selector
+**Toggle Switch:** `[ ] Opt for Facility`
+
+**If Toggle ON -> Select Type:**
+*   ( ) **Hostel**
+*   ( ) **Transport**
+
+**If "Hostel" Selected:**
+| Field Label | Input Type | Data Source |
+| :--- | :--- | :--- |
+| **Hostel Type** | Dropdown | `SHARING_4`, `SHARING_8` |
+| **Select Building** | Dropdown | Filtered by Student Gender (e.g., Only Boys Hostels) |
+| **Select Room** | (V2 Advanced) | Shows Available Rooms |
+
+**If "Transport" Selected:**
+| Field Label | Input Type | Data Source |
+| :--- | :--- | :--- |
+| **Select Route** | Dropdown | Lists Routes. Shows "Filled/Capacity" e.g "Route A (35/40)" |
+| **Pickup Point** | Dropdown | Lists Stops for the selected route |
+
+#### Section C: Fee Summary (Auto-Calulated)
+| Label | Value |
+| :--- | :--- |
+| **Tuition Fee** | ₹ 1,25,000 |
+| **Facility Fee** | ₹ {Dynamic based on Selection} |
+| **Total Payable** | ₹ {Sum} |
