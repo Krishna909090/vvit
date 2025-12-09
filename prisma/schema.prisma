@@ -175,24 +175,29 @@ model Department {
   id        String    @id @default(uuid())
   name      String    @unique
   code      String    @unique 
-  programs  Program[]
+  courses   Course[]
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   createdBy String?
   updatedBy String?
+  isDeleted Boolean @default(false)
 }
 
-model Program {
+// Course model updated
+model Course {
   id            String         @id @default(uuid())
+  code          String         @unique 
   name          String 
   departmentId  String
   department    Department     @relation(fields: [departmentId], references: [id])
   batches       Batch[]
+  specializations      Specialization[]
   feeStructures FeeStructure[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   createdBy     String?
   updatedBy     String?
+  isDeleted     Boolean  @default(false)
 
   @@unique([name, departmentId])
 }
@@ -200,8 +205,8 @@ model Program {
 model Batch {
   id        String    @id @default(uuid())
   name      String 
-  programId String
-  program   Program   @relation(fields: [programId], references: [id])
+  courseId  String
+  course    Course   @relation(fields: [courseId], references: [id])
   sections  Section[]
   startDate DateTime
   endDate   DateTime
@@ -209,6 +214,7 @@ model Batch {
   updatedAt DateTime  @updatedAt
   createdBy String?
   updatedBy String?
+  isDeleted Boolean @default(false)
 }
 
 model Section {
@@ -221,6 +227,7 @@ model Section {
   updatedAt DateTime            @updatedAt
   createdBy String?
   updatedBy String?
+  isDeleted Boolean @default(false)
 }
 
 
@@ -238,6 +245,7 @@ model AcademicYear {
   updatedAt DateTime @updatedAt
   createdBy String?
   updatedBy String?
+  isDeleted Boolean @default(false)
 }
 
 
@@ -308,10 +316,10 @@ model Student {
   documents        StudentDocument[]
 
   academicQualifications AcademicQualification[]
-  branchChangeLogs       BranchChangeLog[]
+  courseChangeLogs       CourseChangeLog[]
   discountRequests       DiscountRequest[]
   cancellationRequests   CancellationRequest[]
-  branchChangeRequests   BranchChangeRequest[]
+  courseChangeRequests   CourseChangeRequest[]
   agentCommissions       AgentCommission[]
   seatAllocations        SeatAllocation[]
   hallTickets            HallTicket[]
@@ -362,7 +370,7 @@ model StudentAdmission {
   status AdmissionStatus @default(REGISTERED)
 
   
-  allottedBranch String?
+  allottedSpecialization String?
 
   
   totalFee  Float     @default(0)
@@ -401,18 +409,22 @@ model StudentDocument {
 
   @@unique([studentId, documentKey])
   @@index([studentId])
+  isDeleted Boolean @default(false)
 }
 
-model Branch {
+model Specialization {
   id          String   @id @default(uuid())
   code        String   @unique 
   name        String
+  courseId   String
+  course     Course  @relation(fields: [courseId], references: [id])
   totalSeats  Int
   filledSeats Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   createdBy   String?
   updatedBy   String?
+  isDeleted   Boolean  @default(false)
 }
 
 
@@ -420,7 +432,8 @@ model Branch {
 model Hostel {
   id       String     @id @default(uuid())
   name     String
-  type     HostelType
+  type     String // 'Boys' or 'Girls'
+  wardenName String?
   capacity Int
   filled   Int        @default(0)
   cost     Float
@@ -449,6 +462,7 @@ model HostelBlock {
   updatedAt DateTime     @updatedAt
   createdBy String?
   updatedBy String?
+  isDeleted Boolean @default(false)
 }
 
 model HostelRoom {
@@ -463,6 +477,7 @@ model HostelRoom {
   updatedAt DateTime    @updatedAt
   createdBy String?
   updatedBy String?
+  isDeleted Boolean @default(false)
 }
 
 model HostelBed {
@@ -508,12 +523,14 @@ model Vehicle {
   updatedAt   DateTime         @updatedAt
   createdBy   String?
   updatedBy   String?
+  isDeleted   Boolean  @default(false)
 }
 
 model TransportRoute {
   id   String @id @default(uuid())
   name String 
   cost Float
+  city String
 
   
   busNumber String?
@@ -547,6 +564,7 @@ model TransportStop {
   updatedAt   DateTime              @updatedAt
   createdBy   String?
   updatedBy   String?
+  isDeleted   Boolean  @default(false)
 }
 
 model TransportAllocation {
@@ -579,12 +597,13 @@ model FeeHead {
   updatedAt   DateTime       @updatedAt
   createdBy   String?
   updatedBy   String?
+  isDeleted   Boolean  @default(false)
 }
 
 model FeeStructure {
   id             String             @id @default(uuid())
-  programId      String
-  program        Program            @relation(fields: [programId], references: [id])
+  courseId      String
+  course        Course             @relation(fields: [courseId], references: [id])
   feeHeadId      String
   feeHead        FeeHead            @relation(fields: [feeHeadId], references: [id])
   amount         Float
@@ -596,8 +615,9 @@ model FeeStructure {
   updatedAt      DateTime           @updatedAt
   createdBy      String?
   updatedBy      String?
+  isDeleted      Boolean  @default(false)
 
-  @@index([programId, academicYearId])
+  @@index([courseId, academicYearId])
 }
 
 model StudentFeeDemand {
@@ -662,12 +682,12 @@ model AcademicQualification {
   @@index([studentId])
 }
 
-model BranchChangeLog {
+model CourseChangeLog {
   id         String   @id @default(uuid())
   studentId  String
   student    Student  @relation(fields: [studentId], references: [id])
-  oldBranch  String
-  newBranch  String
+  oldCourse  String
+  newCourse  String
   approvedBy String 
   date       DateTime @default(now())
   createdBy  String?
@@ -753,6 +773,7 @@ model ExamCenter {
   examSlots ExamSlot[]
   createdBy String?
   updatedBy String?
+  isDeleted Boolean @default(false)
 }
 
 model ExamSlot {
@@ -770,6 +791,7 @@ model ExamSlot {
   updatedAt        DateTime      @updatedAt
   createdBy        String?
   updatedBy        String?
+  isDeleted        Boolean  @default(false)
 }
 
 model HallTicket {
@@ -815,8 +837,8 @@ model SeatAllocation {
   id          String   @id @default(uuid())
   studentId   String
   student     Student  @relation(fields: [studentId], references: [id])
-  oldBranch   String?
-  newBranch   String?
+  oldCourse   String?
+  newCourse   String?
   allocatedBy String? 
   allocatedAt DateTime @default(now())
   notes       String?
@@ -826,12 +848,12 @@ model SeatAllocation {
   @@index([studentId])
 }
 
-model BranchChangeRequest {
+model CourseChangeRequest {
   id          String        @id @default(uuid())
   studentId   String
   student     Student       @relation(fields: [studentId], references: [id])
-  fromBranch  String
-  toBranch    String
+  fromCourse  String
+  toCourse    String
   reason      String
   status      RequestStatus @default(REQUESTED)
   forwardedTo String?
@@ -911,6 +933,7 @@ model DocumentRequirement {
   updatedAt    DateTime @updatedAt
   createdBy    String?
   updatedBy    String?
+  isDeleted    Boolean  @default(false)
 
   @@unique([courseType, documentKey])
 }

@@ -1,9 +1,11 @@
+
 import { Request, Response, NextFunction } from 'express';
 import {
     createDocumentRequirement,
     getDocumentRequirements,
     updateDocumentRequirement,
-    deleteDocumentRequirement
+    deleteDocumentRequirement,
+    deleteStudentDocument as deleteStudentDocService
 } from '../services/documentService';
 import prisma from '../config/prisma';
 import { catchAsync } from '../utils/catchAsync';
@@ -80,5 +82,38 @@ export const getMyRequirements = catchAsync(async (req: Request, res: Response, 
         statusCode: 200,
         success: true,
         data: requirements
+    });
+});
+
+/**
+ * Delete a specific document for a student.
+ */
+export const deleteStudentDocument = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { documentKey } = req.query; // Changed to query as typical DELETE doesn't use body often, but let's check routes. 
+
+    // Route: router.delete('/:studentId/document', ...)
+    // Postman usually sends query params for DELETE or body. 
+    // The previous controller used `req.body` for documentKey.
+    // However, the route definition in `studentRoutes.ts` line 406 says:
+    //       - in: query
+    //         name: documentKey
+    
+    // So `req.query` is correct based on Swagger, but `req.body` was used in `deleteDocumentController`.
+    // I will support both to be safe or stick to query as per Swagger.
+    
+    const key = (documentKey as string) || req.body.documentKey;
+
+    if (!key) {
+        throw new AppError(MESSAGES.ERROR.DOCUMENT_KEY_REQUIRED, 400);
+    }
+
+    const result = await deleteStudentDocService(studentId, key);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DOCUMENT_DELETED,
+        data: result
     });
 });

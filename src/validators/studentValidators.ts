@@ -67,3 +67,12 @@ export const addAcademicDetailsSchema = z.object({
         })).min(1, "At least one academic detail is required"),
     }),
 });
+
+export const selectExamSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        slotId: z.string().uuid("Invalid Slot ID"),
+    }),
+});

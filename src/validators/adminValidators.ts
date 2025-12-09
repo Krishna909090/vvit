@@ -21,22 +21,22 @@ export const verifyAndAllotSeatSchema = z.object({
     body: z.object({
         studentId: z.string().uuid(),
         approved: z.boolean(),
-        allottedBranch: z.string().optional(), // Required if approved is true, but we can refine this
-    }).refine((data) => !data.approved || (data.approved && data.allottedBranch), {
-        message: "Allotted branch is required when approved is true",
-        path: ["allottedBranch"],
+        allottedSpecialization: z.string().optional(), // Required if approved is true, but we can refine this
+    }).refine((data) => !data.approved || (data.approved && data.allottedSpecialization), {
+        message: "Allotted specialization is required when approved is true",
+        path: ["allottedSpecialization"],
     }),
 });
 
-export const changeBranchSchema = z.object({
+export const changeCourseSchema = z.object({
     body: z.object({
         studentId: z.string().uuid(),
-        newBranch: z.string().min(1, "New branch is required"),
+        newSpecialization: z.string().min(1, "New specialization is required"),
         reason: z.string().min(1, "Reason is required"),
     }),
 });
 
-export const approveBranchChangeSchema = z.object({
+export const approveCourseChangeSchema = z.object({
     body: z.object({
         requestId: z.string().uuid(),
         approved: z.boolean(),
@@ -91,6 +91,7 @@ export const updateExamScoreSchema = z.object({
 export const createTransportRouteSchema = z.object({
     body: z.object({
         name: z.string().min(1, "Route name is required"),
+        city: z.string().min(1, "City is required"),
         cost: z.number().min(0),
         busNumber: z.string().min(1, "Bus number is required"),
         capacity: z.number().int().min(1, "Capacity must be at least 1"),
@@ -167,10 +168,11 @@ export const getAgentCommissionsSchema = z.object({
     }),
 });
 
-export const createBranchSchema = z.object({
+export const createSpecializationSchema = z.object({
     body: z.object({
-        code: z.string().min(1, "Branch code is required"),
-        name: z.string().min(1, "Branch name is required"),
+        code: z.string().min(1, "code is required"),
+        name: z.string().min(1, "name is required"),
+        courseId: z.string().uuid("This refers to Course ID"),
         totalSeats: z.number().int().min(1, "Total seats must be at least 1"),
     }),
 });
@@ -185,17 +187,18 @@ export const createDepartmentSchema = z.object({
     }),
 });
 
-export const createProgramSchema = z.object({
+export const createCourseSchema = z.object({
     body: z.object({
-        name: z.string().min(1),
-        departmentId: z.string().uuid(),
+        name: z.string().min(1, "Name is required"),
+        code: z.string().min(1, "Code is required"),
+        departmentId: z.string().uuid("Invalid Department ID"),
     }),
 });
 
 export const createBatchSchema = z.object({
     body: z.object({
         name: z.string().min(1),
-        programId: z.string().uuid(),
+        courseId: z.string().uuid(),
         startDate: z.string().datetime().or(z.date()),
         endDate: z.string().datetime().or(z.date()),
     }),
@@ -221,8 +224,8 @@ export const createHostelRoomSchema = z.object({
     body: z.object({
         blockId: z.string().uuid(),
         number: z.string().min(1),
-        capacity: z.number().int().positive(),
-        type: z.string().min(1),
+        capacity: z.number().int().refine(val => [2, 4, 8].includes(val), { message: "Capacity must be 2, 4, or 8" }),
+        type: z.enum(["AC", "Non-AC", "ac", "non-ac"]),
     }),
 });
 
@@ -265,7 +268,7 @@ export const createFeeHeadSchema = z.object({
 
 export const createFeeStructureSchema = z.object({
     body: z.object({
-        programId: z.string().uuid(),
+        courseId: z.string().uuid(),
         feeHeadId: z.string().uuid(),
         amount: z.number().positive(),
         academicYearId: z.string().uuid(),

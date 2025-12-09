@@ -1,0 +1,1420 @@
+{
+	"info": {
+		"_postman_id": "vvitu-full-api-collection-v1",
+		"name": "VVIT ERP Full API Collection",
+		"description": "Complete API collection for VVIT ERP including Auth, Student, Admin, Exam, and Invigilator modules. Updated with Course (formerly Branch) terminology.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3000/api",
+			"type": "string"
+		},
+		{
+			"key": "token",
+			"value": "YOUR_JWT_TOKEN_HERE",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Auth",
+			"item": [
+				{
+					"name": "Send OTP",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"phone\": \"9876543210\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/auth/send-otp",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"auth",
+								"send-otp"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Verify OTP",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"phone\": \"9876543210\",\n    \"otp\": \"123456\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/auth/verify-otp",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"auth",
+								"verify-otp"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Aadhaar Generate OTP",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"id_number\": \"949817517713\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/auth/aadhaar/generate-otp",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"auth",
+								"aadhaar",
+								"generate-otp"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Aadhaar Submit OTP",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"request_id\": \"REQ123\",\n    \"otp\": \"123456\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/auth/aadhaar/submit-otp",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"auth",
+								"aadhaar",
+								"submit-otp"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Student",
+			"item": [
+				{
+					"name": "Register",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Student Name\",\n  \"fatherName\": \"Father Name\",\n  \"motherName\": \"Mother Name\",\n  \"gender\": \"Male\",\n  \"dob\": \"2005-01-01\",\n  \"phone\": \"9876543210\",\n  \"email\": \"student@example.com\",\n  \"aadharNumber\": \"123412341234\",\n  \"category\": \"General\",\n  \"country\": \"India\",\n  \"address\": \"Address 1\",\n  \"city\": \"Hyderabad\",\n  \"state\": \"Telangana\",\n  \"pincode\": \"500000\",\n  \"courseType\": \"B.Tech\",\n  \"pref1\": \"CSE\",\n  \"profilePhotoUrl\": \"http://example.com/photo.jpg\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/student/register",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								"register"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Profile/Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/student/details",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								"details"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Exam Slots",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/student/exam-slots",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								"exam-slots"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Select Exam",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"slotId\": \"SLOT_UUID\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/student/:studentId/select-exam",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								":studentId",
+								"select-exam"
+							],
+							"variable": [
+								{
+									"key": "studentId",
+									"value": "UUID"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Hall Ticket",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/student/:studentId/hall-ticket",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								":studentId",
+								"hall-ticket"
+							],
+							"variable": [
+								{
+									"key": "studentId",
+									"value": "UUID"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Pay Test Fee",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/student/:studentId/pay-test-fee",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								":studentId",
+								"pay-test-fee"
+							],
+							"variable": [
+								{
+									"key": "studentId",
+									"value": "UUID"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Upload Docs & Prefs",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"marksheetUrl\": \"http://s3.com/marks.pdf\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/student/:studentId/upload-docs",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								":studentId",
+								"upload-docs"
+							],
+							"variable": [
+								{
+									"key": "studentId",
+									"value": "UUID"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Pay College Fee",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/student/:studentId/pay-college-fee",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								":studentId",
+								"pay-college-fee"
+							],
+							"variable": [
+								{
+									"key": "studentId",
+									"value": "UUID"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Add Academic Details",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"details\": [\n    {\n      \"level\": \"10th\",\n      \"board\": \"SSC\",\n      \"yearOfPassing\": \"2020\",\n      \"hallTicketNumber\": \"123456\",\n      \"gpaOrMarks\": \"9.8\"\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/student/:studentId/academic-details",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								":studentId",
+								"academic-details"
+							],
+							"variable": [
+								{
+									"key": "studentId",
+									"value": "UUID"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Doc Requirements",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/student/document-requirements",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								"document-requirements"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Document",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/student/:studentId/document?documentKey=marksheetUrl",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"student",
+								":studentId",
+								"document"
+							],
+							"query": [
+								{
+									"key": "documentKey",
+									"value": "marksheetUrl"
+								}
+							],
+							"variable": [
+								{
+									"key": "studentId",
+									"value": "UUID"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Admin",
+			"item": [
+				{
+					"name": "General",
+					"item": [
+						{
+							"name": "Dashboard Stats",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/admin/dashboard-stats",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"dashboard-stats"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Add Admin",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"Admin Name\",\n    \"email\": \"admin@collegename.com\",\n    \"password\": \"pass123\",\n    \"phone\": \"9999999999\",\n    \"role\": \"ADMIN\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/add-admin",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"add-admin"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Get User Details",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/admin/user-details?phone=9876543210",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"user-details"
+									],
+									"query": [
+										{
+											"key": "phone",
+											"value": "9876543210"
+										}
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Academic",
+					"item": [
+						{
+							"name": "Academic Year",
+							"item": [
+								{
+									"name": "Create Academic Year",
+									"request": {
+										"method": "POST",
+										"header": [
+											{
+												"key": "Authorization",
+												"value": "Bearer {{token}}"
+											},
+											{
+												"key": "Content-Type",
+												"value": "application/json"
+											}
+										],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"code\": \"2024-25\",\n    \"startDate\": \"2024-06-01T00:00:00Z\",\n    \"endDate\": \"2025-05-31T00:00:00Z\",\n    \"isActive\": true\n}"
+										},
+										"url": {
+											"raw": "{{baseUrl}}/admin/academic-year",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"admin",
+												"academic-year"
+											]
+										}
+									},
+									"response": []
+								},
+								{
+									"name": "Get Academic Years",
+									"request": {
+										"method": "GET",
+										"header": [
+											{
+												"key": "Authorization",
+												"value": "Bearer {{token}}"
+											}
+										],
+										"url": {
+											"raw": "{{baseUrl}}/admin/academic-year",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"admin",
+												"academic-year"
+											]
+										}
+									},
+									"response": []
+								}
+							]
+						},
+						{
+							"name": "Department",
+							"item": [
+								{
+									"name": "Create Department",
+									"request": {
+										"method": "POST",
+										"header": [
+											{
+												"key": "Authorization",
+												"value": "Bearer {{token}}"
+											},
+											{
+												"key": "Content-Type",
+												"value": "application/json"
+											}
+										],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"name\": \"Engineering\",\n    \"code\": \"ENG\"\n}"
+										},
+										"url": {
+											"raw": "{{baseUrl}}/admin/department",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"admin",
+												"department"
+											]
+										}
+									},
+									"response": []
+								},
+								{
+									"name": "Get Departments",
+									"request": {
+										"method": "GET",
+										"header": [
+											{
+												"key": "Authorization",
+												"value": "Bearer {{token}}"
+											}
+										],
+										"url": {
+											"raw": "{{baseUrl}}/admin/department",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"admin",
+												"department"
+											]
+										}
+									},
+									"response": []
+								}
+							]
+						},
+						{
+							"name": "Course (Program)",
+							"item": [
+								{
+									"name": "Create Course",
+									"request": {
+										"method": "POST",
+										"header": [
+											{
+												"key": "Authorization",
+												"value": "Bearer {{token}}"
+											},
+											{
+												"key": "Content-Type",
+												"value": "application/json"
+											}
+										],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"name\": \"Bachelor of Technology\",\n    \"code\": \"B.Tech\",\n    \"totalSeats\": 1000\n}"
+										},
+										"url": {
+											"raw": "{{baseUrl}}/admin/course",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"admin",
+												"course"
+											]
+										}
+									},
+									"response": []
+								},
+								{
+									"name": "Get Courses",
+									"request": {
+										"method": "GET",
+										"header": [
+											{
+												"key": "Authorization",
+												"value": "Bearer {{token}}"
+											}
+										],
+										"url": {
+											"raw": "{{baseUrl}}/admin/course",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"admin",
+												"course"
+											]
+										}
+									},
+									"response": []
+								}
+							]
+						},
+						{
+							"name": "Specialization (Branch)",
+							"item": [
+								{
+									"name": "Create Specialization",
+									"request": {
+										"method": "POST",
+										"header": [
+											{
+												"key": "Authorization",
+												"value": "Bearer {{token}}"
+											},
+											{
+												"key": "Content-Type",
+												"value": "application/json"
+											}
+										],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"courseId\": \"UUID_OF_COURSE\",\n    \"name\": \"Computer Science and Engineering\",\n    \"code\": \"CSE\"\n}"
+										},
+										"url": {
+											"raw": "{{baseUrl}}/admin/specialization",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"admin",
+												"specialization"
+											]
+										}
+									},
+									"response": []
+								},
+								{
+									"name": "Get Specializations",
+									"request": {
+										"method": "GET",
+										"header": [
+											{
+												"key": "Authorization",
+												"value": "Bearer {{token}}"
+											}
+										],
+										"url": {
+											"raw": "{{baseUrl}}/admin/specialization",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"admin",
+												"specialization"
+											]
+										}
+									},
+									"response": []
+								}
+							]
+						},
+						{
+							"name": "Batch",
+							"item": [
+								{
+									"name": "Create Batch",
+									"request": {
+										"method": "POST",
+										"header": [
+											{
+												"key": "Authorization",
+												"value": "Bearer {{token}}"
+											},
+											{
+												"key": "Content-Type",
+												"value": "application/json"
+											}
+										],
+										"body": {
+											"mode": "raw",
+											"raw": "{\n    \"name\": \"2024-2028\",\n    \"courseId\": \"UUID_OF_COURSE\",\n    \"startDate\": \"2024-06-01T00:00:00Z\",\n    \"endDate\": \"2028-05-31T00:00:00Z\"\n}"
+										},
+										"url": {
+											"raw": "{{baseUrl}}/admin/batch",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"admin",
+												"batch"
+											]
+										}
+									},
+									"response": []
+								},
+								{
+									"name": "Get Batches",
+									"request": {
+										"method": "GET",
+										"header": [
+											{
+												"key": "Authorization",
+												"value": "Bearer {{token}}"
+											}
+										],
+										"url": {
+											"raw": "{{baseUrl}}/admin/batch",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"admin",
+												"batch"
+											]
+										}
+									},
+									"response": []
+								}
+							]
+						}
+					]
+				},
+				{
+					"name": "Fee",
+					"item": [
+						{
+							"name": "Create Fee Head",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"Tuition Fee\",\n    \"description\": \"Annual Tuition Fee\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/fee-head",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"fee-head"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Create Fee Structure",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"courseId\": \"UUID_OF_COURSE\",\n    \"feeHeadId\": \"UUID_OF_HEAD\",\n    \"amount\": 50000,\n    \"academicYearId\": \"UUID_OF_YEAR\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/fee-structure",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"fee-structure"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Get Fee Stats",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/admin/fee-stats",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"fee-stats"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Create Discount Request",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"studentId\": \"UUID\",\n    \"reason\": \"Merit\",\n    \"documentUrl\": \"http://s3...\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/create-discount",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"create-discount"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Exam Management",
+					"item": [
+						{
+							"name": "Create Exam Center",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"Main Block\",\n    \"address\": \"Campus\",\n    \"city\": \"Hyderabad\",\n    \"state\": \"Telangana\",\n    \"capacity\": 500\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/exam/centers",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"exam",
+										"centers"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Create Exam Slot",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"examCenterId\": \"UUID_OF_CENTER\",\n    \"date\": \"2024-12-01\",\n    \"startTime\": \"2024-12-01T09:00:00Z\",\n    \"endTime\": \"2024-12-01T12:00:00Z\",\n    \"capacity\": 100\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/exam/slots",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"exam",
+										"slots"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Generate Invigilator Creds",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"examCenterId\": \"UUID_OF_CENTER\",\n    \"count\": 5\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/exam/invigilators/generate",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"exam",
+										"invigilators",
+										"generate"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Update Exam Score",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"studentId\": \"UUID\",\n    \"score\": 85,\n    \"cutoff\": 60\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/update-exam-score",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"update-exam-score"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Student Management",
+					"item": [
+						{
+							"name": "Get Applications",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/admin/applications",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"applications"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Request Course Change (Admin)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"studentId\": \"UUID\",\n    \"newCourse\": \"ECE\",\n    \"reason\": \"Personal\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/change-course",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"change-course"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Approve Course Change",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"requestId\": \"UUID_REQ\",\n    \"approved\": true\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/approve-course-change",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"approve-course-change"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Hostel",
+					"item": [
+						{
+							"name": "Create Hostel",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"Boys Hostel A\",\n    \"type\": \"SHARING_4\",\n    \"capacity\": 100,\n    \"fee\": 60000\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/hostels",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"hostels"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Get Hostels",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/admin/hostels",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"hostels"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Transport",
+					"item": [
+						{
+							"name": "Create Route",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"Route 1\",\n    \"cost\": 25000,\n    \"busNumber\": \"AP 12 3456\",\n    \"capacity\": 40\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/transport-route",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"transport-route"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Invigilator",
+			"item": [
+				{
+					"name": "Login",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"code\": \"INV123\",\n    \"password\": \"PASS\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/exam/invigilators/login",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"exam",
+								"invigilators",
+								"login"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Scan Attendance",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"studentId\": \"UUID\",\n    \"slotId\": \"UUID\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/exam/attendance/scan",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"exam",
+								"attendance",
+								"scan"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Upload",
+			"item": [
+				{
+					"name": "Upload Single",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": []
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/upload/single?folder=documents",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"upload",
+								"single"
+							],
+							"query": [
+								{
+									"key": "folder",
+									"value": "documents"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

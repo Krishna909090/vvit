@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AdmissionStatus, Prisma } from '@prisma/client';
 import { AppError } from '../utils/AppError';
 import { MESSAGES } from '../constants/messages';
+import Papa from 'papaparse';
 
 /* -------------------------------------------------------------------------- */
 /*                               HELPER FUNCTIONS                             */
@@ -161,7 +162,7 @@ export const generateInvigilatorCredentials = async (adminId: string, data: any)
 
     const credentials = [];
     for (let i = 0; i < count; i++) {
-        const token = uuidv4();
+        const token = uuidv4().substring(0, 8).toUpperCase(); // Short simple token
         credentials.push({
             adminId,
             token,
@@ -253,6 +254,61 @@ export const markAttendanceByScan = async (qrHash: string, invigilatorId: string
 
     logger.info(`Attendance marked for student=${student.id} by invigilator=${invigilatorId}`);
     return { message: `Attendance marked for ${student.name} (${student.applicationId})` };
+};
+
+/**
+ * Mark student attendance manually by admin using Student ID.
+ */
+export const markAttendanceManually = async (studentId: string, attended: boolean, adminId: string | undefined) => {
+    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+    if (typeof attended !== 'boolean') throw new AppError(MESSAGES.ERROR.ATTENDED_BOOLEAN, 400);
+
+    // If already in that state, maybe return success but here we just update.
+    
+    await prisma.$transaction([
+        prisma.studentExam.update({
+            where: { studentId },
+            data: {
+                examAttended: attended,
+                // updatedBy: adminId - Field not in schema
+            }
+        }),
+        prisma.studentAdmission.update({
+            where: { studentId },
+            data: {
+                // If attended true -> EXAM_ATTENDED
+                // If attended false (unmark) -> Back to HALL_TICKET_GENERATED (assuming)
+                status: attended ? AdmissionStatus.EXAM_ATTENDED : AdmissionStatus.HALL_TICKET_GENERATED,
+                // updatedBy: adminId - Field not in schema
+            }
+        })
+    ]);
+
+    logger.info(`[markAttendanceManually] Attendance marked for ${studentId}: ${attended} by ${adminId}`);
+};
+
+/**
+ * Update exam score for a single student.
+ */
+export const updateStudentExamScore = async (studentId: string, score: number, cutoff: number, adminId: string | undefined) => {
+    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+    if (score === undefined || cutoff === undefined) {
+        throw new AppError(MESSAGES.ERROR.SCORE_CUTOFF_REQUIRED, 400);
+    }
+
+    const isQualified = Number(score) >= Number(cutoff);
+
+    const examDetails = await prisma.studentExam.update({
+        where: { studentId },
+        data: {
+            examScore: Number(score),
+            isQualified,
+            // updatedBy: adminId - Field not in schema
+        }
+    });
+
+    logger.info(`[updateStudentExamScore] Exam score updated for ${studentId}: ${score}, Qualified: ${isQualified}`);
+    return { score: examDetails.examScore, isQualified: examDetails.isQualified };
 };
 
 /**
@@ -557,7 +613,10 @@ export const deleteExamCenter = async (id: string) => {
         throw new AppError(MESSAGES.ERROR.EXAM_CENTER_NOT_FOUND, 404);
     }
 
-    const result = await prisma.examCenter.delete({ where: { id } });
+    const result = await prisma.examCenter.update({
+        where: { id },
+        data: { isDeleted: true }
+    });
     logger.info(`[deleteExamCenter] Successfully deleted center id=${id}`);
     return result;
 };
@@ -677,7 +736,41 @@ export const deleteExamSlot = async (id: string) => {
         throw new AppError(MESSAGES.ERROR.SLOT_HAS_BOOKINGS, 400);
     }
 
-    const result = await prisma.examSlot.delete({ where: { id } });
+    const result = await prisma.examSlot.update({
+        where: { id },
+        data: { isDeleted: true }
+    });
     logger.info(`[deleteExamSlot] Successfully deleted slot id=${id}`);
     return result;
+};
+
+/**
+ * Process bulk exam results from CSV content.
+ */
+export const processBulkResults = async (fileContent: string, cutoff: number) => {
+    const { data, errors } = Papa.parse(fileContent, { header: true, skipEmptyLines: true });
+
+    if (errors.length > 0) throw new AppError(MESSAGES.ERROR.CSV_ERROR, 400);
+
+    const results = [];
+    const rows = data as any[];
+    for (const row of rows) {
+        try {
+            const { applicationId, score } = row;
+            const student = await prisma.student.findUnique({ where: { applicationId } });
+            if (student) {
+                const isQualified = Number(score) >= Number(cutoff);
+                await prisma.studentExam.update({
+                    where: { studentId: student.id },
+                    data: { examScore: Number(score), isQualified }
+                });
+                results.push({ applicationId, status: 'Success' });
+            } else {
+                results.push({ applicationId, status: 'Failed', message: MESSAGES.ERROR.STUDENT_NOT_FOUND });
+            }
+        } catch (err: any) {
+            results.push({ applicationId: row.applicationId, status: 'Failed', message: err.message });
+        }
+    }
+    return results;
 };

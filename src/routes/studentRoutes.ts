@@ -1,12 +1,18 @@
 import { Router } from 'express';
 import {
     registerStudent,
-    payTestFee,
     getHallTicket,
     uploadDocumentsAndPreferences,
-    payCollegeFee,
-    getStudentDetails
+    getStudentDetails,
+    addAcademicDetails,
+    selectExam
 } from '../controllers/studentController';
+import {
+    payTestFee,
+    payCollegeFee,
+    requestDiscount
+} from '../controllers/paymentController';
+
 import { authenticate, authorize } from '../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
 import { validateRequest } from '../middlewares/validationMiddleware';
@@ -14,8 +20,11 @@ import {
     registerStudentSchema,
     studentIdParamSchema,
     uploadDocumentsAndPreferencesSchema,
-    addAcademicDetailsSchema
+    addAcademicDetailsSchema,
+    selectExamSchema
 } from '../validators/studentValidators';
+import { getAvailableSlots } from '../controllers/examController';
+import { getMyRequirements, deleteStudentDocument } from '../controllers/documentController';
 
 const router = Router();
 
@@ -253,7 +262,7 @@ router.post('/:studentId/pay-college-fee', authenticate, authorize([Role.STUDENT
 
 
 
-import { addAcademicDetails } from '../controllers/studentController';
+
 
 /**
  * @swagger
@@ -311,13 +320,7 @@ import { addAcademicDetails } from '../controllers/studentController';
  */
 router.post('/:studentId/academic-details', authenticate, authorize([Role.STUDENT]), validateRequest(addAcademicDetailsSchema), addAcademicDetails);
 
-import {
-    selectExam,
-} from '../controllers/studentController';
-import { getAvailableSlots } from '../controllers/examController';
-import {
-    selectExamSchema
-} from '../validators/studentActionValidators';
+
 
 // ... existing routes ...
 
@@ -368,7 +371,7 @@ router.post('/:studentId/select-exam', authenticate, authorize([Role.STUDENT]), 
  */
 router.get('/exam-slots', authenticate, authorize([Role.STUDENT]), getAvailableSlots);
 
-import { getMyRequirements } from '../controllers/documentController';
+
 
 // Get Document Requirements
 /**
@@ -385,7 +388,7 @@ import { getMyRequirements } from '../controllers/documentController';
  */
 router.get('/document-requirements', authenticate, authorize([Role.STUDENT]), getMyRequirements);
 
-import { deleteStudentDocument } from '../controllers/deleteDocumentController';
+
 
 // Delete Document
 /**

@@ -3,7 +3,7 @@ import prisma from '../config/prisma';
 import logger from '../utils/logger';
 import { Role, AdmissionStatus, RequestStatus } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
-import { registerStudent as registerStudentService, payTestFee as payTestFeeService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, payCollegeFee as payCollegeFeeService, requestDiscount as requestDiscountService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService } from '../services/studentService';
+import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService } from '../services/studentService';
 import { bookExamSlot } from '../services/examService';
 import QRCode from 'qrcode';
 import { catchAsync } from '../utils/catchAsync';
@@ -31,26 +31,7 @@ export const registerStudent = catchAsync(async (req: Request, res: Response, ne
     });
 });
 
-// Phase 1: Pay Test Fee
-export const payTestFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[payTestFee] by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[payTestFee] params=${JSON.stringify(req.params)}`);
 
-    const { studentId } = req.params;
-    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
-
-    const currentUserId = req.user?.userId || null;
-    const student = await payTestFeeService(studentId, currentUserId);
-
-    logger.info(`[payTestFee] initiated for studentId=${studentId}`);
-    sendResponse({
-        res,
-        statusCode: 200,
-        success: true,
-        message: MESSAGES.SUCCESS.PAYMENT_SUCCESS,
-        data: student
-    });
-});
 
 // Phase 2: Download Hall Ticket (Student)
 export const getHallTicket = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -92,48 +73,9 @@ export const uploadDocumentsAndPreferences = catchAsync(async (req: Request, res
     });
 });
 
-// Phase 6: Final Fee Payment
-export const payCollegeFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[payCollegeFee] by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[payCollegeFee] params=${JSON.stringify(req.params)}`);
 
-    const { studentId } = req.params;
-    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-    const currentUserId = req.user?.userId || null;
-    const student = await payCollegeFeeService(studentId, currentUserId);
 
-    logger.info(`[payCollegeFee] initiated for studentId=${studentId}`);
-    sendResponse({
-        res,
-        statusCode: 200,
-        success: true,
-        message: MESSAGES.SUCCESS.PAYMENT_SUCCESS,
-        data: student
-    });
-});
-
-// Fee Reduction Request
-export const requestDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[requestDiscount] by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[requestDiscount] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
-
-    const { studentId } = req.params;
-    const { reason, documentUrl } = req.body;
-    if (!studentId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_REASON_REQUIRED, 400);
-
-    const currentUserId = req.user?.userId || null;
-    const discountRequest = await requestDiscountService(studentId, reason, documentUrl, currentUserId);
-
-    logger.info(`[requestDiscount] created for studentId=${studentId}`);
-    sendResponse({
-        res,
-        statusCode: 201,
-        success: true,
-        message: MESSAGES.SUCCESS.DISCOUNT_REQUESTED,
-        data: discountRequest
-    });
-});
 
 // Select Exam Date and Center
 // Select Exam Date and Center (via Slot)
@@ -158,30 +100,30 @@ export const selectExam = catchAsync(async (req: Request, res: Response, next: N
     });
 });
 
-// Request Branch Change
-export const requestBranchChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[requestBranchChange] by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[requestBranchChange] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
+// Request Course Change
+export const requestCourseChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[requestCourseChange] by=${req.user?.userId || 'anonymous'}`);
+    logger.debug && logger.debug(`[requestCourseChange] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
 
     const { studentId } = req.params;
-    const { newBranch, reason } = req.body;
-    if (!studentId || !newBranch || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_NEWBRANCH_REASON_REQUIRED, 400);
+    const { newCourse, reason } = req.body;
+    if (!studentId || !newCourse || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_NEWCOURSE_REASON_REQUIRED, 400);
 
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         include: { admissionDetails: true }
     });
     if (!student) {
-        logger.warn(`[requestBranchChange] student not found id=${studentId}`);
+        logger.warn(`[requestCourseChange] student not found id=${studentId}`);
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
-    if (!student.admissionDetails?.allottedBranch) {
-        logger.warn(`[requestBranchChange] no allotted branch for student=${studentId}`);
-        throw new AppError(MESSAGES.ERROR.NO_BRANCH_ALLOTTED, 400);
+    if (!student.admissionDetails?.allottedSpecialization) {
+        logger.warn(`[requestCourseChange] no allotted specialization for student=${studentId}`);
+        throw new AppError(MESSAGES.ERROR.NO_COURSE_ALLOTTED, 400);
     }
 
-    const existingRequest = await prisma.branchChangeRequest.findFirst({
+    const existingRequest = await prisma.courseChangeRequest.findFirst({
         where: {
             studentId,
             status: { in: [RequestStatus.REQUESTED, RequestStatus.FORWARDED] }
@@ -189,14 +131,14 @@ export const requestBranchChange = catchAsync(async (req: Request, res: Response
     });
 
     if (existingRequest) {
-        throw new AppError(MESSAGES.ERROR.BRANCH_CHANGE_ALREADY_REQUESTED || 'Branch change request already pending', 409);
+        throw new AppError(MESSAGES.ERROR.COURSE_CHANGE_ALREADY_REQUESTED || 'Course change request already pending', 409);
     }
 
-    const request = await prisma.branchChangeRequest.create({
+    const request = await prisma.courseChangeRequest.create({
         data: {
             studentId,
-            fromBranch: student.admissionDetails.allottedBranch,
-            toBranch: newBranch,
+            fromCourse: student.admissionDetails.allottedSpecialization,
+            toCourse: newCourse,
             reason,
             status: RequestStatus.REQUESTED,
             forwardedTo: 'SUPER_ADMIN', // Direct to Super Admin as per requirement
@@ -204,12 +146,12 @@ export const requestBranchChange = catchAsync(async (req: Request, res: Response
         }
     });
 
-    logger.info(`[requestBranchChange] created requestId=${request.id} for student=${studentId}`);
+    logger.info(`[requestCourseChange] created requestId=${request.id} for student=${studentId}`);
     sendResponse({
         res,
         statusCode: 201,
         success: true,
-        message: MESSAGES.SUCCESS.BRANCH_CHANGE_REQUESTED,
+        message: MESSAGES.SUCCESS.COURSE_CHANGE_REQUESTED,
         data: request
     });
 });

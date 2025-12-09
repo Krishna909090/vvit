@@ -4,9 +4,10 @@ import { HostelType } from '@prisma/client';
 export const createHostelSchema = z.object({
     body: z.object({
         name: z.string().min(1, "Hostel name is required"),
-        type: z.nativeEnum(HostelType),
+        type: z.enum(["Boys", "Girls", "BOYS", "GIRLS"]),
         capacity: z.number().int().positive(),
         cost: z.number().positive(),
+        wardenName: z.string().optional(),
         blockName: z.string().optional(),
         roomNumber: z.string().optional(),
     }),

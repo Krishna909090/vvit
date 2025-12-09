@@ -1,0 +1,924 @@
+{
+	"info": {
+		"_postman_id": "d0a1b2c3-d4e5-6f7g-8h9i-j0k1l2m3n4o5",
+		"name": "VVIT Admin Tasks (Academic, Hostel, Transport)",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3000/api",
+			"type": "string"
+		},
+		{
+			"key": "token",
+			"value": "YOUR_ADMIN_TOKEN_HERE",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Academic",
+			"item": [
+				{
+					"name": "Course (Program - e.g. B.Tech)",
+					"item": [
+						{
+							"name": "Create Course",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"Bachelor of Technology\",\n    \"code\": \"B.Tech\",\n    \"totalSeats\": 1000\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/course",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"course"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Get Courses",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/admin/course",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"course"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Update Course",
+							"request": {
+								"method": "PUT",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"totalSeats\": 1200\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/course/:id",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"course",
+										":id"
+									],
+									"variable": [
+										{
+											"key": "id",
+											"value": "UUID_OF_COURSE"
+										}
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Delete Course",
+							"request": {
+								"method": "DELETE",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/admin/course/:id",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"course",
+										":id"
+									],
+									"variable": [
+										{
+											"key": "id",
+											"value": "UUID_OF_COURSE"
+										}
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Specialization (Stream - e.g. CSE)",
+					"item": [
+						{
+							"name": "Create Specialization",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"courseId\": \"UUID_OF_COURSE_ABOVE\",\n    \"name\": \"Computer Science and Engineering\",\n    \"code\": \"CSE\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/specialization",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"specialization"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Get Specializations",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/admin/specialization",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"specialization"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Update Specialization",
+							"request": {
+								"method": "PUT",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"Artificial Intelligence\",\n    \"code\": \"AI\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/admin/specialization/:id",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"specialization",
+										":id"
+									],
+									"variable": [
+										{
+											"key": "id",
+											"value": "UUID_OF_SPECIALIZATION"
+										}
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Delete Specialization",
+							"request": {
+								"method": "DELETE",
+								"header": [
+									{
+										"key": "Authorization",
+										"value": "Bearer {{token}}"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/admin/specialization/:id",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"specialization",
+										":id"
+									],
+									"variable": [
+										{
+											"key": "id",
+											"value": "UUID_OF_SPECIALIZATION"
+										}
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Hostel",
+			"item": [
+				{
+					"name": "Create Hostel",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Boys Hostel A\",\n    \"type\": \"SHARING_4\",\n    \"capacity\": 200,\n    \"fee\": 75000\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostels",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostels"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Hostels",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostels",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostels"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Hostel",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Boys Hostel A (Updated)\",\n    \"fee\": 80000\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostels/:hostelId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostels",
+								":hostelId"
+							],
+							"variable": [
+								{
+									"key": "hostelId",
+									"value": "UUID_OF_HOSTEL"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Hostel Block",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"hostelId\": \"UUID_OF_HOSTEL\",\n    \"name\": \"Block 1\",\n    \"type\": \"AC\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostel-block",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostel-block"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Hostel Blocks",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostel-block",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostel-block"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Hostel Block",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Block 1 Updated\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostel-block/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostel-block",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "UUID_OF_BLOCK"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Hostel Block",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostel-block/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostel-block",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "UUID_OF_BLOCK"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Hostel Room",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"blockId\": \"UUID_OF_BLOCK\",\n    \"number\": \"101\",\n    \"capacity\": 4,\n    \"type\": \"SHARING_4\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostel-room",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostel-room"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Hostel Rooms",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostel-room",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostel-room"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Hostel Room",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"capacity\": 3\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostel-room/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostel-room",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "UUID_OF_ROOM"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Hostel Room",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/hostel-room/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"hostel-room",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "UUID_OF_ROOM"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Transport",
+			"item": [
+				{
+					"name": "Create Transport Route",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Route 1 - City Centre\",\n    \"cost\": 25000,\n    \"busNumber\": \"KA-01-AB-1234\",\n    \"capacity\": 50\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/transport-route",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"transport-route"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Transport Routes",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/transport-route",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"transport-route"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Vehicle",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"number\": \"KA-05-XY-9876\",\n    \"capacity\": 45,\n    \"driverName\": \"John Doe\",\n    \"driverPhone\": \"9876543210\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/vehicle",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"vehicle"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Vehicles",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/vehicle",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"vehicle"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Vehicle",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"driverName\": \"Jane Doe\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/vehicle/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"vehicle",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "UUID_OF_VEHICLE"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Vehicle",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/vehicle/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"vehicle",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "UUID_OF_VEHICLE"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Transport Stop",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"routeId\": \"UUID_OF_ROUTE\",\n    \"name\": \"Main Bus Stand\",\n    \"sequence\": 1,\n    \"pickupTime\": \"2024-06-01T07:30:00Z\",\n    \"dropTime\": \"2024-06-01T17:30:00Z\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/transport-stop",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"transport-stop"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Transport Stops",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/transport-stop",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"transport-stop"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Transport Stop",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Central Bus Stand\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/transport-stop/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"transport-stop",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "UUID_OF_STOP"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Transport Stop",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/transport-stop/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"transport-stop",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "UUID_OF_STOP"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

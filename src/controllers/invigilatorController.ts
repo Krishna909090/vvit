@@ -1,12 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
-import prisma from '../config/prisma';
 import jwt from 'jsonwebtoken';
-import { AdmissionStatus } from '@prisma/client';
 import { catchAsync } from '../utils/catchAsync';
 import { AppError } from '../utils/AppError';
 import { sendResponse } from '../utils/response';
 import { MESSAGES } from '../constants/messages';
-import { markAttendanceByScan as markAttendanceService } from '../services/examService';
+import { markAttendanceByScan, verifyInvigilatorToken } from '../services/examService';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 
@@ -14,17 +12,7 @@ export const loginInvigilator = catchAsync(async (req: Request, res: Response, n
     const { token } = req.body;
     if (!token) throw new AppError(MESSAGES.ERROR.TOKEN_REQUIRED, 400);
 
-    const credential = await prisma.invigilatorCredential.findFirst({
-        where: {
-            token,
-            validFrom: { lte: new Date() },
-            validUntil: { gte: new Date() }
-        }
-    });
-
-    if (!credential) {
-        throw new AppError(MESSAGES.ERROR.INVALID_EXPIRED_TOKEN, 401);
-    }
+    const credential = await verifyInvigilatorToken(token);
 
     const sessionToken = jwt.sign({ userId: credential.id, role: 'INVIGILATOR' }, JWT_SECRET, { expiresIn: '4h' });
 
@@ -42,7 +30,7 @@ export const scanStudentQR = catchAsync(async (req: Request, res: Response, next
     if (!qrHash) throw new AppError(MESSAGES.ERROR.QR_HASH_REQUIRED, 400);
 
     const invigilatorId = req.user?.userId || 'unknown';
-    const result = await markAttendanceService(qrHash, invigilatorId);
+    const result = await markAttendanceByScan(qrHash, invigilatorId);
 
     sendResponse({
         res,
