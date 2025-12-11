@@ -24,7 +24,12 @@ export const AcademicService = {
     },
 
     async getDepartments() {
-        return await prisma.department.findMany({ include: { courses: true } });
+        const depts = await prisma.department.findMany({ include: { courses: true } });
+        return depts.map(d => ({
+            ...d,
+            schoolName: d.name,
+            schoolCode: d.code
+        }));
     },
 
     async getDepartmentById(id: string) {
@@ -87,10 +92,15 @@ export const AcademicService = {
         if (departmentId) {
             where.departmentId = String(departmentId);
         }
-        return await prisma.course.findMany({
+        const courses = await prisma.course.findMany({
             where,
             include: { department: true, specializations: true, batches: true }
         });
+        return courses.map(c => ({
+            ...c,
+            departmentName: c.department?.name,
+            department: undefined
+        }));
     },
 
     async getCourseById(id: string) {
@@ -150,9 +160,14 @@ export const AcademicService = {
     },
 
     async getSpecializations() {
-        return await prisma.specialization.findMany({
+        const specs = await prisma.specialization.findMany({
             include: { course: true }
         });
+        return specs.map(s => ({
+            ...s,
+            courseName: s.course.name,
+            course: undefined
+        }));
     },
 
     async getSpecializationById(id: string) {

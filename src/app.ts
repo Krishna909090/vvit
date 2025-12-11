@@ -18,6 +18,9 @@ import { globalErrorHandler } from './middlewares/errorMiddleware';
 
 const app = express();
 
+// Trust Proxy (Required for Rate Limiting behind load balancers/proxies like Nginx/AWS ALB)
+app.set('trust proxy', 1);
+
 // Middlewares
 app.use(helmet()); // Secure HTTP headers
 app.use(cors({

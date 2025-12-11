@@ -66,10 +66,19 @@ export const HostelService = {
         const where: any = {};
         if (hostelId) where.hostelId = hostelId;
 
-        return await prisma.hostelBlock.findMany({
+        const blocks = await prisma.hostelBlock.findMany({
             where,
-            include: { rooms: true }
+            include: { 
+                hostel: { select: { name: true } },
+                rooms: true 
+            }
         });
+
+        return blocks.map(block => ({
+            ...block,
+            hostelName: block.hostel?.name,
+            hostel: undefined // Remove the nested object if you want a clean flat structure, or keep it.
+        }));
     },
 
     async updateHostelBlock(id: string, data: any, updatedBy?: string) {

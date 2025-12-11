@@ -70,7 +70,7 @@ export const AdminService = {
             throw new AppError("Role is required", 400);
         }
 
-        const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF];
+        const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR];
         if (!allowedRoles.includes(role)) {
             logger.warn(
                 `[addAdmin] invalid role assignment attempt: role=${role}, phone=${maskPhone(phone)}, by=${currentUserId}`

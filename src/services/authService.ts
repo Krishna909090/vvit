@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import axios from "axios";
 import bcrypt from "bcryptjs";
@@ -16,9 +17,8 @@ const STUDENT_OTP_EXPIRY_MIN = 10;
 const STAFF_OTP_EXPIRY_MIN = 5;
 
 
-// Mock OTP generation (in production, use a real SMS provider)
-const generateOtp = () =>
-  Math.floor(100000 + Math.random() * 900000).toString();
+// Generate 6-digit numeric OTP securely
+const generateOtp = () => crypto.randomInt(100000, 999999).toString();
 
 // Service: Verifies user identity, auto-registers student users by phone,
 // generates a hashed OTP, stores it in UserOtp, and triggers notification(s).
@@ -99,7 +99,7 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
     const notifications: Promise<unknown>[] = [];
 
     if (user.phone) {
-      notifications.push(sendBsnlOtp(user.phone, otp));
+      notifications.push(sendBsnlOtp(user.phone, otp, String(expiresInMinutes)));
     }
 
     if (user.email && user.role !== Role.STUDENT) {

@@ -3,7 +3,14 @@ import DailyRotateFile from 'winston-daily-rotate-file';
 
 const logFormat = winston.format.combine(
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    winston.format.printf(({ timestamp, level, message }) => `${timestamp} [${level.toUpperCase()}]: ${message}`)
+    winston.format.printf(({ timestamp, level, message, ...meta }) => {
+        let msg = message;
+        if (typeof message === 'object') {
+            msg = JSON.stringify(message, null, 2);
+        }
+        const metaStr = Object.keys(meta).length ? JSON.stringify(meta, null, 2) : '';
+        return `${timestamp} [${level.toUpperCase()}]: ${msg} ${metaStr}`;
+    })
 );
 
 const logger = winston.createLogger({

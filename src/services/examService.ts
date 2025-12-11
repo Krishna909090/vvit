@@ -207,23 +207,56 @@ export const verifyInvigilatorToken = async (token: string) => {
 };
 
 /**
- * Mark student attendance by scanning a hall ticket QR hash.
+ * Mark student attendance by scanning a hall ticket QR hash (URL).
  */
 export const markAttendanceByScan = async (qrHash: string, invigilatorId: string) => {
     if (!qrHash || !qrHash.trim()) {
         throw new AppError(MESSAGES.ERROR.QR_HASH_REQUIRED, 400);
     }
 
+    // Parse the QR URL to extract details
+    // Expected format: .../verify?s={studentId}&c={centerId}&sl={slotId}&h={hash}
+    let studentId, centerId, slotId;
+    try {
+        // If it's a full URL
+        const urlObj = new URL(qrHash, 'https://dummy.com'); // Base needed if qrHash is relative or just query
+        const params = new URLSearchParams(urlObj.search);
+        studentId = params.get('s');
+        centerId = params.get('c');
+        slotId = params.get('sl');
+        // 'h' is random hash, we might not strictly need to validate it if we trust the DB lookup of qrHash
+        // But we should verify if the studentId/center/slot are valid
+    } catch (e) {
+        // Fallback or error if not URL format, though we generated URL
+        logger.warn(`[markAttendanceByScan] Failed to parse QR URL: ${qrHash}`);
+    }
+
+    // Try finding by qrHash exact match first (security)
     const hallTicket = await prisma.hallTicket.findFirst({
         where: { qrHash },
-        include: { student: { include: { examDetails: true } } },
+        include: { student: { include: { examDetails: { include: { examSlot: true } } } } },
     });
 
     if (!hallTicket) {
         throw new AppError(MESSAGES.ERROR.INVALID_QR, 400);
     }
 
+    // If we successfully parsed, we can double check consistency
+    if (studentId && hallTicket.studentId !== studentId) {
+         throw new AppError(MESSAGES.ERROR.INVALID_QR + ' (Student Mismatch)', 400);
+    }
+
     const student = hallTicket.student;
+
+    // Validate if the student is actually assigned to this center/slot (redundant if hallTicket is correct, but good for safety)
+    if (centerId && slotId) {
+        if (student.examDetails?.examSlotId !== slotId) {
+             throw new AppError('Student is not assigned to this slot', 400);
+        }
+        if (student.examDetails?.examSlot?.examCenterId !== centerId) {
+             throw new AppError('Student is not assigned to this center', 400);
+        }
+    }
 
     if (student.examDetails?.examAttended) {
         throw new AppError(MESSAGES.ERROR.ATTENDANCE_ALREADY_MARKED, 400);
@@ -503,6 +536,13 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             },
         });
 
+        const uniqueHash = uuidv4();
+        // Generate QR Content as a URL with details
+        // URL format: verify?s={studentId}&c={centerId}&sl={slotId}&h={randomHash}
+        // Ideally this should be a configurable base URL from env
+        const baseUrl = process.env.APP_URL || 'https://api.vvit.com'; 
+        const qrContent = `${baseUrl}/verify-scan?s=${studentId}&c=${slot.examCenterId}&sl=${slotId}&h=${uniqueHash}`;
+
         const hallTicketUrl = `https://s3.aws.com/halltickets/${student.applicationId}.pdf`;
 
         await tx.studentExam.update({
@@ -526,7 +566,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             data: {
                 studentId,
                 url: hallTicketUrl,
-                qrHash: uuidv4(),
+                qrHash: qrContent,
                 createdBy: userId,
             },
         });

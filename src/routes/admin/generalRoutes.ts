@@ -3,10 +3,10 @@ import { authorize, authenticate } from '../../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
-    getDashboardStats, addAdmin, getAgentCommissions, getUserDetails
+    getDashboardStats, addAdmin, getAgentCommissions, getUserDetails, addInvigilator
 } from '../../controllers/admin/generalController';
 import {
-    addAdminSchema, getAgentCommissionsSchema
+    addAdminSchema, getAgentCommissionsSchema, addInvigilatorSchema
 } from '../../validators/adminValidators';
 
 const router = Router();
@@ -73,6 +73,37 @@ router.get('/dashboard-stats', authenticate, authorize([Role.ADMIN, Role.SUPER_A
  *         description: Admin added successfully
  */
 router.post('/add-admin', authenticate, authorize([Role.SUPER_ADMIN]), validateRequest(addAdminSchema), addAdmin);
+
+// Add Invigilator
+/**
+ * @swagger
+ * /admin/add-invigilator:
+ *   post:
+ *     summary: Add a new invigilator
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - phone
+ *             properties:
+ *               name:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Invigilator added successfully
+ */
+router.post('/add-invigilator', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(addInvigilatorSchema), addInvigilator);
 
 // Agent Commissions
 /**

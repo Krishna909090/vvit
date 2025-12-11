@@ -139,7 +139,7 @@ export const studentIdParamSchema = z.object({
     }),
 });
 
-const AllowedRoles = ["ADMIN", "SUPER_ADMIN", "STAFF"] as const;
+const AllowedRoles = ["ADMIN", "SUPER_ADMIN", "STAFF", "INVIGILATOR"] as const;
 
 export const addAdminSchema = z.object({
   body: z.object({
@@ -159,6 +159,19 @@ export const addAdminSchema = z.object({
       .refine((val) => AllowedRoles.includes(val as any), {
         message: "Invalid role for admin creation",
       }),
+  }),
+});
+
+export const addInvigilatorSchema = z.object({
+  body: z.object({
+    phone: z
+      .string()
+      .min(1, "Phone number is required")
+      .min(10, "Phone number must be at least 10 digits")
+      .max(15, "Phone number must be at most 15 digits")
+      .regex(/^\d+$/, "Phone number must contain only digits"),
+    name: z.string().trim().optional(),
+    email: z.string().email("Invalid email address").optional(),
   }),
 });
 

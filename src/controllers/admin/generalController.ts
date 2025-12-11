@@ -67,3 +67,19 @@ export const getUserDetails = catchAsync(async (req: Request, res: Response, nex
         data: user
     });
 });
+
+export const addInvigilator = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[addInvigilator] by=${req.user?.userId || "anonymous"}`);
+
+    const payload = { ...req.body, role: Role.INVIGILATOR };
+
+    const user = await AdminService.addAdmin(payload, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Invigilator added successfully',
+        data: user,
+    });
+});

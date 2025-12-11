@@ -937,3 +937,14 @@ model DocumentRequirement {
 
   @@unique([courseType, documentKey])
 }
+
+model Configuration {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  description String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+}
