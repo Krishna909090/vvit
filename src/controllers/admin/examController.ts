@@ -39,25 +39,7 @@ export const updateExamScore = catchAsync(async (req: Request, res: Response, ne
     });
 });
 
-export const generateInvigilatorCredentials = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[generateInvigilatorCredentials] by=${req.user?.userId || 'anonymous'}`);
-    
-    const { count, validFrom, validUntil } = req.body;
-    if (!count || !validFrom || !validUntil) {
-        throw new AppError(MESSAGES.ERROR.COUNT_VALID_FROM_UNTIL_REQUIRED, 400);
-    }
-    
-    // Using service method which expects an object with validFrom, validUntil, count
-    const result = await ExamService.generateInvigilatorCredentials(req.user?.userId || 'system', req.body);
 
-    sendResponse({
-        res,
-        statusCode: 201,
-        success: true,
-        message: MESSAGES.SUCCESS.CREDENTIALS_GENERATED,
-        data: result.tokens // Mapping to match previous response structure if needed, or just return result
-    });
-});
 
 export const uploadBulkResults = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     if (!req.file) throw new AppError(MESSAGES.ERROR.NO_FILE_UPLOADED, 400);
@@ -69,12 +51,25 @@ export const uploadBulkResults = catchAsync(async (req: Request, res: Response, 
     try {
         const results = await ExamService.processBulkResults(fileContent, cutoff);
         
+        // Calculate summary
+        const successCount = results.filter(r => r.status === 'Success').length;
+        const failedCount = results.filter(r => r.status === 'Failed').length;
+        const failedRecords = results.filter(r => r.status === 'Failed');
+        
         sendResponse({
             res,
             statusCode: 200,
             success: true,
             message: MESSAGES.SUCCESS.BULK_RESULTS_PROCESSED,
-            data: results
+            data: {
+                summary: {
+                    total: results.length,
+                    successful: successCount,
+                    failed: failedCount
+                },
+                failedRecords: failedRecords, // Only failed records for easy review
+                allResults: results // Complete list
+            }
         });
     } finally {
         fs.unlinkSync(req.file.path);

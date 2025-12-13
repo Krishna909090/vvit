@@ -7,8 +7,6 @@ import {
     getExamCenters,
     updateExamCenter,
     deleteExamCenter,
-    generateInvigilatorCredentials,
-    loginInvigilator,
     scanAttendance,
     createExamSlot,
     getExamSlots,
@@ -22,8 +20,6 @@ import {
 } from '../controllers/examController';
 import {
     createExamCenterSchema,
-    generateInvigilatorCredentialSchema,
-    invigilatorLoginSchema,
     scanAttendanceSchema,
     createExamSlotSchema,
     bookExamSlotSchema
@@ -68,34 +64,6 @@ const router = Router();
  *         description: Exam center created
  */
 router.post('/centers', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createExamCenterSchema), createExamCenter);
-
-/**
- * @swagger
- * /exam/invigilators/generate:
- *   post:
- *     summary: Generate invigilator credentials
- *     tags: [Exam]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - examCenterId
- *               - count
- *             properties:
- *               examCenterId:
- *                 type: string
- *               count:
- *                 type: integer
- *     responses:
- *       201:
- *         description: Credentials generated
- */
-router.post('/invigilators/generate', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(generateInvigilatorCredentialSchema), generateInvigilatorCredentials);
 
 /**
  * @swagger
@@ -310,32 +278,7 @@ router.get('/slots', authenticate, getAvailableSlots);
  */
 router.post('/slots/:studentId/book', authenticate, validateRequest(bookExamSlotSchema), bookExamSlot);
 
-// Invigilator Routes
-/**
- * @swagger
- * /exam/invigilators/login:
- *   post:
- *     summary: Invigilator login
- *     tags: [Exam]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - code
- *               - password
- *             properties:
- *               code:
- *                 type: string
- *               password:
- *                 type: string
- *     responses:
- *       200:
- *         description: Login successful
- */
-router.post('/invigilators/login', validateRequest(invigilatorLoginSchema), loginInvigilator);
+
 
 /**
  * @swagger

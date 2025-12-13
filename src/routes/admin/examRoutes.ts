@@ -3,7 +3,7 @@ import { authorize, authenticate } from '../../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
-    markAttendance, updateExamScore, generateInvigilatorCredentials, uploadBulkResults
+    markAttendance, updateExamScore, uploadBulkResults
 } from '../../controllers/admin/examController';
 import {
     markAttendanceSchema, updateExamScoreSchema
@@ -108,42 +108,7 @@ router.post('/mark-attendance', authenticate, authorize([Role.ADMIN, Role.SUPER_
  */
 router.post('/update-exam-score', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateExamScoreSchema), updateExamScore);
 
-/**
- * @swagger
- * /admin/generate-invigilator-credentials:
- *   post:
- *     summary: Generate bulk invigilator credentials
- *     tags: [Admin]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - count
- *               - validFrom
- *               - validUntil
- *             properties:
- *               count:
- *                 type: integer
- *               validFrom:
- *                 type: string
- *                 format: date-time
- *               validUntil:
- *                 type: string
- *                 format: date-time
- *           example:
- *             count: 5
- *             validFrom: "2025-05-10T08:00:00.000Z"
- *             validUntil: "2025-05-10T18:00:00.000Z"
- *     responses:
- *       200:
- *         description: Credentials generated
- */
-router.post('/generate-invigilator-credentials', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), generateInvigilatorCredentials);
+
 
 /**
  * @swagger

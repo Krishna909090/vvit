@@ -8,6 +8,8 @@ import { AdmissionStatus, Prisma } from '@prisma/client';
 import { AppError } from '../utils/AppError';
 import { MESSAGES } from '../constants/messages';
 import Papa from 'papaparse';
+import QRCode from 'qrcode';
+import { encrypt, decrypt } from '../utils/encryption';
 
 /* -------------------------------------------------------------------------- */
 /*                               HELPER FUNCTIONS                             */
@@ -143,68 +145,12 @@ export const createExamCenter = async (data: any, userId?: string) => {
 /**
  * Generate one or more time-bound invigilator credentials (tokens).
  */
-export const generateInvigilatorCredentials = async (adminId: string, data: any) => {
-    if (!adminId) {
-        throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
-    }
 
-    const validFrom = parseDate(data.validFrom, 'validFrom');
-    const validUntil = parseDate(data.validUntil, 'validUntil');
-
-    if (validFrom >= validUntil) {
-        throw new AppError(
-            MESSAGES.ERROR.INVALID_DATE_RANGE,
-            400
-        );
-    }
-
-    const count = assertPositiveInt(data.count ?? 1, 'count');
-
-    const credentials = [];
-    for (let i = 0; i < count; i++) {
-        const token = uuidv4().substring(0, 8).toUpperCase(); // Short simple token
-        credentials.push({
-            adminId,
-            token,
-            validFrom,
-            validUntil,
-            createdBy: adminId, // audit
-        });
-    }
-
-    const result = await prisma.invigilatorCredential.createMany({
-        data: credentials,
-    });
-
-    logger.info(`Generated ${result.count} invigilator credentials by admin=${adminId}`);
-    return { tokens: credentials.map(c => c.token), count: result.count };
-};
 
 /**
  * Verify invigilator login token based on validity date range.
  */
-export const verifyInvigilatorToken = async (token: string) => {
-    if (!token || !token.trim()) {
-        throw new AppError(MESSAGES.ERROR.INVALID_EXPIRED_TOKEN, 401);
-    }
 
-    const now = new Date();
-    const credential = await prisma.invigilatorCredential.findFirst({
-        where: {
-            token,
-            validFrom: { lte: now },
-            validUntil: { gte: now },
-        },
-    });
-
-    if (!credential) {
-        logger.warn(`[verifyInvigilatorToken] Invalid or expired token: ${token}`);
-        throw new AppError(MESSAGES.ERROR.INVALID_EXPIRED_TOKEN, 401);
-    }
-
-    logger.info(`Invigilator verified: ${credential.id}`);
-    return credential;
-};
 
 /**
  * Mark student attendance by scanning a hall ticket QR hash (URL).
@@ -214,21 +160,28 @@ export const markAttendanceByScan = async (qrHash: string, invigilatorId: string
         throw new AppError(MESSAGES.ERROR.QR_HASH_REQUIRED, 400);
     }
 
-    // Parse the QR URL to extract details
-    // Expected format: .../verify?s={studentId}&c={centerId}&sl={slotId}&h={hash}
+    // First, decrypt the QR content (only authorized invigilators can do this)
+    let decryptedContent: string;
+    try {
+        decryptedContent = decrypt(qrHash);
+        logger.info(`[markAttendanceByScan] Successfully decrypted QR for invigilator=${invigilatorId}`);
+    } catch (e) {
+        logger.error(`[markAttendanceByScan] Decryption failed for invigilator=${invigilatorId}: ${e}`);
+        throw new AppError('Invalid or corrupted QR code', 400);
+    }
+
+    // Parse the decrypted content to extract details
+    // Expected format: s={studentId}&c={centerId}&sl={slotId}&h={hash}
     let studentId, centerId, slotId;
     try {
-        // If it's a full URL
-        const urlObj = new URL(qrHash, 'https://dummy.com'); // Base needed if qrHash is relative or just query
-        const params = new URLSearchParams(urlObj.search);
+        // Parse query parameters directly
+        const params = new URLSearchParams(decryptedContent);
         studentId = params.get('s');
         centerId = params.get('c');
         slotId = params.get('sl');
-        // 'h' is random hash, we might not strictly need to validate it if we trust the DB lookup of qrHash
-        // But we should verify if the studentId/center/slot are valid
+        // 'h' is random hash for uniqueness
     } catch (e) {
-        // Fallback or error if not URL format, though we generated URL
-        logger.warn(`[markAttendanceByScan] Failed to parse QR URL: ${qrHash}`);
+        logger.warn(`[markAttendanceByScan] Failed to parse decrypted QR content: ${decryptedContent}`);
     }
 
     // Try finding by qrHash exact match first (security)
@@ -256,6 +209,35 @@ export const markAttendanceByScan = async (qrHash: string, invigilatorId: string
         if (student.examDetails?.examSlot?.examCenterId !== centerId) {
              throw new AppError('Student is not assigned to this center', 400);
         }
+    }
+
+    // Date validation (can be skipped for testing)
+    const skipDateValidation = process.env.SKIP_DATE_VALIDATION === 'true';
+    
+    if (!skipDateValidation) {
+        if (student.examDetails?.testDate) {
+            const today = new Date();
+            const examDate = new Date(student.examDetails.testDate);
+            
+            // Reset times to compare just dates
+            const todayStr = today.toISOString().split('T')[0];
+            const examDateStr = examDate.toISOString().split('T')[0];
+
+            if (todayStr !== examDateStr) {
+                throw new AppError(`Cannot scan: Exam is scheduled for ${examDateStr}, not today (${todayStr})`, 400);
+            }
+        } else if (student.examDetails?.examSlot?.date) {
+             const today = new Date();
+             const examDate = new Date(student.examDetails.examSlot.date);
+              const todayStr = today.toISOString().split('T')[0];
+              const examDateStr = examDate.toISOString().split('T')[0];
+
+              if (todayStr !== examDateStr) {
+                  throw new AppError(`Cannot scan: Exam is scheduled for ${examDateStr}, not today (${todayStr})`, 400);
+              }
+        }
+    } else {
+        logger.warn(`[markAttendanceByScan] Date validation skipped for testing (invigilator=${invigilatorId})`);
     }
 
     if (student.examDetails?.examAttended) {
@@ -536,51 +518,82 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             },
         });
 
+
         const uniqueHash = uuidv4();
-        // Generate QR Content as a URL with details
-        // URL format: verify?s={studentId}&c={centerId}&sl={slotId}&h={randomHash}
-        // Ideally this should be a configurable base URL from env
-        const baseUrl = process.env.APP_URL || 'https://api.vvit.com'; 
-        const qrContent = `${baseUrl}/verify-scan?s=${studentId}&c=${slot.examCenterId}&sl=${slotId}&h=${uniqueHash}`;
+        // Generate QR Content with just the query parameters
+        // Format: s={studentId}&c={centerId}&sl={slotId}&h={randomHash}
+        const plainContent = `s=${studentId}&c=${slot.examCenterId}&sl=${slotId}&h=${uniqueHash}`;
+        
+        // Encrypt the content so only authorized invigilators can decrypt it
+        const encryptedContent = encrypt(plainContent);
 
-        const hallTicketUrl = `https://s3.aws.com/halltickets/${student.applicationId}.pdf`;
+        let qrCodeImage = '';
+        try {
+            qrCodeImage = await QRCode.toDataURL(encryptedContent);
+        } catch (e) {
+            logger.error(`Failed to generate QR code for booking student ${studentId}: ${e}`);
+        }
 
-        await tx.studentExam.update({
+        await tx.studentExam.upsert({
             where: { studentId },
-            data: {
+            update: {
                 examSlotId: slotId,
                 testDate: slot.date,
                 testCenter: slot.examCenter.name,
-                hallTicketUrl,
             },
+            create: {
+                studentId,
+                examSlotId: slotId,
+                testDate: slot.date,
+                testCenter: slot.examCenter.name,
+            }
         });
 
-        await tx.studentAdmission.update({
+        await tx.studentAdmission.upsert({
             where: { studentId },
-            data: {
+            update: {
                 status: AdmissionStatus.HALL_TICKET_GENERATED,
             },
+            create: {
+                studentId,
+                status: AdmissionStatus.HALL_TICKET_GENERATED,
+            }
         });
 
         const hallTicket = await tx.hallTicket.create({
             data: {
                 studentId,
-                url: hallTicketUrl,
-                qrHash: qrContent,
+                // Store encrypted content in qrHash field
+                qrHash: encryptedContent,
                 createdBy: userId,
             },
         });
 
         return {
+            // Student Info
             studentId,
-            slotId,
-            hallTicketUrl,
-            qrHash: hallTicket.qrHash,
             name: student.name,
+            firstName: student.name.split(' ')[0], // First word as first name
+            lastName: student.name.split(' ').slice(1).join(' ') || student.name, // Rest as last name
             phone: student.phone,
+            email: student.email,
+            profilePhotoUrl: student.profilePhotoUrl,
+            applicationId: student.applicationId,
+            
+            // Exam Slot Info
+            slotId,
             examCenter: slot.examCenter.name,
+            examCenterAddress: slot.examCenter.address,
+            examCenterCity: slot.examCenter.city,
+            examDate: formatDate(slot.date),
+            examDay: new Date(slot.date).toLocaleDateString('en-US', { weekday: 'long' }),
+            startTime: formatTime(slot.startTime),
+            endTime: formatTime(slot.endTime),
+            
+            // Hall Ticket Info
             hallTicketNumber: hallTicket.id,
-            examTime: slot.date,
+            qrCodeImage,
+            qrHash: hallTicket.qrHash,
         };
     });
 
@@ -794,17 +807,38 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
 
     const results = [];
     const rows = data as any[];
+    
+    // Extract all applicationIds
+    const applicationIds = rows.map((row: any) => row.applicationId).filter(Boolean);
+    
+    // Batch fetch all students at once
+    const students = await prisma.student.findMany({
+        where: { applicationId: { in: applicationIds } },
+        select: { id: true, applicationId: true }
+    });
+    
+    // Create a map for quick lookup
+    const studentMap = new Map(students.map(s => [s.applicationId, s.id]));
+    
+    // Prepare batch updates
+    const updatePromises = [];
+    
     for (const row of rows) {
         try {
             const { applicationId, score } = row;
-            const student = await prisma.student.findUnique({ where: { applicationId } });
-            if (student) {
+            const studentId = studentMap.get(applicationId);
+            
+            if (studentId) {
                 const isQualified = Number(score) >= Number(cutoff);
-                await prisma.studentExam.update({
-                    where: { studentId: student.id },
-                    data: { examScore: Number(score), isQualified }
-                });
-                results.push({ applicationId, status: 'Success' });
+                
+                // Add to batch update promises
+                updatePromises.push(
+                    prisma.studentExam.update({
+                        where: { studentId },
+                        data: { examScore: Number(score), isQualified }
+                    }).then(() => ({ applicationId, status: 'Success' }))
+                    .catch((err: any) => ({ applicationId, status: 'Failed', message: err.message }))
+                );
             } else {
                 results.push({ applicationId, status: 'Failed', message: MESSAGES.ERROR.STUDENT_NOT_FOUND });
             }
@@ -812,5 +846,16 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
             results.push({ applicationId: row.applicationId, status: 'Failed', message: err.message });
         }
     }
+    
+    // Execute all updates in parallel (in batches of 50 to avoid overwhelming DB)
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < updatePromises.length; i += BATCH_SIZE) {
+        const batch = updatePromises.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(batch);
+        results.push(...batchResults);
+    }
+    
+    logger.info(`[processBulkResults] Processed ${rows.length} records: ${results.filter(r => r.status === 'Success').length} success, ${results.filter(r => r.status === 'Failed').length} failed`);
+    
     return results;
 };

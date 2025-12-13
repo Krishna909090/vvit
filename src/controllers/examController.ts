@@ -39,73 +39,7 @@ export const createExamCenter = catchAsync(
     }
 );
 
-/**
- * Controller: Generate invigilator credentials (tokens) for attendance.
- * Route: POST /exam/invigilators/credentials
- * Roles: ADMIN, SUPER_ADMIN
- */
-export const generateInvigilatorCredentials = catchAsync(
-    async (req: Request, res: Response, next: NextFunction) => {
-        const adminId = req.user?.userId;
-        if (!adminId) {
-            logger.warn('[generateInvigilatorCredentials] unauthorized access attempt');
-            throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
-        }
 
-        if (req.user?.role !== 'ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
-            logger.warn(
-                `[generateInvigilatorCredentials] forbidden user=${adminId} role=${req.user?.role}`
-            );
-            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
-        }
-
-        logger.info(`[generateInvigilatorCredentials] admin=${adminId}`);
-        logger.debug &&
-            logger.debug(
-                `[generateInvigilatorCredentials] payload=${JSON.stringify(req.body)}`
-            );
-
-        const result = await examService.generateInvigilatorCredentials(adminId, req.body);
-        logger.info('[generateInvigilatorCredentials] generated credentials');
-        sendResponse({
-            res,
-            statusCode: 201,
-            success: true,
-            message: MESSAGES.SUCCESS.INVIGILATOR_CREDENTIALS_GENERATED,
-            data: result,
-        });
-    }
-);
-
-/**
- * Controller: Invigilator login using token, returns JWT with role=INVIGILATOR.
- * Route: POST /exam/invigilators/login
- * Roles: PUBLIC (token-based)
- */
-export const loginInvigilator = catchAsync(
-    async (req: Request, res: Response, next: NextFunction) => {
-        logger.info('[loginInvigilator] attempt');
-        logger.debug && logger.debug(`[loginInvigilator] payload=${JSON.stringify(req.body)}`);
-
-        const { token } = req.body;
-        const credential = await examService.verifyInvigilatorToken(token);
-
-        const jwtToken = jwt.sign(
-            { userId: credential.id, role: 'INVIGILATOR' as Role },
-            JWT_SECRET,
-            { expiresIn: '12h' }
-        );
-
-        logger.info(`[loginInvigilator] success invigilator=${credential.id}`);
-        sendResponse({
-            res,
-            statusCode: 200,
-            success: true,
-            message: MESSAGES.SUCCESS.LOGIN_SUCCESS,
-            data: { token: jwtToken },
-        });
-    }
-);
 
 /**
  * Controller: Mark attendance for a student by QR scan.

@@ -1,4 +1,5 @@
 import prisma from '../config/prisma';
+import QRCode from 'qrcode';
 import {
     AdmissionStatus,
     StudentDocumentStatus,
@@ -41,28 +42,64 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
 
     const prefix = data.isOffline ? 'VOF' : 'VON';
 
-    // Find the last student with the same offline status to determine the next ID
-    const lastStudent = await prisma.student.findFirst({
-        where: {
-            isOffline: data.isOffline || false,
-            applicationId: { startsWith: prefix }
-        },
-        orderBy: { createdAt: 'desc' }
-    });
+    // Generate unique applicationId with retry logic to handle race conditions
+    let applicationId = '';
+    let attempts = 0;
+    const maxAttempts = 5;
 
-    let nextIdNumber = 1;
-    if (lastStudent && lastStudent.applicationId) {
-        const lastIdPart = lastStudent.applicationId.replace(prefix, '');
-        const lastNumber = parseInt(lastIdPart, 10);
-        if (!isNaN(lastNumber)) {
-            nextIdNumber = lastNumber + 1;
+    while (attempts < maxAttempts) {
+        // Find the last student with the same offline status to determine the next ID
+        const lastStudent = await prisma.student.findFirst({
+            where: {
+                isOffline: data.isOffline || false,
+                applicationId: { startsWith: prefix }
+            },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        let nextIdNumber = 1;
+        if (lastStudent && lastStudent.applicationId) {
+            const lastIdPart = lastStudent.applicationId.replace(prefix, '');
+            const lastNumber = parseInt(lastIdPart, 10);
+            if (!isNaN(lastNumber)) {
+                nextIdNumber = lastNumber + 1;
+            }
+        }
+
+        applicationId = `${prefix}${nextIdNumber}`;
+
+        // Check if this applicationId already exists (race condition check)
+        const existingWithId = await prisma.student.findUnique({
+            where: { applicationId }
+        });
+
+        if (!existingWithId) {
+            // ID is unique, break the loop
+            break;
+        }
+
+        // ID already exists, increment and retry
+        attempts++;
+        logger.warn(`[registerStudent] ApplicationId ${applicationId} already exists, retrying... (attempt ${attempts}/${maxAttempts})`);
+        
+        if (attempts >= maxAttempts) {
+            throw new AppError('Failed to generate unique application ID after multiple attempts. Please try again.', 500);
         }
     }
 
-    const applicationId = `${prefix}${nextIdNumber}`;
+    logger.info(`[registerStudent] Generated applicationId: ${applicationId}`);
 
     // Transaction to create Student and related tables
     const student = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        // Double-check uniqueness within transaction
+        const existingInTx = await tx.student.findUnique({
+            where: { applicationId }
+        });
+
+        if (existingInTx) {
+            throw new AppError('Application ID conflict detected. Please try again.', 409);
+        }
+
         const newStudent = await tx.student.create({
             data: {
                 applicationId,
@@ -152,10 +189,21 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
 
 
 
+
+
 export const getHallTicket = async (studentId: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
-        include: { admissionDetails: true, examDetails: true }
+        include: { 
+            admissionDetails: true, 
+            examDetails: {
+                include: { examSlot: true }
+            },
+            hallTickets: {
+                orderBy: { generatedAt: 'desc' },
+                take: 1
+            }
+        }
     });
 
     if (!student || !student.admissionDetails || !student.examDetails) {
@@ -173,16 +221,69 @@ export const getHallTicket = async (studentId: string) => {
         throw new AppError(MESSAGES.ERROR.HALL_TICKET_NOT_GENERATED, 400);
     }
 
+    let qrCodeImage = null;
+    const latestHallTicket = student.hallTickets[0];
+    
+    if (latestHallTicket && latestHallTicket.qrHash) {
+        try {
+            qrCodeImage = await QRCode.toDataURL(latestHallTicket.qrHash);
+        } catch (err) {
+            logger.error(`Failed to generate QR code for student ${studentId}: ${err}`);
+        }
+    }
+
     logger.info(`Hall ticket retrieved for student: ${studentId}`);
-    return student.examDetails.hallTicketUrl;
+    
+    return {
+        qrCodeImage,
+        studentName: student.name,
+        applicationId: student.applicationId,
+        photoUrl: student.profilePhotoUrl,
+        examCenter: student.examDetails.testCenter,
+        examDate: student.examDetails.testDate,
+        startTime: student.examDetails.examSlot?.startTime,
+        endTime: student.examDetails.examSlot?.endTime
+    };
 };
 
 export const uploadDocumentsAndPreferences = async (studentId: string, data: any, currentUserId: string | null) => {
     const { id, applicationId, email, phone, pref1, pref2, pref3, ...documentData } = data;
 
-    const studentExists = await prisma.student.findUnique({ where: { id: studentId } });
-    if (!studentExists) {
+    // Validate student exists and check qualification status
+    const student = await prisma.student.findUnique({ 
+        where: { id: studentId },
+        include: {
+            admissionDetails: true,
+            examDetails: true
+        }
+    });
+    
+    if (!student) {
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+    }
+
+    // Check if student is qualified to upload documents
+    if (!student.examDetails?.examAttended) {
+        throw new AppError('Cannot upload documents: Exam not attended yet', 400);
+    }
+
+    if (!student.examDetails?.isQualified) {
+        throw new AppError('Cannot upload documents: Student not qualified in entrance exam', 400);
+    }
+
+    // Check admission status - must be EXAM_ATTENDED or later
+    const validStatuses: AdmissionStatus[] = [
+        AdmissionStatus.EXAM_ATTENDED,
+        AdmissionStatus.DOCUMENTS_UPLOADED,
+        AdmissionStatus.SEAT_ALLOTTED,
+        AdmissionStatus.ADMISSION_CONFIRMED
+    ];
+
+    if (!student.admissionDetails || !validStatuses.includes(student.admissionDetails.status)) {
+        throw new AppError(
+            `Cannot upload documents: Current status is ${student.admissionDetails?.status || 'UNKNOWN'}. Must be EXAM_ATTENDED or later.`,
+            400
+        );
     }
 
     // Update Preferences
@@ -305,10 +406,42 @@ export const verifyDocument = async (studentId: string, documentKey: string, sta
 
 
 export const addAcademicDetails = async (studentId: string, details: any[], currentUserId: string | null) => {
-    // Validate student exists
-    const student = await prisma.student.findUnique({ where: { id: studentId } });
+    // Validate student exists and check admission status
+    const student = await prisma.student.findUnique({ 
+        where: { id: studentId },
+        include: { 
+            admissionDetails: true,
+            examDetails: true 
+        }
+    });
+    
     if (!student) {
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+    }
+
+    // Check if student is qualified to add academic details
+    // Student must have attended exam and be qualified
+    if (!student.examDetails?.examAttended) {
+        throw new AppError('Cannot add academic details: Exam not attended yet', 400);
+    }
+
+    if (!student.examDetails?.isQualified) {
+        throw new AppError('Cannot add academic details: Student not qualified in entrance exam', 400);
+    }
+
+    // Check admission status - must be EXAM_ATTENDED or later
+    const validStatuses: AdmissionStatus[] = [
+        AdmissionStatus.EXAM_ATTENDED,
+        AdmissionStatus.DOCUMENTS_UPLOADED,
+        AdmissionStatus.SEAT_ALLOTTED,
+        AdmissionStatus.ADMISSION_CONFIRMED
+    ];
+
+    if (!student.admissionDetails || !validStatuses.includes(student.admissionDetails.status)) {
+        throw new AppError(
+            `Cannot add academic details: Current status is ${student.admissionDetails?.status || 'UNKNOWN'}. Must be EXAM_ATTENDED or later.`,
+            400
+        );
     }
 
     // Use transaction to create multiple records
@@ -319,9 +452,9 @@ export const addAcademicDetails = async (studentId: string, details: any[], curr
                     studentId,
                     level: detail.level,
                     board: detail.board,
-                    yearOfPassing: detail.yearOfPassing,
+                    yearOfPassing: detail.yearOfPassing.toString(),
                     hallTicketNumber: detail.hallTicketNumber,
-                    gpaOrMarks: detail.gpaOrMarks,
+                    gpaOrMarks: detail.gpaOrMarks.toString(),
                     createdBy: currentUserId,
                     updatedBy: currentUserId
                 }

@@ -6,24 +6,38 @@ import { MESSAGES } from '../constants/messages';
 import { FeeStatus, AdmissionStatus, AgentCommissionStatus } from '@prisma/client';
 
 export const payTestFee = async (studentId: string, currentUserId: string | null) => {
-    // Update Admission Status
-    const studentExists = await prisma.student.findUnique({ where: { id: studentId } });
-    if (!studentExists) {
+    // Validate student exists and check admission status
+    const student = await prisma.student.findUnique({ 
+        where: { id: studentId },
+        include: { admissionDetails: true }
+    });
+    
+    if (!student) {
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
-    // Update Admission Status
-    const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
-    if (admission?.feeStatus !== FeeStatus.PENDING && admission?.status === AdmissionStatus.TEST_FEE_PAID) {
+    // Check if student is in correct status to pay test fee
+    if (!student.admissionDetails) {
+        throw new AppError('Admission details not found', 404);
+    }
+
+    if (student.admissionDetails.status !== AdmissionStatus.REGISTERED) {
+        throw new AppError(
+            `Cannot pay test fee: Current status is ${student.admissionDetails.status}. Must be REGISTERED.`,
+            400
+        );
+    }
+
+    // Check if already paid
+    if (student.admissionDetails.feeStatus !== FeeStatus.PENDING) {
         throw new AppError(MESSAGES.ERROR.ALREADY_PAID, 400);
     }
 
+    // Update Admission Status
     const updatedAdmission = await prisma.studentAdmission.update({
         where: { studentId },
         data: { status: AdmissionStatus.TEST_FEE_PAID }
     });
-
-    const student = await prisma.student.findUnique({ where: { id: studentId } });
 
     // Record Payment
     await prisma.payment.create({
@@ -49,7 +63,7 @@ export const payTestFee = async (studentId: string, currentUserId: string | null
     }
 
     logger.info(`Test fee paid for student: ${studentId}`);
-    return { ...student, admissionDetails: admission };
+    return { ...student, admissionDetails: updatedAdmission };
 };
 
 export const payCollegeFee = async (studentId: string, currentUserId: string | null) => {
