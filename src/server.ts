@@ -5,7 +5,7 @@ import logger from './utils/logger';
 import { getDatabaseSecret } from './config/awsConfig';
 
 const PORT = process.env.PORT || 3000;
-const SECRET_NAME = "rds!db-2e1ab980-8cb9-4e7c-a2fd-d1f50885c30f";
+const SECRET_NAME = "rds-secretname";
 
 const startServer = async () => {
     try {
