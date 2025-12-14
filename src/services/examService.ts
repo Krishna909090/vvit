@@ -725,8 +725,11 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             throw new AppError(MESSAGES.ERROR.SLOT_FULL, 400);
         }
 
+        // Check if exam has already started (use startTime, not date)
         const now = new Date();
-        if (slot.date < now) {
+        const skipDateValidation = process.env.SKIP_DATE_VALIDATION === 'true';
+        
+        if (!skipDateValidation && slot.startTime < now) {
             throw new AppError(
                 MESSAGES.ERROR.SLOT_IN_PAST,
                 400
