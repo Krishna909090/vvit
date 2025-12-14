@@ -7,19 +7,41 @@ import logger from '../utils/logger';
 
 /**
  * Sanitize string to prevent XSS attacks
+ * Only sanitizes if the string looks like user input (not UUIDs, dates, etc.)
  */
 function sanitizeString(value: string): string {
-    // Escape HTML entities
-    let sanitized = validator.escape(value);
+    // Don't sanitize UUIDs (36 chars with hyphens)
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+        return value;
+    }
     
-    // Remove any script tags
-    sanitized = sanitized.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+    // Don't sanitize ISO dates
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z?$/.test(value)) {
+        return value;
+    }
+    
+    // Don't sanitize numbers (as strings)
+    if (/^\d+(\.\d+)?$/.test(value)) {
+        return value;
+    }
+    
+    // Don't sanitize phone numbers (10-15 digits)
+    if (/^\d{10,15}$/.test(value)) {
+        return value;
+    }
+    
+    // Only sanitize actual text content
+    // Remove script tags
+    let sanitized = value.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
     
     // Remove event handlers (onclick, onerror, etc.)
     sanitized = sanitized.replace(/on\w+\s*=\s*["'][^"']*["']/gi, '');
     
     // Remove javascript: protocol
     sanitized = sanitized.replace(/javascript:/gi, '');
+    
+    // Remove dangerous HTML tags but keep the content
+    sanitized = sanitized.replace(/<(script|iframe|object|embed|link|style)[^>]*>.*?<\/\1>/gi, '');
     
     return sanitized;
 }
@@ -48,9 +70,8 @@ function sanitizeObject(obj: any): any {
         const sanitized: any = {};
         for (const key in obj) {
             if (obj.hasOwnProperty(key)) {
-                // Sanitize key name as well
-                const sanitizedKey = sanitizeString(key);
-                sanitized[sanitizedKey] = sanitizeObject(obj[key]);
+                // Don't sanitize key names - they're controlled by API schema
+                sanitized[key] = sanitizeObject(obj[key]);
             }
         }
         return sanitized;
@@ -64,19 +85,25 @@ function sanitizeObject(obj: any): any {
  */
 export const sanitizeInput = (req: Request, res: Response, next: NextFunction) => {
     try {
-        // Sanitize request body
+        // Sanitize request body (safe to modify)
         if (req.body && typeof req.body === 'object') {
             req.body = sanitizeObject(req.body);
         }
 
-        // Sanitize query parameters
+        // Sanitize query parameters (create new object to avoid read-only error)
         if (req.query && typeof req.query === 'object') {
-            req.query = sanitizeObject(req.query);
+            const sanitizedQuery = sanitizeObject(req.query);
+            // Replace query object properties individually
+            Object.keys(req.query).forEach(key => delete (req.query as any)[key]);
+            Object.assign(req.query, sanitizedQuery);
         }
 
-        // Sanitize URL parameters
+        // Sanitize URL parameters (create new object to avoid read-only error)
         if (req.params && typeof req.params === 'object') {
-            req.params = sanitizeObject(req.params);
+            const sanitizedParams = sanitizeObject(req.params);
+            // Replace params object properties individually
+            Object.keys(req.params).forEach(key => delete req.params[key]);
+            Object.assign(req.params, sanitizedParams);
         }
 
         next();
@@ -85,6 +112,7 @@ export const sanitizeInput = (req: Request, res: Response, next: NextFunction) =
         next(error);
     }
 };
+
 
 /**
  * Validate and sanitize email
