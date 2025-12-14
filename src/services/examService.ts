@@ -630,13 +630,17 @@ export const createExamSlot = async (data: any, userId?: string) => {
  * Get all future and booking-enabled slots that are not full.
  */
 export const getAvailableSlots = async () => {
-    // 1. Fetch available slots (future date, booking enabled)
+    // 1. Fetch available slots (future date, booking enabled, not deleted)
     const slots = await prisma.examSlot.findMany({
         where: {
             date: {
                 gte: new Date(),
             },
             isBookingEnabled: true,
+            isDeleted: false,
+            examCenter: {
+                isDeleted: false,
+            },
         },
         include: {
             examCenter: true,
@@ -857,7 +861,15 @@ export const toggleSlotBooking = async (
  */
 export const getExamCenters = async () => {
     logger.info('[getExamCenters] Fetching all exam centers');
-    const centers = await prisma.examCenter.findMany({ include: { examSlots: true } });
+    const centers = await prisma.examCenter.findMany({
+        where: { isDeleted: false },
+        include: {
+            examSlots: {
+                where: { isDeleted: false },
+                orderBy: { date: 'asc' },
+            },
+        },
+    });
     logger.info(`[getExamCenters] Found ${centers.length} centers`);
     return centers.map(transformExamCenterWithSlots);
 };
@@ -906,6 +918,12 @@ export const deleteExamCenter = async (id: string) => {
 export const getExamSlots = async () => {
     logger.info('[getExamSlots] Fetching all exam slots');
     const slots = await prisma.examSlot.findMany({
+        where: {
+            isDeleted: false,
+            examCenter: {
+                isDeleted: false,
+            },
+        },
         include: { examCenter: true },
         orderBy: { date: 'asc' },
     });
@@ -919,8 +937,13 @@ export const getExamSlots = async () => {
 export const getExamSlotsByCenter = async (centerId: string) => {
     logger.info(`[getExamSlotsByCenter] Fetching slots for center=${centerId}`);
     const center = await prisma.examCenter.findUnique({
-        where: { id: centerId },
-        include: { examSlots: { orderBy: { date: 'asc' } } },
+        where: { id: centerId, isDeleted: false },
+        include: {
+            examSlots: {
+                where: { isDeleted: false },
+                orderBy: { date: 'asc' },
+            },
+        },
     });
 
     if (!center) {
