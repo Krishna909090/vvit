@@ -1,4 +1,5 @@
 import './config/env'; // Must be first
+import { validateEnvironment } from './config/envValidator'; // Validate environment variables
 import app from './app';
 import logger from './utils/logger';
 import { getDatabaseSecret } from './config/awsConfig';
@@ -8,6 +9,10 @@ const SECRET_NAME = "rds!db-2e1ab980-8cb9-4e7c-a2fd-d1f50885c30f";
 
 const startServer = async () => {
     try {
+        // STEP 1: Validate environment variables BEFORE anything else
+        logger.info('🔍 Validating environment configuration...');
+        validateEnvironment();
+        
         if (process.env.USE_LOCAL_DB === 'true') {
             logger.info('Using local database configuration from environment variables.');
             if (!process.env.DATABASE_URL) {
@@ -37,12 +42,13 @@ const startServer = async () => {
         }
 
         app.listen(PORT, () => {
-            logger.info(`Server is running on port ${PORT}`);
-            logger.info(`Swagger docs available at http://localhost:${PORT}/api-docs`);
+            logger.info(`🚀 Server is running on port ${PORT}`);
+            logger.info(`📚 Swagger docs available at http://localhost:${PORT}/api-docs`);
+            logger.info(`🔒 Security: Environment validation passed`);
         });
 
     } catch (error: any) {
-        logger.error(`Failed to start server: ${error.message}`);
+        logger.error(`❌ Failed to start server: ${error.message}`);
         process.exit(1);
     }
 };

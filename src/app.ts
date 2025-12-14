@@ -1,9 +1,7 @@
 import express from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
 import morgan from 'morgan';
 import compression from 'compression';
-import rateLimit from 'express-rate-limit';
 import hpp from 'hpp';
 import swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
@@ -13,33 +11,40 @@ import adminRoutes from './routes/adminRoutes';
 import examRoutes from './routes/examRoutes';
 import uploadRoutes from './routes/uploadRoutes';
 import invigilatorRoutes from './routes/invigilatorRoutes';
+import documentRequirementRoutes from './routes/documentRequirementRoutes';
+import healthRoutes from './routes/healthRoutes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
+import {
+    authRateLimiter,
+    uploadRateLimiter,
+    readRateLimiter,
+    writeRateLimiter,
+    generalRateLimiter
+} from './middlewares/rateLimitMiddleware';
+import { enhancedSecurityHeaders, additionalSecurityHeaders } from './middlewares/securityHeaders';
+import { sanitizeInput } from './middlewares/inputSanitization';
 
 const app = express();
 
 // Trust Proxy (Required for Rate Limiting behind load balancers/proxies like Nginx/AWS ALB)
 app.set('trust proxy', 1);
 
-// Middlewares
-app.use(helmet()); // Secure HTTP headers
+// Security Middlewares (Order matters!)
+app.use(enhancedSecurityHeaders); // Enhanced Helmet configuration
+app.use(additionalSecurityHeaders); // Custom security headers
 app.use(cors({
     origin: process.env.CORS_ORIGIN || '*', // Configure this in env for production
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+    maxAge: 86400 // 24 hours
 }));
 app.use(compression()); // Gzip compression
 app.use(express.json({ limit: '10kb' })); // Body limit
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(hpp()); // Prevent HTTP Parameter Pollution
-
-// Rate Limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.'
-});
-app.use('/auth', limiter); // Apply stricter limit to auth routes
-app.use('/api', limiter); // Apply to other API routes if needed
+app.use(sanitizeInput); // Input sanitization (XSS, NoSQL injection prevention)
 
 app.use(morgan('combined', {
     stream: { write: (message) => logger.info(message.trim()) }
@@ -80,13 +85,20 @@ const swaggerOptions = {
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
-// Routes
-app.use('/auth', authRoutes);
-app.use('/student', studentRoutes);
-app.use('/admin', adminRoutes);
-app.use('/exam', examRoutes);
-app.use('/invigilator', invigilatorRoutes);
-app.use('/api/upload', uploadRoutes);
+// Health Check Routes (No rate limiting for load balancers)
+app.use('/', healthRoutes);
+
+// Routes with Enhanced Rate Limiting
+app.use('/auth', authRateLimiter, authRoutes); // Strict: 5 attempts/15min
+app.use('/student', readRateLimiter, writeRateLimiter, studentRoutes); // Read: 200/15min, Write: 50/15min
+app.use('/admin', readRateLimiter, writeRateLimiter, adminRoutes); // Read: 200/15min, Write: 50/15min
+app.use('/exam', readRateLimiter, writeRateLimiter, examRoutes); // Read: 200/15min, Write: 50/15min
+app.use('/invigilator', readRateLimiter, writeRateLimiter, invigilatorRoutes); // Read: 200/15min, Write: 50/15min
+app.use('/api/upload', uploadRateLimiter, uploadRoutes); // 30 uploads/hour (student-friendly)
+app.use('/document-requirements', readRateLimiter, writeRateLimiter, documentRequirementRoutes); // Read: 200/15min, Write: 50/15min
+
+// Apply general rate limiter to any other routes
+app.use(generalRateLimiter);
 
 // Global Error Handler
 app.use(globalErrorHandler);
@@ -96,3 +108,4 @@ app.get('/', (req, res) => {
 });
 
 export default app;
+

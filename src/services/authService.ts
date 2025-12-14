@@ -10,7 +10,8 @@ import { sendBsnlOtp, sendNetcoreEmail } from "./integrationService";
 import { MESSAGES } from "../constants/messages";
 import { maskPhone, maskEmail } from "../utils/mask";
 
-const JWT_SECRET = process.env.JWT_SECRET || "supersecret";
+// JWT_SECRET is validated on startup by envValidator - no fallback needed
+const JWT_SECRET = process.env.JWT_SECRET!;
 const OTP_SALT_ROUNDS = 10;
 const OTP_MAX_ATTEMPTS = 5;
 const STUDENT_OTP_EXPIRY_MIN = 10;

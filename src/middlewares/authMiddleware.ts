@@ -4,7 +4,9 @@ import { Role } from '@prisma/client';
 import logger from '../utils/logger';
 import { AppError } from '../utils/AppError';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
+// JWT_SECRET is validated on startup by envValidator - no fallback needed
+const JWT_SECRET = process.env.JWT_SECRET!;
+
 
 export const authenticate = (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization;

@@ -11,7 +11,8 @@ import { AppError } from '../utils/AppError';
 import { sendResponse } from '../utils/response';
 import { MESSAGES } from '../constants/messages';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
+// JWT_SECRET is validated on startup by envValidator - no fallback needed
+const JWT_SECRET = process.env.JWT_SECRET!;
 
 /* -------------------------------------------------------------------------- */
 /*                               CONTROLLER APIS                              */
@@ -42,38 +43,118 @@ export const createExamCenter = catchAsync(
 
 
 /**
- * Controller: Mark attendance for a student by QR scan.
+ * Controller: Scan QR code and return student details for validation.
  * Route: POST /exam/attendance/scan
- * Roles: INVIGILATOR
+ * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR
  */
 export const scanAttendance = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
-        const invigilatorId = req.user?.userId;
-        if (!invigilatorId) {
+        const userId = req.user?.userId;
+        if (!userId) {
             logger.warn('[scanAttendance] unauthorized attempt');
             throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
         }
 
-        if (req.user?.role !== 'INVIGILATOR') {
-            logger.warn(`[scanAttendance] forbidden user=${invigilatorId} role=${req.user?.role}`);
-            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
-        }
-
         const { qrHash } = req.body;
 
-        logger.info(`[scanAttendance] invigilator=${invigilatorId} scanning`);
-        const result = await examService.markAttendanceByScan(qrHash, invigilatorId);
+        logger.info(`[scanAttendance] user=${userId} role=${req.user?.role} scanning`);
+        
+        try {
+            const result = await examService.markAttendanceByScan(qrHash, userId);
 
-        logger.info('[scanAttendance] attendance marked');
-        sendResponse({
-            res,
-            statusCode: 200,
-            success: true,
-            message: MESSAGES.SUCCESS.ATTENDANCE_MARKED,
-            data: result,
-        });
+            // Audit log successful scan
+            const { logAttendanceOperation, AuditAction } = await import('../utils/auditLogger');
+            await logAttendanceOperation(
+                AuditAction.ATTENDANCE_SCANNED,
+                userId,
+                result.student.id,
+                result.attendanceRecordId,
+                true,
+                {
+                    studentName: result.student.name,
+                    applicationId: result.student.applicationId,
+                    examCenter: result.examDetails.examCenter
+                }
+            );
+
+            logger.info('[scanAttendance] student details retrieved');
+            sendResponse({
+                res,
+                statusCode: 200,
+                success: true,
+                message: 'Student details retrieved for validation',
+                data: result,
+            });
+        } catch (error: any) {
+            // Audit log failed scan
+            const { logSecurityEvent, AuditAction } = await import('../utils/auditLogger');
+            await logSecurityEvent(
+                AuditAction.SUSPICIOUS_ACTIVITY,
+                req,
+                { error: error.message, qrHash: qrHash?.substring(0, 20) + '...' }
+            );
+            throw error;
+        }
     }
 );
+
+/**
+ * Controller: Verify and mark student attendance after validation.
+ * Route: POST /exam/attendance/verify
+ * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR
+ */
+export const verifyAttendance = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        const userId = req.user?.userId;
+        if (!userId) {
+            logger.warn('[verifyAttendance] unauthorized attempt');
+            throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
+        }
+
+        const { attendanceRecordId } = req.body;
+
+        logger.info(`[verifyAttendance] user=${userId} role=${req.user?.role} verifying record=${attendanceRecordId}`);
+        
+        try {
+            const result = await examService.verifyStudentAttendance(attendanceRecordId, userId);
+
+            // Audit log successful verification
+            const { logAttendanceOperation, AuditAction } = await import('../utils/auditLogger');
+            await logAttendanceOperation(
+                AuditAction.ATTENDANCE_VERIFIED,
+                userId,
+                result.studentId,
+                attendanceRecordId,
+                true,
+                {
+                    studentName: result.studentName,
+                    applicationId: result.applicationId,
+                    examCenter: result.examCenter,
+                    verifiedAt: result.verifiedAt
+                }
+            );
+
+            logger.info('[verifyAttendance] attendance verified and marked');
+            sendResponse({
+                res,
+                statusCode: 200,
+                success: true,
+                message: MESSAGES.SUCCESS.ATTENDANCE_MARKED,
+                data: result,
+            });
+        } catch (error: any) {
+            // Audit log failed verification
+            const { logSecurityEvent, AuditAction } = await import('../utils/auditLogger');
+            await logSecurityEvent(
+                AuditAction.ATTENDANCE_REJECTED,
+                req,
+                { error: error.message, attendanceRecordId }
+            );
+            throw error;
+        }
+    }
+);
+
 
 /**
  * Controller: Create a new exam slot for a center.

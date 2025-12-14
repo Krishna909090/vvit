@@ -3,7 +3,8 @@
 
 import crypto from 'crypto';
 
-const ENCRYPTION_KEY = process.env.QR_ENCRYPTION_KEY || process.env.JWT_SECRET || 'supersecret';
+// QR_ENCRYPTION_KEY is validated on startup by envValidator - no fallback needed
+const ENCRYPTION_KEY = process.env.QR_ENCRYPTION_KEY!;
 const ALGORITHM = 'aes-256-cbc';
 
 /**

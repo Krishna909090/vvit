@@ -83,3 +83,50 @@ export const addInvigilator = catchAsync(async (req: Request, res: Response, nex
         data: user,
     });
 });
+
+/**
+ * Get all staff users (excluding students)
+ * Returns users with roles: SUPER_ADMIN, ADMIN, AGENT, INVIGILATOR, STAFF
+ */
+export const getStaffUsers = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getStaffUsers] by=${req.user?.userId || 'anonymous'}`);
+    
+    const { role, search } = req.query;
+    
+    const users = await AdminService.getStaffUsers({
+        role: role as Role | undefined,
+        search: search as string | undefined
+    });
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Staff users retrieved successfully',
+        data: users
+    });
+});
+
+/**
+ * Update staff user details
+ */
+export const updateStaffUser = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[updateStaffUser] by=${req.user?.userId || 'anonymous'}`);
+    
+    const { userId } = req.params;
+    const { name, email, role } = req.body;
+    
+    const updatedUser = await AdminService.updateStaffUser(
+        userId,
+        { name, email, role },
+        req.user?.userId
+    );
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Staff user updated successfully',
+        data: updatedUser
+    });
+});

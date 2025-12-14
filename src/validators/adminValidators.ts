@@ -287,3 +287,19 @@ export const createFeeStructureSchema = z.object({
         academicYearId: z.string().uuid(),
     }),
 });
+
+export const updateStaffUserSchema = z.object({
+    params: z.object({
+        userId: z.string().uuid('Invalid user ID'),
+    }),
+    body: z.object({
+        name: z.string().trim().min(1, 'Name cannot be empty').optional(),
+        email: z.string().email('Invalid email address').optional(),
+        role: z.nativeEnum(Role).optional(),
+    }).refine(
+        (data) => data.name !== undefined || data.email !== undefined || data.role !== undefined,
+        {
+            message: 'At least one field (name, email, or role) must be provided',
+        }
+    ),
+});

@@ -183,5 +183,131 @@ export const AdminService = {
         }
 
         return user;
+    },
+
+    /**
+     * Get all staff users (excluding students)
+     * Supports filtering by role and search term
+     */
+    async getStaffUsers(filters?: { role?: Role; search?: string }) {
+        const where: any = {
+            role: {
+                not: Role.STUDENT // Exclude students
+            }
+        };
+
+        // Filter by specific role if provided
+        if (filters?.role) {
+            where.role = filters.role;
+        }
+
+        // Search by name, phone, or email
+        if (filters?.search) {
+            const searchTerm = filters.search.trim();
+            where.OR = [
+                { name: { contains: searchTerm, mode: 'insensitive' } },
+                { phone: { contains: searchTerm } },
+                { email: { contains: searchTerm, mode: 'insensitive' } }
+            ];
+        }
+
+        const users = await prisma.user.findMany({
+            where,
+            select: {
+                id: true,
+                phone: true,
+                name: true,
+                email: true,
+                role: true,
+                createdAt: true,
+                updatedAt: true
+            },
+            orderBy: [
+                { role: 'asc' },
+                { createdAt: 'desc' }
+            ]
+        });
+
+        logger.info(`[getStaffUsers] Found ${users.length} staff users`);
+        return users;
+    },
+
+    /**
+     * Update staff user details
+     * Can update name, email, and role (excluding STUDENT role)
+     */
+    async updateStaffUser(userId: string, data: { name?: string; email?: string; role?: Role }, currentUserId?: string) {
+        if (!userId) {
+            throw new AppError('User ID is required', 400);
+        }
+
+        // Find the user
+        const user = await prisma.user.findUnique({
+            where: { id: userId }
+        });
+
+        if (!user) {
+            throw new AppError('User not found', 404);
+        }
+
+        // Cannot update STUDENT role users through this API
+        if (user.role === Role.STUDENT) {
+            throw new AppError('Cannot update student users through this API', 400);
+        }
+
+        // Validate role if being updated
+        if (data.role) {
+            const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR, Role.AGENT];
+            if (!allowedRoles.includes(data.role)) {
+                throw new AppError('Invalid role for staff user', 400);
+            }
+
+            // Prevent changing SUPER_ADMIN role if another SUPER_ADMIN exists
+            if (data.role === Role.SUPER_ADMIN && user.role !== Role.SUPER_ADMIN) {
+                const existingSuperAdmin = await prisma.user.findFirst({
+                    where: { 
+                        role: Role.SUPER_ADMIN,
+                        id: { not: userId }
+                    }
+                });
+
+                if (existingSuperAdmin) {
+                    throw new AppError('A SUPER_ADMIN already exists. Cannot create another SUPER_ADMIN.', 400);
+                }
+            }
+        }
+
+        // Prepare update data
+        const updateData: any = {};
+        
+        if (data.name !== undefined) {
+            updateData.name = data.name.trim();
+        }
+
+        if (data.email !== undefined) {
+            updateData.email = data.email.trim().toLowerCase();
+        }
+
+        if (data.role !== undefined) {
+            updateData.role = data.role;
+        }
+
+        // Update user
+        const updatedUser = await prisma.user.update({
+            where: { id: userId },
+            data: updateData,
+            select: {
+                id: true,
+                phone: true,
+                name: true,
+                email: true,
+                role: true,
+                createdAt: true,
+                updatedAt: true
+            }
+        });
+
+        logger.info(`[updateStaffUser] Updated user id=${userId} by=${currentUserId}`);
+        return updatedUser;
     }
 };

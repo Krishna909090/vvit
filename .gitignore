@@ -49,8 +49,8 @@ docker-compose.override.yml
 
 # Ignore all Markdown files
 
-openapi.json
-openapi.yaml
+# openapi.json
+# openapi.yaml
 
 deploy.zip
 

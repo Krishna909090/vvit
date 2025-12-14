@@ -153,20 +153,21 @@ export const createExamCenter = async (data: any, userId?: string) => {
 
 
 /**
- * Mark student attendance by scanning a hall ticket QR hash (URL).
+ * Scan student QR code and return student details for admin/invigilator validation.
+ * Does NOT mark attendance - that happens in verifyStudentAttendance.
  */
-export const markAttendanceByScan = async (qrHash: string, invigilatorId: string) => {
+export const markAttendanceByScan = async (qrHash: string, userId: string) => {
     if (!qrHash || !qrHash.trim()) {
         throw new AppError(MESSAGES.ERROR.QR_HASH_REQUIRED, 400);
     }
 
-    // First, decrypt the QR content (only authorized invigilators can do this)
+    // First, decrypt the QR content (only authorized users can do this)
     let decryptedContent: string;
     try {
         decryptedContent = decrypt(qrHash);
-        logger.info(`[markAttendanceByScan] Successfully decrypted QR for invigilator=${invigilatorId}`);
+        logger.info(`[markAttendanceByScan] Successfully decrypted QR for user=${userId}`);
     } catch (e) {
-        logger.error(`[markAttendanceByScan] Decryption failed for invigilator=${invigilatorId}: ${e}`);
+        logger.error(`[markAttendanceByScan] Decryption failed for user=${userId}: ${e}`);
         throw new AppError('Invalid or corrupted QR code', 400);
     }
 
@@ -187,7 +188,21 @@ export const markAttendanceByScan = async (qrHash: string, invigilatorId: string
     // Try finding by qrHash exact match first (security)
     const hallTicket = await prisma.hallTicket.findFirst({
         where: { qrHash },
-        include: { student: { include: { examDetails: { include: { examSlot: true } } } } },
+        include: { 
+            student: { 
+                include: { 
+                    examDetails: { 
+                        include: { 
+                            examSlot: {
+                                include: {
+                                    examCenter: true
+                                }
+                            }
+                        } 
+                    } 
+                } 
+            } 
+        },
     });
 
     if (!hallTicket) {
@@ -201,7 +216,7 @@ export const markAttendanceByScan = async (qrHash: string, invigilatorId: string
 
     const student = hallTicket.student;
 
-    // Validate if the student is actually assigned to this center/slot (redundant if hallTicket is correct, but good for safety)
+    // Validate if the student is actually assigned to this center/slot
     if (centerId && slotId) {
         if (student.examDetails?.examSlotId !== slotId) {
              throw new AppError('Student is not assigned to this slot', 400);
@@ -237,14 +252,221 @@ export const markAttendanceByScan = async (qrHash: string, invigilatorId: string
               }
         }
     } else {
-        logger.warn(`[markAttendanceByScan] Date validation skipped for testing (invigilator=${invigilatorId})`);
+        logger.warn(`[markAttendanceByScan] Date validation skipped for testing (user=${userId})`);
     }
 
+    // Check if already verified
+    const existingRecord = await prisma.attendanceRecord.findFirst({
+        where: {
+            studentId: student.id,
+            verified: true
+        }
+    });
+
+    if (existingRecord) {
+        throw new AppError('Attendance already verified for this student', 400);
+    }
+
+    // Create unverified attendance record (or update if exists)
+    const attendanceRecord = await prisma.attendanceRecord.upsert({
+        where: {
+            // We need a unique constraint or use findFirst + create/update
+            // For now, let's just create a new record each scan
+            id: 'dummy-will-create-new'
+        },
+        create: {
+            studentId: student.id,
+            invigilatorId: userId,
+            scannedAt: new Date(),
+            verified: false,
+            createdBy: userId,
+        },
+        update: {
+            scannedAt: new Date(),
+            invigilatorId: userId,
+        }
+    }).catch(async () => {
+        // If upsert fails (no matching id), just create
+        return await prisma.attendanceRecord.create({
+            data: {
+                studentId: student.id,
+                invigilatorId: userId,
+                scannedAt: new Date(),
+                verified: false,
+                createdBy: userId,
+            }
+        });
+    });
+
+    logger.info(`QR scanned for student=${student.id} by user=${userId}, awaiting verification`);
+    
+    // Return student details for validation
+    return {
+        attendanceRecordId: attendanceRecord.id,
+        student: {
+            id: student.id,
+            name: student.name,
+            applicationId: student.applicationId,
+            phone: student.phone,
+            email: student.email,
+            profilePhotoUrl: student.profilePhotoUrl,
+            fatherName: student.fatherName,
+            dob: student.dob,
+        },
+        examDetails: {
+            examCenter: student.examDetails?.examSlot?.examCenter?.name,
+            examCenterAddress: student.examDetails?.examSlot?.examCenter?.address,
+            examDate: student.examDetails?.testDate ? formatDate(student.examDetails.testDate) : null,
+            startTime: student.examDetails?.examSlot?.startTime ? formatTime(student.examDetails.examSlot.startTime) : null,
+            endTime: student.examDetails?.examSlot?.endTime ? formatTime(student.examDetails.examSlot.endTime) : null,
+        },
+        message: 'Student details retrieved. Please verify and call verify API to mark attendance.'
+    };
+};
+
+/**
+ * Verify and mark student attendance after admin/invigilator validation.
+ * Includes strict validations to prevent human error.
+ */
+export const verifyStudentAttendance = async (attendanceRecordId: string, userId: string) => {
+    if (!attendanceRecordId || !attendanceRecordId.trim()) {
+        throw new AppError('Attendance record ID is required', 400);
+    }
+
+    // Find the attendance record with full student details including exam slot
+    const attendanceRecord = await prisma.attendanceRecord.findUnique({
+        where: { id: attendanceRecordId },
+        include: {
+            student: {
+                include: {
+                    examDetails: {
+                        include: {
+                            examSlot: {
+                                include: {
+                                    examCenter: true
+                                }
+                            }
+                        }
+                    },
+                    admissionDetails: true
+                }
+            }
+        }
+    });
+
+    if (!attendanceRecord) {
+        throw new AppError('Attendance record not found', 404);
+    }
+
+    // Verify the user matches (only the person who scanned can verify)
+    if (attendanceRecord.invigilatorId !== userId) {
+        throw new AppError('Unauthorized: You can only verify records you scanned', 403);
+    }
+
+    // Check if already verified
+    if (attendanceRecord.verified) {
+        throw new AppError('Attendance already verified', 400);
+    }
+
+    const student = attendanceRecord.student;
+
+    // STRICT VALIDATION 1: Check if exam already attended
     if (student.examDetails?.examAttended) {
         throw new AppError(MESSAGES.ERROR.ATTENDANCE_ALREADY_MARKED, 400);
     }
 
+    // STRICT VALIDATION 2: Verify student has a valid exam slot assigned
+    if (!student.examDetails?.examSlotId) {
+        throw new AppError('Student does not have an exam slot assigned', 400);
+    }
+
+    // STRICT VALIDATION 3: Verify student admission status is eligible
+    const validStatuses: AdmissionStatus[] = [
+        AdmissionStatus.TEST_FEE_PAID,
+        AdmissionStatus.HALL_TICKET_GENERATED
+    ];
+    
+    if (!student.admissionDetails || !validStatuses.includes(student.admissionDetails.status)) {
+        throw new AppError(
+            `Student admission status (${student.admissionDetails?.status}) is not eligible for exam attendance. Must be TEST_FEE_PAID or HALL_TICKET_GENERATED.`,
+            400
+        );
+    }
+
+
+    // STRICT VALIDATION 4: Date validation - Exam must be TODAY (unless explicitly skipped for testing)
+    const skipDateValidation = process.env.SKIP_DATE_VALIDATION === 'true';
+    
+    if (!skipDateValidation) {
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
+        
+        let examDateStr: string | null = null;
+        
+        // Check testDate first, then fall back to examSlot.date
+        if (student.examDetails.testDate) {
+            const examDate = new Date(student.examDetails.testDate);
+            examDateStr = examDate.toISOString().split('T')[0];
+        } else if (student.examDetails.examSlot?.date) {
+            const examDate = new Date(student.examDetails.examSlot.date);
+            examDateStr = examDate.toISOString().split('T')[0];
+        }
+        
+        if (!examDateStr) {
+            throw new AppError('Student exam date not found. Cannot verify attendance.', 400);
+        }
+        
+        if (todayStr !== examDateStr) {
+            throw new AppError(
+                `Cannot verify attendance: Exam is scheduled for ${examDateStr}, not today (${todayStr}). Attendance can only be marked on the exam date.`,
+                400
+            );
+        }
+    } else {
+        logger.warn(`[verifyStudentAttendance] Date validation skipped for testing (user=${userId})`);
+    }
+
+    // STRICT VALIDATION 5: Verify exam slot is still valid and booking is enabled
+    if (student.examDetails.examSlot) {
+        const examSlot = student.examDetails.examSlot;
+        
+        // Check if slot exists and is not deleted
+        const currentSlot = await prisma.examSlot.findUnique({
+            where: { id: examSlot.id }
+        });
+        
+        if (!currentSlot) {
+            throw new AppError('Exam slot no longer exists', 400);
+        }
+        
+        if (currentSlot.isDeleted) {
+            throw new AppError('Exam slot has been deleted', 400);
+        }
+    }
+
+    // STRICT VALIDATION 6: Check scan time validity (attendance record should not be too old)
+    const scanTime = new Date(attendanceRecord.scannedAt);
+    const now = new Date();
+    const hoursSinceScan = (now.getTime() - scanTime.getTime()) / (1000 * 60 * 60);
+    
+    // If scan was more than 24 hours ago, reject verification
+    if (hoursSinceScan > 24) {
+        throw new AppError(
+            `Cannot verify: QR code was scanned ${Math.floor(hoursSinceScan)} hours ago. Please scan again.`,
+            400
+        );
+    }
+
+    // All validations passed - Mark attendance as verified and update student records
     await prisma.$transaction([
+        prisma.attendanceRecord.update({
+            where: { id: attendanceRecordId },
+            data: {
+                verified: true,
+                verifiedAt: new Date(),
+                updatedBy: userId,
+            },
+        }),
         prisma.studentExam.update({
             where: { studentId: student.id },
             data: {
@@ -257,19 +479,20 @@ export const markAttendanceByScan = async (qrHash: string, invigilatorId: string
                 status: AdmissionStatus.EXAM_ATTENDED,
             },
         }),
-        prisma.attendanceRecord.create({
-            data: {
-                studentId: student.id,
-                invigilatorId,
-                scannedAt: new Date(),
-                createdBy: invigilatorId, // audit
-            },
-        }),
     ]);
 
-    logger.info(`Attendance marked for student=${student.id} by invigilator=${invigilatorId}`);
-    return { message: `Attendance marked for ${student.name} (${student.applicationId})` };
+    logger.info(`Attendance verified and marked for student=${student.id} by user=${userId} after strict validation`);
+    return { 
+        message: `Attendance marked for ${student.name} (${student.applicationId})`,
+        studentId: student.id,
+        studentName: student.name,
+        applicationId: student.applicationId,
+        verifiedAt: new Date(),
+        examDate: student.examDetails.testDate ? formatDate(student.examDetails.testDate) : null,
+        examCenter: student.examDetails.examSlot?.examCenter?.name
+    };
 };
+
 
 /**
  * Mark student attendance manually by admin using Student ID.

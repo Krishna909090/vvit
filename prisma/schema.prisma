@@ -150,6 +150,9 @@ model User {
   agentCommissions  AgentCommission[]
   adminActivityLogs AdminActivityLog[]
   notifications     Notification[]
+
+  @@index([role])
+  @@index([createdAt])
 }
 
 model UserOtp {
@@ -181,6 +184,8 @@ model Department {
   createdBy String?
   updatedBy String?
   isDeleted Boolean @default(false)
+
+  @@index([isDeleted])
 }
 
 // Course model updated
@@ -200,6 +205,8 @@ model Course {
   isDeleted     Boolean  @default(false)
 
   @@unique([name, departmentId])
+  @@index([departmentId])
+  @@index([isDeleted])
 }
 
 model Batch {
@@ -215,6 +222,10 @@ model Batch {
   createdBy String?
   updatedBy String?
   isDeleted Boolean @default(false)
+
+  @@index([courseId])
+  @@index([isDeleted])
+  @@index([startDate, endDate])
 }
 
 model Section {
@@ -228,6 +239,9 @@ model Section {
   createdBy String?
   updatedBy String?
   isDeleted Boolean @default(false)
+
+  @@index([batchId])
+  @@index([isDeleted])
 }
 
 
@@ -246,6 +260,9 @@ model AcademicYear {
   createdBy String?
   updatedBy String?
   isDeleted Boolean @default(false)
+
+  @@index([isActive])
+  @@index([isDeleted])
 }
 
 
@@ -267,6 +284,10 @@ model StudentEnrollment {
 
   @@index([studentId])
   @@index([rollNumber])
+  @@index([sectionId])
+  @@index([academicYearId])
+  @@index([status])
+  @@index([currentSemester])
 }
 
 
@@ -337,6 +358,17 @@ model Student {
   updatedAt DateTime @updatedAt
   createdBy String?
   updatedBy String?
+
+  @@index([userId])
+  @@index([agentId])
+  @@index([phone])
+  @@index([aadharNumber])
+  @@index([courseType])
+  @@index([isOffline])
+  @@index([isKycVerified])
+  @@index([createdAt])
+  @@index([category])
+  @@index([city, state])
 }
 
 
@@ -360,6 +392,10 @@ model StudentExam {
   updatedAt DateTime @updatedAt
 
   @@index([studentId])
+  @@index([examSlotId])
+  @@index([examAttended])
+  @@index([isQualified])
+  @@index([testDate])
 }
 
 model StudentAdmission {
@@ -390,6 +426,11 @@ model StudentAdmission {
 
   @@index([studentId])
   @@index([status])
+  @@index([feeStatus])
+  @@index([accommodationType])
+  @@index([hostelId])
+  @@index([transportRouteId])
+  @@index([allottedSpecialization])
 }
 
 model StudentDocument {
@@ -425,6 +466,9 @@ model Specialization {
   createdBy   String?
   updatedBy   String?
   isDeleted   Boolean  @default(false)
+
+  @@index([courseId])
+  @@index([isDeleted])
 }
 
 
@@ -449,6 +493,8 @@ model Hostel {
   updatedAt DateTime @updatedAt
   createdBy String?
   updatedBy String?
+
+  @@index([type])
 }
 
 model HostelBlock {
@@ -463,6 +509,9 @@ model HostelBlock {
   createdBy String?
   updatedBy String?
   isDeleted Boolean @default(false)
+
+  @@index([hostelId])
+  @@index([isDeleted])
 }
 
 model HostelRoom {
@@ -478,6 +527,9 @@ model HostelRoom {
   createdBy String?
   updatedBy String?
   isDeleted Boolean @default(false)
+
+  @@index([blockId])
+  @@index([isDeleted])
 }
 
 model HostelBed {
@@ -491,6 +543,9 @@ model HostelBed {
   updatedAt  DateTime          @updatedAt
   createdBy  String?
   updatedBy  String?
+
+  @@index([roomId])
+  @@index([isOccupied])
 }
 
 model HostelAllocation {
@@ -508,6 +563,9 @@ model HostelAllocation {
   updatedBy String?
 
   @@index([studentId])
+  @@index([bedId])
+  @@index([status])
+  @@index([startDate, endDate])
 }
 
 
@@ -524,6 +582,8 @@ model Vehicle {
   createdBy   String?
   updatedBy   String?
   isDeleted   Boolean  @default(false)
+
+  @@index([isDeleted])
 }
 
 model TransportRoute {
@@ -549,6 +609,9 @@ model TransportRoute {
   updatedAt DateTime @updatedAt
   createdBy String?
   updatedBy String?
+
+  @@index([vehicleId])
+  @@index([city])
 }
 
 model TransportStop {
@@ -565,6 +628,10 @@ model TransportStop {
   createdBy   String?
   updatedBy   String?
   isDeleted   Boolean  @default(false)
+
+  @@index([routeId])
+  @@index([isDeleted])
+  @@index([sequence])
 }
 
 model TransportAllocation {
@@ -584,6 +651,10 @@ model TransportAllocation {
   updatedBy String?
 
   @@index([studentId])
+  @@index([routeId])
+  @@index([stopId])
+  @@index([status])
+  @@index([startDate, endDate])
 }
 
 
@@ -598,6 +669,8 @@ model FeeHead {
   createdBy   String?
   updatedBy   String?
   isDeleted   Boolean  @default(false)
+
+  @@index([isDeleted])
 }
 
 model FeeStructure {
@@ -760,6 +833,8 @@ model ExamDate {
   attendanceRecords AttendanceRecord[]
   createdBy         String?
   updatedBy         String?
+
+  @@index([date])
 }
 
 model ExamCenter {
@@ -774,6 +849,9 @@ model ExamCenter {
   createdBy String?
   updatedBy String?
   isDeleted Boolean @default(false)
+
+  @@index([city])
+  @@index([isDeleted])
 }
 
 model ExamSlot {
@@ -792,6 +870,12 @@ model ExamSlot {
   createdBy        String?
   updatedBy        String?
   isDeleted        Boolean  @default(false)
+
+  @@index([examCenterId])
+  @@index([date])
+  @@index([isBookingEnabled])
+  @@index([isDeleted])
+  @@index([date, examCenterId])
 }
 
 model HallTicket {
@@ -817,6 +901,10 @@ model InvigilatorCredential {
   createdAt  DateTime @default(now())
   createdBy  String?
   updatedBy  String?
+
+  @@index([adminId])
+  @@index([token])
+  @@index([validFrom, validUntil])
 }
 
 model AttendanceRecord {
@@ -827,10 +915,16 @@ model AttendanceRecord {
   examDate      ExamDate? @relation(fields: [examDateId], references: [id])
   invigilatorId String?
   scannedAt     DateTime  @default(now())
+  verified      Boolean   @default(false)
+  verifiedAt    DateTime?
   createdBy     String?
   updatedBy     String?
 
   @@index([studentId])
+  @@index([examDateId])
+  @@index([invigilatorId])
+  @@index([scannedAt])
+  @@index([verified])
 }
 
 model SeatAllocation {
@@ -895,6 +989,11 @@ model AdminActivityLog {
   createdAt    DateTime @default(now())
   createdBy    String?
   updatedBy    String?
+
+  @@index([adminId])
+  @@index([action])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
 }
 
 model Notification {
@@ -909,6 +1008,12 @@ model Notification {
   createdAt   DateTime @default(now())
   createdBy   String?
   updatedBy   String?
+
+  @@index([recipientId])
+  @@index([isRead])
+  @@index([type])
+  @@index([createdAt])
+  @@index([recipientId, isRead])
 }
 
 model OfflineUploadBatch {
@@ -921,6 +1026,10 @@ model OfflineUploadBatch {
   updatedAt     DateTime                 @updatedAt
   createdBy     String?
   updatedBy     String?
+
+  @@index([agentId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model DocumentRequirement {
@@ -936,6 +1045,8 @@ model DocumentRequirement {
   isDeleted    Boolean  @default(false)
 
   @@unique([courseType, documentKey])
+  @@index([courseType])
+  @@index([isDeleted])
 }
 
 model Configuration {

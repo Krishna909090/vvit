@@ -7,7 +7,6 @@ import {
     getExamCenters,
     updateExamCenter,
     deleteExamCenter,
-    scanAttendance,
     createExamSlot,
     getExamSlots,
     getExamSlot,
@@ -20,7 +19,6 @@ import {
 } from '../controllers/examController';
 import {
     createExamCenterSchema,
-    scanAttendanceSchema,
     createExamSlotSchema,
     bookExamSlotSchema
 } from '../validators/examValidators';
@@ -278,34 +276,5 @@ router.get('/slots', authenticate, getAvailableSlots);
  */
 router.post('/slots/:studentId/book', authenticate, validateRequest(bookExamSlotSchema), bookExamSlot);
 
-
-
-/**
- * @swagger
- * /exam/attendance/scan:
- *   post:
- *     summary: Scan attendance (Invigilator)
- *     tags: [Exam]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - studentId
- *               - slotId
- *             properties:
- *               studentId:
- *                 type: string
- *               slotId:
- *                 type: string
- *     responses:
- *       200:
- *         description: Attendance marked
- */
-router.post('/attendance/scan', authenticate, validateRequest(scanAttendanceSchema), scanAttendance);
-
 export default router;
+

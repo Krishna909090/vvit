@@ -3,10 +3,10 @@ import { authorize, authenticate } from '../../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
-    getDashboardStats, addAdmin, getAgentCommissions, getUserDetails, addInvigilator
+    getDashboardStats, addAdmin, getAgentCommissions, getUserDetails, addInvigilator, getStaffUsers, updateStaffUser
 } from '../../controllers/admin/generalController';
 import {
-    addAdminSchema, getAgentCommissionsSchema, addInvigilatorSchema
+    addAdminSchema, getAgentCommissionsSchema, addInvigilatorSchema, updateStaffUserSchema
 } from '../../validators/adminValidators';
 
 const router = Router();
@@ -72,7 +72,7 @@ router.get('/dashboard-stats', authenticate, authorize([Role.ADMIN, Role.SUPER_A
  *       201:
  *         description: Admin added successfully
  */
-router.post('/add-admin', authenticate, authorize([Role.SUPER_ADMIN]), validateRequest(addAdminSchema), addAdmin);
+router.post('/add-admin', authenticate, authorize([Role.ADMIN,Role.SUPER_ADMIN]), validateRequest(addAdminSchema), addAdmin);
 
 // Add Invigilator
 /**
@@ -152,4 +152,71 @@ router.get('/commissions', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN
  */
 router.get('/user-details', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getUserDetails);
 
+// Get Staff Users
+/**
+ * @swagger
+ * /admin/staff-users:
+ *   get:
+ *     summary: Get all staff users (excluding students)
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: role
+ *         schema:
+ *           type: string
+ *           enum: [SUPER_ADMIN, ADMIN, AGENT, INVIGILATOR, STAFF]
+ *         description: Filter by specific role
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search by name, phone, or email
+ *     responses:
+ *       200:
+ *         description: Staff users retrieved successfully
+ */
+router.get('/staff-users', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getStaffUsers);
+
+// Update Staff User
+/**
+ * @swagger
+ * /admin/staff-users/{userId}:
+ *   put:
+ *     summary: Update staff user details
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: User ID to update
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               role:
+ *                 type: string
+ *                 enum: [SUPER_ADMIN, ADMIN, AGENT, INVIGILATOR, STAFF]
+ *     responses:
+ *       200:
+ *         description: Staff user updated successfully
+ */
+router.put('/staff-users/:userId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateStaffUserSchema), updateStaffUser);
+
 export default router;
+
+
