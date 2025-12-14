@@ -23,7 +23,6 @@ import {
     generalRateLimiter
 } from './middlewares/rateLimitMiddleware';
 import { enhancedSecurityHeaders, additionalSecurityHeaders } from './middlewares/securityHeaders';
-import { sanitizeInput } from './middlewares/inputSanitization';
 
 const app = express();
 
@@ -44,7 +43,7 @@ app.use(compression()); // Gzip compression
 app.use(express.json({ limit: '10kb' })); // Body limit
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(hpp()); // Prevent HTTP Parameter Pollution
-app.use(sanitizeInput); // Input sanitization (XSS, NoSQL injection prevention)
+// app.use(sanitizeInput); // Input sanitization (XSS, NoSQL injection prevention) - TEMPORARILY DISABLED FOR DEMO
 
 app.use(morgan('combined', {
     stream: { write: (message) => logger.info(message.trim()) }
