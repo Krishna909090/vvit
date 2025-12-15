@@ -42,9 +42,11 @@ export const scanAttendanceSchema = z.object({
 export const createExamSlotSchema = z.object({
     body: z.object({
         examCenterId: z.string().uuid(),
-        date: z.string().datetime().or(z.date()), // Accepts ISO string
-        startTime: z.string().datetime().or(z.date()),
-        endTime: z.string().datetime().or(z.date()),
+        // Accept datetime strings (with or without timezone) or Date objects
+        // Our parseDate function in examService will handle IST conversion
+        date: z.string().min(1, "Date is required").or(z.date()),
+        startTime: z.string().min(1, "Start time is required").or(z.date()),
+        endTime: z.string().min(1, "End time is required").or(z.date()),
         capacity: z.number().int().positive(),
     }),
 });
