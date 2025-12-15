@@ -10,6 +10,7 @@ import { AppError } from '../utils/AppError';
 import { verifyAadhar } from './integrationService';
 import { deleteFileFromS3 } from '../utils/s3Utils';
 import { MESSAGES } from '../constants/messages';
+import { formatDate, formatTime, formatDateTime } from '../utils/dateFormatter';
 export const registerStudent = async (data: any, agentId: string | null, userId: string | null, currentUserId: string | null) => {
     // Check for duplicate registration
     const dobDate = data.dob ? new Date(data.dob) : undefined;
@@ -240,9 +241,9 @@ export const getHallTicket = async (studentId: string) => {
         applicationId: student.applicationId,
         photoUrl: student.profilePhotoUrl,
         examCenter: student.examDetails.testCenter,
-        examDate: student.examDetails.testDate,
-        startTime: student.examDetails.examSlot?.startTime,
-        endTime: student.examDetails.examSlot?.endTime
+        examDate: formatDate(student.examDetails.testDate),
+        startTime: formatTime(student.examDetails.examSlot?.startTime),
+        endTime: formatTime(student.examDetails.examSlot?.endTime)
     };
 };
 

@@ -10,6 +10,7 @@ import { MESSAGES } from '../constants/messages';
 import Papa from 'papaparse';
 import QRCode from 'qrcode';
 import { encrypt, decrypt } from '../utils/encryption';
+import { formatDate, formatTime, formatDateTime } from '../utils/dateFormatter';
 
 /* -------------------------------------------------------------------------- */
 /*                               HELPER FUNCTIONS                             */
@@ -51,32 +52,6 @@ const assertPositiveInt = (value: any, fieldName: string) => {
         throw new AppError(`${fieldName} must be a positive integer`, 400);
     }
     return num;
-};
-
-/**
- * Format a date into dd-MM-yyyy string in IST.
- */
-const formatDate = (date: Date) => {
-    return new Date(date).toLocaleDateString('en-IN', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        timeZone: 'Asia/Kolkata',
-    }).replace(/\//g, '-');
-};
-
-/**
- * Format a time part using 12-hour clock without space in IST.
- */
-const formatTime = (date: Date) => {
-    return new Date(date)
-        .toLocaleTimeString('en-IN', {
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true,
-            timeZone: 'Asia/Kolkata',
-        })
-        .toUpperCase(); // Ensure AM/PM is uppercase
 };
 
 /**
@@ -502,12 +477,13 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
     ]);
 
     logger.info(`Attendance verified and marked for student=${student.id} by user=${userId} after strict validation`);
+    const verifiedAt = new Date();
     return { 
         message: `Attendance marked for ${student.name} (${student.applicationId})`,
         studentId: student.id,
         studentName: student.name,
         applicationId: student.applicationId,
-        verifiedAt: new Date(),
+        verifiedAt: formatDateTime(verifiedAt),
         examDate: student.examDetails.testDate ? formatDate(student.examDetails.testDate) : null,
         examCenter: student.examDetails.examSlot?.examCenter?.name
     };
@@ -641,9 +617,26 @@ export const createExamSlot = async (data: any, userId?: string) => {
             capacity,
             createdBy: userId,
         },
+        include: {
+            examCenter: true
+        }
     });
     logger.info(`Exam slot created: ${slot.id} at ${slot.examCenterId}`);
-    return slot;
+    
+    // Return formatted slot data with IST times
+    return {
+        id: slot.id,
+        examCenterId: slot.examCenterId,
+        examCenterName: slot.examCenter.name,
+        date: formatDate(slot.date),
+        startTime: formatTime(slot.startTime),
+        endTime: formatTime(slot.endTime),
+        capacity: slot.capacity,
+        filled: slot.filled,
+        isBookingEnabled: slot.isBookingEnabled,
+        createdAt: formatDateTime(slot.createdAt),
+        isDeleted: slot.isDeleted
+    };
 };
 
 /**
@@ -1250,7 +1243,7 @@ export const getStudentsByAdmissionStatus = async (status: AdmissionStatus) => {
             isQualified: student.examDetails?.isQualified,
             examCenter: student.examDetails?.examSlot?.examCenter?.name,
             examDate: student.examDetails?.testDate ? formatDate(student.examDetails.testDate) : null,
-            createdAt: student.createdAt
+            createdAt: formatDateTime(student.createdAt)
         }))
     };
 };
