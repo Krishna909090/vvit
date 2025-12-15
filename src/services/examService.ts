@@ -19,7 +19,23 @@ import { encrypt, decrypt } from '../utils/encryption';
  * Safely parse a string/Date into a valid Date object and throw 400 on invalid.
  */
 const parseDate = (value: string | Date, fieldName: string): Date => {
-    const d = value instanceof Date ? value : new Date(value);
+    let d: Date;
+    if (value instanceof Date) {
+        d = value;
+    } else {
+        const strVal = String(value).trim();
+        // Check if string contains timezone info (Z or +HH:mm or -HH:mm)
+        const hasTimezone = strVal.toUpperCase().includes('Z') || /[+-]\d{1,2}:?\d{2}$/.test(strVal);
+        
+        // If it looks like a datetime string (has T or space) but no timezone, assume IST (+05:30)
+        // Heuristic: YYYY-MM-DD is 10 chars. Anything longer likely has time.
+        if (!hasTimezone && strVal.length > 10) { 
+            d = new Date(`${strVal}+05:30`);
+        } else {
+            d = new Date(value);
+        }
+    }
+
     if (Number.isNaN(d.getTime())) {
         throw new AppError(`${fieldName} is invalid date`, 400);
     }
@@ -38,27 +54,29 @@ const assertPositiveInt = (value: any, fieldName: string) => {
 };
 
 /**
- * Format a date into dd-MM-yyyy string.
+ * Format a date into dd-MM-yyyy string in IST.
  */
 const formatDate = (date: Date) => {
-    const d = new Date(date);
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const year = d.getFullYear();
-    return `${day}-${month}-${year}`;
+    return new Date(date).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        timeZone: 'Asia/Kolkata',
+    }).replace(/\//g, '-');
 };
 
 /**
- * Format a time part using 12-hour clock without space.
+ * Format a time part using 12-hour clock without space in IST.
  */
 const formatTime = (date: Date) => {
     return new Date(date)
-        .toLocaleTimeString('en-US', {
+        .toLocaleTimeString('en-IN', {
             hour: '2-digit',
             minute: '2-digit',
             hour12: true,
+            timeZone: 'Asia/Kolkata',
         })
-        .replace(' ', '');
+        .toUpperCase(); // Ensure AM/PM is uppercase
 };
 
 /**
@@ -70,6 +88,8 @@ const transformExamCenterWithSlots = (center: any) => {
         slots: center.examSlots.map((slot: any) => ({
             id: slot.id,
             capacity: slot.capacity,
+            filled: slot.filled,
+            isBookingEnabled: slot.isBookingEnabled,
             date: formatDate(slot.date),
             startTime: formatTime(slot.startTime),
             endTime: formatTime(slot.endTime),
@@ -1107,4 +1127,130 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
     logger.info(`[processBulkResults] Processed ${rows.length} records: ${results.filter(r => r.status === 'Success').length} success, ${results.filter(r => r.status === 'Failed').length} failed`);
     
     return results;
+};
+
+/**
+ * Get students by admission status with progression chain.
+ * If status is HALL_TICKET_GENERATED, returns students with HALL_TICKET_GENERATED, TEST_FEE_PAID, and REGISTERED.
+ * If status is TEST_FEE_PAID, returns students with TEST_FEE_PAID and REGISTERED.
+ * If status is REGISTERED, returns only REGISTERED students.
+ */
+export const getStudentsByAdmissionStatus = async (status: AdmissionStatus) => {
+    logger.info(`[getStudentsByAdmissionStatus] Fetching students for status=${status}`);
+    
+    // Define the progression chain
+    const statusChain: AdmissionStatus[] = [];
+    
+    switch (status) {
+        case AdmissionStatus.HALL_TICKET_GENERATED:
+            statusChain.push(
+                AdmissionStatus.HALL_TICKET_GENERATED,
+                AdmissionStatus.TEST_FEE_PAID,
+                AdmissionStatus.REGISTERED
+            );
+            break;
+        case AdmissionStatus.TEST_FEE_PAID:
+            statusChain.push(
+                AdmissionStatus.TEST_FEE_PAID,
+                AdmissionStatus.REGISTERED
+            );
+            break;
+        case AdmissionStatus.EXAM_ATTENDED:
+            statusChain.push(
+                AdmissionStatus.EXAM_ATTENDED,
+                AdmissionStatus.HALL_TICKET_GENERATED,
+                AdmissionStatus.TEST_FEE_PAID,
+                AdmissionStatus.REGISTERED
+            );
+            break;
+        case AdmissionStatus.DOCUMENTS_UPLOADED:
+            statusChain.push(
+                AdmissionStatus.DOCUMENTS_UPLOADED,
+                AdmissionStatus.EXAM_ATTENDED,
+                AdmissionStatus.HALL_TICKET_GENERATED,
+                AdmissionStatus.TEST_FEE_PAID,
+                AdmissionStatus.REGISTERED
+            );
+            break;
+        case AdmissionStatus.SEAT_ALLOTTED:
+            statusChain.push(
+                AdmissionStatus.SEAT_ALLOTTED,
+                AdmissionStatus.DOCUMENTS_UPLOADED,
+                AdmissionStatus.EXAM_ATTENDED,
+                AdmissionStatus.HALL_TICKET_GENERATED,
+                AdmissionStatus.TEST_FEE_PAID,
+                AdmissionStatus.REGISTERED
+            );
+            break;
+        case AdmissionStatus.ADMISSION_CONFIRMED:
+            statusChain.push(
+                AdmissionStatus.ADMISSION_CONFIRMED,
+                AdmissionStatus.SEAT_ALLOTTED,
+                AdmissionStatus.DOCUMENTS_UPLOADED,
+                AdmissionStatus.EXAM_ATTENDED,
+                AdmissionStatus.HALL_TICKET_GENERATED,
+                AdmissionStatus.TEST_FEE_PAID,
+                AdmissionStatus.REGISTERED
+            );
+            break;
+        default:
+            // For REGISTERED or any other status, return only that status
+            statusChain.push(status);
+    }
+    
+    const students = await prisma.student.findMany({
+        where: {
+            admissionDetails: {
+                status: {
+                    in: statusChain
+                }
+            }
+        },
+        include: {
+            admissionDetails: true,
+            examDetails: {
+                include: {
+                    examSlot: {
+                        include: {
+                            examCenter: true
+                        }
+                    }
+                }
+            },
+            user: {
+                select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    phone: true,
+                    role: true
+                }
+            }
+        },
+        orderBy: {
+            createdAt: 'desc'
+        }
+    });
+    
+    logger.info(`[getStudentsByAdmissionStatus] Found ${students.length} students for status=${status} (including progression chain)`);
+    
+    return {
+        requestedStatus: status,
+        includedStatuses: statusChain,
+        count: students.length,
+        students: students.map(student => ({
+            id: student.id,
+            applicationId: student.applicationId,
+            name: student.name,
+            email: student.email,
+            phone: student.phone,
+            currentStatus: student.admissionDetails?.status,
+            examAttended: student.examDetails?.examAttended || false,
+            examScore: student.examDetails?.examScore,
+            isQualified: student.examDetails?.isQualified,
+            examCenter: student.examDetails?.examSlot?.examCenter?.name,
+            examDate: student.examDetails?.testDate ? formatDate(student.examDetails.testDate) : null,
+            createdAt: student.createdAt
+        }))
+    };
 };
