@@ -13,14 +13,14 @@ import {
     updateExamSlot,
     deleteExamSlot,
     getAvailableSlots,
-    bookExamSlot,
     toggleSlotBooking,
-    getExamSlotsByCenter
+    getExamSlotsByCenter,
+    getStudentsByStatus,
+    getHallTicketDetails
 } from '../controllers/examController';
 import {
     createExamCenterSchema,
     createExamSlotSchema,
-    bookExamSlotSchema
 } from '../validators/examValidators';
 
 const router = Router();
@@ -193,6 +193,27 @@ router.delete('/centers/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_AD
 
 /**
  * @swagger
+ * /exam/students/status/{status}:
+ *   get:
+ *     summary: Get students by admission status (with progression chain)
+ *     tags: [Exam]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: status
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [REGISTERED, TEST_FEE_PAID, HALL_TICKET_GENERATED, EXAM_ATTENDED, DOCUMENTS_UPLOADED, SEAT_ALLOTTED, ADMISSION_CONFIRMED]
+ *     responses:
+ *       200:
+ *         description: List of students with the status
+ */
+router.get('/students/status/:status', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getStudentsByStatus);
+
+/**
+ * @swagger
  * /exam/all-slots:
  *   get:
  *     summary: Get all exam slots (Admin)
@@ -245,11 +266,12 @@ router.delete('/slots/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMI
  */
 router.get('/slots', authenticate, getAvailableSlots);
 
+
 /**
  * @swagger
- * /exam/slots/{studentId}/book:
- *   post:
- *     summary: Book an exam slot
+ * /exam/hall-ticket/{studentId}:
+ *   get:
+ *     summary: Get hall ticket details including QR code
  *     tags: [Exam]
  *     security:
  *       - bearerAuth: []
@@ -259,22 +281,12 @@ router.get('/slots', authenticate, getAvailableSlots);
  *         required: true
  *         schema:
  *           type: string
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - slotId
- *             properties:
- *               slotId:
- *                 type: string
  *     responses:
  *       200:
- *         description: Slot booked successfully
+ *         description: Hall ticket details with QR code
  */
-router.post('/slots/:studentId/book', authenticate, validateRequest(bookExamSlotSchema), bookExamSlot);
+router.get('/hall-ticket/:studentId', authenticate, getHallTicketDetails);
+
 
 export default router;
 

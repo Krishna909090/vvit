@@ -11,6 +11,8 @@ import Papa from 'papaparse';
 import QRCode from 'qrcode';
 import { encrypt, decrypt } from '../utils/encryption';
 import { formatDate, formatTime, formatDateTime } from '../utils/dateFormatter';
+import { generateHallTicketPDF } from '../utils/pdfGenerator';
+import { uploadFileToS3, getPresignedUrl } from '../utils/s3Utils';
 
 /* -------------------------------------------------------------------------- */
 /*                               HELPER FUNCTIONS                             */
@@ -746,11 +748,22 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         const now = new Date();
         const skipDateValidation = process.env.SKIP_DATE_VALIDATION === 'true';
         
-        if (!skipDateValidation && slot.startTime < now) {
-            throw new AppError(
-                MESSAGES.ERROR.SLOT_IN_PAST,
-                400
-            );
+        if (!skipDateValidation) {
+            if (slot.startTime < now) {
+                throw new AppError(
+                    MESSAGES.ERROR.SLOT_IN_PAST,
+                    400
+                );
+            }
+
+            // Check if exam is within 24 hours (Booking cut-off)
+            const oneDayInMs = 24 * 60 * 60 * 1000;
+            if (slot.startTime.getTime() - now.getTime() < oneDayInMs) {
+                throw new AppError(
+                    "Booking closed. You must book your slot at least 24 hours in advance.",
+                    400
+                );
+            }
         }
 
         await tx.examSlot.update({
@@ -761,7 +774,6 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             },
         });
 
-
         const uniqueHash = uuidv4();
         // Generate QR Content with just the query parameters
         // Format: s={studentId}&c={centerId}&sl={slotId}&h={randomHash}
@@ -770,12 +782,8 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         // Encrypt the content so only authorized invigilators can decrypt it
         const encryptedContent = encrypt(plainContent);
 
-        let qrCodeImage = '';
-        try {
-            qrCodeImage = await QRCode.toDataURL(encryptedContent);
-        } catch (e) {
-            logger.error(`Failed to generate QR code for booking student ${studentId}: ${e}`);
-        }
+        // NOTE: We do NOT generate/upload PDF here to avoid Transaction Timeout (P2028).
+        // S3 uploads can be slow. We will do it AFTER this transaction commits.
 
         await tx.studentExam.upsert({
             where: { studentId },
@@ -806,42 +814,110 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         const hallTicket = await tx.hallTicket.create({
             data: {
                 studentId,
-                // Store encrypted content in qrHash field
                 qrHash: encryptedContent,
+                url: null, // Will be updated after upload
                 createdBy: userId,
             },
         });
 
         return {
-            // Student Info
-            studentId,
-            name: student.name,
-            firstName: student.name.split(' ')[0], // First word as first name
-            lastName: student.name.split(' ').slice(1).join(' ') || student.name, // Rest as last name
-            phone: student.phone,
-            email: student.email,
-            profilePhotoUrl: student.profilePhotoUrl,
-            applicationId: student.applicationId,
-            
-            // Exam Slot Info
-            slotId,
-            examCenter: slot.examCenter.name,
-            examCenterAddress: slot.examCenter.address,
-            examCenterCity: slot.examCenter.city,
-            examDate: formatDate(slot.date),
-            examDay: new Date(slot.date).toLocaleDateString('en-US', { weekday: 'long' }),
-            startTime: formatTime(slot.startTime),
-            endTime: formatTime(slot.endTime),
-            
-            // Hall Ticket Info
-            hallTicketNumber: hallTicket.id,
-            qrCodeImage,
-            qrHash: hallTicket.qrHash,
+            slot,
+            encryptedContent,
+            hallTicketId: hallTicket.id,
+            uniqueHash
         };
     });
 
+    // --- NON-TRANSACTIONAL PHASE (Heavy Lifting) ---
+    // Now that slot is secured, we generate the PDF and upload it.
+    // If this fails, the user still has the slot booked, but might need to retry "Get Hall Ticket" to generate it.
+
+    let qrCodeImage = '';
+    let hallTicketUrl: string | null = null;
+    
+    try {
+        const qrCodeBuffer = await QRCode.toBuffer(result.encryptedContent);
+        qrCodeImage = `data:image/png;base64,${qrCodeBuffer.toString('base64')}`;
+        
+        // Generate presigned URL for profile photo if it's an S3 URL
+        let profilePhotoUrl = student.profilePhotoUrl || '';
+        if (profilePhotoUrl && profilePhotoUrl.includes('.amazonaws.com/')) {
+            try {
+                const urlParts = profilePhotoUrl.split('.amazonaws.com/');
+                if (urlParts.length > 1) {
+                    const key = urlParts[1];
+                    // Generate a presigned URL valid for 5 minutes (enough for PDF generation)
+                    profilePhotoUrl = await getPresignedUrl(key, 300);
+                }
+            } catch (e) {
+                logger.warn(`Failed to generate presigned URL for profile photo: ${e}`);
+                // Fallback to original URL if presigning fails
+            }
+        }
+
+        const pdfBuffer = await generateHallTicketPDF({
+            studentName: student.name || '',
+            applicationId: student.applicationId || '',
+            rollNumber: student.applicationId || '', // Using appId as roll no for now
+            fatherName: student.fatherName || '',
+            motherName: student.motherName || '',
+            examCenterName: result.slot.examCenter.name || '',
+            examCenterAddress: result.slot.examCenter.address || '',
+            examDate: formatDate(result.slot.date) || '',
+            startTime: formatTime(result.slot.startTime) || '',
+            endTime: formatTime(result.slot.endTime) || '',
+            profilePhotoUrl: profilePhotoUrl,
+            qrCodeBuffer: qrCodeBuffer,
+            session: 'Entrance Exam 2024', // Static or dynamic based on config
+            program: student.courseType || 'B.Tech'
+        });
+        
+        const key = `students/${studentId}/hall_tickets/${slotId}_${Date.now()}.pdf`;
+        hallTicketUrl = await uploadFileToS3(pdfBuffer, key, 'application/pdf');
+
+        // Update the Hall Ticket record with the URL
+        if (hallTicketUrl) {
+            await prisma.hallTicket.update({
+                where: { id: result.hallTicketId },
+                data: { url: hallTicketUrl }
+            });
+        }
+
+    } catch (e) {
+        logger.error(`[bookExamSlot] Failed to generate/upload PDF for student ${studentId}. Slot is booked but ticket missing URL. Error: ${e}`);
+        // We do NOT throw here, so the booking remains valid. 
+        // The user can later "download hall ticket" which should handle generation on the fly if missing.
+    }
+
     logger.info(`Exam slot booked: student=${studentId} slot=${slotId}`);
-    return result;
+    
+    return {
+        // Student Info
+        studentId,
+        name: student.name,
+        firstName: student.name.split(' ')[0],
+        lastName: student.name.split(' ').slice(1).join(' ') || student.name,
+        phone: student.phone,
+        email: student.email,
+        profilePhotoUrl: student.profilePhotoUrl,
+        applicationId: student.applicationId,
+        
+        // Exam Slot Info
+        slotId,
+        examCenter: result.slot.examCenter.name,
+        examCenterAddress: result.slot.examCenter.address,
+        examCenterCity: result.slot.examCenter.city,
+        examDate: formatDate(result.slot.date),
+        examDay: new Date(result.slot.date).toLocaleDateString('en-US', { weekday: 'long' }),
+        startTime: formatTime(result.slot.startTime),
+        endTime: formatTime(result.slot.endTime),
+        
+        // Hall Ticket Info
+        hallTicketNumber: result.hallTicketId,
+        qrCodeImage,
+        qrHash: result.encryptedContent,
+        hallTicketUrl // Can be null if upload failed
+    };
 };
 
 /**
@@ -1245,5 +1321,92 @@ export const getStudentsByAdmissionStatus = async (status: AdmissionStatus) => {
             examDate: student.examDetails?.testDate ? formatDate(student.examDetails.testDate) : null,
             createdAt: formatDateTime(student.createdAt)
         }))
+    };
+};
+
+/**
+ * Get hall ticket details with generated QR code for a student.
+ */
+export const getHallTicketDetails = async (studentId: string) => {
+    const student = await prisma.student.findUnique({
+        where: { id: studentId },
+        include: {
+            examDetails: {
+                include: {
+                    examSlot: {
+                        include: {
+                            examCenter: true
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+
+    if (!student.examDetails?.examSlot) {
+        throw new AppError('Student does not have an exam slot booked', 404);
+    }
+
+    const hallTicket = await prisma.hallTicket.findFirst({
+        where: { studentId },
+        orderBy: { generatedAt: 'desc' }
+    });
+
+    if (!hallTicket) {
+        throw new AppError('Hall ticket not found', 404);
+    }
+
+    let qrCodeImage = '';
+    if (hallTicket.qrHash) {
+        try {
+            qrCodeImage = await QRCode.toDataURL(hallTicket.qrHash);
+        } catch (e) {
+            logger.error(`Failed to regenerate QR code for student ${studentId}: ${e}`);
+        }
+    }
+
+    let hallTicketDownloadUrl = hallTicket.url;
+    if (hallTicketDownloadUrl) {
+        try {
+            const urlParts = hallTicketDownloadUrl.split('.amazonaws.com/');
+            if (urlParts.length > 1) {
+                const key = urlParts[1];
+                hallTicketDownloadUrl = await getPresignedUrl(key);
+            }
+        } catch (e) {
+            logger.warn(`Failed to generate presigned URL for student ${studentId}: ${e}`);
+        }
+    }
+
+    const slot = student.examDetails.examSlot;
+
+    return {
+        // Student Info
+        studentId,
+        name: student.name,
+        firstName: student.name.split(' ')[0],
+        lastName: student.name.split(' ').slice(1).join(' ') || student.name,
+        phone: student.phone,
+        email: student.email,
+        profilePhotoUrl: student.profilePhotoUrl,
+        applicationId: student.applicationId,
+        
+        // Exam Slot Info
+        slotId: slot.id,
+        examCenter: slot.examCenter.name,
+        examCenterAddress: slot.examCenter.address,
+        examCenterCity: slot.examCenter.city,
+        examDate: formatDate(slot.date),
+        examDay: new Date(slot.date).toLocaleDateString('en-US', { weekday: 'long' }),
+        startTime: formatTime(slot.startTime),
+        endTime: formatTime(slot.endTime),
+        
+        // Hall Ticket Info
+        hallTicketNumber: hallTicket.id,
+        qrCodeImage,
+        qrHash: hallTicket.qrHash,
+        hallTicketDownloadUrl
     };
 };

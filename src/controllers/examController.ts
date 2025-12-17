@@ -2,10 +2,11 @@
 // Express controllers for exam-related APIs, using services for business logic.
 
 import { Request, Response, NextFunction } from 'express';
+import prisma from '../config/prisma';
 import * as examService from '../services/examService';
 import logger from '../utils/logger';
 import jwt from 'jsonwebtoken';
-import { Role } from '@prisma/client';
+import { Role, AdmissionStatus } from '@prisma/client';
 import { catchAsync } from '../utils/catchAsync';
 import { AppError } from '../utils/AppError';
 import { sendResponse } from '../utils/response';
@@ -395,6 +396,65 @@ export const deleteExamSlot = catchAsync(
             statusCode: 200,
             success: true,
             message: MESSAGES.SUCCESS.EXAM_SLOT_DELETED,
+        });
+    }
+);
+
+/**
+ * Controller: Get students by admission status.
+ * Route: GET /exam/students/status/:status
+ * Roles: ADMIN, SUPER_ADMIN
+ */
+export const getStudentsByStatus = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[getStudentsByStatus] by=${req.user?.userId || 'anonymous'}`);
+        const { status } = req.params;
+        
+        // Validate status enum
+        if (!Object.values(AdmissionStatus).includes(status as any)) {
+            throw new AppError(`Invalid status. Allowed: ${Object.values(AdmissionStatus).join(', ')}`, 400);
+        }
+
+        const result = await examService.getStudentsByAdmissionStatus(status as any);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: `Students with status ${status} retrieved`,
+            data: result,
+        });
+    }
+);
+
+/**
+ * Controller: Get hall ticket details with QR code.
+ * Route: GET /exam/hall-ticket/:studentId
+ * Roles: STUDENT, ADMIN, SUPER_ADMIN
+ */
+export const getHallTicketDetails = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        logger.info(`[getHallTicketDetails] by=${req.user?.userId || 'anonymous'}`);
+        const { studentId } = req.params;
+
+        // Security check: Students can only view their own hall ticket
+        if (req.user?.role === Role.STUDENT) {
+            // Find student profile to verify ID
+            const student = await prisma.student.findUnique({
+                where: { userId: req.user.userId }
+            });
+            
+            if (student?.id !== studentId) {
+                 throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 403);
+            }
+        }
+
+        const result = await examService.getHallTicketDetails(studentId);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: 'Hall ticket details retrieved',
+            data: result,
         });
     }
 );

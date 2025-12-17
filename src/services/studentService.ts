@@ -8,7 +8,7 @@ import {
 import logger from '../utils/logger';
 import { AppError } from '../utils/AppError';
 import { verifyAadhar } from './integrationService';
-import { deleteFileFromS3 } from '../utils/s3Utils';
+import { deleteFileFromS3, getPresignedUrl } from '../utils/s3Utils';
 import { MESSAGES } from '../constants/messages';
 import { formatDate, formatTime, formatDateTime } from '../utils/dateFormatter';
 export const registerStudent = async (data: any, agentId: string | null, userId: string | null, currentUserId: string | null) => {
@@ -233,6 +233,22 @@ export const getHallTicket = async (studentId: string) => {
         }
     }
 
+    let hallTicketDownloadUrl = latestHallTicket?.url;
+    if (hallTicketDownloadUrl) {
+        try {
+            // Extract key from URL
+            // Format: https://bucket.s3.region.amazonaws.com/key
+            const urlParts = hallTicketDownloadUrl.split('.amazonaws.com/');
+            if (urlParts.length > 1) {
+                const key = urlParts[1];
+                hallTicketDownloadUrl = await getPresignedUrl(key);
+            }
+        } catch (e) {
+            logger.warn(`Failed to generate presigned URL for student ${studentId}: ${e}`);
+            // Fallback to original URL
+        }
+    }
+
     logger.info(`Hall ticket retrieved for student: ${studentId}`);
     
     return {
@@ -243,7 +259,8 @@ export const getHallTicket = async (studentId: string) => {
         examCenter: student.examDetails.testCenter,
         examDate: formatDate(student.examDetails.testDate),
         startTime: formatTime(student.examDetails.examSlot?.startTime),
-        endTime: formatTime(student.examDetails.examSlot?.endTime)
+        endTime: formatTime(student.examDetails.examSlot?.endTime),
+        hallTicketDownloadUrl
     };
 };
 
