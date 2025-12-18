@@ -525,5 +525,34 @@ export const getStudentByUserId = async (userId: string) => {
         }
     });
 
-    return student;
+    if (!student) return null;
+
+    const ADMISSION_FLOW_ORDER: AdmissionStatus[] = [
+        AdmissionStatus.REGISTERED,
+        AdmissionStatus.TEST_FEE_PAID,
+        AdmissionStatus.HALL_TICKET_GENERATED,
+        AdmissionStatus.EXAM_ATTENDED,
+        AdmissionStatus.DOCUMENTS_UPLOADED,
+        AdmissionStatus.SEAT_ALLOTTED,
+        AdmissionStatus.ADMISSION_CONFIRMED
+    ];
+
+    const currentStatus = student.admissionDetails?.status;
+    let completedStatuses: string[] = [];
+
+    if (currentStatus) {
+        const currentIndex = ADMISSION_FLOW_ORDER.indexOf(currentStatus);
+        if (currentIndex !== -1) {
+            completedStatuses = ADMISSION_FLOW_ORDER.slice(0, currentIndex + 1);
+        }
+    }
+
+    return {
+        ...student,
+        admissionDetails: {
+            ...student.admissionDetails,
+            completedStatuses,
+            currentStatus
+        }
+    };
 };
