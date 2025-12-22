@@ -12,7 +12,7 @@ import { registerStudent } from '../student/student.service';
 
 export const AdminStudentService = {
     async getAllApplications(query: any) {
-        const { page = 1, limit = 10, search } = query;
+        const { page = 1, limit = 10, search, status, quotaType, courseType } = query;
         const skip = (Number(page) - 1) * Number(limit);
 
         const where: any = {};
@@ -23,6 +23,20 @@ export const AdminStudentService = {
                 { phone: { contains: String(search), mode: 'insensitive' } },
                 { applicationId: { contains: String(search), mode: 'insensitive' } }
             ];
+        }
+
+        if (status) {
+            where.admissionDetails = {
+                status: status
+            };
+        }
+
+        if (quotaType) {
+            where.quotaType = quotaType;
+        }
+
+        if (courseType) {
+            where.courseType = courseType;
         }
 
         const [students, total] = await prisma.$transaction([
