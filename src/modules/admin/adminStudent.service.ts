@@ -261,7 +261,7 @@ export const AdminStudentService = {
             throw new AppError(MESSAGES.ERROR.DOCUMENT_NOT_FOUND, 404);
         }
 
-        return await prisma.studentDocument.update({
+        const updatedDoc = await prisma.studentDocument.update({
             where: {
                 studentId_documentKey: {
                     studentId,
@@ -273,6 +273,34 @@ export const AdminStudentService = {
                 remarks
             }
         });
+
+        // Check if all required documents are verified
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: { documents: true }
+        });
+
+        if (student) {
+            const requirements = await prisma.documentRequirement.findMany({
+                where: { courseType: student.courseType || '', isRequired: true }
+            });
+
+            const requiredKeys = requirements.map(r => r.documentKey);
+            const verifiedKeys = student.documents
+                .filter(d => d.status === StudentDocumentStatus.APPROVED)
+                .map(d => d.documentKey);
+
+            const allVerified = requiredKeys.every(key => verifiedKeys.includes(key));
+
+            if (allVerified) {
+                await prisma.studentAdmission.update({
+                    where: { studentId },
+                    data: { status: AdmissionStatus.DOCUMENTS_VERIFIED }
+                });
+            }
+        }
+
+        return updatedDoc;
     },
 
     async requestCourseChange(studentId: string, newSpecialization: string, reason: string) {
