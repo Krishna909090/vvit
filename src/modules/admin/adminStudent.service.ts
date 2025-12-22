@@ -49,6 +49,7 @@ export const AdminStudentService = {
                     admissionDetails: true,
                     examDetails: true,
                     documents: true,
+                    academicQualifications: true
                 }
             }),
             prisma.student.count({ where })
