@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
@@ -29,11 +29,58 @@ export const processExcelImport = async (
 
   const mapping = mappingRecord.mapping as Record<string, string>;
 
-  // 2. Parse Excel
-  const workbook = XLSX.read(fileBuffer, { type: "buffer" });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  const rows: ExcelRow[] = XLSX.utils.sheet_to_json(sheet);
+  // 2. Parse Excel using ExcelJS
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(fileBuffer as any);
+  
+  // Use the first worksheet
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+      throw new AppError("Excel file has no worksheets", 400);
+  }
+
+  // Convert Sheet to JSON manually
+  const rows: ExcelRow[] = [];
+  const headers: string[] = [];
+  
+  worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) {
+          // Capture Headers
+          row.eachCell((cell, colNumber) => {
+              headers[colNumber] = cell.value ? String(cell.value) : '';
+          });
+      } else {
+          // Capture Data
+          const rowData: ExcelRow = {};
+          // Iterate over headers to ensure we get all cols even if cell is empty
+          headers.forEach((header, index) => {
+              if (index === 0) return; // headers array index matches colNumber (1-based usually, but here array is 0-based with holes if sparse?)
+              // exceljs colNumber is 1-based. headers array will have index 1 for col 1.
+              
+              const cell = row.getCell(index);
+              let cellValue = cell.value;
+              
+              // Handle special cell types (hyperlink, formula result)
+              if (cellValue && typeof cellValue === 'object') {
+                  if ('text' in cellValue) {
+                      cellValue = (cellValue as any).text; 
+                  } else if ('result' in cellValue) {
+                      cellValue = (cellValue as any).result;
+                  }
+              }
+              
+              // Normalize date if needed? For now keep raw.
+              
+              if (header) {
+                  rowData[header] = cellValue;
+              }
+          });
+          // Check if row is not empty
+          if (Object.keys(rowData).length > 0) {
+              rows.push(rowData);
+          }
+      }
+  });
 
   if (rows.length === 0) {
     throw new AppError("Excel file is empty", 400);
