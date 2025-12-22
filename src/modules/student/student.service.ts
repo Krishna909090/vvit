@@ -534,7 +534,8 @@ export const getStudentByUserId = async (userId: string) => {
                     remarks: true,
                     updatedAt: true
                 }
-            }
+            },
+            academicQualifications: true
         }
     });
 
