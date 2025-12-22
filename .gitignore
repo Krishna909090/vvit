@@ -19,10 +19,10 @@ pids/
 .pm2/
 
 # Environment / Secrets
-.env
-.env.*
-.env.local
-.env.*.local
+# .env
+# .env.*
+# .env.local
+# .env.*.local
 
 # OS-generated files
 .DS_Store
@@ -56,5 +56,7 @@ deploy.zip
 
 scripts/
 
-*.md
+*.md    
 *.txt
+
+*.test.ts

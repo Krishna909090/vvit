@@ -95,6 +95,7 @@ export const createTransportRouteSchema = z.object({
         cost: z.number().min(0),
         busNumber: z.string().min(1, "Bus number is required"),
         capacity: z.number().int().min(1, "Capacity must be at least 1"),
+        vehicleId: z.string().uuid().optional().nullable(),
     }),
 });
 
@@ -211,9 +212,9 @@ export const createCourseSchema = z.object({
 export const createBatchSchema = z.object({
     body: z.object({
         name: z.string().min(1),
-        courseId: z.string().uuid(),
-        startDate: z.string().datetime().or(z.date()),
-        endDate: z.string().datetime().or(z.date()),
+        specializationId: z.string().uuid(),
+        startDate: z.coerce.date(),
+        endDate: z.coerce.date(),
     }),
 });
 

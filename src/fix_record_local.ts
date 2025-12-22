@@ -34,7 +34,7 @@ async function main() {
                 courseType: 'BTECH',
                 admissionDetails: {
                     create: {
-                        status: 'TEST_FEE_PAID'
+                        status: 'ENTRANCE_FEE_PAID'
                     }
                 },
                 examDetails: {
@@ -53,8 +53,8 @@ async function main() {
         });
         await prisma.studentAdmission.upsert({
             where: { studentId: student.id },
-            update: { status: 'TEST_FEE_PAID' },
-            create: { studentId: student.id, status: 'TEST_FEE_PAID' }
+            update: { status: 'ENTRANCE_FEE_PAID' },
+            create: { studentId: student.id, status: 'ENTRANCE_FEE_PAID' }
         });
         console.log('Ensured StudentExam and StudentAdmission in LOCAL DB.');
     }

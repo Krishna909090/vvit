@@ -225,5 +225,8 @@ export const MESSAGES = {
         EXAM_CENTERS_FETCHED: 'Exam centers fetched successfully',
         EXAM_SLOTS_FETCHED: 'Exam slots fetched successfully',
         EXAM_SLOT_FETCHED: 'Exam slot fetched successfully',
+        HOSTEL_DELETED: 'Hostel deleted successfully',
+        TRANSPORT_ROUTE_UPDATED: 'Transport route updated successfully',
+        TRANSPORT_ROUTE_DELETED: 'Transport route deleted successfully',
     }
 };

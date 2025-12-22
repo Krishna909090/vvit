@@ -1,0 +1,424 @@
+import prisma from '../../config/prisma';
+import { AppError } from '../../utils/AppError';
+import { MESSAGES } from '../../constants/messages';
+
+export const AcademicService = {
+    // Department
+    async createDepartment(name: string, code: string, createdBy?: string) {
+        const existingDept = await prisma.department.findFirst({
+            where: {
+                OR: [
+                    { code: { equals: code, mode: 'insensitive' } },
+                    { name: { equals: name, mode: 'insensitive' } }
+                ]
+            }
+        });
+
+        if (existingDept) {
+            throw new AppError(MESSAGES.ERROR.DEPARTMENT_EXISTS, 409);
+        }
+
+        return await prisma.department.create({
+            data: { name, code, createdBy }
+        });
+    },
+
+    async getDepartments() {
+        const depts = await prisma.department.findMany({ include: { courses: true } });
+        return depts.map(d => ({
+            ...d,
+            schoolName: d.name,
+            schoolCode: d.code
+        }));
+    },
+
+    async getDepartmentById(id: string) {
+        const department = await prisma.department.findUnique({
+            where: { id },
+            include: { courses: true }
+        });
+        if (!department) throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
+        return department;
+    },
+
+    async updateDepartment(id: string, name: string, code: string, updatedBy?: string) {
+        const department = await prisma.department.findUnique({ where: { id } });
+        if (!department) throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
+
+        if (department.name === name && department.code === code) {
+            throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+        }
+
+        return await prisma.department.update({
+            where: { id },
+            data: { name, code, updatedBy }
+        });
+    },
+
+    async deleteDepartment(id: string) {
+        const department = await prisma.department.findUnique({ where: { id } });
+        if (!department) throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
+
+        return await prisma.department.update({ where: { id }, data: { isDeleted: true } });
+    },
+
+    // Course
+    async createCourse(name: string, code: string, departmentId: string, createdBy?: string) {
+        const existingCourse = await prisma.course.findFirst({
+            where: {
+                OR: [
+                    {
+                        name: { equals: name, mode: 'insensitive' },
+                        departmentId
+                    },
+                    {
+                        code: { equals: code, mode: 'insensitive' }
+                    }
+                ]
+            }
+        });
+
+        if (existingCourse) {
+            throw new AppError("Course with this name or code already exists", 409);
+        }
+
+        return await prisma.course.create({
+            data: { name, code, departmentId, createdBy }
+        });
+    },
+
+    async getCourses(departmentId?: string) {
+        const where: any = {};
+        if (departmentId) {
+            where.departmentId = String(departmentId);
+        }
+        const courses = await prisma.course.findMany({
+            where,
+            include: { department: true, specializations: true }
+        });
+        return courses.map((c: any) => ({
+            ...c,
+            departmentName: c.department?.name,
+            department: undefined
+        }));
+    },
+
+    async getCourseById(id: string) {
+        const course = await prisma.course.findUnique({
+            where: { id },
+            include: { department: true, specializations: true }
+        });
+        if (!course) throw new AppError("Course not found", 404);
+        return course;
+    },
+
+    async updateCourse(id: string, name: string, code: string, departmentId: string, updatedBy?: string) {
+        const course = await prisma.course.findUnique({ where: { id } });
+        if (!course) throw new AppError("Course not found", 404);
+
+        if (
+            (name === undefined || course.name === name) && 
+            (code === undefined || course.code === code) && 
+            (departmentId === undefined || course.departmentId === departmentId)
+        ) {
+            throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+        }
+
+        // Check for code uniqueness if code is being changed
+        if (code && code !== course.code) {
+           const existingCourse = await prisma.course.findFirst({
+                where: {
+                    code: { equals: code, mode: 'insensitive' },
+                    id: { not: id }
+                }
+            });
+            if (existingCourse) {
+                 throw new AppError("Course code already exists", 409);
+            }
+        }
+
+        return await prisma.course.update({
+            where: { id },
+            data: { name, code, departmentId, updatedBy }
+        });
+    },
+
+    async deleteCourse(id: string) {
+        const course = await prisma.course.findUnique({ where: { id } });
+        if (!course) throw new AppError("Course not found", 404);
+
+        return await prisma.course.update({ where: { id }, data: { isDeleted: true } });
+    },
+
+    // Specialization
+    async createSpecialization(code: string, name: string, totalSeats: number, courseId: string, createdBy?: string) {
+        if (!code || !name || !totalSeats || !courseId) throw new AppError(MESSAGES.ERROR.CODE_NAME_SEATS_REQUIRED, 400);
+
+        const course = await prisma.course.findUnique({ where: { id: courseId } });
+        if (!course) {
+            throw new AppError("Course (Specialization Parent) not found", 404);
+        }
+
+        const existingSpecialization = await prisma.specialization.findUnique({ where: { code } });
+        if (existingSpecialization) {
+            throw new AppError("Specialization code exists", 409);
+        }
+
+        return await prisma.specialization.create({
+            data: {
+                code,
+                name,
+                courseId,
+                totalSeats: Number(totalSeats),
+                filledSeats: 0,
+                createdBy
+            }
+        });
+    },
+
+    async getSpecializations() {
+        const specs = await prisma.specialization.findMany({
+            include: { course: true }
+        });
+        return specs.map(s => ({
+            ...s,
+            courseName: s.course.name,
+            course: undefined
+        }));
+    },
+
+    async getSpecializationById(id: string) {
+        const specialization = await prisma.specialization.findUnique({
+            where: { id },
+            include: { course: { include: { department: true } } }
+        });
+        if (!specialization) throw new AppError("Specialization not found", 404);
+        return specialization;
+    },
+
+    async updateSpecialization(id: string, code: string, name: string, totalSeats: number, updatedBy?: string) {
+        const specialization = await prisma.specialization.findUnique({ where: { id } });
+        if (!specialization) throw new AppError("Specialization not found", 404);
+
+        const newCode = code !== undefined ? code : specialization.code;
+        const newName = name !== undefined ? name : specialization.name;
+        const newTotalSeats = totalSeats !== undefined ? Number(totalSeats) : specialization.totalSeats;
+
+        if (
+            specialization.code === newCode && 
+            specialization.name === newName && 
+            specialization.totalSeats === newTotalSeats
+        ) {
+            throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+        }
+
+        return await prisma.specialization.update({
+            where: { id },
+            data: { 
+                code: newCode, 
+                name: newName, 
+                totalSeats: newTotalSeats, 
+                updatedBy 
+            }
+        });
+    },
+
+    async deleteSpecialization(id: string) {
+        const specialization = await prisma.specialization.findUnique({ where: { id } });
+        if (!specialization) throw new AppError("Specialization not found", 404);
+
+        return await prisma.specialization.update({ where: { id }, data: { isDeleted: true } });
+    },
+
+    // Academic Year
+    async createAcademicYear(code: string, startDate: string, endDate: string, isActive: boolean, createdBy?: string) {
+        const existingYear = await prisma.academicYear.findUnique({ where: { code } });
+        if (existingYear) {
+            throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_EXISTS, 409);
+        }
+
+        return await prisma.academicYear.create({
+            data: {
+                code,
+                startDate: new Date(startDate),
+                endDate: new Date(endDate),
+                isActive: isActive !== undefined ? isActive : true,
+                createdBy
+            }
+        });
+    },
+
+    async getAcademicYears() {
+        return await prisma.academicYear.findMany({ orderBy: { startDate: 'desc' } });
+    },
+
+    async updateAcademicYear(id: string, data: any, updatedBy?: string) {
+        const academicYear = await prisma.academicYear.findUnique({ where: { id } });
+        if (!academicYear) throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_NOT_FOUND, 404);
+
+        const updateData: any = { code: data.code, updatedBy };
+        if (data.startDate) updateData.startDate = new Date(data.startDate);
+        if (data.endDate) updateData.endDate = new Date(data.endDate);
+        if (data.isActive !== undefined) updateData.isActive = data.isActive;
+
+        return await prisma.academicYear.update({
+            where: { id },
+            data: updateData
+        });
+    },
+
+    async deleteAcademicYear(id: string) {
+        const academicYear = await prisma.academicYear.findUnique({ where: { id } });
+        if (!academicYear) throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_NOT_FOUND, 404);
+
+        return await prisma.academicYear.update({ where: { id }, data: { isDeleted: true } });
+    },
+
+    // Batch
+    async createBatch(name: string, specializationId: string, startDate: string, endDate: string, createdBy?: string) {
+        // Validate Specialization Exists
+        const specialization = await prisma.specialization.findUnique({ where: { id: specializationId } });
+        if (!specialization) {
+            throw new AppError("Specialization not found", 404);
+        }
+
+        const existingBatch = await prisma.batch.findFirst({
+            where: {
+                name: { equals: name, mode: 'insensitive' },
+                specializationId
+            }
+        });
+
+        if (existingBatch) {
+            throw new AppError(MESSAGES.ERROR.BATCH_EXISTS, 409);
+        }
+
+        return await prisma.batch.create({
+            data: {
+                name,
+                specializationId,
+                startDate: new Date(startDate),
+                endDate: new Date(endDate),
+                createdBy
+            }
+        });
+    },
+
+    async getBatches(specializationId?: string) {
+        const where: any = {};
+        if (specializationId) where.specializationId = String(specializationId);
+
+        return await prisma.batch.findMany({
+            where,
+            include: { specialization: true },
+            orderBy: { startDate: 'desc' }
+        });
+    },
+
+    async getBatchById(id: string) {
+        const batch = await prisma.batch.findUnique({
+            where: { id },
+            include: { specialization: true }
+        });
+        if (!batch) throw new AppError(MESSAGES.ERROR.BATCH_NOT_FOUND, 404);
+        return batch;
+    },
+
+    async updateBatch(id: string, name: string, specializationId: string, startDate: string, endDate: string, updatedBy?: string) {
+        const batch = await prisma.batch.findUnique({ where: { id } });
+        if (!batch) throw new AppError(MESSAGES.ERROR.BATCH_NOT_FOUND, 404);
+
+        const data: any = { name, specializationId, updatedBy };
+        if (startDate) data.startDate = new Date(startDate);
+        if (endDate) data.endDate = new Date(endDate);
+
+        return await prisma.batch.update({
+            where: { id },
+            data
+        });
+    },
+
+    async deleteBatch(id: string) {
+        const batch = await prisma.batch.findUnique({ where: { id } });
+        if (!batch) throw new AppError(MESSAGES.ERROR.BATCH_NOT_FOUND, 404);
+
+        return await prisma.batch.update({ where: { id }, data: { isDeleted: true } });
+    },
+
+    // Section
+    async createSection(name: string, batchId: string, createdBy?: string) {
+        // Validate Batch Exists
+        const batch = await prisma.batch.findUnique({ where: { id: batchId } });
+        if (!batch) {
+            throw new AppError("Batch not found", 404);
+        }
+
+        const existingSection = await prisma.section.findFirst({
+            where: {
+                name: { equals: name, mode: 'insensitive' },
+                batchId
+            }
+        });
+
+        if (existingSection) {
+            throw new AppError(MESSAGES.ERROR.SECTION_EXISTS, 409);
+        }
+
+        return await prisma.section.create({
+            data: { name, batchId, createdBy }
+        });
+    },
+
+    async getSections(batchId?: string) {
+        const where: any = {};
+        if (batchId) where.batchId = String(batchId);
+
+        return await prisma.section.findMany({
+            where,
+            include: { batch: true }
+        });
+    },
+
+    async getSectionById(id: string) {
+        const section = await prisma.section.findUnique({
+            where: { id },
+            include: { batch: true }
+        });
+        if (!section) throw new AppError(MESSAGES.ERROR.SECTION_NOT_FOUND, 404);
+        return section;
+    },
+
+    async updateSection(id: string, name: string, batchId: string, updatedBy?: string) {
+        const section = await prisma.section.findUnique({ where: { id } });
+        if (!section) throw new AppError(MESSAGES.ERROR.SECTION_NOT_FOUND, 404);
+
+        const newName = name !== undefined ? name : section.name;
+        const newBatchId = batchId !== undefined ? batchId : section.batchId;
+
+        if (section.name === newName && section.batchId === newBatchId) {
+             throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+        }
+
+        // Validate Batch if changing
+        if (batchId && batchId !== section.batchId) {
+             const batch = await prisma.batch.findUnique({ where: { id: batchId } });
+             if (!batch) throw new AppError("Batch not found", 404);
+        }
+
+        return await prisma.section.update({
+            where: { id },
+            data: { 
+                name: newName, 
+                batchId: newBatchId, 
+                updatedBy 
+            }
+        });
+    },
+
+    async deleteSection(id: string) {
+        const section = await prisma.section.findUnique({ where: { id } });
+        if (!section) throw new AppError(MESSAGES.ERROR.SECTION_NOT_FOUND, 404);
+
+        return await prisma.section.update({ where: { id }, data: { isDeleted: true } });
+    }
+};

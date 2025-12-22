@@ -24,7 +24,7 @@ interface EnvConfig {
     AWS_REGION?: string;
     AWS_ACCESS_KEY_ID?: string;
     AWS_SECRET_ACCESS_KEY?: string;
-    S3_BUCKET_NAME?: string;
+    AWS_BUCKET_NAME?: string;
 
     // CORS
     CORS_ORIGIN?: string;
@@ -46,7 +46,7 @@ const recommendedEnvVars: (keyof EnvConfig)[] = [
     'AWS_REGION',
     'AWS_ACCESS_KEY_ID',
     'AWS_SECRET_ACCESS_KEY',
-    'S3_BUCKET_NAME',
+    'AWS_BUCKET_NAME',
     'CORS_ORIGIN'
 ];
 

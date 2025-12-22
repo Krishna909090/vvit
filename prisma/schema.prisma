@@ -19,15 +19,68 @@ enum Role {
 }
 
 
+// ============================================================================
+// ADMISSION STATUS LIFECYCLE ENUM (Final Enterprise-Grade)
+// ============================================================================
+// Defines the complete student admission journey from application to enrollment
+// Supports: Management Quota (EXAM) and Convenor Quota (DIRECT qualification)
+// ERP Access: Granted ONLY at ADMISSION_CONFIRMED or ENROLLED (NO EXCEPTIONS)
+// See: src/types/admissionStatus.ts for complete documentation
+// ============================================================================
+
 enum AdmissionStatus {
-  REGISTERED 
-  TEST_FEE_PAID 
-  HALL_TICKET_GENERATED 
-  EXAM_ATTENDED 
-  DOCUMENTS_UPLOADED 
-  SEAT_ALLOTTED 
-  ADMISSION_CONFIRMED 
-  CANCELLED 
+  // PHASE 1: APPLICATION (Portal)
+  REGISTERED                  // Initial registration complete
+  ENTRANCE_FEE_PAID           // Entrance/exam fee paid
+  EXAM_SCHEDULED              // Exam slot booked (EXAM mode only)
+  EXAM_ATTENDED               // Attended exam (EXAM mode only)
+  EXAM_QUALIFIED              // Qualified (via exam OR direct admission)
+  EXAM_NOT_QUALIFIED          // Failed to qualify
+  
+  // PHASE 2: DOCUMENT VERIFICATION (Portal ONLY - NOT ERP)
+  DOCUMENTS_PENDING           // Awaiting document upload
+  DOCUMENTS_SUBMITTED         // Documents uploaded, awaiting admin verification
+  DOCUMENTS_VERIFIED          // Admin verified documents in ERP
+  
+  // PHASE 3: ADMISSION CONFIRMATION (ERP)
+  SEAT_ALLOTTED               // Seat allocated, admission number assigned
+  ADMISSION_CONFIRMED         // Token fee paid, admission confirmed
+                              // ⚠️ ERP ACCESS GRANTED FROM HERE ⚠️
+  
+  // PHASE 4: ENROLLMENT (University assigns roll number)
+  ENROLLED                    // Roll number assigned, academic lifecycle begins
+  
+  // TERMINAL STATES
+  REJECTED                    // Application rejected (terminal)
+  CANCELLED                   // Application/admission cancelled (terminal)
+}
+
+// ============================================================================
+// QUALIFICATION MODE (How student qualified for admission)
+// ============================================================================
+
+enum QualificationMode {
+  EXAM                        // Qualified via entrance examination
+  DIRECT                      // Direct admission (convenor quota, transfer, etc.)
+}
+
+// ============================================================================
+// ENROLLMENT STATUS (Academic Lifecycle - Separate from Admission)
+// ============================================================================
+
+enum EnrollmentStatus {
+  ACTIVE                      // Currently enrolled and attending
+  SUSPENDED                   // Temporarily suspended (academic/disciplinary)
+  DROPPED                     // Dropped out / Discontinued
+  COMPLETED                   // Graduated / Program completed
+}
+
+enum AdmissionSource {
+  WEBSITE
+  WALKIN
+  AGENT
+  REFERRAL
+  COUNCIL
 }
 
 enum FeeStatus {
@@ -92,14 +145,6 @@ enum RequestStatus {
   REJECTED
 }
 
-enum EnrollmentStatus {
-  ACTIVE
-  DETAINED
-  ALUMNI
-  SUSPENDED
-  DROPPED_OUT
-}
-
 enum StudentDocumentStatus {
   PENDING
   APPROVED
@@ -137,6 +182,7 @@ model User {
   name      String?
   email     String?   @unique
   phone     String    @unique
+  password  String?   // For Admins/Staff
   role      Role      @default(STUDENT)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -150,9 +196,15 @@ model User {
   agentCommissions  AgentCommission[]
   adminActivityLogs AdminActivityLog[]
   notifications     Notification[]
+  
+  customRoleId String?
+  customRole   CustomRole? @relation(fields: [customRoleId], references: [id])
+  auditLogs    AuditLog[]
+  isDeleted Boolean @default(false)
 
   @@index([role])
   @@index([createdAt])
+  @@index([isDeleted])
 }
 
 model UserOtp {
@@ -195,7 +247,6 @@ model Course {
   name          String 
   departmentId  String
   department    Department     @relation(fields: [departmentId], references: [id])
-  batches       Batch[]
   specializations      Specialization[]
   feeStructures FeeStructure[]
   createdAt     DateTime       @default(now())
@@ -212,8 +263,8 @@ model Course {
 model Batch {
   id        String    @id @default(uuid())
   name      String 
-  courseId  String
-  course    Course   @relation(fields: [courseId], references: [id])
+  specializationId  String
+  specialization    Specialization   @relation(fields: [specializationId], references: [id])
   sections  Section[]
   startDate DateTime
   endDate   DateTime
@@ -223,7 +274,7 @@ model Batch {
   updatedBy String?
   isDeleted Boolean @default(false)
 
-  @@index([courseId])
+  @@index([specializationId])
   @@index([isDeleted])
   @@index([startDate, endDate])
 }
@@ -254,6 +305,7 @@ model AcademicYear {
 
   enrollments   StudentEnrollment[]
   feeStructures FeeStructure[]
+  isLocked      Boolean      @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -292,6 +344,22 @@ model StudentEnrollment {
 
 
 
+
+enum QuotaType {
+  MANAGEMENT
+  CONVENOR
+}
+
+enum ApplicationMode {
+  ONLINE
+  OFFLINE
+}
+
+enum ImportType {
+  OFFLINE_ADMISSION
+  CONVENOR_ADMISSION
+}
+
 model Student {
   id            String @id @default(uuid())
   applicationId String @unique 
@@ -312,10 +380,18 @@ model Student {
   city            String
   state           String
   pincode         String
-  profilePhotoUrl String 
+  profilePhotoUrl String? 
   documentFolderPath String? // S3 Key prefix for student docs
 
-  isOffline Boolean @default(false)
+  source    AdmissionSource @default(WEBSITE)
+  ledgerEntries StudentLedger[]
+
+  // Use new enums for better flow control
+  quotaType       QuotaType       @default(MANAGEMENT)
+  applicationMode ApplicationMode @default(ONLINE)
+  
+  // Keep isOffline for backward compatibility if needed, but mark deprecated or sync with applicationMode
+  isOffline Boolean @default(false) 
   isKycVerified Boolean @default(false)
 
   
@@ -334,6 +410,7 @@ model Student {
 
   examDetails      StudentExam?
   admissionDetails StudentAdmission?
+  convenorDetails  ConvenorAdmission?
   documents        StudentDocument[]
 
   academicQualifications AcademicQualification[]
@@ -364,12 +441,49 @@ model Student {
   @@index([phone])
   @@index([aadharNumber])
   @@index([courseType])
-  @@index([isOffline])
+  @@index([quotaType])
+  @@index([applicationMode])
   @@index([isKycVerified])
   @@index([createdAt])
   @@index([category])
   @@index([city, state])
 }
+
+model ConvenorAdmission {
+  id        String   @id @default(uuid())
+  studentId String   @unique
+  student   Student  @relation(fields: [studentId], references: [id])
+  
+  // Specific fields for Convenor/EMCET data
+  rank           String?
+  hallTicketNo   String? 
+  allotmentOrder String? // File URL or Number
+  councilId      String? // Unique ID in council DB
+  category       String? // Council specific category if different
+  joiningReport  String? // File URL
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+model DataImportMapping {
+  id        String     @id @default(uuid())
+  name      String     @unique // e.g., "OMR_MAPPING_V1", "EMCET_2025"
+  type      ImportType
+  
+  // JSON Key-Value pair: "ExcelHeader": "DBField"
+  // e.g., { "Candidate Name": "name", "Mobile No": "phone" }
+  mapping   Json       
+  
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
 
 
 
@@ -404,6 +518,7 @@ model StudentAdmission {
   student   Student @relation(fields: [studentId], references: [id])
 
   status AdmissionStatus @default(REGISTERED)
+  qualificationMode QualificationMode? // How student qualified (EXAM or DIRECT)
 
   
   allottedSpecialization String?
@@ -461,6 +576,7 @@ model Specialization {
   course     Course  @relation(fields: [courseId], references: [id])
   totalSeats  Int
   filledSeats Int      @default(0)
+  batches     Batch[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   createdBy   String?
@@ -493,8 +609,10 @@ model Hostel {
   updatedAt DateTime @updatedAt
   createdBy String?
   updatedBy String?
+  isDeleted Boolean @default(false)
 
   @@index([type])
+  @@index([isDeleted])
 }
 
 model HostelBlock {
@@ -609,9 +727,11 @@ model TransportRoute {
   updatedAt DateTime @updatedAt
   createdBy String?
   updatedBy String?
+  isDeleted Boolean @default(false)
 
   @@index([vehicleId])
   @@index([city])
+  @@index([isDeleted])
 }
 
 model TransportStop {
@@ -711,17 +831,57 @@ model StudentFeeDemand {
   @@index([studentId, status])
 }
 
+
+enum PaymentMode {
+  ONLINE
+  OFFLINE
+}
+
+enum PaymentMethod {
+  // Online Methods
+  UPI
+  CREDIT_CARD
+  DEBIT_CARD
+  NET_BANKING
+  WALLET
+  
+  // Offline Methods
+  CASH
+  CHEQUE
+  DEMAND_DRAFT
+  NEFT_RTGS // Direct bank transfer by student (verified by admin)
+}
+
 model Payment {
   id         String           @id @default(uuid())
   studentId  String
   student    Student          @relation(fields: [studentId], references: [id])
+  
+  // Amount Details
   amount     Float
   currency   String           @default("INR")
+  
+  // Tracking
   status     PaymentStatus    @default(PENDING)
-  method     String?
-  providerTx String?
+  mode       PaymentMode      @default(ONLINE) 
+  method     PaymentMethod?
+  
+  // Online Specifics
+  providerTxId   String?  // e.g. Razorpay Payment ID
+  merchantOrderId String? // Our internal Order ID sent to gateway
+  signature      String?  // Verification signature
+  
+  // Offline Specifics
+  referenceNumber String? // DD Number, Cheque Number, or UTR
+  bankName        String? // Bank issuing the DD/Cheque
+  branchName      String?
+  instrumentDate  DateTime? // Date on DD/Cheque
+  collectedBy     String?   // User ID of the admin/staff who collected cash
+  
+  // Categorization
   component  PaymentComponent
-  metadata   Json?
+  metadata   Json? // Extra gateway details or remarks
+  invoiceUrl String?
 
   
   feeDemandId String?
@@ -733,7 +893,11 @@ model Payment {
   updatedBy String?
 
   @@index([studentId, status])
+  @@index([providerTxId])
+  @@index([referenceNumber])
+  @@index([mode])
 }
+
 
 
 
@@ -786,6 +950,120 @@ model DiscountRequest {
   @@index([studentId, status])
 }
 
+
+// ... (Existing Enums)
+
+
+
+// RBAC Models
+model Permission {
+  id          String   @id @default(uuid())
+  code        String   @unique // e.g. "STUDENT_VIEW", "FEES_EDIT"
+  description String?
+  module      String   // e.g. "FINANCE", "ACADEMIC"
+  
+  rolePermissions RolePermission[]
+  customRolePermissions CustomRolePermission[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  role         Role       // Links Enum Role to Permissions (Static Roles)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([role, permissionId])
+}
+
+model CustomRole {
+  id          String   @id @default(uuid())
+  name        String   @unique // e.g. "Guest Lecturer", "Exam Cell Clerk"
+  description String?
+  
+  users       User[]
+  permissions CustomRolePermission[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+model CustomRolePermission {
+  id           String     @id @default(uuid())
+  roleId       String
+  role         CustomRole @relation(fields: [roleId], references: [id])
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@unique([roleId, permissionId])
+}
+
+
+
+// Financial Ledger System
+enum LedgerTransactionType {
+  CREDIT  // Payment, Scholarship, Waiver
+  DEBIT   // Fee Demand, Penalty
+}
+
+model StudentLedger {
+  id          String                @id @default(uuid())
+  studentId   String
+  student     Student               @relation(fields: [studentId], references: [id])
+  
+  type        LedgerTransactionType
+  amount      Float
+  description String
+  date        DateTime              @default(now())
+  
+  // Linking to source documents
+  referenceId   String?  // ID of Payment or FeeDemand
+  referenceType String?  // "PAYMENT", "FEE_DEMAND", "DISCOUNT"
+  
+  // Balance Snapshot (Optional but useful for quick checks)
+  runningBalance Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?  // Audit: Who created this entry
+}
+
+// System Core
+model SystemSetting {
+  key         String   @id // e.g., "ADMISSION_OPEN"
+  value       String   // JSON value: "true", "2025-05-20"
+  description String?
+  isLocked    Boolean  @default(false) // If true, even admins can't easy-edit without super-admin
+  
+  updatedAt   DateTime @updatedAt
+  updatedBy   String?
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  
+  action    String   // "UPDATE", "DELETE", "LOGIN"
+  entity    String   // "Student", "FeeStructure"
+  entityId  String?
+  details   Json?    // Before/After state
+  
+  ipAddress String?
+  userAgent String?
+  
+  createdAt DateTime @default(now())
+}
+
+
+
 model CancellationRequest {
   id           String             @id @default(uuid())
   studentId    String
@@ -794,11 +1072,10 @@ model CancellationRequest {
   refundAmount Float?
   status       CancellationStatus @default(REQUESTED)
   approvedBy   String? 
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  createdBy    String?
+  updatedBy    String?
 
   @@index([studentId, status])
 }
@@ -1059,3 +1336,5 @@ model Configuration {
   createdBy String?
   updatedBy String?
 }
+
+

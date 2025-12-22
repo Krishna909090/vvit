@@ -5,14 +5,16 @@ import compression from 'compression';
 import hpp from 'hpp';
 import swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
-import authRoutes from './routes/authRoutes';
-import studentRoutes from './routes/studentRoutes';
-import adminRoutes from './routes/adminRoutes';
-import examRoutes from './routes/examRoutes';
-import uploadRoutes from './routes/uploadRoutes';
-import invigilatorRoutes from './routes/invigilatorRoutes';
-import documentRequirementRoutes from './routes/documentRequirementRoutes';
-import healthRoutes from './routes/healthRoutes';
+import authRoutes from './modules/auth/auth.routes';
+import studentRoutes from './modules/student/student.routes';
+import adminRoutes from './modules/admin/admin.routes';
+import examRoutes from './modules/exam/exam.routes';
+import uploadRoutes from './modules/student/upload.routes';
+import invigilatorRoutes from './modules/exam/invigilator.routes';
+import documentRequirementRoutes from './modules/document/documentRequirement.routes';
+import healthRoutes from './modules/health/health.routes';
+import paymentRoutes from './modules/finance/payment.routes';
+import dataImportRoutes from './modules/admission/dataImport.routes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
 import {
@@ -78,7 +80,7 @@ const swaggerOptions = {
             },
         ],
     },
-    apis: ['./src/routes/*.ts'],
+    apis: ['./src/modules/**/*.routes.ts'],
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
@@ -95,6 +97,9 @@ app.use('/exam', readRateLimiter, writeRateLimiter, examRoutes); // Read: 200/15
 app.use('/invigilator', readRateLimiter, writeRateLimiter, invigilatorRoutes); // Read: 200/15min, Write: 50/15min
 app.use('/api/upload', uploadRateLimiter, uploadRoutes); // 30 uploads/hour (student-friendly)
 app.use('/document-requirements', readRateLimiter, writeRateLimiter, documentRequirementRoutes); // Read: 200/15min, Write: 50/15min
+app.use('/payment', writeRateLimiter, paymentRoutes);
+app.use('/api/admission', readRateLimiter, writeRateLimiter, dataImportRoutes);
+
 
 // Apply general rate limiter to any other routes
 app.use(generalRateLimiter);
