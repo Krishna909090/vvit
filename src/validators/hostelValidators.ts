@@ -21,5 +21,6 @@ export const updateHostelSchema = z.object({
         name: z.string().optional(),
         capacity: z.number().int().positive().optional(),
         cost: z.number().positive().optional(),
+        wardenName: z.string().optional(),
     }),
 });
