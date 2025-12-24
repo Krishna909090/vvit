@@ -217,3 +217,18 @@ export const updateRollNumber = catchAsync(async (req: Request, res: Response, n
         data: result
     });
 });
+
+// Update Student Admission Status Manually
+export const updateStudentStatus = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[updateStudentStatus] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId, status } = req.body;
+    
+    const result = await AdminStudentService.updateStudentAdmissionStatus(studentId, status, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.message
+    });
+});

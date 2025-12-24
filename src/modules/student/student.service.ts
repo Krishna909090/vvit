@@ -293,6 +293,7 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
     const validStatuses: AdmissionStatus[] = [
         AdmissionStatus.EXAM_ATTENDED,
         AdmissionStatus.EXAM_QUALIFIED,
+        AdmissionStatus.DOCUMENTS_PENDING,
         AdmissionStatus.DOCUMENTS_SUBMITTED,
         AdmissionStatus.SEAT_ALLOTTED,
         AdmissionStatus.ADMISSION_CONFIRMED
@@ -452,6 +453,7 @@ export const addAcademicDetails = async (studentId: string, details: any[], curr
     const validStatuses: AdmissionStatus[] = [
         AdmissionStatus.EXAM_ATTENDED,
         AdmissionStatus.EXAM_QUALIFIED,
+        AdmissionStatus.DOCUMENTS_PENDING,
         AdmissionStatus.DOCUMENTS_SUBMITTED,
         AdmissionStatus.SEAT_ALLOTTED,
         AdmissionStatus.ADMISSION_CONFIRMED
@@ -547,18 +549,31 @@ export const getStudentByUserId = async (userId: string) => {
         AdmissionStatus.EXAM_SCHEDULED,
         AdmissionStatus.EXAM_ATTENDED,
         AdmissionStatus.EXAM_QUALIFIED,
+        AdmissionStatus.DOCUMENTS_PENDING,
         AdmissionStatus.DOCUMENTS_SUBMITTED,
+        AdmissionStatus.DOCUMENTS_VERIFIED,
         AdmissionStatus.SEAT_ALLOTTED,
-        AdmissionStatus.ADMISSION_CONFIRMED
+        AdmissionStatus.ADMISSION_CONFIRMED,
+        AdmissionStatus.ENROLLED
     ];
 
     const currentStatus = student.admissionDetails?.status;
     let completedStatuses: string[] = [];
 
     if (currentStatus) {
-        const currentIndex = ADMISSION_FLOW_ORDER.indexOf(currentStatus);
-        if (currentIndex !== -1) {
-            completedStatuses = ADMISSION_FLOW_ORDER.slice(0, currentIndex + 1);
+        if (currentStatus === AdmissionStatus.EXAM_NOT_QUALIFIED) {
+             const attendedIndex = ADMISSION_FLOW_ORDER.indexOf(AdmissionStatus.EXAM_ATTENDED);
+             if (attendedIndex !== -1) {
+                 completedStatuses = [
+                    ...ADMISSION_FLOW_ORDER.slice(0, attendedIndex + 1),
+                    AdmissionStatus.EXAM_NOT_QUALIFIED
+                 ];
+             }
+        } else {
+            const currentIndex = ADMISSION_FLOW_ORDER.indexOf(currentStatus);
+            if (currentIndex !== -1) {
+                completedStatuses = ADMISSION_FLOW_ORDER.slice(0, currentIndex + 1);
+            }
         }
     }
 

@@ -282,22 +282,29 @@ export const AdminStudentService = {
         });
 
         if (student) {
-            const requirements = await prisma.documentRequirement.findMany({
-                where: { courseType: student.courseType || '', isRequired: true }
-            });
-
-            const requiredKeys = requirements.map(r => r.documentKey);
-            const verifiedKeys = student.documents
-                .filter(d => d.status === StudentDocumentStatus.APPROVED)
-                .map(d => d.documentKey);
-
-            const allVerified = requiredKeys.every(key => verifiedKeys.includes(key));
-
-            if (allVerified) {
-                await prisma.studentAdmission.update({
+            if (status === StudentDocumentStatus.REJECTED) {
+                 await prisma.studentAdmission.update({
                     where: { studentId },
-                    data: { status: AdmissionStatus.DOCUMENTS_VERIFIED }
+                    data: { status: AdmissionStatus.DOCUMENTS_PENDING }
                 });
+            } else {
+                const requirements = await prisma.documentRequirement.findMany({
+                    where: { courseType: student.courseType || '', isRequired: true }
+                });
+
+                const requiredKeys = requirements.map(r => r.documentKey);
+                const verifiedKeys = student.documents
+                    .filter(d => d.status === StudentDocumentStatus.APPROVED)
+                    .map(d => d.documentKey);
+
+                const allVerified = requiredKeys.every(key => verifiedKeys.includes(key));
+
+                if (allVerified) {
+                    await prisma.studentAdmission.update({
+                        where: { studentId },
+                        data: { status: AdmissionStatus.DOCUMENTS_VERIFIED }
+                    });
+                }
             }
         }
 
@@ -583,5 +590,23 @@ export const AdminStudentService = {
         });
         
         return enrollment;
+    },
+
+    async updateStudentAdmissionStatus(studentId: string, status: AdmissionStatus, adminId: string | undefined) {
+        if (!studentId || !status) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
+
+        if (!Object.values(AdmissionStatus).includes(status)) {
+            throw new AppError('Invalid admission status', 400);
+        }
+        
+        const student = await prisma.student.findUnique({ where: { id: studentId } });
+        if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+
+        await prisma.studentAdmission.update({
+            where: { studentId },
+            data: { status }
+        });
+
+        return { success: true, message: `Admission status updated to ${status}` };
     }
 };

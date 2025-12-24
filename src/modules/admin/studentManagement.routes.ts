@@ -5,7 +5,8 @@ import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     getAllApplications, uploadBulkApplications, requestCancellation, approveCancellation,
     verifyAndAllotSeat, verifyStudentDocument, requestCourseChange, approveCourseChange,
-    updateAdmissionDetails, getStudentCertificates, downloadStudentDocuments, updateRollNumber
+    updateAdmissionDetails, getStudentCertificates, downloadStudentDocuments, updateRollNumber,
+    updateStudentStatus
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -59,5 +60,8 @@ router.delete('/document-requirements/:id', authenticate, authorize([Role.ADMIN,
 
 // Enrollment
 router.post('/update-roll-number', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateRollNumber);
+
+// Manual Status Update
+router.post('/update-status', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateStudentStatus);
 
 export default router;
