@@ -232,3 +232,18 @@ export const updateStudentStatus = catchAsync(async (req: Request, res: Response
         message: result.message
     });
 });
+
+// Set Scholarship Eligibility Manual
+export const setScholarshipEligibility = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[setScholarshipEligibility] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId, ruleId } = req.body;
+    
+    await AdminStudentService.setScholarshipEligibility(studentId, ruleId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Scholarship eligibility updated successfully'
+    });
+});

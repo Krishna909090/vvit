@@ -3,14 +3,16 @@ import { authorize, authenticate } from '../../middlewares/authMiddleware';
 import { Role } from '@prisma/client';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
+    createSchool, getSchools, getSchoolById, updateSchool, deleteSchool,
     createDepartment, getDepartments, getDepartmentById, updateDepartment, deleteDepartment,
-    createCourse, getCourses, getCourseById, updateCourse, deleteCourse,
+    createCourse, getCourses, getCourseById, updateCourse, deleteCourse, getDegrees,
     createSpecialization, getSpecializations, getSpecializationById, updateSpecialization, deleteSpecialization,
     createAcademicYear, getAcademicYears, updateAcademicYear, deleteAcademicYear,
     createBatch, getBatches, getBatchById, updateBatch, deleteBatch,
     createSection, getSections, getSectionById, updateSection, deleteSection
 } from './academic.controller';
 import {
+    createSchoolSchema,
     createDepartmentSchema, createCourseSchema, createSpecializationSchema,
     createAcademicYearSchema, createBatchSchema, createSectionSchema
 } from '../../validators/adminValidators';
@@ -24,6 +26,13 @@ router.get('/academic-year', authenticate, authorize([Role.ADMIN, Role.SUPER_ADM
 router.put('/academic-year/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateAcademicYear);
 router.delete('/academic-year/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteAcademicYear);
 
+// School
+router.post('/school', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createSchoolSchema), createSchool);
+router.get('/school', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT, Role.AGENT]), getSchools);
+router.get('/school/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT, Role.AGENT]), getSchoolById);
+router.put('/school/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateSchool);
+router.delete('/school/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteSchool);
+
 // Department
 router.post('/department', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createDepartmentSchema), createDepartment);
 router.get('/department', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT, Role.AGENT]), getDepartments);
@@ -33,6 +42,7 @@ router.delete('/department/:id', authenticate, authorize([Role.ADMIN, Role.SUPER
 
 // Course
 router.post('/course', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createCourseSchema), createCourse);
+router.get('/degrees', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT, Role.AGENT]), getDegrees);
 router.get('/course', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getCourses);
 router.get('/course/:id', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getCourseById);
 router.put('/course/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateCourse);

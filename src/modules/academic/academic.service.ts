@@ -3,8 +3,66 @@ import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 
 export const AcademicService = {
+    // School
+    async createSchool(name: string, code: string, createdBy?: string) {
+        const existingSchool = await prisma.school.findFirst({
+            where: {
+                OR: [
+                    { code: { equals: code, mode: 'insensitive' } },
+                    { name: { equals: name, mode: 'insensitive' } }
+                ]
+            }
+        });
+
+        if (existingSchool) {
+            throw new AppError("School with this name or code already exists", 409);
+        }
+
+        return await prisma.school.create({
+            data: { name, code, createdBy }
+        });
+    },
+
+    async getSchools() {
+        return await prisma.school.findMany({ include: { departments: true } });
+    },
+
+    async getSchoolById(id: string) {
+        const school = await prisma.school.findUnique({
+            where: { id },
+            include: { departments: true }
+        });
+        if (!school) throw new AppError("School not found", 404);
+        return school;
+    },
+
+    async updateSchool(id: string, name: string, code: string, updatedBy?: string) {
+        const school = await prisma.school.findUnique({ where: { id } });
+        if (!school) throw new AppError("School not found", 404);
+
+        return await prisma.school.update({
+            where: { id },
+            data: { name, code, updatedBy }
+        });
+    },
+
+    async deleteSchool(id: string) {
+        const school = await prisma.school.findUnique({ where: { id } });
+        if (!school) throw new AppError("School not found", 404);
+
+        return await prisma.school.update({ where: { id }, data: { isDeleted: true } });
+    },
+
     // Department
-    async createDepartment(name: string, code: string, createdBy?: string) {
+    async createDepartment(name: string, code: string, schoolId?: string, createdBy?: string) {
+        // Validate School if provided
+        if (schoolId) {
+            const school = await prisma.school.findUnique({ where: { id: schoolId } });
+            if (!school) {
+                throw new AppError("School not found", 404);
+            }
+        }
+
         const existingDept = await prisma.department.findFirst({
             where: {
                 OR: [
@@ -19,7 +77,7 @@ export const AcademicService = {
         }
 
         return await prisma.department.create({
-            data: { name, code, createdBy }
+            data: { name, code, schoolId, createdBy }
         });
     },
 
@@ -41,17 +99,25 @@ export const AcademicService = {
         return department;
     },
 
-    async updateDepartment(id: string, name: string, code: string, updatedBy?: string) {
+    async updateDepartment(id: string, name: string, code: string, schoolId?: string, updatedBy?: string) {
         const department = await prisma.department.findUnique({ where: { id } });
         if (!department) throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
 
-        if (department.name === name && department.code === code) {
+        const newSchoolId = schoolId !== undefined ? schoolId : department.schoolId;
+
+        if (department.name === name && department.code === code && department.schoolId === newSchoolId) {
             throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
+        }
+
+        // Validate School if changing
+        if (schoolId && schoolId !== department.schoolId) {
+            const school = await prisma.school.findUnique({ where: { id: schoolId } });
+            if (!school) throw new AppError("School not found", 404);
         }
 
         return await prisma.department.update({
             where: { id },
-            data: { name, code, updatedBy }
+            data: { name, code, schoolId: newSchoolId, updatedBy }
         });
     },
 
@@ -63,7 +129,12 @@ export const AcademicService = {
     },
 
     // Course
-    async createCourse(name: string, code: string, departmentId: string, createdBy?: string) {
+    async createCourse(name: string, code: string, departmentId: string, degree?: string, createdBy?: string) {
+        const department = await prisma.department.findUnique({ where: { id: departmentId } });
+        if (!department) {
+            throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
+        }
+
         const existingCourse = await prisma.course.findFirst({
             where: {
                 OR: [
@@ -83,14 +154,17 @@ export const AcademicService = {
         }
 
         return await prisma.course.create({
-            data: { name, code, departmentId, createdBy }
+            data: { name, code, departmentId, degree, createdBy }
         });
     },
 
-    async getCourses(departmentId?: string) {
+    async getCourses(departmentId?: string, degree?: string) {
         const where: any = {};
         if (departmentId) {
             where.departmentId = String(departmentId);
+        }
+        if (degree) {
+            where.degree = String(degree);
         }
         const courses = await prisma.course.findMany({
             where,
@@ -101,6 +175,21 @@ export const AcademicService = {
             departmentName: c.department?.name,
             department: undefined
         }));
+    },
+
+    async getDegrees() {
+        const result = await prisma.course.findMany({
+            select: { degree: true },
+            distinct: ['degree'],
+            where: {
+                degree: { not: null }
+            }
+        });
+        
+        // Filter out nulls and return array of strings
+        return result
+            .map(r => r.degree)
+            .filter((d): d is string => d !== null);
     },
 
     async getCourseById(id: string) {

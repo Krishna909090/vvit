@@ -16,7 +16,13 @@ enum Role {
   STUDENT
   INVIGILATOR
   STAFF
+  VERIFICATION_OFFICER
 }
+
+// ... lines 20-523 ... (Need to split edits if they are far apart)
+// Actually, I should use multi_replace for far apart edits.
+// But first, let me just use replace_file_content for Role, then another for StudentExam.
+
 
 
 // ============================================================================
@@ -102,6 +108,7 @@ enum PaymentComponent {
   HOSTEL
   TRANSPORT
   OTHER
+  SCHOLARSHIP_TOKEN
 }
 
 enum AccommodationType {
@@ -175,6 +182,13 @@ enum OfflineUploadBatchStatus {
   FAILED
 }
 
+enum ScholarshipStatus {
+  RESERVED
+  LOCKED
+  EXPIRED
+  UTILIZED
+}
+
 
 
 model User {
@@ -226,11 +240,32 @@ model UserOtp {
 
 
 
+
+model School {
+  id        String   @id @default(uuid())
+  name      String   @unique // e.g. "School of Management"
+  code      String   @unique // e.g. "SOM"
+  
+  departments Department[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+  isDeleted Boolean  @default(false)
+
+  @@index([isDeleted])
+}
+
 model Department {
   id        String    @id @default(uuid())
   name      String    @unique
   code      String    @unique 
   courses   Course[]
+
+  schoolId  String?
+  school    School?   @relation(fields: [schoolId], references: [id])
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   createdBy String?
@@ -245,6 +280,7 @@ model Course {
   id            String         @id @default(uuid())
   code          String         @unique 
   name          String 
+  degree        String?        // e.g. "B.Tech", "M.Tech"
   departmentId  String
   department    Department     @relation(fields: [departmentId], references: [id])
   specializations      Specialization[]
@@ -430,6 +466,11 @@ model Student {
   hostelAllocation    HostelAllocation?
   transportAllocation TransportAllocation?
   feeDemands          StudentFeeDemand[]
+  scholarshipAllocation ScholarshipAllocation?
+
+  eligibleScholarshipRuleId String? // Admin manually selects this rule
+  eligibleScholarshipRule   ScholarshipRule? @relation(fields: [eligibleScholarshipRuleId], references: [id])
+
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -496,8 +537,17 @@ model StudentExam {
   testDate      DateTime?
   testCenter    String?
   examAttended  Boolean   @default(false)
-  examScore     Float?
+  examScore     Float? // Internal raw score or legacy
+  
+  // External / Standardized Scores
+  class12Aggregate Float?
+  jeePercentile    Float? 
+  satScore         Float?
+  vvitPercentile   Float?
+
   isQualified   Boolean?  @default(false)
+  createdBy     String?
+  updatedBy     String? // ID of Verification Officer
 
   examSlotId String?
   examSlot   ExamSlot? @relation(fields: [examSlotId], references: [id])
@@ -533,6 +583,7 @@ model StudentAdmission {
   hostelType        HostelType?
   hostelId          String?
   hostel            Hostel?           @relation(fields: [hostelId], references: [id])
+  roomNumber        String?
   transportRouteId  String?
   transportRoute    TransportRoute?   @relation(fields: [transportRouteId], references: [id])
 
@@ -596,7 +647,9 @@ model Hostel {
   wardenName String?
   capacity Int
   filled   Int        @default(0)
-  cost     Float
+
+  // cost removed from Hostel, moved to HostelRoom
+
 
   
   blockName  String?
@@ -639,6 +692,7 @@ model HostelRoom {
   number    String
   capacity  Int
   type      String 
+  cost      Float    @default(0) // Room-wise fee (e.g. AC vs Non-AC)
   beds      HostelBed[]
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
@@ -1335,6 +1389,41 @@ model Configuration {
   updatedAt DateTime @updatedAt
   createdBy String?
   updatedBy String?
+}
+
+model ScholarshipRule {
+  id                 String   @id @default(uuid())
+  name               String
+  minPercentile      Float
+  discountPercentage Float
+  totalSlots         Int
+  filledSlots        Int      @default(0)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  
+  eligibleStudents Student[]
+  allocations        ScholarshipAllocation[]
+}
+
+model ScholarshipAllocation {
+  id            String            @id @default(uuid())
+  studentId     String            @unique 
+  student       Student           @relation(fields: [studentId], references: [id])
+
+  ruleId        String
+  rule          ScholarshipRule   @relation(fields: [ruleId], references: [id])
+  
+  status        ScholarshipStatus @default(RESERVED)
+  reservedAt    DateTime          @default(now())
+  lockedAt      DateTime?
+  expiresAt     DateTime?
+  
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([status])
+  @@index([expiresAt])
 }
 
 

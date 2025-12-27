@@ -140,7 +140,7 @@ export const studentIdParamSchema = z.object({
     }),
 });
 
-const AllowedRoles = ["ADMIN", "SUPER_ADMIN", "STAFF", "INVIGILATOR"] as const;
+const AllowedRoles = ["ADMIN", "SUPER_ADMIN", "STAFF", "INVIGILATOR", "VERIFICATION_OFFICER"] as const;
 
 export const addAdminSchema = z.object({
   body: z.object({
@@ -194,10 +194,18 @@ export const createSpecializationSchema = z.object({
 // ERP Schemas
 
 // Academics
+export const createSchoolSchema = z.object({
+    body: z.object({
+        name: z.string().min(1, "Name is required"),
+        code: z.string().min(1, "Code is required"),
+    }),
+});
+
 export const createDepartmentSchema = z.object({
     body: z.object({
         name: z.string().min(1),
         code: z.string().min(1),
+        schoolId: z.string().uuid().optional(),
     }),
 });
 
@@ -206,6 +214,7 @@ export const createCourseSchema = z.object({
         name: z.string().min(1, "Name is required"),
         code: z.string().min(1, "Code is required"),
         departmentId: z.string().uuid("Invalid Department ID"),
+        degree: z.string().optional(),
     }),
 });
 
@@ -240,6 +249,7 @@ export const createHostelRoomSchema = z.object({
         number: z.string().min(1),
         capacity: z.number().int().refine(val => [2, 4, 8].includes(val), { message: "Capacity must be 2, 4, or 8" }),
         type: z.enum(["AC", "Non-AC", "ac", "non-ac"]),
+        cost: z.number().positive(),
     }),
 });
 
@@ -303,4 +313,23 @@ export const updateStaffUserSchema = z.object({
             message: 'At least one field (name, email, or role) must be provided',
         }
     ),
+});
+
+export const setEligibleScholarshipSchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid(),
+        ruleId: z.string().uuid(),
+    }),
+});
+
+export const submitVerificationSchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid(),
+        class12Aggregate: z.number().min(0).max(100).optional(),
+        jeePercentile: z.number().min(0).max(100).optional(),
+        satScore: z.number().min(400).max(1600).optional(),
+        vvitPercentile: z.number().min(0).max(100).optional(),
+    }).refine(data => data.class12Aggregate !== undefined || data.jeePercentile !== undefined || data.satScore !== undefined || data.vvitPercentile !== undefined, {
+        message: "At least one score must be provided",
+    }),
 });

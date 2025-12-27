@@ -6,12 +6,56 @@ import { AcademicService } from './academic.service';
 
 // --- ERP CONTROLLERS: Academics ---
 
-// Department
-export const createDepartment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+// School
+export const createSchool = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, code } = req.body;
     const adminId = req.user?.userId;
 
-    const department = await AcademicService.createDepartment(name, code, adminId);
+    const school = await AcademicService.createSchool(name, code, adminId);
+    
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: "School created successfully",
+        data: school
+    });
+});
+
+export const getSchools = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const schools = await AcademicService.getSchools();
+    sendResponse({ res, statusCode: 200, success: true, data: schools });
+});
+
+export const getSchoolById = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { id } = req.params;
+    const school = await AcademicService.getSchoolById(id);
+    sendResponse({ res, statusCode: 200, success: true, data: school });
+});
+
+export const updateSchool = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { id } = req.params;
+    const { name, code } = req.body;
+    
+    const updatedSchool = await AcademicService.updateSchool(id, name, code, req.user?.userId);
+    
+    sendResponse({ res, statusCode: 200, success: true, message: "School updated successfully", data: updatedSchool });
+});
+
+export const deleteSchool = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { id } = req.params;
+    
+    await AcademicService.deleteSchool(id);
+    
+    sendResponse({ res, statusCode: 200, success: true, message: "School deleted successfully" });
+});
+
+// Department
+export const createDepartment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { name, code, schoolId } = req.body;
+    const adminId = req.user?.userId;
+
+    const department = await AcademicService.createDepartment(name, code, schoolId, adminId);
     
     sendResponse({
         res,
@@ -35,9 +79,9 @@ export const getDepartmentById = catchAsync(async (req: Request, res: Response, 
 
 export const updateDepartment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { name, code } = req.body;
+    const { name, code, schoolId } = req.body;
     
-    const updatedDepartment = await AcademicService.updateDepartment(id, name, code, req.user?.userId);
+    const updatedDepartment = await AcademicService.updateDepartment(id, name, code, schoolId, req.user?.userId);
     
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.DEPARTMENT_UPDATED, data: updatedDepartment });
 });
@@ -52,10 +96,10 @@ export const deleteDepartment = catchAsync(async (req: Request, res: Response, n
 
 // Course
 export const createCourse = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { name, code, departmentId } = req.body;
+    const { name, code, departmentId, degree } = req.body;
     const adminId = req.user?.userId;
 
-    const course = await AcademicService.createCourse(name, code, departmentId, adminId);
+    const course = await AcademicService.createCourse(name, code, departmentId, degree, adminId);
     
     sendResponse({
         res,
@@ -67,11 +111,16 @@ export const createCourse = catchAsync(async (req: Request, res: Response, next:
 });
 
 export const getCourses = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { departmentId } = req.query;
+    const { departmentId, degree } = req.query;
     
-    const courses = await AcademicService.getCourses(departmentId as string);
+    const courses = await AcademicService.getCourses(departmentId as string, degree as string);
     
     sendResponse({ res, statusCode: 200, success: true, data: courses });
+});
+
+export const getDegrees = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const degrees = await AcademicService.getDegrees();
+    sendResponse({ res, statusCode: 200, success: true, data: degrees });
 });
 
 export const getCourseById = catchAsync(async (req: Request, res: Response, next: NextFunction) => {

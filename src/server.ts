@@ -41,6 +41,14 @@ const startServer = async () => {
             }
         }
 
+        if (process.env.USE_LOCAL_DB !== 'true' && !process.env.DATABASE_URL) {
+            // Already handled above
+        }
+        
+        // Start Schedulers
+        const { startScholarshipExpiryJob } = require('./jobs/scheduler');
+        startScholarshipExpiryJob();
+
         app.listen(PORT, () => {
             logger.info(`🚀 Server is running on port ${PORT}`);
             logger.info(`📚 Swagger docs available at http://localhost:${PORT}/api-docs`);

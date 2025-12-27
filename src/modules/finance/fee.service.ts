@@ -213,5 +213,87 @@ export const FeeService = {
         }
         
         return payment;
+    },
+
+    // Automated Fee Generation
+    generateFeeDemands: async (studentId: string, courseId: string, academicYearId: string, userId: string) => {
+        // 1. Get Fee Structures
+        const feeStructures = await prisma.feeStructure.findMany({
+            where: {
+                courseId,
+                academicYearId,
+                isDeleted: false
+            },
+            include: { feeHead: true }
+        });
+
+        if (feeStructures.length === 0) return;
+
+        // 2. Create Demands & Ledger Entries
+        // Using transaction to ensure ledger matches demands
+        await prisma.$transaction(async (tx) => {
+            for (const fee of feeStructures) {
+                // specific key to avoid duplicates
+                const uniqueKey = `${studentId}-${fee.id}`; 
+                
+                // Ideally strictly check duplicates, but for now assuming one-time generation per year
+                // Or verify if demand exists for this fee structure?
+                const existing = await tx.studentFeeDemand.findFirst({
+                    where: { studentId, feeStructureId: fee.id }
+                });
+
+                if (!existing) {
+                    const demand = await tx.studentFeeDemand.create({
+                        data: {
+                            studentId,
+                            feeStructureId: fee.id,
+                            amount: fee.amount,
+                            status: 'PENDING',
+                            dueDate: new Date(), // Immediate due
+                            createdBy: userId
+                        }
+                    });
+
+                    // Ledger Debit
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId,
+                            type: 'DEBIT',
+                            amount: fee.amount,
+                            description: `Fee: ${fee.feeHead.name}`,
+                            referenceId: demand.id,
+                            referenceType: 'FEE_DEMAND',
+                            createdBy: userId
+                        }
+                    });
+                }
+            }
+        });
+    },
+
+    // Get Full Ledger/Statement
+    getStudentFeeDetails: async (studentId: string) => {
+        const demands = await prisma.studentFeeDemand.findMany({
+            where: { studentId },
+            include: { feeStructure: { include: { feeHead: true } } }
+        });
+
+        const payments = await prisma.payment.findMany({
+            where: { studentId, status: 'SUCCESS' }
+        });
+
+        const totalDemand = demands.reduce((sum, d) => sum + d.amount, 0);
+        const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+        const pendingAmount = totalDemand - totalPaid;
+
+        return {
+            summary: {
+                totalDemand,
+                totalPaid,
+                pendingAmount
+            },
+            demands,
+            payments
+        };
     }
 };

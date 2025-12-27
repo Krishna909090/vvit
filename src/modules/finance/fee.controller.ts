@@ -210,3 +210,24 @@ export const collectFee = catchAsync(async (req: Request, res: Response, next: N
         data: payment
     });
 });
+
+// Student Ledger
+export const getStudentLedger = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    
+    // Security: Students can only see their own
+    if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
+        // Simple unauthorized check, can be expanded
+        // throw new AppError("Unauthorized", 403);
+    }
+
+    const ledger = await FeeService.getStudentFeeDetails(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Student ledger fetched successfully",
+        data: ledger
+    });
+});

@@ -6,12 +6,14 @@ import {
     getAllApplications, uploadBulkApplications, requestCancellation, approveCancellation,
     verifyAndAllotSeat, verifyStudentDocument, requestCourseChange, approveCourseChange,
     updateAdmissionDetails, getStudentCertificates, downloadStudentDocuments, updateRollNumber,
-    updateStudentStatus
+    updateStudentStatus,
+    setScholarshipEligibility
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
     verifyAndAllotSeatSchema, changeCourseSchema, approveCourseChangeSchema,
-    updateAdmissionDetailsSchema, studentIdParamSchema
+    updateAdmissionDetailsSchema, studentIdParamSchema,
+    setEligibleScholarshipSchema
 } from '../../validators/adminValidators';
 import upload from '../../config/multer';
 import {
@@ -63,5 +65,8 @@ router.post('/update-roll-number', authenticate, authorize([Role.ADMIN, Role.SUP
 
 // Manual Status Update
 router.post('/update-status', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateStudentStatus);
+
+// Scholarship Eligibility
+router.post('/scholarship-eligibility', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(setEligibleScholarshipSchema), setScholarshipEligibility);
 
 export default router;

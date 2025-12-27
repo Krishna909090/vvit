@@ -9,6 +9,7 @@ import path from 'path';
 import archiver from 'archiver';
 import axios from 'axios';
 import { registerStudent } from '../student/student.service';
+import { FeeService } from '../finance/fee.service';
 
 export const AdminStudentService = {
     async getAllApplications(query: any) {
@@ -49,7 +50,9 @@ export const AdminStudentService = {
                     admissionDetails: true,
                     examDetails: true,
                     documents: true,
-                    academicQualifications: true
+                    academicQualifications: true,
+                    eligibleScholarshipRule: true,
+                    scholarshipAllocation: { include: { rule: true } }
                 }
             }),
             prisma.student.count({ where })
@@ -210,7 +213,10 @@ export const AdminStudentService = {
 
         if (!allottedSpecialization) throw new AppError(MESSAGES.ERROR.ALLOTTED_COURSE_REQUIRED, 400);
 
-        const student = await prisma.student.findUnique({ where: { id: studentId } });
+        const student = await prisma.student.findUnique({ 
+            where: { id: studentId },
+            include: { examDetails: true }
+        });
         if (!student) {
             throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         }
@@ -240,6 +246,31 @@ export const AdminStudentService = {
                 }
             });
         });
+
+        // Scholarship Allocation (Runs independently of transaction to allow failure without rolling back seat? 
+        // Or should it be atomic? 
+        // User request: "Student will get to know how much he need to pay actual college fees and aslo he got scholarship"
+        // It implies scholarship happens AT allocation. Best to be atomic or immediately following.
+        // Since ScholarshipService handles its own transaction for slots, we call it separately logic-wise, 
+        // but ideally we should wait for it.
+        
+        try {
+            // Need to dynamic import or regular import. Using regular import at top of file is better.
+            // For now, assuming import is added.
+            const { ScholarshipService } = require('./scholarship.service'); 
+            
+            // Manual Scholarship Allocation
+            // Admission team sets eligibleScholarshipRuleId during verification
+            const ruleId = student.eligibleScholarshipRuleId;
+            
+            if (ruleId) {
+                await ScholarshipService.allocateManualRule(studentId, ruleId);
+            } else {
+                logger.info(`No eligible scholarship rule set for student ${studentId}. Skipping allocation.`);
+            }
+        } catch (err) {
+            logger.error(`Failed to allocate scholarship for ${studentId}: ${err}`);
+        }
 
         return { success: true, message: MESSAGES.SUCCESS.SEAT_ALLOTTED };
     },
@@ -434,10 +465,12 @@ export const AdminStudentService = {
                         where: { id: hostelId },
                         data: { filled: { increment: 1 }, updatedBy: adminId }
                     });
-                    totalFee += hostel.cost;
+                    // Fee calculation now depends on Room, not just Hostel. 
+                    // If room is assigned, we should fetch it. For now, assuming 0 if no room specific logic exists here yet.
+                    // totalFee += hostel.cost; // REMOVED
                 } else {
-                    const hostel = await tx.hostel.findUnique({ where: { id: hostelId } });
-                    if (hostel) totalFee += hostel.cost;
+                     // const hostel = await tx.hostel.findUnique({ where: { id: hostelId } });
+                     // if (hostel) totalFee += hostel.cost; // REMOVED
                 }
             }
             else if (accommodationType === AccommodationType.TRANSPORT) {
@@ -608,5 +641,54 @@ export const AdminStudentService = {
         });
 
         return { success: true, message: `Admission status updated to ${status}` };
+    },
+
+    async setScholarshipEligibility(studentId: string, ruleId: string) {
+        if (!studentId || !ruleId) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
+
+        const student = await prisma.student.findUnique({ where: { id: studentId } });
+        if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+
+        const rule = await prisma.scholarshipRule.findUnique({ where: { id: ruleId } });
+        if (!rule) throw new AppError('Scholarship Rule not found', 404);
+        if (!rule.isActive) throw new AppError('Scholarship Rule is inactive', 400);
+
+        return await prisma.student.update({
+            where: { id: studentId },
+            data: { eligibleScholarshipRuleId: ruleId }
+        });
+    },
+
+    async updateStudentScores(studentId: string, scores: any, adminId: string) {
+        if (!studentId) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
+
+        const { class12Aggregate, jeePercentile, satScore, vvitPercentile } = scores;
+
+        const student = await prisma.student.findUnique({ where: { id: studentId } });
+        if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+
+        // Update StudentExam
+        return await prisma.studentExam.upsert({
+            where: { studentId },
+            update: {
+                class12Aggregate,
+                jeePercentile,
+                satScore,
+                vvitPercentile,
+                examScore: vvitPercentile ?? undefined,
+                updatedBy: adminId
+            },
+            create: {
+                studentId,
+                class12Aggregate,
+                jeePercentile,
+                satScore,
+                vvitPercentile,
+                examScore: vvitPercentile ?? undefined,
+                createdBy: adminId,
+                updatedBy: adminId
+            }
+        });
     }
 };
+

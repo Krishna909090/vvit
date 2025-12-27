@@ -7,6 +7,8 @@ import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeSt
 import { getApplicationFeeAmount } from './fee.service';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, getPresignedUrl } from '../../utils/s3Utils';
+import { ScholarshipService } from '../admin/scholarship.service';
+
 
 const MERCHANTABILITY = process.env.PHONEPE_MERCHANT_ID;
 const SALT_KEY = process.env.PHONEPE_SALT_KEY;
@@ -196,6 +198,18 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
                 }
             });
             logger.info(`Student ${payment.studentId} admission status updated to ADMISSION_CONFIRMED`);
+        } else if (payment.component === PaymentComponent.SCHOLARSHIP_TOKEN) {
+            await ScholarshipService.lockAllocation(payment.studentId);
+            await prisma.studentAdmission.update({
+                where: { studentId: payment.studentId },
+                data: {
+                    paidFee: { increment: payment.amount },
+                    feeStatus: FeeStatus.PARTIAL,
+                    // Optionally set status to ADMISSION_CONFIRMED ?
+                    status: AdmissionStatus.ADMISSION_CONFIRMED 
+                }
+            });
+            logger.info(`Scholarship locked for student ${payment.studentId}`);
         }
     } else {
          await prisma.payment.update({
@@ -247,9 +261,20 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
     
     // Validate & Calculate Hostel Fee
     if (hostelSelection?.hostelId) {
-        const hostel = await prisma.hostel.findUnique({ where: { id: hostelSelection.hostelId } });
+        const hostel = await prisma.hostel.findUnique({ 
+            where: { id: hostelSelection.hostelId },
+            include: { blocks: { include: { rooms: true } } }
+        });
         if (!hostel) throw new AppError('Selected hostel not found', 404);
-        hostelFee = hostel.cost;
+        
+        // Find assigned room cost if available
+        if (student.admissionDetails.roomNumber) {
+            // Flatten rooms to find the matching one (simplified lookup)
+            const room = hostel.blocks.flatMap(b => b.rooms).find(r => r.number === student.admissionDetails?.roomNumber);
+            if (room) {
+                hostelFee = room.cost;
+            }
+        }
     }
 
     // Validate & Calculate Transport Fee
@@ -373,4 +398,73 @@ export const getInvoiceUrl = async (paymentId: string) => {
     
     const presignedUrl = await getPresignedUrl(key);
     return presignedUrl;
+};
+
+export const initiateTokenPayment = async (studentId: string) => {
+    const TOKEN_AMOUNT = 10000; // Fixed Token Amount
+    const student = await prisma.student.findUnique({ where: { id: studentId } });
+    if (!student) throw new AppError('Student not found', 404);
+
+    const transactionId = `TOK_${Date.now()}_${studentId.substring(0, 8)}`;
+
+    const createdPayment = await prisma.payment.create({
+        data: {
+            studentId,
+            amount: TOKEN_AMOUNT,
+            status: PaymentStatus.PENDING,
+            component: PaymentComponent.SCHOLARSHIP_TOKEN,
+            providerTxId: transactionId,
+            method: PaymentMethod.UPI
+        }
+    });
+
+    const payload = {
+        merchantId: MERCHANTABILITY,
+        merchantTransactionId: transactionId,
+        merchantUserId: student.userId || studentId,
+        amount: TOKEN_AMOUNT * 100,
+        redirectUrl: `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`,
+        redirectMode: "REDIRECT",
+        callbackUrl: CALLBACK_URL,
+        mobileNumber: student.phone,
+        paymentInstrument: { type: "PAY_PAGE" }
+    };
+
+    const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64');
+    const stringToSign = base64Payload + "/pg/v1/pay" + SALT_KEY;
+    const sha256 = crypto.createHash('sha256').update(stringToSign).digest('hex');
+    const checksum = sha256 + "###" + SALT_INDEX;
+
+    // BYPASS
+    if (process.env.NODE_ENV !== 'production' || process.env.BYPASS_PAYMENT === 'true') {
+        logger.info(`[MOCK TOKEN PAY] Bypassing Payment Gateway for transaction ${transactionId}`);
+        await prisma.payment.update({
+             where: { id: createdPayment.id }, 
+             data: { status: PaymentStatus.SUCCESS }
+        });
+
+        // Lock Scholarship
+        await ScholarshipService.lockAllocation(studentId);
+
+        // Update Admission
+        await prisma.studentAdmission.update({
+             where: { studentId },
+             data: { 
+                 paidFee: { increment: TOKEN_AMOUNT },
+                 feeStatus: FeeStatus.PARTIAL,
+                 status: AdmissionStatus.ADMISSION_CONFIRMED
+             }
+        });
+
+        return `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}`;
+    }
+
+    try {
+        const response = await axios.post(`${HOST_URL}/pg/v1/pay`, { request: base64Payload }, {
+            headers: { 'Content-Type': 'application/json', 'X-VERIFY': checksum }
+        });
+        return response.data.data.instrumentResponse.redirectInfo.url;
+    } catch (error: any) {
+        throw new AppError('Failed to initiate payment gateway', 502);
+    }
 };

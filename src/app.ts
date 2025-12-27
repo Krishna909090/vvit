@@ -15,6 +15,8 @@ import documentRequirementRoutes from './modules/document/documentRequirement.ro
 import healthRoutes from './modules/health/health.routes';
 import paymentRoutes from './modules/finance/payment.routes';
 import dataImportRoutes from './modules/admission/dataImport.routes';
+import verificationRoutes from './modules/admin/verification.routes';
+import academicRoutes from './modules/academic/academic.routes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
 import {
@@ -99,6 +101,8 @@ app.use('/api/upload', uploadRateLimiter, uploadRoutes); // 30 uploads/hour (stu
 app.use('/document-requirements', readRateLimiter, writeRateLimiter, documentRequirementRoutes); // Read: 200/15min, Write: 50/15min
 app.use('/payment', writeRateLimiter, paymentRoutes);
 app.use('/api/admission', readRateLimiter, writeRateLimiter, dataImportRoutes);
+app.use('/verification', readRateLimiter, writeRateLimiter, verificationRoutes);
+app.use('/admin/academic', readRateLimiter, writeRateLimiter, academicRoutes);
 
 
 // Apply general rate limiter to any other routes

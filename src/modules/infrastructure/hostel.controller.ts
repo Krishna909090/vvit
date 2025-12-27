@@ -7,9 +7,9 @@ import { sendResponse } from '../../utils/response';
 import { HostelService } from './hostel.service';
 
 export const createHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { name, type, capacity, cost } = req.body;
+    const { name, type, capacity } = req.body;
     
-    if (!name || !type || !capacity || !cost) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
+    if (!name || !type || !capacity) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
     const hostel = await HostelService.createHostel(req.body, req.user?.userId);
     

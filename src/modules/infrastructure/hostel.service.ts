@@ -6,7 +6,7 @@ import { HostelType } from '@prisma/client';
 export const HostelService = {
     // Hostel
     async createHostel(data: any, createdBy?: string) {
-        const { name, type, capacity, cost, wardenName } = data;
+        const { name, type, capacity, wardenName } = data;
 
         const existingHostel = await prisma.hostel.findFirst({
             where: {
@@ -24,7 +24,6 @@ export const HostelService = {
                 type: type, // Now string
                 wardenName,
                 capacity: Number(capacity),
-                cost: Number(cost),
                 createdBy
             }
         });
@@ -64,7 +63,6 @@ export const HostelService = {
             data: { 
                 name: data.name,
                 capacity: data.capacity ? Number(data.capacity) : undefined,
-                cost: data.cost ? Number(data.cost) : undefined,
                 wardenName: data.wardenName,
                 filled: data.filled ? Number(data.filled) : undefined
             }
@@ -161,7 +159,7 @@ export const HostelService = {
 
     // Hostel Room
     async createHostelRoom(data: any, createdBy?: string) {
-        const { blockId, number, capacity, type } = data;
+        const { blockId, number, capacity, type, cost } = data;
 
         const block = await prisma.hostelBlock.findUnique({ where: { id: blockId } });
         if (!block) throw new AppError("Hostel Block not found", 404);
@@ -174,6 +172,7 @@ export const HostelService = {
                     number,
                     capacity: Number(capacity),
                     type,
+                    cost: Number(cost),
                     createdBy
                 }
             });
@@ -222,7 +221,11 @@ export const HostelService = {
 
         return await prisma.hostelRoom.update({
             where: { id },
-            data: { ...data, updatedBy }
+            data: { 
+                ...data, 
+                cost: data.cost ? Number(data.cost) : undefined,
+                updatedBy 
+            }
         });
     },
 

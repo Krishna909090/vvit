@@ -8,7 +8,7 @@ import {
     getFeeStatistics,
     createDiscountRequest, reviewDiscountRequest, approveDiscount,
     getApplicationFee, updateApplicationFee,
-    collectFee
+    collectFee, getStudentLedger
 } from './fee.controller';
 import {
     createFeeHeadSchema, createFeeStructureSchema,
@@ -47,5 +47,7 @@ router.post('/application-fee', authenticate, authorize([Role.ADMIN, Role.SUPER_
 
 router.post('/collect-fee', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), collectFee);
 
+// Ledger
+router.get('/ledger/:studentId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.VERIFICATION_OFFICER]), getStudentLedger);
 
 export default router;
