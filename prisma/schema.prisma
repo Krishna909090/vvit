@@ -704,6 +704,25 @@ model HostelRoom {
   @@index([isDeleted])
 }
 
+enum HostelRoomType {
+  AC
+  NON_AC
+}
+
+model HostelPriceCategory {
+  id        String         @id @default(uuid())
+  sharing   Int            // 2, 4, 6, 8, 10
+  roomType  HostelRoomType
+  price     Float
+  
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  createdBy String?
+  updatedBy String?
+
+  @@unique([sharing, roomType])
+}
+
 model HostelBed {
   id         String            @id @default(uuid())
   roomId     String

@@ -62,8 +62,8 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
 
             // College Name & Subtitle (Centered)
             const headerTextY = currentY + 15;
-            doc.font('Helvetica-Bold').fontSize(18).text('VVITU College of Engineering', 0, headerTextY, { align: 'center' });
-            doc.font('Helvetica').fontSize(10).text('(Autonomous Institution)', { align: 'center' });
+            doc.font('Helvetica-Bold').fontSize(18).text('VVIT University', 0, headerTextY, { align: 'center' });
+            
 
             // Adjust Y to clear the header area
             // We want enough space for the logo (height 80) + padding
@@ -223,7 +223,7 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
             doc.moveTo(startX, currentY).lineTo(startX + contentWidth, currentY).stroke(); // Line
             currentY += 10;
             doc.fontSize(9).font('Helvetica-Oblique').text(
-                'VVITU College of Engineering is not responsible for any inadvertent error in this hall ticket. This is a computer generated document.', 
+                'VVIT University is not responsible for any inadvertent error in this hall ticket. This is a computer generated document.', 
                 startX + 10, 
                 currentY, 
                 { width: contentWidth - 20, align: 'center' }

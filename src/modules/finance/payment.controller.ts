@@ -9,7 +9,9 @@ import {
     payTestFee as payTestFeeService,
     payCollegeFee as payCollegeFeeService,
     requestDiscount as requestDiscountService,
-    getInvoiceUrl // Added import
+    getInvoiceUrl,
+    checkPaymentStatus as checkPaymentStatusService,
+    getStudentFinancialHistory
 } from './payment.service';
 
 // Phase 1: Pay Test Fee
@@ -18,6 +20,9 @@ export const payTestFee = catchAsync(async (req: Request, res: Response, next: N
     logger.debug && logger.debug(`[payTestFee] params=${JSON.stringify(req.params)}`);
 
     let { studentId } = req.params;
+    if (!studentId && req.body.studentId) {
+        studentId = req.body.studentId;
+    }
     
     // Self-service fallback
     if (!studentId && req.user?.role === 'STUDENT') {
@@ -47,6 +52,9 @@ export const payCollegeFee = catchAsync(async (req: Request, res: Response, next
     logger.debug && logger.debug(`[payCollegeFee] params=${JSON.stringify(req.params)}`);
 
     let { studentId } = req.params;
+    if (!studentId && req.body.studentId) {
+        studentId = req.body.studentId;
+    }
     
     // Self-service fallback
     if (!studentId && req.user?.role === 'STUDENT') {
@@ -105,5 +113,44 @@ export const getInvoice = catchAsync(async (req: Request, res: Response, next: N
         success: true,
         message: "Invoice URL retrieved successfully",
         data: { url }
+    });
+});
+
+export const checkPaymentStatus = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[checkPaymentStatus] params=${JSON.stringify(req.params)}`);
+    const { txnId } = req.params;
+    if (!txnId) throw new AppError("Transaction ID is required", 400);
+
+    const status = await checkPaymentStatusService(txnId);
+    
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Payment status check completed",
+        data: status
+    });
+});
+
+export const getPaymentHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    let { studentId } = req.params;
+    
+    // Self-service fallback
+    if (!studentId && req.user?.role === 'STUDENT') {
+         const { getStudentByUserId } = await import('../student/student.service');
+         const s = await getStudentByUserId(req.user.userId);
+         if (s) studentId = s.id;
+    }
+
+    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+    const history = await getStudentFinancialHistory(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Financial history retrieved successfully",
+        data: history
     });
 });

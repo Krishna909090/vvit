@@ -1,163 +1,248 @@
-import PDFDocument from 'pdfkit';
-import path from 'path';
-import fs from 'fs';
-import { format } from 'date-fns';
+import PDFDocument from 'pdfkit'
+import path from 'path'
+import fs from 'fs'
+import { format } from 'date-fns'
 
-interface InvoiceData {
-    invoiceNumber: string;
-    date: Date;
-    studentName: string;
-    studentId: string; // Application ID or Roll No
-    paymentMethod: string;
-    transactionId: string;
-    amount: number;
-    description: string; // "Application Fee", "Tuition Fee"
-    address: {
-        line1: string;
-        line2?: string;
-        city: string;
-        state: string;
-        pincode: string;
-    };
+export interface InvoiceData {
+  invoiceNumber: string
+  date: Date
+  studentName: string
+  studentId: string
+  paymentMethod: string
+  transactionId: string
+  amount: number
+  description: string
+
+  signerName: string          // ⭐ Dynamic signer name
+  signerTitle: string         // e.g. "Chancellor" / "Principal"
+  signedDate?: Date           // ⭐ Date under signature (optional)
+
+  address: {
+    line1: string
+    city: string
+    state: string
+    pincode: string
+  }
 }
 
 export const generateInvoicePDF = async (data: InvoiceData): Promise<Buffer> => {
-    return new Promise((resolve, reject) => {
-        try {
-            const doc = new PDFDocument({ size: 'A4', margin: 50 });
-            const buffers: Buffer[] = [];
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 })
+      const buffers: Buffer[] = []
 
-            doc.on('data', buffers.push.bind(buffers));
-            doc.on('end', () => resolve(Buffer.concat(buffers)));
-            doc.on('error', (err) => reject(err));
+      doc.on('data', buffers.push.bind(buffers))
+      doc.on('end', () => resolve(Buffer.concat(buffers)))
+      doc.on('error', reject)
 
-            generateHeader(doc);
-            generateCustomerInformation(doc, data);
-            generateInvoiceTable(doc, data);
-            generateFooter(doc);
+      drawWatermark(doc)                 // ⭐ watermark behind everything
+      drawCollegeHeader(doc)
+      drawInvoiceTitle(doc)
+      drawStudentAndInvoiceInfo(doc, data)
+      drawTable(doc, data)
+      drawSignatureAndStamp(doc, data)   // ⭐ dynamic signer + date
+      drawFooter(doc)
 
-            doc.end();
-        } catch (error) {
-            reject(error);
-        }
-    });
-};
-
-function generateHeader(doc: PDFKit.PDFDocument) {
-    const logoPath = path.join(process.cwd(), 'src/assets/logo.png');
-    if (fs.existsSync(logoPath)) {
-        doc.image(logoPath, 50, 45, { width: 50 });
+      doc.end()
+    } catch (err) {
+      reject(err)
     }
-
-    doc.fillColor('#444444')
-        .fontSize(20)
-        .text('VVITU College of Engineering', 110, 57)
-        .fontSize(10)
-        .text('(Autonomous)', 110, 80)
-        .text('Nambur, Guntur, Andhra Pradesh', 200, 65, { align: 'right' })
-        .text('support@vvitedu.in', 200, 80, { align: 'right' })
-        .moveDown();
-
-    doc.moveTo(50, 105).lineTo(550, 105).stroke();
+  })
 }
 
-function generateCustomerInformation(doc: PDFKit.PDFDocument, data: InvoiceData) {
-    doc.fillColor('#444444').fontSize(20).text('INVOICE', 50, 130);
+/* ================= WATERMARK ================= */
 
-    generateHr(doc, 155);
+function drawWatermark(doc: PDFKit.PDFDocument) {
+  const stampPath = path.join(process.cwd(), 'src/assets/college-stamp.png')
 
-    const customerInformationTop = 170;
+  if (!fs.existsSync(stampPath)) return
 
-    doc.fontSize(10)
-        .text('Invoice Number:', 50, customerInformationTop)
-        .font('Helvetica-Bold')
-        .text(data.invoiceNumber, 150, customerInformationTop)
-        .font('Helvetica')
-        .text('Invoice Date:', 50, customerInformationTop + 15)
-        .text(format(data.date, 'dd/MM/yyyy'), 150, customerInformationTop + 15)
-        .text('Transaction ID:', 50, customerInformationTop + 30)
-        .text(data.transactionId, 150, customerInformationTop + 30)
-        .text('Payment Method:', 50, customerInformationTop + 45)
-        .text(data.paymentMethod, 150, customerInformationTop + 45)
+  doc.save()
+  doc.opacity(0.08) // ⭐ watermark transparency
 
-        .font('Helvetica-Bold')
-        .text(data.studentName, 300, customerInformationTop)
-        .font('Helvetica')
-        .text(`ID: ${data.studentId}`, 300, customerInformationTop + 15)
-        .text(data.address.line1, 300, customerInformationTop + 30)
-        .text(`${data.address.city}, ${data.address.state} - ${data.address.pincode}`, 300, customerInformationTop + 45)
-        .moveDown();
+  doc.image(stampPath, 150, 280, {
+    width: 300,
+  })
 
-    generateHr(doc, 225);
+  doc.restore()
 }
 
-function generateInvoiceTable(doc: PDFKit.PDFDocument, data: InvoiceData) {
-    let i;
-    const invoiceTableTop = 270;
+/* ================= COLLEGE HEADER ================= */
 
-    doc.font('Helvetica-Bold');
-    generateTableRow(
-        doc,
-        invoiceTableTop,
-        'Item',
-        'Description',
-        'Amount'
-    );
-    generateHr(doc, invoiceTableTop + 20);
-    doc.font('Helvetica');
+function drawCollegeHeader(doc: PDFKit.PDFDocument) {
+  const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
 
-    const amountStr = `INR ${data.amount.toFixed(2)}`;
-    
-    generateTableRow(
-        doc,
-        invoiceTableTop + 30,
-        '1',
-        data.description,
-        amountStr
-    );
+  if (fs.existsSync(logoPath)) {
+    doc.image(logoPath, 50, 40, { width: 60 })
+  }
 
-    generateHr(doc, invoiceTableTop + 50);
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(20)
+    .fillColor('#000')
+    .text('VVITU University', 130, 45)
 
-    const subtotalPosition = invoiceTableTop + 70;
-    generateTableRow(
-        doc,
-        subtotalPosition,
-        '',
-        'Total',
-        amountStr
-    );
-    
-    doc.font('Helvetica-Bold');
-    doc.text('PAID', 50, subtotalPosition + 30, { align: 'center', width: 500 });
+  doc
+    .font('Helvetica')
+    .fontSize(11)
+    .text('(Autonomous)', 130, 70)
+
+  doc
+    .fontSize(10)
+    .fillColor('#333')
+    .text(
+      'Nambur, Guntur, Andhra Pradesh - 522508',
+      350,
+      50,
+      { align: 'right' }
+    )
+    .text('support@vvitedu.in', 350, 65, { align: 'right' })
+
+  drawLine(doc, 125)
 }
 
-function generateFooter(doc: PDFKit.PDFDocument) {
-    doc.fontSize(10)
-        .text(
-            'This is a computer generated invoice and does not require a physical signature.',
-            50,
-            720,
-            { align: 'center', width: 500 }
-        );
+/* ================= INVOICE TITLE ================= */
+
+function drawInvoiceTitle(doc: PDFKit.PDFDocument) {
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(22)
+    .text('INVOICE', 50, 145)
+
+  drawLine(doc, 175)
 }
 
-function generateTableRow(
-    doc: PDFKit.PDFDocument,
-    y: number,
-    item: string,
-    description: string,
-    amount: string
+/* ================= BILLED TO + INVOICE DETAILS ================= */
+
+function drawStudentAndInvoiceInfo(doc: PDFKit.PDFDocument, data: InvoiceData) {
+  const top = 195
+  const leftX = 50
+  const rightX = 330
+
+  doc.font('Helvetica-Bold').fontSize(11).text('Billed To:', leftX, top)
+  doc
+    .font('Helvetica')
+    .fontSize(10)
+    .text(data.studentName, leftX, top + 18)
+    .text(`Student ID: ${data.studentId}`, leftX, top + 33)
+    .text(data.address.line1, leftX, top + 48)
+    .text(
+      `${data.address.city}, ${data.address.state} - ${data.address.pincode}`,
+      leftX,
+      top + 63,
+      { width: 250 }
+    )
+
+  doc.font('Helvetica-Bold').fontSize(11).text('Invoice Details:', rightX, top)
+  doc
+    .font('Helvetica')
+    .fontSize(10)
+    .text(`Invoice No: ${data.invoiceNumber}`, rightX, top + 18)
+    .text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, top + 33)
+    .text('Transaction ID:', rightX, top + 48)
+    .text(data.transactionId, rightX, top + 63, { width: 200 })
+    .text(`Payment Method: ${data.paymentMethod}`, rightX, top + 78)
+
+  drawLine(doc, top + 115)
+}
+
+/* ================= TABLE ================= */
+
+function drawTable(doc: PDFKit.PDFDocument, data: InvoiceData) {
+  const tableTop = 345
+
+  doc.font('Helvetica-Bold').fontSize(11)
+  drawTableRow(doc, tableTop, 'S.No', 'Description', 'Amount (INR)')
+  drawLine(doc, tableTop + 20)
+
+  doc.font('Helvetica').fontSize(10)
+  drawTableRow(
+    doc,
+    tableTop + 35,
+    '1',
+    data.description,
+    data.amount.toFixed(2)
+  )
+
+  drawLine(doc, tableTop + 60)
+
+  doc.font('Helvetica-Bold')
+  doc.text('Total', 350, tableTop + 80)
+  doc.text(`₹ ${data.amount.toFixed(2)}`, 0, tableTop + 80, {
+    align: 'right',
+  })
+
+  doc
+    .fontSize(16)
+    .fillColor('#2ecc71')
+    .text('PAID', 0, tableTop + 120, { align: 'center' })
+}
+
+/* ================= SIGNATURE (DYNAMIC) ================= */
+
+function drawSignatureAndStamp(
+  doc: PDFKit.PDFDocument,
+  data: InvoiceData
 ) {
-    doc.fontSize(10)
-        .text(item, 50, y)
-        .text(description, 150, y)
-        .text(amount, 0, y, { align: 'right' });
+  const signPath = path.join(process.cwd(), 'src/assets/chancellor-sign.png')
+  const y = 560
+
+  if (fs.existsSync(signPath)) {
+    doc.image(signPath, 70, y, { width: 120 })
+  }
+
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(10)
+    .text(data.signerName, 70, y + 55)
+
+  doc
+    .font('Helvetica')
+    .fontSize(9)
+    .text(data.signerTitle, 70, y + 70)
+    .text(
+      `Date: ${format(data.signedDate ?? data.date, 'dd/MM/yyyy')}`,
+      70,
+      y + 85
+    )
 }
 
-function generateHr(doc: PDFKit.PDFDocument, y: number) {
-    doc.strokeColor('#aaaaaa')
-        .lineWidth(1)
-        .moveTo(50, y)
-        .lineTo(550, y)
-        .stroke();
+/* ================= FOOTER ================= */
+
+function drawFooter(doc: PDFKit.PDFDocument) {
+  drawLine(doc, 720)
+
+  doc
+    .font('Helvetica')
+    .fontSize(9)
+    .fillColor('#555')
+    .text(
+      'This is a system generated invoice and does not require a physical signature.',
+      50,
+      735,
+      { align: 'center', width: 500 }
+    )
+}
+
+/* ================= HELPERS ================= */
+
+function drawTableRow(
+  doc: PDFKit.PDFDocument,
+  y: number,
+  col1: string,
+  col2: string,
+  col3: string
+) {
+  doc.text(col1, 50, y, { width: 50 })
+  doc.text(col2, 110, y, { width: 250 })
+  doc.text(col3, 0, y, { align: 'right' })
+}
+
+function drawLine(doc: PDFKit.PDFDocument, y: number) {
+  doc
+    .strokeColor('#ccc')
+    .lineWidth(1)
+    .moveTo(50, y)
+    .lineTo(550, y)
+    .stroke()
 }

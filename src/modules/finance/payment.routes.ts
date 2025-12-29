@@ -1,6 +1,6 @@
 import express from 'express';
 import { handlePaymentCallback } from './payment.service';
-import { getInvoice, payTestFee, payCollegeFee, requestDiscount } from './payment.controller';
+import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory } from './payment.controller';
 import { authenticate, authorize } from '../../middlewares/authMiddleware';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
@@ -11,9 +11,13 @@ router.get('/:paymentId/invoice', authenticate, authorize(['STUDENT', 'ADMIN', '
 
 // Callback only
 
-router.post('/initiate-entrance-fee', authenticate, authorize(['STUDENT']), payTestFee);
-router.post('/initiate-college-fee', authenticate, authorize(['STUDENT']), payCollegeFee);
+router.post('/initiate-entrance-fee', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN', 'AGENT']), payTestFee);
+router.post('/initiate-college-fee', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN', 'AGENT']), payCollegeFee);
 router.post('/request-discount', authenticate, authorize(['STUDENT']), requestDiscount);
+router.get('/check-status/:txnId', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), checkPaymentStatus);
+// History Routes
+router.get('/history', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), getPaymentHistory);
+router.get('/history/:studentId', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), getPaymentHistory);
 router.post('/callback', async (req, res, next) => {
     try {
         const { response } = req.body; // base64 payload

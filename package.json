@@ -44,6 +44,7 @@
     "papaparse": "^5.5.3",
     "pdfkit": "^0.17.2",
     "pg": "^8.16.3",
+    "pg-sdk-node": "https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-node/releases/v2/phonepe-pg-sdk-node-2.0.3.tgz",
     "pm2": "^6.0.14",
     "qrcode": "^1.5.4",
     "swagger-jsdoc": "^6.2.8",

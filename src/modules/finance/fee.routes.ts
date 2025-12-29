@@ -8,8 +8,9 @@ import {
     getFeeStatistics,
     createDiscountRequest, reviewDiscountRequest, approveDiscount,
     getApplicationFee, updateApplicationFee,
-    collectFee, getStudentLedger
+    collectFee, getStudentLedger, downloadAllotmentOrder
 } from './fee.controller';
+
 import {
     createFeeHeadSchema, createFeeStructureSchema,
     createDiscountRequestSchema, reviewDiscountRequestSchema, approveDiscountSchema
@@ -49,5 +50,8 @@ router.post('/collect-fee', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMI
 
 // Ledger
 router.get('/ledger/:studentId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.VERIFICATION_OFFICER]), getStudentLedger);
+
+// Allotment Order
+router.get('/allotment-order/:studentId', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), downloadAllotmentOrder);
 
 export default router;

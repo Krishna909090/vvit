@@ -8,13 +8,24 @@ import { getApplicationFeeAmount } from './fee.service';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, getPresignedUrl } from '../../utils/s3Utils';
 import { ScholarshipService } from '../admin/scholarship.service';
+import { generateAllotmentOrderPDF } from '../../utils/allotmentGenerator';
+import { StudentDocumentStatus } from '@prisma/client';
 
 
-const MERCHANTABILITY = process.env.PHONEPE_MERCHANT_ID;
-const SALT_KEY = process.env.PHONEPE_SALT_KEY;
-const SALT_INDEX = process.env.PHONEPE_SALT_INDEX || '1';
-const HOST_URL = process.env.PHONEPE_HOST_URL || 'https://api-preprod.phonepe.com/apis/pg-sandbox';
-const CALLBACK_URL = process.env.PHONEPE_CALLBACK_URL;
+import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
+
+const MERCHANTABILITY = (process.env.PHONEPE_MERCHANT_ID || 'VVITFEEONLINE_2512111619').trim();
+const SALT_KEY = (process.env.PHONEPE_SALT_KEY || 'MGQ4MzNmMmEtNmEzZC00M2JiLWE1NGUtZDdlNjA1MTI0ZTcx').trim();
+const SALT_INDEX = (process.env.PHONEPE_SALT_INDEX || '1').trim();
+const CLIENT_VERSION = 1;
+const ENV = process.env.NODE_ENV === 'production' ? Env.PRODUCTION : Env.SANDBOX;
+const CALLBACK_URL = (process.env.PHONEPE_CALLBACK_URL || '').trim();
+
+// Initialize SDK Client
+const client = StandardCheckoutClient.getInstance(MERCHANTABILITY, SALT_KEY, CLIENT_VERSION, ENV);
+
+// Debug PhonePe Config
+logger.info(`[PhonePe Config] MerchantId: ${MERCHANTABILITY}, SaltIndex: ${SALT_INDEX}, SaltKey(Last4): ${SALT_KEY.slice(-4)}`);
 
 export const initiateApplicationFeePayment = async (studentId: string) => {
     const amount = await getApplicationFeeAmount();
@@ -53,36 +64,15 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
         }
     });
 
-    const payload = {
-        merchantId: MERCHANTABILITY,
-        merchantTransactionId: transactionId,
-        merchantUserId: student.userId || studentId,
-        amount: amount * 100, // Amount in paise
-        redirectUrl: `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`,
-        redirectMode: "REDIRECT",
-        callbackUrl: CALLBACK_URL,
-        mobileNumber: student.phone,
-        paymentInstrument: {
-            type: "PAY_PAGE"
-        }
-    };
-
-    const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64');
-    const stringToSign = base64Payload + "/pg/v1/pay" + SALT_KEY;
-    const sha256 = crypto.createHash('sha256').update(stringToSign).digest('hex');
-    const checksum = sha256 + "###" + SALT_INDEX;
-
-    // BYPASS FOR DEV/TESTING or if Gateway Fails
-    if (process.env.NODE_ENV !== 'production' || process.env.BYPASS_PAYMENT === 'true') {
+    // BYPASS FOR DEV/TESTING (Only if explicit env var is set)
+    if (process.env.BYPASS_PAYMENT === 'true') {
         logger.info(`[MOCK PAYMENT] Bypassing Payment Gateway for transaction ${transactionId}`);
         
-        // Auto-Success Payment
         await prisma.payment.update({
              where: { id: createdPayment.id }, 
              data: { status: PaymentStatus.SUCCESS }
         });
 
-        // Update Student Status
          await prisma.studentAdmission.update({
             where: { studentId: studentId },
             data: {
@@ -96,19 +86,195 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     }
 
     try {
-        const response = await axios.post(`${HOST_URL}/pg/v1/pay`, {
-            request: base64Payload
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'X-VERIFY': checksum
+        const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
+        
+        const request = StandardCheckoutPayRequest.builder()
+            .merchantOrderId(transactionId)
+            .amount(amount * 100)
+            .redirectUrl(redirectUrl)
+            .build();
+
+        const response = await client.pay(request);
+        return response.redirectUrl;
+    } catch (error: any) {
+        logger.error(`PhonePe Payment Initiation Error: ${error.message}`, error);
+        throw new AppError('Failed to initiate payment gateway', 502);
+    }
+};
+
+export const checkPaymentStatus = async (merchantTransactionId: string) => {
+    try {
+        const response = await client.getOrderStatus(merchantTransactionId);
+        
+        if (response.state === 'COMPLETED' || response.state === 'PAYMENT_SUCCESS') { // Check Exact Enum from SDK
+             const payment = await prisma.payment.findFirst({ 
+                 where: { providerTxId: merchantTransactionId },
+                 include: { student: true }
+             });
+
+             if (payment && payment.status !== PaymentStatus.SUCCESS) {
+                 await processPaymentSuccess(payment, response);
+             }
+             return { status: 'SUCCESS', data: response };
+        } else if (response.state === 'FAILED') {
+             const payment = await prisma.payment.findFirst({ where: { providerTxId: merchantTransactionId } });
+             if (payment && payment.status === PaymentStatus.PENDING) {
+                  await prisma.payment.update({
+                        where: { id: payment.id },
+                        data: { status: PaymentStatus.FAILED, metadata: response as any }
+                    });
+             }
+             return { status: 'FAILED', data: response };
+        }
+        return { status: response.state, data: response };
+    } catch (error) {
+        logger.error("Error Checking Payment Status", error);
+        return null;
+    }
+};
+
+const processPaymentSuccess = async (payment: any, metadata: any) => {
+    let invoiceUrl = null;
+    try {
+        // Generate Invoice
+        const invoiceData:any = {
+            invoiceNumber: payment.providerTxId,
+            date: new Date(),
+            studentName: payment.student.name,
+            studentId: payment.student.applicationId,
+            paymentMethod: payment.method || 'ONLINE',
+            transactionId: payment.providerTxId,
+            amount: payment.amount,
+            description: payment.component === 'APPLICATION_FEE' ? 'Entrance Exam Application Fee' : 'Payment',
+            address: {
+                line1: payment.student.address,
+                line2: payment.student.address2 || '',
+                city: payment.student.city,
+                state: payment.student.state,
+                pincode: payment.student.pincode
+            }
+        };
+
+        const invoiceBuffer = await generateInvoicePDF(invoiceData);
+        const s3Key = `student/${payment.student.applicationId}/invoices/${payment.providerTxId}.pdf`;
+        invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
+        logger.info(`Invoice generated and uploaded: ${invoiceUrl}`);
+    } catch (err) {
+        logger.error(`Failed to generate/upload invoice for ${payment.providerTxId}: ${err}`);
+    }
+
+    // Update Payment Status
+    await prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+            status: PaymentStatus.SUCCESS,
+            metadata: metadata,
+            invoiceUrl: invoiceUrl
+        }
+    });
+
+    // Update Admission Status
+    if (payment.component === PaymentComponent.APPLICATION_FEE) {
+         await prisma.studentAdmission.update({
+            where: { studentId: payment.studentId },
+            data: {
+                status: AdmissionStatus.ENTRANCE_FEE_PAID,
+                feeStatus: FeeStatus.PARTIAL,
+                paidFee: { increment: payment.amount }
+            }
+        });
+        logger.info(`Student ${payment.studentId} admission status updated to ENTRANCE_FEE_PAID`);
+    } else if (payment.component === PaymentComponent.TUITION) {
+         await prisma.studentAdmission.update({
+            where: { studentId: payment.studentId },
+            data: {
+                status: AdmissionStatus.ADMISSION_CONFIRMED,
+                feeStatus: FeeStatus.PARTIAL,
+                paidFee: { increment: payment.amount }
             }
         });
 
-        return response.data.data.instrumentResponse.redirectInfo.url;
-    } catch (error: any) {
-        logger.error(`PhonePe Payment Initiation Error: ${error.message}`, error.response?.data);
-        throw new AppError('Failed to initiate payment gateway', 502);
+        logger.info(`Student ${payment.studentId} admission status updated to ADMISSION_CONFIRMED`);
+
+        // Generate Allotment Order
+        try {
+            const studentWithDetails = await prisma.student.findUnique({
+                where: { id: payment.studentId },
+                include: { admissionDetails: true }
+            });
+
+            if (studentWithDetails && studentWithDetails.admissionDetails) {
+                const allotmentData = {
+                    applicationId: studentWithDetails.applicationId,
+                    studentName: studentWithDetails.name,
+                    fatherName: studentWithDetails.fatherName,
+                    category: studentWithDetails.category,
+                    allottedCourse: studentWithDetails.admissionDetails.allottedSpecialization || 'N/A',
+                    allottedCollege: 'VVIT University',
+                    admissionFee: studentWithDetails.admissionDetails.paidFee,
+                    tuitionFee: studentWithDetails.admissionDetails.totalFee,
+                    date: new Date(),
+                    academicYear: `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`
+                };
+
+                const pdfBuffer = await generateAllotmentOrderPDF(allotmentData);
+                const s3Key = `student/${studentWithDetails.applicationId}/documents/AllotmentOrder.pdf`;
+                const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
+
+                await prisma.studentDocument.upsert({
+                    where: {
+                        studentId_documentKey: {
+                            studentId: payment.studentId,
+                            documentKey: 'ALLOTMENT_ORDER'
+                        }
+                    },
+                    create: {
+                        studentId: payment.studentId,
+                        documentKey: 'ALLOTMENT_ORDER',
+                        url: url,
+                        status: StudentDocumentStatus.APPROVED,
+                        remarks: 'Generated after College Fee Payment'
+                    },
+                    update: {
+                        url: url,
+                        updatedAt: new Date()
+                    }
+                });
+                logger.info(`Allotment order generated and saved for student ${payment.studentId}`);
+            }
+        } catch (err) {
+            logger.error(`Failed to generate/upload allotment order for ${payment.studentId}: ${err}`);
+        }
+    } else if (payment.component === PaymentComponent.SCHOLARSHIP_TOKEN) {
+        await ScholarshipService.lockAllocation(payment.studentId);
+        await prisma.studentAdmission.update({
+            where: { studentId: payment.studentId },
+            data: {
+                paidFee: { increment: payment.amount },
+                feeStatus: FeeStatus.PARTIAL,
+                status: AdmissionStatus.ADMISSION_CONFIRMED 
+            }
+        });
+        logger.info(`Scholarship locked for student ${payment.studentId}`);
+        logger.info(`Scholarship locked for student ${payment.studentId}`);
+    }
+
+    // 4. Create Ledger Entry (Financial Record)
+    try {
+        await prisma.studentLedger.create({
+            data: {
+                studentId: payment.studentId,
+                type: 'CREDIT', // Use string literal or enum if imported
+                amount: payment.amount,
+                description: `Payment Received via ${payment.method || 'ONLINE'} (${payment.component})`,
+                referenceId: payment.id,
+                referenceType: 'PAYMENT',
+                date: new Date()
+            }
+        });
+        logger.info(`Ledger entry created for payment ${payment.providerTxId}`);
+    } catch (err) {
+        logger.error(`Failed to create ledger entry for ${payment.providerTxId}: ${err}`);
     }
 };
 
@@ -137,79 +303,8 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
     }
 
     if (code === 'PAYMENT_SUCCESS') {
-        let invoiceUrl = null;
-        try {
-            // Generate Invoice
-            const invoiceData = {
-                invoiceNumber: merchantTransactionId,
-                date: new Date(),
-                studentName: payment.student.name,
-                studentId: payment.student.applicationId,
-                paymentMethod: payment.method || 'ONLINE',
-                transactionId: merchantTransactionId,
-                amount: payment.amount,
-                description: payment.component === 'APPLICATION_FEE' ? 'Entrance Exam Application Fee' : 'Payment',
-                address: {
-                    line1: payment.student.address,
-                    line2: payment.student.address2 || '',
-                    city: payment.student.city,
-                    state: payment.student.state,
-                    pincode: payment.student.pincode
-                }
-            };
-
-            const invoiceBuffer = await generateInvoicePDF(invoiceData);
-            const s3Key = `student/${payment.student.applicationId}/invoices/${merchantTransactionId}.pdf`;
-            invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
-            logger.info(`Invoice generated and uploaded: ${invoiceUrl}`);
-        } catch (err) {
-            logger.error(`Failed to generate/upload invoice for ${merchantTransactionId}: ${err}`);
-            // Continue execution, don't fail the payment webhook
-        }
-
-        // Update Payment Status
-        await prisma.payment.update({
-            where: { id: payment.id },
-            data: {
-                status: PaymentStatus.SUCCESS,
-                metadata: decodedPayload,
-                invoiceUrl: invoiceUrl
-            }
-        });
-
-        // Update Admission Status if it's application fee
-        if (payment.component === PaymentComponent.APPLICATION_FEE) {
-             await prisma.studentAdmission.update({
-                where: { studentId: payment.studentId },
-                data: {
-                    status: AdmissionStatus.ENTRANCE_FEE_PAID,
-                    feeStatus: FeeStatus.PARTIAL,
-                    paidFee: { increment: payment.amount }
-                }
-            });
-            logger.info(`Student ${payment.studentId} admission status updated to ENTRANCE_FEE_PAID`);
-        } else if (payment.component === PaymentComponent.TUITION) {
-             await prisma.studentAdmission.update({
-                where: { studentId: payment.studentId },
-                data: {
-                    status: AdmissionStatus.ADMISSION_CONFIRMED,
-                    feeStatus: FeeStatus.PARTIAL,
-                    paidFee: { increment: payment.amount }
-                }
-            });
-            logger.info(`Student ${payment.studentId} admission status updated to ADMISSION_CONFIRMED`);
-        } else if (payment.component === PaymentComponent.SCHOLARSHIP_TOKEN) {
-            await ScholarshipService.lockAllocation(payment.studentId);
-            await prisma.studentAdmission.update({
-                where: { studentId: payment.studentId },
-                data: {
-                    paidFee: { increment: payment.amount },
-                    feeStatus: FeeStatus.PARTIAL,
-                    // Optionally set status to ADMISSION_CONFIRMED ?
-                    status: AdmissionStatus.ADMISSION_CONFIRMED 
-                }
-            });
-            logger.info(`Scholarship locked for student ${payment.studentId}`);
+        if (payment.status !== PaymentStatus.SUCCESS) {
+            await processPaymentSuccess(payment, decodedPayload);
         }
     } else {
          await prisma.payment.update({
@@ -291,9 +386,8 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
          // logger.warn(`Client amount ${paymentDetails.amount} differs from calculated ${totalAmount}. Using calculated.`);
     }
 
-    // 4. Process Logic (Transaction)
+    // 4. Process Logic (Transaction for Selections)
     await prisma.$transaction(async (tx) => {
-        
         // Update Hostel/Transport Selections
         if (hostelSelection || transportSelection) {
             const updateData: any = {};
@@ -301,21 +395,10 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
             if (hostelSelection?.hostelId) {
                 updateData.hostelId = hostelSelection.hostelId;
                 updateData.accommodationType = 'HOSTEL';
-                // Note: Logic to link room specifically would go here if schema supports it
             }
 
             if (transportSelection?.routeId) {
-                // transportRouteId is not directly on studentAdmission in current schema view,
-                // mostly handled via TransportAllocation table or distinct fields.
-                // We set type to TRANSPORT. Actual route storage might be in a separate table.
                 updateData.accommodationType = 'TRANSPORT'; 
-                
-                // IF schema supports transportRouteId on StudentAdmission, add it.
-                // checking schema... schema text in chat didn't show it on StudentAdmission.
-                // Only 'hostelId' was visible.
-                
-                // We will create TransportAllocation record instead if needed?
-                // For simplicity, we just mark type.
             }
 
             if (Object.keys(updateData).length > 0) {
@@ -325,38 +408,46 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
                 });
             }
         }
+    });
 
-        // 5. Create Payment Record (Total Amount)
-        const payment = await tx.payment.create({
-            data: {
-                studentId,
-                amount: totalAmount,
-                status: PaymentStatus.PENDING,
-                component: PaymentComponent.TUITION,
-                providerTxId: transactionId,
-                method: paymentDetails?.paymentMode === 'PHONEPE' ? PaymentMethod.UPI : PaymentMethod.CASH
-            }
-        });
+    // 5. Create Payment Record (Pending)
+    const payment = await prisma.payment.create({
+        data: {
+            studentId,
+            amount: totalAmount,
+            status: PaymentStatus.PENDING,
+            component: PaymentComponent.TUITION,
+            providerTxId: transactionId,
+            method: paymentDetails?.paymentMode === 'PHONEPE' ? PaymentMethod.UPI : PaymentMethod.CASH
+        }
+    });
 
-        // 6. Mock Success
-         await tx.payment.update({
+    // PhonePe Integration for College Fee
+    // BYPASS FOR DEV/TESTING
+    if (process.env.BYPASS_PAYMENT === 'true') {
+         await prisma.payment.update({
              where: { id: payment.id }, 
              data: { status: PaymentStatus.SUCCESS }
         });
+        await processPaymentSuccess({ ...payment, student }, {});
+        return { redirectUrl: `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}&amount=${totalAmount}`, totalAmount };
+    }
 
-        // 7. Update Student Status
-         await tx.studentAdmission.update({
-            where: { studentId: studentId },
-            data: {
-                status: AdmissionStatus.ADMISSION_CONFIRMED,
-                feeStatus: FeeStatus.FULL, // Assuming full payment
-                paidFee: { increment: totalAmount }
-            }
-        });
-    });
+    try {
+        const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
 
-    const redirectUrl = `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}&amount=${totalAmount}`;
-    return { redirectUrl, totalAmount };
+        const request = StandardCheckoutPayRequest.builder()
+            .merchantOrderId(transactionId)
+            .amount(totalAmount * 100)
+            .redirectUrl(redirectUrl)
+            .build();
+
+        const response = await client.pay(request);
+        return { redirectUrl: response.redirectUrl, totalAmount };
+    } catch (error: any) {
+        logger.error(`PhonePe Payment Initiation Error (College Fee): ${error.message}`, error);
+        throw new AppError('Failed to initiate payment gateway', 502);
+    }
 };
 
 export const requestDiscount = async (studentId: string, reason: string, documentUrl?: string, userId?: string | null) => {
@@ -400,6 +491,34 @@ export const getInvoiceUrl = async (paymentId: string) => {
     return presignedUrl;
 };
 
+export const getAllotmentOrderUrl = async (studentId: string) => {
+    const doc = await prisma.studentDocument.findUnique({
+        where: {
+            studentId_documentKey: {
+                studentId,
+                documentKey: 'ALLOTMENT_ORDER'
+            }
+        }
+    });
+
+    if (!doc) {
+        throw new AppError('Allotment Order not found', 404);
+    }
+
+    // Extract key from URL if it's full URL, or use as is if it's key. 
+    // Utils logic usually returns full URL "https://bucket.s3.../key"
+    // s3Utils.getPresignedUrl takes Key. 
+    
+    // Logic to extract key from full URL:
+    let key = doc.url;
+    const parts = doc.url.split('amazonaws.com/');
+    if (parts.length > 1) {
+        key = parts[1];
+    }
+
+    return getPresignedUrl(key);
+};
+
 export const initiateTokenPayment = async (studentId: string) => {
     const TOKEN_AMOUNT = 10000; // Fixed Token Amount
     const student = await prisma.student.findUnique({ where: { id: studentId } });
@@ -417,23 +536,6 @@ export const initiateTokenPayment = async (studentId: string) => {
             method: PaymentMethod.UPI
         }
     });
-
-    const payload = {
-        merchantId: MERCHANTABILITY,
-        merchantTransactionId: transactionId,
-        merchantUserId: student.userId || studentId,
-        amount: TOKEN_AMOUNT * 100,
-        redirectUrl: `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`,
-        redirectMode: "REDIRECT",
-        callbackUrl: CALLBACK_URL,
-        mobileNumber: student.phone,
-        paymentInstrument: { type: "PAY_PAGE" }
-    };
-
-    const base64Payload = Buffer.from(JSON.stringify(payload)).toString('base64');
-    const stringToSign = base64Payload + "/pg/v1/pay" + SALT_KEY;
-    const sha256 = crypto.createHash('sha256').update(stringToSign).digest('hex');
-    const checksum = sha256 + "###" + SALT_INDEX;
 
     // BYPASS
     if (process.env.NODE_ENV !== 'production' || process.env.BYPASS_PAYMENT === 'true') {
@@ -460,11 +562,58 @@ export const initiateTokenPayment = async (studentId: string) => {
     }
 
     try {
-        const response = await axios.post(`${HOST_URL}/pg/v1/pay`, { request: base64Payload }, {
-            headers: { 'Content-Type': 'application/json', 'X-VERIFY': checksum }
-        });
-        return response.data.data.instrumentResponse.redirectInfo.url;
+        const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
+        
+        const request = StandardCheckoutPayRequest.builder()
+            .merchantOrderId(transactionId)
+            .amount(TOKEN_AMOUNT * 100)
+            .redirectUrl(redirectUrl)
+            .build();
+
+        const response = await client.pay(request);
+        return response.redirectUrl;
     } catch (error: any) {
         throw new AppError('Failed to initiate payment gateway', 502);
     }
+};
+
+export const getStudentFinancialHistory = async (studentId: string) => {
+    // 1. Fetch Ledger (The Master Record)
+    const ledger = await prisma.studentLedger.findMany({
+        where: { studentId },
+        orderBy: { date: 'desc' }
+    });
+
+    // 2. Fetch Payments to enrich ledger data
+    const payments = await prisma.payment.findMany({
+        where: { studentId }
+    });
+
+    // 3. Create a Map for fast lookup
+    const paymentMap = new Map(payments.map(p => [p.id, p]));
+
+    // 4. Merge Data
+    const history = ledger.map(entry => {
+        let enrichment = {};
+        
+        if (entry.referenceType === 'PAYMENT' && entry.referenceId) {
+            const payment = paymentMap.get(entry.referenceId);
+            if (payment) {
+                enrichment = {
+                    category: payment.component, // e.g., APPLICATION_FEE, TUITION
+                    paymentMethod: payment.method,
+                    transactionId: payment.providerTxId,
+                    invoiceUrl: payment.invoiceUrl,
+                    status: payment.status
+                };
+            }
+        }
+
+        return {
+            ...entry,
+            ...enrichment
+        };
+    });
+
+    return { history };
 };

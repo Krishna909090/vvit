@@ -82,11 +82,17 @@ export const AcademicService = {
     },
 
     async getDepartments() {
-        const depts = await prisma.department.findMany({ include: { courses: true } });
+        const depts = await prisma.department.findMany({
+            include: {
+                courses: true,
+                school: true
+            }
+        });
         return depts.map(d => ({
             ...d,
-            schoolName: d.name,
-            schoolCode: d.code
+            schoolName: d.school?.name,
+            schoolCode: d.school?.code,
+            schoolId: d.school?.id
         }));
     },
 

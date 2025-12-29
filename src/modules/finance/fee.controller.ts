@@ -3,6 +3,7 @@ import { catchAsync } from '../../utils/catchAsync';
 import { MESSAGES } from '../../constants/messages';
 import { sendResponse } from '../../utils/response';
 import { FeeService, getApplicationFeeAmount, setApplicationFeeAmount } from './fee.service';
+import { getAllotmentOrderUrl } from './payment.service';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { Role } from '@prisma/client';
@@ -229,5 +230,19 @@ export const getStudentLedger = catchAsync(async (req: Request, res: Response, n
         success: true,
         message: "Student ledger fetched successfully",
         data: ledger
+    });
+});
+
+export const downloadAllotmentOrder = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    
+    const url = await getAllotmentOrderUrl(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Allotment order URL generated",
+        data: { url }
     });
 });
