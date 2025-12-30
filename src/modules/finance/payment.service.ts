@@ -86,7 +86,7 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     }
 
     try {
-        const redirectUrl = `${process.env.FRONTEND_URL}student/payment?txnId=${transactionId}`;
+        const redirectUrl = `${process.env.FRONTEND_URL}/student/payment?txnId=${transactionId}`;
         
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(transactionId)
