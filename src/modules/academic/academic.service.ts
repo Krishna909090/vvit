@@ -24,7 +24,12 @@ export const AcademicService = {
     },
 
     async getSchools() {
-        return await prisma.school.findMany({ include: { departments: true } });
+        return await prisma.school.findMany({ 
+            where: { isDeleted: false },
+            include: { departments: {
+                where: { isDeleted: false }
+            } } 
+        });
     },
 
     async getSchoolById(id: string) {
@@ -83,8 +88,9 @@ export const AcademicService = {
 
     async getDepartments() {
         const depts = await prisma.department.findMany({
+            where: { isDeleted: false },
             include: {
-                courses: true,
+                courses: { where: { isDeleted: false } },
                 school: true
             }
         });
@@ -165,7 +171,7 @@ export const AcademicService = {
     },
 
     async getCourses(departmentId?: string, degree?: string) {
-        const where: any = {};
+        const where: any = { isDeleted: false };
         if (departmentId) {
             where.departmentId = String(departmentId);
         }
@@ -273,6 +279,7 @@ export const AcademicService = {
 
     async getSpecializations() {
         const specs = await prisma.specialization.findMany({
+            where: { isDeleted: false },
             include: { course: true }
         });
         return specs.map(s => ({
@@ -344,7 +351,10 @@ export const AcademicService = {
     },
 
     async getAcademicYears() {
-        return await prisma.academicYear.findMany({ orderBy: { startDate: 'desc' } });
+        return await prisma.academicYear.findMany({ 
+            where: { isDeleted: false },
+            orderBy: { startDate: 'desc' } 
+        });
     },
 
     async updateAcademicYear(id: string, data: any, updatedBy?: string) {
@@ -400,7 +410,7 @@ export const AcademicService = {
     },
 
     async getBatches(specializationId?: string) {
-        const where: any = {};
+        const where: any = { isDeleted: false };
         if (specializationId) where.specializationId = String(specializationId);
 
         return await prisma.batch.findMany({
@@ -465,7 +475,7 @@ export const AcademicService = {
     },
 
     async getSections(batchId?: string) {
-        const where: any = {};
+        const where: any = { isDeleted: false };
         if (batchId) where.batchId = String(batchId);
 
         return await prisma.section.findMany({

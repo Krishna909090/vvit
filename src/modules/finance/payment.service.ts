@@ -106,27 +106,27 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
     try {
         const response = await client.getOrderStatus(merchantTransactionId);
         
-        if (response.state === 'COMPLETED' || response.state === 'PAYMENT_SUCCESS') { // Check Exact Enum from SDK
-             const payment = await prisma.payment.findFirst({ 
-                 where: { providerTxId: merchantTransactionId },
-                 include: { student: true }
-             });
+        // Fetch payment to return ID and update if needed
+        const payment = await prisma.payment.findFirst({ 
+             where: { providerTxId: merchantTransactionId },
+             include: { student: true }
+        });
 
+        if (response.state === 'COMPLETED' || response.state === 'PAYMENT_SUCCESS') {
              if (payment && payment.status !== PaymentStatus.SUCCESS) {
                  await processPaymentSuccess(payment, response);
              }
-             return { status: 'SUCCESS', data: response };
+             return { status: 'SUCCESS', data: response, paymentId: payment?.id };
         } else if (response.state === 'FAILED') {
-             const payment = await prisma.payment.findFirst({ where: { providerTxId: merchantTransactionId } });
              if (payment && payment.status === PaymentStatus.PENDING) {
                   await prisma.payment.update({
                         where: { id: payment.id },
                         data: { status: PaymentStatus.FAILED, metadata: response as any }
                     });
              }
-             return { status: 'FAILED', data: response };
+             return { status: 'FAILED', data: response, paymentId: payment?.id };
         }
-        return { status: response.state, data: response };
+        return { status: response.state, data: response, paymentId: payment?.id };
     } catch (error) {
         logger.error("Error Checking Payment Status", error);
         return null;

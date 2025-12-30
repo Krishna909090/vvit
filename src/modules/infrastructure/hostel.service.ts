@@ -31,7 +31,18 @@ export const HostelService = {
 
     async getAllHostels() {
         return await prisma.hostel.findMany({
-            include: { blocks: { include: { rooms: { include: { beds: true } } } } }
+            where: { isDeleted: false },
+            include: { 
+                blocks: { 
+                    where: { isDeleted: false },
+                    include: { 
+                        rooms: { 
+                            where: { isDeleted: false },
+                            include: { beds: true } 
+                        } 
+                    } 
+                } 
+            }
         });
     },
 
@@ -113,7 +124,7 @@ export const HostelService = {
     },
 
     async getHostelBlocks(hostelId?: string) {
-        const where: any = {};
+        const where: any = { isDeleted: false };
         if (hostelId) where.hostelId = hostelId;
 
         const blocks = await prisma.hostelBlock.findMany({
@@ -197,7 +208,7 @@ export const HostelService = {
     },
 
     async getHostelRooms(blockId?: string) {
-        const where: any = {};
+        const where: any = { isDeleted: false };
         if (blockId) where.blockId = blockId;
 
         return await prisma.hostelRoom.findMany({
@@ -219,13 +230,16 @@ export const HostelService = {
         const room = await prisma.hostelRoom.findUnique({ where: { id } });
         if (!room) throw new AppError("Hostel Room not found", 404);
 
+        const updateData: any = { updatedBy };
+        if (data.number) updateData.number = data.number;
+        if (data.capacity) updateData.capacity = Number(data.capacity);
+        if (data.type) updateData.type = data.type;
+        if (data.cost !== undefined) updateData.cost = Number(data.cost);
+        if (data.blockId) updateData.blockId = data.blockId;
+
         return await prisma.hostelRoom.update({
             where: { id },
-            data: { 
-                ...data, 
-                cost: data.cost ? Number(data.cost) : undefined,
-                updatedBy 
-            }
+            data: updateData
         });
     },
 
