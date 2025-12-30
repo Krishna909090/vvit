@@ -79,24 +79,39 @@ export const convertToPresignedUrl = async (s3Url: string | null | undefined, ex
         return s3Url;
     }
     
+    // Check if this is actually an S3 URL
+    // Only process URLs that contain 'amazonaws.com' or match S3 key patterns
+    const isS3Url = s3Url.includes('amazonaws.com') || s3Url.startsWith('students/');
+    
+    if (!isS3Url) {
+        // Not an S3 URL (e.g., placeholder images, external URLs), return as-is
+        logger.debug(`URL is not an S3 URL, returning as-is: ${s3Url}`);
+        return s3Url;
+    }
+    
     try {
         // Extract key from URL
         // Format: https://bucket.s3.region.amazonaws.com/key
         const urlParts = s3Url.split('.amazonaws.com/');
         if (urlParts.length > 1) {
-            const key = urlParts[1];
+            const key = decodeURIComponent(urlParts[1]);
             return await getPresignedUrl(key, expiresIn);
         }
         
-        // Try regex pattern for key extraction
-        const keyMatch = s3Url.match(/(student\/.*)/);
+        // Try regex pattern for key extraction (for students/ paths)
+        const keyMatch = s3Url.match(/(students?\/.*)/)
         if (keyMatch && keyMatch[1]) {
             return await getPresignedUrl(keyMatch[1], expiresIn);
         }
         
-        // If no pattern matches, assume it's already a key
-        logger.warn(`Could not extract key from S3 URL: ${s3Url}, treating as key`);
-        return await getPresignedUrl(s3Url, expiresIn);
+        // If it starts with students/, treat it as a key directly
+        if (s3Url.startsWith('students/')) {
+            return await getPresignedUrl(s3Url, expiresIn);
+        }
+        
+        // If we can't parse it, return the original URL
+        logger.warn(`Could not extract key from S3 URL: ${s3Url}, returning original`);
+        return s3Url;
     } catch (error) {
         logger.error(`Error converting S3 URL to presigned URL: ${error}`);
         // Return original URL as fallback
