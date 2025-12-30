@@ -66,14 +66,12 @@ export const enhancedSecurityHeaders = helmet({
     // Cross-Origin-Embedder-Policy
     crossOriginEmbedderPolicy: false, // Set to true if you need strict isolation
 
-    // Cross-Origin-Opener-Policy
     crossOriginOpenerPolicy: {
-        policy: 'same-origin',
+        policy: 'unsafe-none',
     },
 
-    // Cross-Origin-Resource-Policy
     crossOriginResourcePolicy: {
-        policy: 'same-origin',
+        policy: 'cross-origin',
     },
 
     // Origin-Agent-Cluster

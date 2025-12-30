@@ -37,7 +37,7 @@ app.set('trust proxy', 1);
 app.use(enhancedSecurityHeaders); // Enhanced Helmet configuration
 app.use(additionalSecurityHeaders); // Custom security headers
 app.use(cors({
-    origin: process.env.CORS_ORIGIN || '*', // Configure this in env for production
+    origin: process.env.CORS_ORIGIN === '*' ? true : (process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true), // Allow all if * or undefined (dev), else specific list
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
