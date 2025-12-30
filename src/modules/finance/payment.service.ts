@@ -82,11 +82,11 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
             }
         });
 
-        return `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}`;
+        return { redirectUrl: `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}`, paymentId: createdPayment.id };
     }
 
     try {
-        const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
+        const redirectUrl = `${process.env.FRONTEND_URL}student/payment?txnId=${transactionId}`;
         
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(transactionId)
@@ -95,7 +95,7 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
             .build();
 
         const response = await client.pay(request);
-        return response.redirectUrl;
+        return { redirectUrl: response.redirectUrl, paymentId: createdPayment.id };
     } catch (error: any) {
         logger.error(`PhonePe Payment Initiation Error: ${error.message}`, error);
         throw new AppError('Failed to initiate payment gateway', 502);
@@ -322,8 +322,8 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
 
 // Functions expected by PaymentController
 export const payTestFee = async (studentId: string, userId: string | null) => {
-    const redirectUrl = await initiateApplicationFeePayment(studentId);
-    return { redirectUrl };
+    const { redirectUrl, paymentId } = await initiateApplicationFeePayment(studentId);
+    return { redirectUrl, paymentId };
 };
 
 export const payCollegeFee = async (studentId: string, data: any, userId: string | null) => {
@@ -430,7 +430,7 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
              data: { status: PaymentStatus.SUCCESS }
         });
         await processPaymentSuccess({ ...payment, student }, {});
-        return { redirectUrl: `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}&amount=${totalAmount}`, totalAmount };
+        return { redirectUrl: `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}&amount=${totalAmount}`, totalAmount, paymentId: payment.id };
     }
 
     try {
@@ -443,7 +443,7 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
             .build();
 
         const response = await client.pay(request);
-        return { redirectUrl: response.redirectUrl, totalAmount };
+        return { redirectUrl: response.redirectUrl, totalAmount, paymentId: payment.id };
     } catch (error: any) {
         logger.error(`PhonePe Payment Initiation Error (College Fee): ${error.message}`, error);
         throw new AppError('Failed to initiate payment gateway', 502);
