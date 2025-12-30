@@ -6,7 +6,7 @@ import logger from '../utils/logger';
 
 const commonConfig = {
     windowMs: 60 * 60 * 1000, // 1 hour
-    max: 100, // 100 requests per hour
+    max: 1000000, // 100 requests per hour
     message: {
         success: false,
         message: 'Too many requests from this IP. Please try again after 1 hour.'
