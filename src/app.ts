@@ -19,13 +19,7 @@ import verificationRoutes from './modules/admin/verification.routes';
 import academicRoutes from './modules/academic/academic.routes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
-import {
-    authRateLimiter,
-    uploadRateLimiter,
-    readRateLimiter,
-    writeRateLimiter,
-    generalRateLimiter
-} from './middlewares/rateLimitMiddleware';
+import { generalRateLimiter } from './middlewares/rateLimitMiddleware';
 import { enhancedSecurityHeaders, additionalSecurityHeaders } from './middlewares/securityHeaders';
 
 const app = express();
@@ -91,22 +85,23 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 // Health Check Routes (No rate limiting for load balancers)
 app.use('/', healthRoutes);
 
-// Routes with Enhanced Rate Limiting
-app.use('/auth', authRateLimiter, authRoutes); // Strict: 5 attempts/15min
-app.use('/student', readRateLimiter, writeRateLimiter, studentRoutes); // Read: 200/15min, Write: 50/15min
-app.use('/admin', readRateLimiter, writeRateLimiter, adminRoutes); // Read: 200/15min, Write: 50/15min
-app.use('/exam', readRateLimiter, writeRateLimiter, examRoutes); // Read: 200/15min, Write: 50/15min
-app.use('/invigilator', readRateLimiter, writeRateLimiter, invigilatorRoutes); // Read: 200/15min, Write: 50/15min
-app.use('/api/upload', uploadRateLimiter, uploadRoutes); // 30 uploads/hour (student-friendly)
-app.use('/document-requirements', readRateLimiter, writeRateLimiter, documentRequirementRoutes); // Read: 200/15min, Write: 50/15min
-app.use('/payment', writeRateLimiter, paymentRoutes);
-app.use('/api/admission', readRateLimiter, writeRateLimiter, dataImportRoutes);
-app.use('/verification', readRateLimiter, writeRateLimiter, verificationRoutes);
-app.use('/admin/academic', readRateLimiter, writeRateLimiter, academicRoutes);
-
-
-// Apply general rate limiter to any other routes
+// Apply general rate limiter (100 req/hr) to all routes
 app.use(generalRateLimiter);
+
+app.use('/auth', authRoutes);
+app.use('/student', studentRoutes);
+app.use('/admin', adminRoutes);
+app.use('/exam', examRoutes);
+app.use('/invigilator', invigilatorRoutes);
+app.use('/api/upload', uploadRoutes);
+app.use('/document-requirements', documentRequirementRoutes);
+app.use('/payment', paymentRoutes);
+app.use('/api/admission', dataImportRoutes);
+app.use('/verification', verificationRoutes);
+app.use('/admin/academic', academicRoutes);
+
+
+
 
 // Global Error Handler
 app.use(globalErrorHandler);
