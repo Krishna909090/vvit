@@ -12,7 +12,7 @@ import QRCode from 'qrcode';
 import { encrypt, decrypt } from '../../utils/encryption';
 import { formatDate, formatTime, formatDateTime } from '../../utils/dateFormatter';
 import { generateHallTicketPDF } from '../../utils/pdfGenerator';
-import { uploadFileToS3, getPresignedUrl } from '../../utils/s3Utils';
+import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 
 /* -------------------------------------------------------------------------- */
 /*                               HELPER FUNCTIONS                             */
@@ -882,20 +882,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         qrCodeImage = `data:image/png;base64,${qrCodeBuffer.toString('base64')}`;
         
         // Generate presigned URL for profile photo if it's an S3 URL
-        let profilePhotoUrl = student.profilePhotoUrl || '';
-        if (profilePhotoUrl && profilePhotoUrl.includes('.amazonaws.com/')) {
-            try {
-                const urlParts = profilePhotoUrl.split('.amazonaws.com/');
-                if (urlParts.length > 1) {
-                    const key = urlParts[1];
-                    // Generate a presigned URL valid for 5 minutes (enough for PDF generation)
-                    profilePhotoUrl = await getPresignedUrl(key, 300);
-                }
-            } catch (e) {
-                logger.warn(`Failed to generate presigned URL for profile photo: ${e}`);
-                // Fallback to original URL if presigning fails
-            }
-        }
+        let profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl, 300) || '';
 
         const pdfBuffer = await generateHallTicketPDF({
             studentName: student.name || '',
@@ -1417,18 +1404,11 @@ export const getHallTicketDetails = async (studentId: string) => {
         }
     }
 
-    let hallTicketDownloadUrl = hallTicket.url;
-    if (hallTicketDownloadUrl) {
-        try {
-            const urlParts = hallTicketDownloadUrl.split('.amazonaws.com/');
-            if (urlParts.length > 1) {
-                const key = urlParts[1];
-                hallTicketDownloadUrl = await getPresignedUrl(key);
-            }
-        } catch (e) {
-            logger.warn(`Failed to generate presigned URL for student ${studentId}: ${e}`);
-        }
-    }
+    // Convert hall ticket URL to presigned URL
+    let hallTicketDownloadUrl = await convertToPresignedUrl(hallTicket.url);
+    
+    // Convert profile photo URL to presigned URL
+    const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
     const slot = student.examDetails.examSlot;
 
@@ -1440,7 +1420,7 @@ export const getHallTicketDetails = async (studentId: string) => {
         lastName: student.name.split(' ').slice(1).join(' ') || student.name,
         phone: student.phone,
         email: student.email,
-        profilePhotoUrl: student.profilePhotoUrl,
+        profilePhotoUrl,
         applicationId: student.applicationId,
         
         // Exam Slot Info

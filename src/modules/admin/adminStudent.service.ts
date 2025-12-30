@@ -10,6 +10,7 @@ import archiver from 'archiver';
 import axios from 'axios';
 import { registerStudent } from '../student/student.service';
 import { FeeService } from '../finance/fee.service';
+import { convertToPresignedUrl } from '../../utils/s3Utils';
 
 export const AdminStudentService = {
     async getAllApplications(query: any) {
@@ -528,13 +529,26 @@ export const AdminStudentService = {
             throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         }
     
+        // Convert all document URLs to presigned URLs
+        const documentPromises = student.documents.map(async (doc: any) => {
+            const presignedUrl = await convertToPresignedUrl(doc.url);
+            return { key: doc.documentKey, url: presignedUrl };
+        });
+
+        const documentArray = await Promise.all(documentPromises);
+        const documentMap = documentArray.reduce((acc: any, item) => {
+            acc[item.key] = item.url;
+            return acc;
+        }, {});
+
+        // Convert profile photo and hall ticket URLs
+        const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
+        const hallTicketUrl = await convertToPresignedUrl(student.examDetails?.hallTicketUrl);
+
         return {
-            profilePhotoUrl: student.profilePhotoUrl,
-            hallTicketUrl: student.examDetails?.hallTicketUrl,
-            ...student.documents.reduce((acc: any, doc: any) => {
-                acc[doc.documentKey] = doc.url;
-                return acc;
-            }, {})
+            profilePhotoUrl,
+            hallTicketUrl,
+            ...documentMap
         };
     },
 

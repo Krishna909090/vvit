@@ -6,7 +6,7 @@ import logger from '../../utils/logger';
 import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod } from '@prisma/client';
 import { getApplicationFeeAmount } from './fee.service';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
-import { uploadFileToS3, getPresignedUrl } from '../../utils/s3Utils';
+import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { ScholarshipService } from '../admin/scholarship.service';
 import { generateAllotmentOrderPDF } from '../../utils/allotmentGenerator';
 import { StudentDocumentStatus } from '@prisma/client';
@@ -592,18 +592,21 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     // 3. Create a Map for fast lookup
     const paymentMap = new Map(payments.map(p => [p.id, p]));
 
-    // 4. Merge Data
-    const history = ledger.map(entry => {
+    // 4. Merge Data and convert invoice URLs to presigned URLs
+    const history = await Promise.all(ledger.map(async (entry) => {
         let enrichment = {};
         
         if (entry.referenceType === 'PAYMENT' && entry.referenceId) {
             const payment = paymentMap.get(entry.referenceId);
             if (payment) {
+                // Convert invoice URL to presigned URL
+                const invoiceUrl = await convertToPresignedUrl(payment.invoiceUrl);
+                
                 enrichment = {
                     category: payment.component, // e.g., APPLICATION_FEE, TUITION
                     paymentMethod: payment.method,
                     transactionId: payment.providerTxId,
-                    invoiceUrl: payment.invoiceUrl,
+                    invoiceUrl,
                     status: payment.status
                 };
             }
@@ -613,7 +616,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
             ...entry,
             ...enrichment
         };
-    });
+    }));
 
     return { history };
 };

@@ -4,7 +4,7 @@ import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 import { StudentDocumentStatus, AdmissionStatus } from '@prisma/client';
-import { deleteFileFromS3 } from '../../utils/s3Utils';
+import { deleteFileFromS3, convertToPresignedUrl } from '../../utils/s3Utils';
 import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
@@ -199,12 +199,30 @@ export const getStudentDocuments = async (studentId: string) => {
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
+    // Convert all document URLs to presigned URLs
+    const documentMapPromises = student.documents.map(async (doc: any) => {
+        const presignedUrl = await convertToPresignedUrl(doc.url);
+        return { key: doc.documentKey, url: presignedUrl };
+    });
+
+    const documentMapArray = await Promise.all(documentMapPromises);
+    const documentMap = documentMapArray.reduce((acc: any, item) => {
+        acc[item.key] = item.url;
+        return acc;
+    }, {});
+
+    // Convert profile photo and hall ticket URLs
+    const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
+    const hallTicketUrl = await convertToPresignedUrl(student.examDetails?.hallTicketUrl);
+
     return {
         ...student,
-        documentMap: student.documents.reduce((acc: any, doc: any) => {
-            acc[doc.documentKey] = doc.url;
-            return acc;
-        }, {})
+        profilePhotoUrl,
+        examDetails: student.examDetails ? {
+            ...student.examDetails,
+            hallTicketUrl
+        } : null,
+        documentMap
     };
 };
 

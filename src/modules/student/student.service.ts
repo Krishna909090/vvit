@@ -8,7 +8,7 @@ import {
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { verifyAadhar } from '../integration/integration.service';
-import { deleteFileFromS3, getPresignedUrl } from '../../utils/s3Utils';
+import { deleteFileFromS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { MESSAGES } from '../../constants/messages';
 import { formatDate, formatTime, formatDateTime } from '../../utils/dateFormatter';
 export const registerStudent = async (data: any, agentId: string | null, userId: string | null, currentUserId: string | null) => {
@@ -233,21 +233,9 @@ export const getHallTicket = async (studentId: string) => {
         }
     }
 
-    let hallTicketDownloadUrl = latestHallTicket?.url;
-    if (hallTicketDownloadUrl) {
-        try {
-            // Extract key from URL
-            // Format: https://bucket.s3.region.amazonaws.com/key
-            const urlParts = hallTicketDownloadUrl.split('.amazonaws.com/');
-            if (urlParts.length > 1) {
-                const key = urlParts[1];
-                hallTicketDownloadUrl = await getPresignedUrl(key);
-            }
-        } catch (e) {
-            logger.warn(`Failed to generate presigned URL for student ${studentId}: ${e}`);
-            // Fallback to original URL
-        }
-    }
+    // Convert URLs to presigned URLs
+    const hallTicketDownloadUrl = await convertToPresignedUrl(latestHallTicket?.url);
+    const photoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
     logger.info(`Hall ticket retrieved for student: ${studentId}`);
     
@@ -255,7 +243,7 @@ export const getHallTicket = async (studentId: string) => {
         qrCodeImage,
         studentName: student.name,
         applicationId: student.applicationId,
-        photoUrl: student.profilePhotoUrl,
+        photoUrl,
         examCenter: student.examDetails.testCenter,
         examDate: formatDate(student.examDetails.testDate),
         startTime: formatTime(student.examDetails.examSlot?.startTime),
@@ -543,6 +531,18 @@ export const getStudentByUserId = async (userId: string) => {
 
     if (!student) return null;
 
+    // Convert all document URLs to presigned URLs
+    const documentsWithPresignedUrls = await Promise.all(
+        student.documents.map(async (doc) => ({
+            ...doc,
+            url: await convertToPresignedUrl(doc.url)
+        }))
+    );
+
+    // Convert profile photo and hall ticket URLs
+    const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
+    const hallTicketUrl = await convertToPresignedUrl(student.examDetails?.hallTicketUrl);
+
     const ADMISSION_FLOW_ORDER: AdmissionStatus[] = [
         AdmissionStatus.REGISTERED,
         AdmissionStatus.ENTRANCE_FEE_PAID,
@@ -579,6 +579,12 @@ export const getStudentByUserId = async (userId: string) => {
 
     return {
         ...student,
+        profilePhotoUrl,
+        documents: documentsWithPresignedUrls,
+        examDetails: student.examDetails ? {
+            ...student.examDetails,
+            hallTicketUrl
+        } : null,
         admissionDetails: {
             ...student.admissionDetails,
             completedStatuses,
