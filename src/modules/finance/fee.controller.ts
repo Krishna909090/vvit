@@ -48,10 +48,10 @@ export const deleteFeeHead = catchAsync(async (req: Request, res: Response, next
 
 // Fee Structure
 export const createFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { courseId, feeHeadId, amount, academicYearId } = req.body;
+    const { courseId, feeHeadId, amount, academicYearId, quotaType, courseType, yearOfStudy, dueDate } = req.body;
     const adminId = req.user!.userId;
 
-    const feeStructure = await FeeService.createFeeStructure(courseId, feeHeadId, amount, academicYearId, adminId);
+    const feeStructure = await FeeService.createFeeStructure(courseId, feeHeadId, amount, academicYearId, adminId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined);
     
     sendResponse({
         res,
@@ -62,6 +62,23 @@ export const createFeeStructure = catchAsync(async (req: Request, res: Response,
     });
 });
 
+export const createBulkFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { degreeType, feeHeadId, amount, academicYearId, quotaType, courseType, yearOfStudy, dueDate } = req.body;
+    const adminId = req.user!.userId;
+
+    if (!degreeType) throw new AppError('Degree type is required', 400);
+
+    const feeStructures = await FeeService.createFeeStructureForDegree(degreeType, feeHeadId, amount, academicYearId, adminId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined);
+    
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: `Fee structures created for ${feeStructures.length} courses under ${degreeType}`,
+        data: feeStructures
+    });
+});
+
 export const getFeeStructures = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const feeStructures = await FeeService.getFeeStructures();
     sendResponse({ res, statusCode: 200, success: true, data: feeStructures });
@@ -69,9 +86,9 @@ export const getFeeStructures = catchAsync(async (req: Request, res: Response, n
 
 export const updateFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { courseId, feeHeadId, amount, academicYearId } = req.body;
+    const { courseId, feeHeadId, amount, academicYearId, quotaType, courseType, yearOfStudy, dueDate } = req.body;
     
-    const updatedFeeStructure = await FeeService.updateFeeStructure(id, courseId, feeHeadId, amount, academicYearId, req.user!.userId);
+    const updatedFeeStructure = await FeeService.updateFeeStructure(id, courseId, feeHeadId, amount, academicYearId, req.user!.userId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined);
     
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.FEE_STRUCTURE_UPDATED, data: updatedFeeStructure });
 });
@@ -95,6 +112,31 @@ export const getFeeStatistics = catchAsync(async (req: Request, res: Response, n
         success: true,
         message: MESSAGES.SUCCESS.FEE_STATISTICS_FETCHED,
         data: stats
+    });
+});
+
+// Generate Fee Demands
+export const generateFeeDemands = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId, courseId, academicYearId } = req.body;
+    const adminId = req.user!.userId;
+
+    const result = await FeeService.generateFeeDemands(studentId, courseId, academicYearId, adminId);
+    
+    // If undefined returned (no applicable fees or error?) Service returns undefined if no applicable fees
+    if (!result) {
+        return sendResponse({
+            res,
+            statusCode: 200, // Ok but nothing done
+            success: true,
+            message: "No applicable fee structures found for this student criteria"
+        });
+    }
+
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: "Fee demands generated successfully"
     });
 });
 

@@ -433,6 +433,7 @@ model Student {
 
   
   degreeType String? 
+  courseType String? // e.g., "Regular", "Lateral" 
 
   
   pref1 String?
@@ -877,6 +878,10 @@ model FeeStructure {
   currency       String             @default("INR")
   academicYearId String
   academicYear   AcademicYear       @relation(fields: [academicYearId], references: [id])
+  quotaType      QuotaType?         // If null, applies to all? Or specific to Management/Convenor
+  courseType     String?            // e.g., "Regular", "Lateral"
+  yearOfStudy    Int?               // e.g., 1, 2, 3, 4 (If null, applies to all years)
+  dueDate        DateTime?
   demands        StudentFeeDemand[]
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
@@ -885,6 +890,8 @@ model FeeStructure {
   isDeleted      Boolean  @default(false)
 
   @@index([courseId, academicYearId])
+  @@index([quotaType])
+  @@index([yearOfStudy])
 }
 
 model StudentFeeDemand {

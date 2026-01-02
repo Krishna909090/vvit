@@ -296,6 +296,23 @@ export const createFeeStructureSchema = z.object({
         feeHeadId: z.string().uuid(),
         amount: z.number().positive(),
         academicYearId: z.string().uuid(),
+        quotaType: z.string().optional(),
+        courseType: z.string().optional(),
+        yearOfStudy: z.number().int().min(1).max(10).optional(),
+        dueDate: z.string().datetime().or(z.date()).optional(),
+    }),
+});
+
+export const createBulkFeeStructureSchema = z.object({
+    body: z.object({
+        degreeType: z.string().min(1),
+        feeHeadId: z.string().uuid(),
+        amount: z.number().positive(),
+        academicYearId: z.string().uuid(),
+        quotaType: z.string().optional(),
+        courseType: z.string().optional(),
+        yearOfStudy: z.number().int().min(1).max(10).optional(),
+        dueDate: z.string().datetime().or(z.date()).optional(),
     }),
 });
 
@@ -313,6 +330,14 @@ export const updateStaffUserSchema = z.object({
             message: 'At least one field (name, email, or role) must be provided',
         }
     ),
+});
+
+export const generateFeeDemandsSchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid(),
+        courseId: z.string().uuid(),
+        academicYearId: z.string().uuid(),
+    }),
 });
 
 export const setEligibleScholarshipSchema = z.object({

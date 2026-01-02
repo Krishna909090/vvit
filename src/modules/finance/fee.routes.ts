@@ -4,16 +4,16 @@ import { Role } from '@prisma/client';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     createFeeHead, getFeeHeads, updateFeeHead, deleteFeeHead,
-    createFeeStructure, getFeeStructures, updateFeeStructure, deleteFeeStructure,
+    createFeeStructure, createBulkFeeStructure, getFeeStructures, updateFeeStructure, deleteFeeStructure,
     getFeeStatistics,
     createDiscountRequest, reviewDiscountRequest, approveDiscount,
     getApplicationFee, updateApplicationFee,
-    collectFee, getStudentLedger, downloadAllotmentOrder
+    collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands
 } from './fee.controller';
 
 import {
-    createFeeHeadSchema, createFeeStructureSchema,
-    createDiscountRequestSchema, reviewDiscountRequestSchema, approveDiscountSchema
+    createFeeHeadSchema, createFeeStructureSchema, createBulkFeeStructureSchema,
+    createDiscountRequestSchema, reviewDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema
 } from '../../validators/adminValidators';
 
 const router = Router();
@@ -26,10 +26,14 @@ router.put('/fee-head/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMI
 router.delete('/fee-head/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteFeeHead);
 
 // Fee Structure
+router.post('/fee-structure/bulk', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createBulkFeeStructureSchema), createBulkFeeStructure);
 router.post('/fee-structure', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createFeeStructureSchema), createFeeStructure);
 router.get('/fee-structure', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getFeeStructures);
 router.put('/fee-structure/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateFeeStructure);
 router.delete('/fee-structure/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteFeeStructure);
+
+// Fee Generation
+router.post('/generate-demands', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(generateFeeDemandsSchema), generateFeeDemands);
 
 // Fee Statistics
 router.get('/fee-stats', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getFeeStatistics);
@@ -46,10 +50,10 @@ router.get('/application-fee', authenticate, authorize([Role.ADMIN, Role.SUPER_A
 
 router.post('/application-fee', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateApplicationFee);
 
-router.post('/collect-fee', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), collectFee);
+router.post('/collect-fee', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]), collectFee);
 
 // Ledger
-router.get('/ledger/:studentId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.VERIFICATION_OFFICER]), getStudentLedger);
+router.get('/ledger/:studentId', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN, Role.VERIFICATION_OFFICER]), getStudentLedger);
 
 // Allotment Order
 router.get('/allotment-order/:studentId', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), downloadAllotmentOrder);

@@ -1,6 +1,6 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
-import { FeeStructure, SystemSetting, FeeHead, Role, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus } from '@prisma/client';
+import { FeeStructure, SystemSetting, FeeHead, Role, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType } from '@prisma/client';
 import { MESSAGES } from '../../constants/messages';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
@@ -55,17 +55,78 @@ export const FeeService = {
     },
 
     // Fee Structure
-    createFeeStructure: async (courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string) => {
+    createFeeStructure: async (courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, courseType?: string, yearOfStudy?: number, dueDate?: Date) => {
+        
+        const existing = await prisma.feeStructure.findFirst({
+            where: {
+                courseId,
+                feeHeadId,
+                academicYearId,
+                quotaType: quotaType ?? null,
+                courseType: courseType ?? null,
+                yearOfStudy: yearOfStudy ?? null,
+                isDeleted: false
+            }
+        });
+
+        if (existing) {
+            throw new AppError("Fee Structure already exists for this combination", 409);
+        }
+
         return prisma.feeStructure.create({
             data: {
                 courseId,
                 feeHeadId,
                 amount,
                 academicYearId,
+                quotaType,
+                courseType,
+                yearOfStudy,
+                dueDate,
                 createdBy: userId,
                 updatedBy: userId
             }
         });
+    },
+
+    createFeeStructureForDegree: async (degree: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, courseType?: string, yearOfStudy?: number, dueDate?: Date) => {
+        // 1. Find all courses for this degree
+        const courses = await prisma.course.findMany({
+            where: { degree, isDeleted: false }
+        });
+
+        if (courses.length === 0) {
+            throw new AppError(`No courses found for degree: ${degree}`, 404);
+        }
+
+        // 2. Create entries for each course
+        const createdStructures = [];
+        // Sequential creation to avoid race conditions with simple create, or use createMany if confident
+        for (const course of courses) {
+            // Check if exists to avoid duplicates? 
+            // Unique constraint is composite [courseId, academicYearId, feeHeadId] (Wait, schema index is just course, academicYear)
+            // Ideally we need checks. Assuming clean slate or upsert logic.
+            // Let's do simple create for now as per request "how to add".
+            
+            const structure = await prisma.feeStructure.create({
+                data: {
+                    courseId: course.id,
+                    feeHeadId,
+                    amount,
+                    academicYearId,
+                    quotaType,
+
+                    courseType,
+                    yearOfStudy,
+                    dueDate,
+                    createdBy: userId,
+                    updatedBy: userId
+                }
+            });
+            createdStructures.push(structure);
+        }
+
+        return createdStructures;
     },
 
     getFeeStructures: async () => {
@@ -79,7 +140,7 @@ export const FeeService = {
         });
     },
 
-    updateFeeStructure: async (id: string, courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string) => {
+    updateFeeStructure: async (id: string, courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, courseType?: string, yearOfStudy?: number, dueDate?: Date) => {
         return prisma.feeStructure.update({
             where: { id },
             data: {
@@ -87,6 +148,11 @@ export const FeeService = {
                 feeHeadId,
                 amount,
                 academicYearId,
+                quotaType,
+
+                courseType,
+                yearOfStudy,
+                dueDate,
                 updatedBy: userId
             }
         });
@@ -202,7 +268,6 @@ export const FeeService = {
              });
         } else if (component === PaymentComponent.TUITION) {
              // Upgrade to ADMISSION_CONFIRMED if Seat Allocated
-             // This is the "Token Fee" or "Admission Fee" payment
              const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
              if (admission && admission.status === AdmissionStatus.SEAT_ALLOTTED) { 
                  await prisma.studentAdmission.update({
@@ -212,11 +277,25 @@ export const FeeService = {
              }
         }
         
+        // 5. Create Ledger Entry (CREDIT)
+        await prisma.studentLedger.create({
+            data: {
+                studentId,
+                type: 'CREDIT',
+                amount: amount,
+                description: `Payment: ${component} (${method})`,
+                referenceId: payment.id,
+                referenceType: 'PAYMENT',
+                date: new Date(),
+                createdBy: adminId
+            }
+        });
+
         return payment;
     },
 
     // Automated Fee Generation
-    generateFeeDemands: async (studentId: string, courseId: string, academicYearId: string, userId: string) => {
+    generateFeeDemands: async (studentId: string, courseId: string, academicYearId: string, userId: string): Promise<any[]> => {
         // 1. Get Fee Structures
         const feeStructures = await prisma.feeStructure.findMany({
             where: {
@@ -224,15 +303,42 @@ export const FeeService = {
                 academicYearId,
                 isDeleted: false
             },
+
             include: { feeHead: true }
         });
 
-        if (feeStructures.length === 0) return;
+        // Get student quota type and course type to filter
+        const student = await prisma.student.findUnique({ 
+            where: { id: studentId },
+            include: { enrollment: true }
+        });
+        
+        if (!student) throw new AppError("Student not found", 404);
+
+        const studentQuota = student.quotaType;
+        const studentCourseType = student.courseType;
+
+        // Filter fee structures: 
+        // 1. If structure has NO quotaType/courseType (applies to all)
+        // 2. OR structure matches student's quotaType/courseType
+        // 3. AND yearOfStudy matches student's calculated year
+        
+        // Calculate Year of Study
+        const currentYear = student.enrollment?.currentSemester ? Math.ceil(student.enrollment.currentSemester / 2) : 1; // Default to 1 if no enrollment
+
+        const applicableFees = feeStructures.filter(fs => 
+            (!fs.quotaType || (studentQuota && fs.quotaType === studentQuota)) &&
+            (!fs.courseType || (studentCourseType && fs.courseType === studentCourseType)) &&
+            (!fs.yearOfStudy || fs.yearOfStudy === currentYear)
+        );
+
+        if (applicableFees.length === 0) return []; // Return empty array instead of void
 
         // 2. Create Demands & Ledger Entries
         // Using transaction to ensure ledger matches demands
-        await prisma.$transaction(async (tx) => {
-            for (const fee of feeStructures) {
+        return prisma.$transaction(async (tx) => {
+            const results = [];
+            for (const fee of applicableFees) {
                 // specific key to avoid duplicates
                 const uniqueKey = `${studentId}-${fee.id}`; 
                 
@@ -248,8 +354,9 @@ export const FeeService = {
                             studentId,
                             feeStructureId: fee.id,
                             amount: fee.amount,
+
                             status: 'PENDING',
-                            dueDate: new Date(), // Immediate due
+                            dueDate: fee.dueDate || new Date(), // Use structure due date or now
                             createdBy: userId
                         }
                     });
@@ -266,8 +373,10 @@ export const FeeService = {
                             createdBy: userId
                         }
                     });
+                    results.push(demand);
                 }
             }
+            return results;
         });
     },
 
