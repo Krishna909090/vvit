@@ -122,7 +122,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
                 profilePhotoUrl: data.profilePhotoUrl,
                 agentId,
                 isOffline: data.isOffline || false,
-                courseType: data.courseType,
+                degreeType: data.degreeType,
                 pref1: data.pref1,
                 pref2: data.pref2,
                 pref3: data.pref3,
@@ -175,7 +175,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
             pref1: true,
             pref2: true,
             pref3: true,
-            courseType: true,
+            degreeType: true,
             applicationId: true // Needed for logger and likely client
         }
     });
@@ -501,7 +501,7 @@ export const getStudentByUserId = async (userId: string) => {
             pref1: true,
             pref2: true,
             pref3: true,
-            courseType: true,
+            degreeType: true,
             applicationId: true, // Generally useful
             examDetails: {
                 select: {
@@ -533,7 +533,7 @@ export const getStudentByUserId = async (userId: string) => {
 
     // Convert all document URLs to presigned URLs
     const documentsWithPresignedUrls = await Promise.all(
-        student.documents.map(async (doc) => ({
+        student.documents.map(async (doc: any) => ({
             ...doc,
             url: await convertToPresignedUrl(doc.url)
         }))
@@ -618,7 +618,7 @@ export const searchStudents = async (query: string, page: number = 1, limit: num
                 name: true,
                 email: true,
                 phone: true,
-                courseType: true,
+                degreeType: true,
                 createdAt: true,
                 profilePhotoUrl: true,
                 admissionDetails: {

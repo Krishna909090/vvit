@@ -13,7 +13,7 @@ import axios from 'axios';
 export const createDocumentRequirement = async (data: any) => {
     const existingRequirement = await prisma.documentRequirement.findFirst({
         where: {
-            courseType: data.courseType,
+            degreeType: data.degreeType,
             documentKey: data.documentKey
         }
     });
@@ -24,7 +24,7 @@ export const createDocumentRequirement = async (data: any) => {
 
     const requirement = await prisma.documentRequirement.create({
         data: {
-            courseType: data.courseType,
+            degreeType: data.degreeType,
             documentName: data.documentName,
             documentKey: data.documentKey,
             isRequired: data.isRequired
@@ -34,13 +34,13 @@ export const createDocumentRequirement = async (data: any) => {
     return requirement;
 };
 
-export const getDocumentRequirements = async (courseType?: string) => {
-    const where = courseType ? { courseType } : {};
+export const getDocumentRequirements = async (degreeType?: string) => {
+    const where = degreeType ? { degreeType } : {};
     const requirements = await prisma.documentRequirement.findMany({
         where,
         orderBy: { createdAt: 'asc' }
     });
-    logger.info(`Fetched ${requirements.length} document requirements for courseType=${courseType || 'ALL'}`);
+    logger.info(`Fetched ${requirements.length} document requirements for degreeType=${degreeType || 'ALL'}`);
     return requirements;
 };
 

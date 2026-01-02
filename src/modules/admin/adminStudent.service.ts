@@ -38,7 +38,7 @@ export const AdminStudentService = {
         }
 
         if (courseType) {
-            where.courseType = courseType;
+            where.degreeType = courseType;
         }
 
         const [students, total] = await prisma.$transaction([
@@ -63,13 +63,13 @@ export const AdminStudentService = {
         const requirements = await prisma.documentRequirement.findMany({ where: { isRequired: true } });
         const reqMap: Record<string, string[]> = {};
         requirements.forEach((r: any) => {
-            if (!reqMap[r.courseType]) reqMap[r.courseType] = [];
-            reqMap[r.courseType].push(r.documentKey);
+            if (!reqMap[r.degreeType]) reqMap[r.degreeType] = [];
+            reqMap[r.degreeType].push(r.documentKey);
         });
 
         const enhancedStudents = students.map((student: any) => {
             const uploadedKeys = student.documents.map((d: any) => d.documentKey);
-            const requiredKeys = reqMap[student.courseType || ''] || [];
+            const requiredKeys = reqMap[student.degreeType || ''] || [];
             const pendingDocs = requiredKeys.filter(key => !uploadedKeys.includes(key));
 
             return {
@@ -133,7 +133,7 @@ export const AdminStudentService = {
                     pref2: studentData.branch_preference_2,
                     pref3: studentData.branch_preference_3,
                     isOffline: true,
-                    courseType: studentData.course_type || 'B.Tech',
+                    degreeType: studentData.course_type || 'B.Tech',
                     profilePhotoUrl: studentData.profile_photo_url || 'https://via.placeholder.com/150',
                 };
 
@@ -321,7 +321,7 @@ export const AdminStudentService = {
                 });
             } else {
                 const requirements = await prisma.documentRequirement.findMany({
-                    where: { courseType: student.courseType || '', isRequired: true }
+                    where: { degreeType: student.degreeType || '', isRequired: true }
                 });
 
                 const requiredKeys = requirements.map(r => r.documentKey);

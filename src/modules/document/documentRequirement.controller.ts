@@ -8,19 +8,19 @@ import { catchAsync } from '../../utils/catchAsync';
 import { sendResponse } from '../../utils/response';
 
 /**
- * Controller: Get all document requirements (with optional courseType filter)
+ * Controller: Get all document requirements (with optional degreeType filter)
  * Route: GET /document-requirements
- * Query Params: ?courseType=UG (optional)
+ * Query Params: ?degreeType=UG (optional)
  * Roles: ADMIN, SUPER_ADMIN
  */
 export const getDocumentRequirements = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
-        const { courseType } = req.query;
+        const { degreeType } = req.query;
         
-        logger.info(`[getDocumentRequirements] by=${req.user?.userId} courseType=${courseType || 'all'}`);
+        logger.info(`[getDocumentRequirements] by=${req.user?.userId} degreeType=${degreeType || 'all'}`);
         
         const requirements = await documentRequirementService.getDocumentRequirements(
-            courseType as string | undefined
+            degreeType as string | undefined
         );
         
         sendResponse({
@@ -32,6 +32,20 @@ export const getDocumentRequirements = catchAsync(
         });
     }
 );
+
+/**
+ * Controller: Get document requirement by ID
+ */
+export const getDocumentRequirementById = catchAsync(async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const requirement = await documentRequirementService.getDocumentRequirementById(id);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        data: requirement
+    });
+});
 
 /**
  * Controller: Create a new document requirement

@@ -7,6 +7,7 @@ import { Role } from '@prisma/client';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     getDocumentRequirements,
+    getDocumentRequirementById,
     createDocumentRequirement,
     updateDocumentRequirement,
     deleteDocumentRequirement,
@@ -24,6 +25,13 @@ router.get(
     authenticate,
     authorize([Role.ADMIN, Role.SUPER_ADMIN]),
     getDocumentRequirements
+);
+
+router.get(
+    '/:id',
+    authenticate,
+    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    getDocumentRequirementById
 );
 
 router.post(

@@ -432,7 +432,7 @@ model Student {
   isKycVerified Boolean @default(false)
 
   
-  courseType String? 
+  degreeType String? 
 
   
   pref1 String?
@@ -482,7 +482,7 @@ model Student {
   @@index([agentId])
   @@index([phone])
   @@index([aadharNumber])
-  @@index([courseType])
+  @@index([degreeType])
   @@index([quotaType])
   @@index([applicationMode])
   @@index([isKycVerified])
@@ -1385,7 +1385,7 @@ model OfflineUploadBatch {
 
 model DocumentRequirement {
   id           String   @id @default(uuid())
-  courseType   String 
+  degreeType   String 
   documentName String 
   documentKey  String 
   isRequired   Boolean  @default(true)
@@ -1395,8 +1395,8 @@ model DocumentRequirement {
   updatedBy    String?
   isDeleted    Boolean  @default(false)
 
-  @@unique([courseType, documentKey])
-  @@index([courseType])
+  @@unique([degreeType, documentKey])
+  @@index([degreeType])
   @@index([isDeleted])
 }
 
@@ -1444,6 +1444,28 @@ model ScholarshipAllocation {
 
   @@index([status])
   @@index([expiresAt])
+}
+
+model QualificationRequirement {
+  id               String   @id @default(uuid())
+  degreeType       String
+  
+  // Rule Logic
+  ruleType         String   @default("SINGLE") // "SINGLE", "OR", "AND"
+  
+  // Content
+  qualificationKeys String[] // e.g., ["SSC"] or ["EAPCET", "JEE"]
+  
+  isRequired       Boolean  @default(true)
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  createdBy        String?
+  updatedBy        String?
+  isDeleted        Boolean  @default(false)
+
+  @@index([degreeType])
+  @@index([isDeleted])
 }
 
 

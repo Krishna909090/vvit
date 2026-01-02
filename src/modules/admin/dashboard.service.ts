@@ -173,7 +173,7 @@ export const DashboardService = {
                 email: true,
                 phone: true,
                 createdAt: true,
-                courseType: true,
+                degreeType: true,
                 admissionDetails: {
                     select: {
                         status: true

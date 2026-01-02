@@ -27,8 +27,8 @@ export const addRequirement = catchAsync(async (req: Request, res: Response, nex
 
 // Admin: List Requirements (Optional query param: courseType)
 export const listRequirements = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { courseType } = req.query;
-    const requirements = await getDocumentRequirements(courseType as string);
+    const { degreeType } = req.query;
+    const requirements = await getDocumentRequirements(degreeType as string);
     sendResponse({
         res,
         statusCode: 200,
@@ -69,14 +69,14 @@ export const getMyRequirements = catchAsync(async (req: Request, res: Response, 
 
     const student = await prisma.student.findUnique({
         where: { id: studentId },
-        select: { courseType: true }
+        select: { degreeType: true }
     });
 
-    if (!student || !student.courseType) {
+    if (!student || !student.degreeType) {
         throw new AppError(MESSAGES.ERROR.STUDENT_COURSE_TYPE_NOT_FOUND, 400);
     }
 
-    const requirements = await getDocumentRequirements(student.courseType);
+    const requirements = await getDocumentRequirements(student.degreeType);
     sendResponse({
         res,
         statusCode: 200,

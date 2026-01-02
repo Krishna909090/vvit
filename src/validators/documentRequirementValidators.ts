@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 export const createDocumentRequirementSchema = z.object({
     body: z.object({
-        courseType: z.string().min(1, 'Course type is required').trim(),
+        degreeType: z.string().min(1, 'Degree type is required').trim(),
         documentName: z.string().min(1, 'Document name is required').trim(),
         documentKey: z.string().min(1, 'Document key is required').trim(),
         isRequired: z.boolean().optional().default(true)

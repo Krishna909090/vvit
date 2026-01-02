@@ -28,7 +28,7 @@ interface StudentImportRow {
     city: string;
     state: string;
     pincode: string;
-    courseType: string; 
+    degreeType: string; 
     category: string;
     quotaType?: string; 
     amount?: number; 
@@ -86,7 +86,7 @@ export const processOfflineRegistration = async (fileBuffer: any, adminId: strin
             city: values[10],
             state: values[11],
             pincode: values[12]?.toString(),
-            courseType: values[13],
+            degreeType: values[13],
             category: values[14]
         });
     });
@@ -142,7 +142,7 @@ export const processSeatBookingRegistration = async (fileBuffer: any, adminId: s
             city: values[10],
             state: values[11],
             pincode: values[12]?.toString(),
-            courseType: values[13],
+            degreeType: values[13],
             category: values[14],
             amount: values[15] ? Number(values[15]) : 10000 // Default token amount
         });
@@ -221,7 +221,7 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
                 city: data.city || '',
                 state: data.state || '',
                 pincode: data.pincode || '',
-                courseType: data.courseType,
+                degreeType: data.degreeType,
                 applicationMode: mode,
                 isOffline: mode === ApplicationMode.OFFLINE, // Backward compat
                 userId: user.id,
@@ -294,7 +294,7 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 city: data.city || '',
                 state: data.state || '',
                 pincode: data.pincode || '',
-                courseType: data.courseType,
+                degreeType: data.degreeType,
                 applicationMode: 'SEAT_BOOKING' as ApplicationMode, // Cast to avoid lint error if d.ts outdated
                 isOffline: true, 
                 userId: user.id,

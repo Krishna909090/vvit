@@ -72,6 +72,6 @@ router.post('/update-status', authenticate, authorize([Role.ADMIN, Role.SUPER_AD
 router.post('/scholarship-eligibility', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(setEligibleScholarshipSchema), setScholarshipEligibility);
 
 // Update Personal Details
-router.post('/update-personal-details', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateStudentPersonalDetailsSchema), updateStudentPersonalDetails);
+router.post('/update-personal-details', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateStudentPersonalDetailsSchema), updateStudentPersonalDetails);
 
 export default router;

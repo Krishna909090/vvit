@@ -17,6 +17,7 @@ import paymentRoutes from './modules/finance/payment.routes';
 import dataImportRoutes from './modules/admission/dataImport.routes';
 import verificationRoutes from './modules/admin/verification.routes';
 import academicRoutes from './modules/academic/academic.routes';
+import qualificationRequirementRoutes from './modules/qualification/qualificationRequirement.routes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
 import { generalRateLimiter } from './middlewares/rateLimitMiddleware';
@@ -99,6 +100,7 @@ app.use('/payment', paymentRoutes);
 app.use('/api/admission', dataImportRoutes);
 app.use('/verification', verificationRoutes);
 app.use('/admin/academic', academicRoutes);
+app.use('/qualification-requirements', qualificationRequirementRoutes);
 
 
 

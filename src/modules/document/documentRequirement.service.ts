@@ -1,5 +1,5 @@
 // services/documentRequirementService.ts
-// Business logic for managing document requirements based on qualifications/course types
+// Business logic for managing document requirements based on qualifications/degree types
 
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
@@ -7,23 +7,23 @@ import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 
 /**
- * Get all document requirements with optional filtering by courseType
+ * Get all document requirements with optional filtering by degreeType
  */
-export const getDocumentRequirements = async (courseType?: string) => {
-    logger.info(`[getDocumentRequirements] Fetching document requirements${courseType ? ` for courseType=${courseType}` : ''}`);
+export const getDocumentRequirements = async (degreeType?: string) => {
+    logger.info(`[getDocumentRequirements] Fetching document requirements${degreeType ? ` for degreeType=${degreeType}` : ''}`);
     
     const where: any = {
         isDeleted: false
     };
     
-    if (courseType) {
-        where.courseType = courseType;
+    if (degreeType) {
+        where.degreeType = degreeType;
     }
     
     const requirements = await prisma.documentRequirement.findMany({
         where,
         orderBy: [
-            { courseType: 'asc' },
+            { degreeType: 'asc' },
             { documentName: 'asc' }
         ]
     });
@@ -33,13 +33,30 @@ export const getDocumentRequirements = async (courseType?: string) => {
 };
 
 /**
+ * Get a single document requirement by ID
+ */
+export const getDocumentRequirementById = async (id: string) => {
+    if (!id) throw new AppError('Requirement ID is required', 400);
+
+    const requirement = await prisma.documentRequirement.findUnique({
+        where: { id }
+    });
+
+    if (!requirement || requirement.isDeleted) {
+        throw new AppError('Document requirement not found', 404);
+    }
+    
+    return requirement;
+};
+
+/**
  * Create a new document requirement
  */
 export const createDocumentRequirement = async (data: any, userId?: string) => {
-    const { courseType, documentName, documentKey, isRequired } = data;
+    const { degreeType, documentName, documentKey, isRequired } = data;
     
-    if (!courseType || !courseType.trim()) {
-        throw new AppError('Course type is required', 400);
+    if (!degreeType || !degreeType.trim()) {
+        throw new AppError('Degree type is required', 400);
     }
     
     if (!documentName || !documentName.trim()) {
@@ -53,7 +70,7 @@ export const createDocumentRequirement = async (data: any, userId?: string) => {
     // Check if already exists
     const existing = await prisma.documentRequirement.findFirst({
         where: {
-            courseType: courseType.trim(),
+            degreeType: degreeType.trim(),
             documentKey: documentKey.trim(),
             isDeleted: false
         }
@@ -61,14 +78,14 @@ export const createDocumentRequirement = async (data: any, userId?: string) => {
     
     if (existing) {
         throw new AppError(
-            `Document requirement already exists for courseType="${courseType}" with documentKey="${documentKey}"`,
+            `Document requirement already exists for degreeType="${degreeType}" with documentKey="${documentKey}"`,
             409
         );
     }
     
     const requirement = await prisma.documentRequirement.create({
         data: {
-            courseType: courseType.trim(),
+            degreeType: degreeType.trim(),
             documentName: documentName.trim(),
             documentKey: documentKey.trim(),
             isRequired: isRequired !== undefined ? Boolean(isRequired) : true,
@@ -76,7 +93,7 @@ export const createDocumentRequirement = async (data: any, userId?: string) => {
         }
     });
     
-    logger.info(`[createDocumentRequirement] Created document requirement id=${requirement.id} for courseType=${courseType}`);
+    logger.info(`[createDocumentRequirement] Created document requirement id=${requirement.id} for degreeType=${degreeType}`);
     return requirement;
 };
 
@@ -115,7 +132,7 @@ export const updateDocumentRequirement = async (id: string, data: any, userId?: 
         updateData.isRequired = Boolean(data.isRequired);
     }
     
-    // Note: courseType and documentKey cannot be updated as they form unique constraint
+    // Note: degreeType and documentKey cannot be updated as they form unique constraint
     // If needed, delete and create new one
     
     const updated = await prisma.documentRequirement.update({
@@ -159,7 +176,7 @@ export const deleteDocumentRequirement = async (id: string) => {
 };
 
 /**
- * Get document requirements for a specific student based on their course type
+ * Get document requirements for a specific student based on their degree type
  */
 export const getStudentDocumentRequirements = async (studentId: string) => {
     if (!studentId) {
@@ -169,7 +186,7 @@ export const getStudentDocumentRequirements = async (studentId: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         select: {
-            courseType: true
+            degreeType: true
         }
     });
     
@@ -177,16 +194,16 @@ export const getStudentDocumentRequirements = async (studentId: string) => {
         throw new AppError('Student not found', 404);
     }
     
-    if (!student.courseType) {
-        throw new AppError('Student does not have a course type assigned', 400);
+    if (!student.degreeType) {
+        throw new AppError('Student does not have a degree type assigned', 400);
     }
     
-    const requirements = await getDocumentRequirements(student.courseType);
+    const requirements = await getDocumentRequirements(student.degreeType);
     
-    logger.info(`[getStudentDocumentRequirements] Found ${requirements.length} document requirements for student=${studentId} courseType=${student.courseType}`);
+    logger.info(`[getStudentDocumentRequirements] Found ${requirements.length} document requirements for student=${studentId} degreeType=${student.degreeType}`);
     return {
         studentId,
-        courseType: student.courseType,
+        degreeType: student.degreeType,
         requirements
     };
 };

@@ -898,7 +898,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             profilePhotoUrl: profilePhotoUrl,
             qrCodeBuffer: qrCodeBuffer,
             session: 'Entrance Exam 2024', // Static or dynamic based on config
-            program: student.courseType || 'B.Tech'
+            program: student.degreeType || 'B.Tech'
         });
         
         const key = `students/${studentId}/hall_tickets/${slotId}_${Date.now()}.pdf`;
