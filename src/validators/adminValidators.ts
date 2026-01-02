@@ -333,3 +333,29 @@ export const submitVerificationSchema = z.object({
         message: "At least one score must be provided",
     }),
 });
+
+export const updateStudentPersonalDetailsSchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid(),
+        name: z.string().min(1).optional(),
+        fatherName: z.string().min(1).optional(),
+        motherName: z.string().min(1).optional(),
+        gender: z.string().min(1).optional(),
+        dob: z.coerce.date().optional(),
+        email: z.string().email().optional(),
+        category: z.string().min(1).optional(),
+        address: z.string().min(1).optional(),
+        city: z.string().min(1).optional(),
+        state: z.string().min(1).optional(),
+        pincode: z.string().min(1).optional(),
+        country: z.string().min(1).optional(),
+        profilePhotoUrl: z.string().url().optional(),
+    }).refine(data => {
+        const forbiddenKeys = ['phone', 'phoneNumber', 'aadharNumber', 'aadhar'];
+        const keys = Object.keys(data);
+        return !keys.some(k => forbiddenKeys.includes(k));
+    }, {
+        message: "Updates to phone number or Aadhar number are not allowed through this API.",
+    }),
+});
+

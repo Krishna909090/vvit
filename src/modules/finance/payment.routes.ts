@@ -1,6 +1,6 @@
 import express from 'express';
 import { handlePaymentCallback } from './payment.service';
-import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory } from './payment.controller';
+import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary } from './payment.controller';
 import { authenticate, authorize } from '../../middlewares/authMiddleware';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
@@ -18,6 +18,9 @@ router.get('/check-status/:txnId', authenticate, authorize(['STUDENT', 'ADMIN', 
 // History Routes
 router.get('/history', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), getPaymentHistory);
 router.get('/history/:studentId', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), getPaymentHistory);
+router.get('/summary', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), getFinancialSummary);
+router.get('/summary/:studentId', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), getFinancialSummary);
+
 router.post('/callback', async (req, res, next) => {
     try {
         const { response } = req.body; // base64 payload

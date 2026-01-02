@@ -8,6 +8,8 @@ import studentRoutes from './studentManagement.routes';
 import transportRoutes from '../infrastructure/transport.routes';
 import dashboardRoutes from './dashboard.routes';
 
+import bulkImportRoutes from './bulkImport.routes';
+
 const router = Router();
 
 router.use('/academic', academicRoutes);
@@ -18,5 +20,6 @@ router.use('/hostel', hostelRoutes);
 router.use('/hostel-prices', hostelPriceRoutes);
 router.use('/students', studentRoutes); // Was studentRoutes in admin/index
 router.use('/transport', transportRoutes);
+router.use('/bulk-import', bulkImportRoutes);
 
 export default router;

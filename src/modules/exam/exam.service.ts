@@ -1440,3 +1440,115 @@ export const getHallTicketDetails = async (studentId: string) => {
         hallTicketDownloadUrl
     };
 };
+
+/**
+ * Manually scan student by Application ID and return details for validation.
+ * Similar to markAttendanceByScan but uses manual input.
+ */
+export const markAttendanceByApplicationId = async (applicationId: string, userId: string) => {
+    if (!applicationId || !applicationId.trim()) {
+        throw new AppError('Application ID is required', 400);
+    }
+
+    // Find student by applicationId
+    const student = await prisma.student.findUnique({
+        where: { applicationId },
+        include: {
+            examDetails: {
+                include: {
+                    examSlot: {
+                        include: {
+                            examCenter: true
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    if (!student) {
+        throw new AppError('Student not found with this Application ID', 404);
+    }
+
+    // Validate if student has exam details
+    if (!student.examDetails || !student.examDetails.examSlot) {
+         throw new AppError('Student does not have an assigned exam slot', 400);
+    }
+
+    // Date validation
+    const skipDateValidation = process.env.SKIP_DATE_VALIDATION === 'true';
+    
+    if (!skipDateValidation) {
+        if (student.examDetails?.testDate) {
+            const today = new Date();
+            const examDate = new Date(student.examDetails.testDate);
+            
+            const todayStr = today.toISOString().split('T')[0];
+            const examDateStr = examDate.toISOString().split('T')[0];
+
+            if (todayStr !== examDateStr) {
+                throw new AppError(`Cannot scan: Exam is scheduled for ${examDateStr}, not today (${todayStr})`, 400);
+            }
+        } else if (student.examDetails?.examSlot?.date) {
+             const today = new Date();
+             const examDate = new Date(student.examDetails.examSlot.date);
+              const todayStr = today.toISOString().split('T')[0];
+              const examDateStr = examDate.toISOString().split('T')[0];
+
+              if (todayStr !== examDateStr) {
+                  throw new AppError(`Cannot scan: Exam is scheduled for ${examDateStr}, not today (${todayStr})`, 400);
+              }
+        }
+    } else {
+        logger.warn(`[markAttendanceByApplicationId] Date validation skipped for testing (user=${userId})`);
+    }
+
+    // Check if already verified
+    const existingRecord = await prisma.attendanceRecord.findFirst({
+        where: {
+            studentId: student.id,
+            verified: true
+        }
+    });
+
+    if (existingRecord) {
+        throw new AppError('Attendance already verified for this student', 400);
+    }
+
+    // Create unverified attendance record (or update if exists)
+    // For manual scan, we can reuse the same logic
+    const attendanceRecord = await prisma.attendanceRecord.create({
+        data: {
+            studentId: student.id,
+            invigilatorId: userId,
+            scannedAt: new Date(),
+            verified: false,
+            createdBy: userId,
+        }
+    });
+
+    logger.info(`Manual ApplicationId scan for student=${student.id} by user=${userId}`);
+    
+    // Return student details for validation (Must match markAttendanceByScan return structure)
+    return {
+        attendanceRecordId: attendanceRecord.id,
+        student: {
+            id: student.id,
+            name: student.name,
+            applicationId: student.applicationId,
+            phone: student.phone,
+            email: student.email,
+            profilePhotoUrl: student.profilePhotoUrl,
+            fatherName: student.fatherName,
+            dob: student.dob,
+        },
+        examDetails: {
+            examCenter: student.examDetails?.examSlot?.examCenter?.name,
+            examCenterAddress: student.examDetails?.examSlot?.examCenter?.address,
+            examDate: student.examDetails?.testDate ? formatDate(student.examDetails.testDate) : null,
+            startTime: student.examDetails?.examSlot?.startTime ? formatTimeUTC(student.examDetails.examSlot.startTime) : null,
+            endTime: student.examDetails?.examSlot?.endTime ? formatTimeUTC(student.examDetails.examSlot.endTime) : null,
+        },
+        message: 'Student details retrieved. Please verify and call verify API to mark attendance.'
+    };
+};

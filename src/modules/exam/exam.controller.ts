@@ -101,6 +101,63 @@ export const scanAttendance = catchAsync(
 );
 
 /**
+ * Controller: Manual scan by Application ID and return student details for validation.
+ * Route: POST /exam/attendance/manual-scan
+ * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR
+ */
+export const manualScan = catchAsync(
+    async (req: Request, res: Response, next: NextFunction) => {
+        const userId = req.user?.userId;
+        if (!userId) {
+            logger.warn('[manualScan] unauthorized attempt');
+            throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
+        }
+
+        const { applicationId } = req.body;
+
+        logger.info(`[manualScan] user=${userId} role=${req.user?.role} manually scanning appId=${applicationId}`);
+        
+        try {
+            const result = await examService.markAttendanceByApplicationId(applicationId, userId);
+
+            // Audit log successful scan
+            const { logAttendanceOperation, AuditAction } = await import('../../utils/auditLogger');
+            await logAttendanceOperation(
+                AuditAction.ATTENDANCE_SCANNED,
+                userId,
+                result.student.id,
+                result.attendanceRecordId,
+                true,
+                {
+                    studentName: result.student.name,
+                    applicationId: result.student.applicationId,
+                    examCenter: result.examDetails.examCenter,
+                    method: 'MANUAL_SCAN'
+                }
+            );
+
+            logger.info('[manualScan] student details retrieved');
+            sendResponse({
+                res,
+                statusCode: 200,
+                success: true,
+                message: 'Student details retrieved for validation',
+                data: result,
+            });
+        } catch (error: any) {
+            // Audit log failed scan
+            const { logSecurityEvent, AuditAction } = await import('../../utils/auditLogger');
+            await logSecurityEvent(
+                AuditAction.SUSPICIOUS_ACTIVITY,
+                req,
+                { error: error.message, applicationId, method: 'MANUAL_SCAN' }
+            );
+            throw error;
+        }
+    }
+);
+
+/**
  * Controller: Verify and mark student attendance after validation.
  * Route: POST /exam/attendance/verify
  * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR

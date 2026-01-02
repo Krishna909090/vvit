@@ -154,3 +154,26 @@ export const getPaymentHistory = catchAsync(async (req: Request, res: Response, 
         data: history
     });
 });
+
+export const getFinancialSummary = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    let { studentId } = req.params;
+    
+    if (!studentId && req.user?.role === 'STUDENT') {
+         const { getStudentByUserId } = await import('../student/student.service');
+         const s = await getStudentByUserId(req.user.userId);
+         if (s) studentId = s.id;
+    }
+
+    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+    const { getStudentFinancialSummary } = await import('./payment.service');
+    const summary = await getStudentFinancialSummary(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Financial summary retrieved successfully",
+        data: summary
+    });
+});

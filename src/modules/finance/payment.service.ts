@@ -351,6 +351,12 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
 
     // 3. Calculate Dynamic Fees
     let collegeFee = student.admissionDetails.totalFee > 0 ? student.admissionDetails.totalFee : 25000;
+    
+    // Deduct already paid amount (e.g. Token Fee)
+    if (student.admissionDetails.paidFee > 0) {
+        collegeFee = Math.max(0, collegeFee - student.admissionDetails.paidFee);
+    }
+
     let hostelFee = 0;
     let transportFee = 0;
     
@@ -619,4 +625,156 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     }));
 
     return { history };
+};
+
+export const getStudentFinancialSummary = async (studentId: string) => {
+    // 1. Fetch Student Config & Admission Details
+    const student = await prisma.student.findUnique({
+        where: { id: studentId },
+        include: {
+            admissionDetails: {
+                include: {
+                    hostel: { include: { blocks: { include: { rooms: true } } } },
+                    transportRoute: true
+                }
+            }
+        }
+    });
+
+    if (!student || !student.admissionDetails) {
+        throw new AppError('Student admission details not found', 404);
+    }
+
+    // 2. Fetch All Successful Payments
+    const payments = await prisma.payment.findMany({
+        where: {
+            studentId,
+            status: PaymentStatus.SUCCESS
+        }
+    });
+
+    // 3. Initialize Summary Structure
+    const summary = {
+        applicationFee: { expected: 0, paid: 0, pending: 0, status: 'PENDING' },
+        collegeFee: { expected: 0, paid: 0, pending: 0, breakdown: {}, status: 'PENDING' },
+        totalPaid: 0
+    };
+
+    // --- APPLICATION FEE ---
+    summary.applicationFee.expected = await getApplicationFeeAmount();
+    summary.applicationFee.paid = payments
+        .filter(p => p.component === PaymentComponent.APPLICATION_FEE)
+        .reduce((sum, p) => sum + p.amount, 0);
+    
+    summary.applicationFee.pending = Math.max(0, summary.applicationFee.expected - summary.applicationFee.paid);
+    summary.applicationFee.status = summary.applicationFee.pending === 0 ? 'PAID' : (summary.applicationFee.paid > 0 ? 'PARTIAL' : 'PENDING');
+
+    // --- COLLEGE FEE (Tuition + Hostel + Transport) ---
+    // Calculate Breakdown
+    const baseTuition = student.admissionDetails.totalFee > 0 ? student.admissionDetails.totalFee : 25000; // Default or DB value
+    let hostelFee = 0;
+    let transportFee = 0;
+
+    // Hostel Cost
+    if (student.admissionDetails.hostelId && student.admissionDetails.roomNumber) {
+         // Try to find the specific room cost
+         const room = student.admissionDetails.hostel?.blocks
+            .flatMap(b => b.rooms)
+            .find(r => r.number === student.admissionDetails?.roomNumber);
+         hostelFee = room ? room.cost : 0;
+    }
+
+    // Transport Cost
+    if (student.admissionDetails.transportRouteId) {
+        transportFee = student.admissionDetails.transportRoute?.cost || 0;
+    }
+
+    summary.collegeFee.breakdown = {
+        tuition: baseTuition,
+        hostel: hostelFee,
+        transport: transportFee
+    };
+
+    // Calculate Paid Breakdown
+    const paidBreakdown = {
+        tuition: 0,
+        hostel: 0,
+        transport: 0,
+        scholarship_token: 0,
+        other: 0
+    };
+
+    payments.forEach(p => {
+        if (p.component === PaymentComponent.TUITION) paidBreakdown.tuition += p.amount;
+        else if (p.component === PaymentComponent.HOSTEL) paidBreakdown.hostel += p.amount;
+        else if (p.component === PaymentComponent.TRANSPORT) paidBreakdown.transport += p.amount;
+        else if (p.component === PaymentComponent.SCHOLARSHIP_TOKEN) paidBreakdown.scholarship_token += p.amount;
+        else if (p.component === PaymentComponent.OTHER) paidBreakdown.other += p.amount;
+    });
+
+    (summary.collegeFee as any).paidBreakdown = paidBreakdown;
+
+    summary.collegeFee.expected = baseTuition + hostelFee + transportFee;
+
+    // --- SCHOLARSHIP & DISCOUNTS ---
+    // Fetch Active Scholarships
+    const scholarship = await prisma.scholarshipAllocation.findUnique({
+        where: { studentId },
+        include: { rule: true }
+    });
+
+    let scholarshipAmount = 0;
+    if (scholarship && scholarship.status === 'LOCKED' && scholarship.rule) {
+        // Calculate Discount
+        // Assuming percentage of TUITION Fee
+        scholarshipAmount = (baseTuition * scholarship.rule.discountPercentage) / 100;
+    }
+
+    // Fetch Manual Discounts from Ledger (Type: CREDIT, RefType: DISCOUNT or Custom)
+    // Or check if there is a 'DiscountRequest' APPROVED with specific amount. 
+    // Since DiscountRequest schema doesn't have amount, we rely on Ledger entries created during approval.
+    const discountLedgerEntries = await prisma.studentLedger.findMany({
+        where: {
+            studentId,
+            type: 'CREDIT',
+            OR: [
+                { referenceType: 'DISCOUNT' },
+                { description: { contains: 'Discount', mode: 'insensitive' } }
+            ]
+        }
+    });
+
+    const manualDiscountAmount = discountLedgerEntries.reduce((sum, entry) => sum + entry.amount, 0);
+
+    const totalDiscount = scholarshipAmount + manualDiscountAmount;
+
+    // Update College Fee Paid Logic to Include Discounts
+    const collegeFeeComponents = [
+        PaymentComponent.TUITION, 
+        PaymentComponent.HOSTEL, 
+        PaymentComponent.TRANSPORT, 
+        PaymentComponent.SCHOLARSHIP_TOKEN, 
+        PaymentComponent.OTHER
+    ];
+    
+    summary.collegeFee.paid = payments
+        .filter(p => collegeFeeComponents.includes(p.component as any))
+        .reduce((sum, p) => sum + p.amount, 0);
+
+    // Add Discount to "Paid/Waived" coverage
+    // Effectively, Discount reduces the Pending Amount.
+    // We can show it as "Waived" or just subtract from Expected.
+    // Let's add specific field for Clarity.
+    (summary.collegeFee as any).discount = totalDiscount;
+    (summary.collegeFee as any).scholarship = scholarshipAmount;
+    (summary.collegeFee as any).manualDiscount = manualDiscountAmount;
+
+    // Pending = Expected - (Paid + Discount)
+    summary.collegeFee.pending = Math.max(0, summary.collegeFee.expected - (summary.collegeFee.paid + totalDiscount));
+    summary.collegeFee.status = summary.collegeFee.pending === 0 ? 'PAID' : (summary.collegeFee.paid > 0 ? 'PARTIAL' : 'PENDING');
+
+    // --- TOTAL PAID ---
+    summary.totalPaid = summary.applicationFee.paid + summary.collegeFee.paid;
+
+    return summary;
 };

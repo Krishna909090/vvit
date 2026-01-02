@@ -703,6 +703,54 @@ export const AdminStudentService = {
                 updatedBy: adminId
             }
         });
+    },
+    async updateStudentPersonalDetails(studentId: string, data: any, adminId: string | undefined) {
+        if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+        // Explicitly ban phone and aadharNumber updates
+        const { phone, aadharNumber, phoneNumber, aadhar, ...updateData } = data;
+
+        const student = await prisma.student.findUnique({ where: { id: studentId } });
+        if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+
+        // Check email uniqueness if changing
+        if (updateData.email && updateData.email !== student.email) {
+            const existingEmail = await prisma.student.findUnique({ where: { email: updateData.email } });
+            if (existingEmail) throw new AppError('Email already in use by another student', 400);
+            
+            // Allow update only if email is not taken by another user
+             if (student.userId) {
+                const existingUserEmail = await prisma.user.findUnique({ where: { email: updateData.email } });
+                if (existingUserEmail && existingUserEmail.id !== student.userId) {
+                    throw new AppError('Email already in use by another user', 400);
+                }
+             } else {
+                 // Check if any user has this email
+                 const existingUserEmail = await prisma.user.findUnique({ where: { email: updateData.email } });
+                 if (existingUserEmail) throw new AppError('Email already in use by a user', 400);
+             }
+        }
+
+        await prisma.$transaction(async (tx) => {
+             // Update Student
+             await tx.student.update({
+                 where: { id: studentId },
+                 data: {
+                     ...updateData,
+                     updatedBy: adminId
+                 }
+             });
+
+             // Update User if linked and email is changed
+             if (student.userId && updateData.email && updateData.email !== student.email) {
+                 await tx.user.update({
+                     where: { id: student.userId },
+                     data: { email: updateData.email }
+                 });
+             }
+        });
+
+        return { success: true, message: 'Student personal details updated successfully' };
     }
 };
 

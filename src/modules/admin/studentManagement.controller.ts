@@ -247,3 +247,19 @@ export const setScholarshipEligibility = catchAsync(async (req: Request, res: Re
         message: 'Scholarship eligibility updated successfully'
     });
 });
+
+// Update Student Personal Details
+export const updateStudentPersonalDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[updateStudentPersonalDetails] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId, ...updateData } = req.body;
+
+    const result = await AdminStudentService.updateStudentPersonalDetails(studentId, updateData, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.message
+    });
+});
+

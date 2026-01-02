@@ -389,6 +389,7 @@ enum QuotaType {
 enum ApplicationMode {
   ONLINE
   OFFLINE
+  SEAT_BOOKING
 }
 
 enum ImportType {
