@@ -256,6 +256,7 @@ export const verifyOtp = async (
     token,
     role: user.role,
     id: user.id,
+    phone:user.phone
   };
 };
 
