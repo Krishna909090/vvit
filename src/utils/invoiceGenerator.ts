@@ -80,12 +80,12 @@ function drawCollegeHeader(doc: PDFKit.PDFDocument) {
     .font('Helvetica-Bold')
     .fontSize(20)
     .fillColor('#000')
-    .text('VVITU University', 130, 45)
+    .text('VVIT University', 130, 45)
 
   doc
     .font('Helvetica')
     .fontSize(11)
-    .text('(Autonomous)', 130, 70)
+    .text('', 130, 70)
 
   doc
     .fontSize(10)
