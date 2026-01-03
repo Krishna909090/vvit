@@ -25,9 +25,9 @@ export const DashboardService = {
                 _sum: { amount: true }
             }),
 
-            // 3. Pending Payments (Count of failed/pending payments)
-            prisma.payment.count({
-                where: { status: { in: [PaymentStatus.PENDING, PaymentStatus.FAILED] } }
+            // 3. Pending Payments (Count of students registered but not yet paid entrance fee)
+            prisma.studentAdmission.count({
+                where: { status: AdmissionStatus.REGISTERED }
             }),
 
             // 4. Total Entrance Fee Collected
