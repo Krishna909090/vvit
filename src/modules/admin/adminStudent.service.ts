@@ -48,7 +48,15 @@ export const AdminStudentService = {
                 take: Number(limit),
                 orderBy: { createdAt: 'desc' },
                 include: {
-                    admissionDetails: true,
+                    admissionDetails: {
+                        include: {
+                            allottedCourse: {
+                                select: {
+                                    name: true
+                                }
+                            }
+                        }
+                    },
                     examDetails: true,
                     documents: true,
                     academicQualifications: true,
@@ -88,6 +96,7 @@ export const AdminStudentService = {
                 ...student,
                 profilePhotoUrl,
                 documents: documentsWithPresignedUrls,
+                allottedCourseName: student.admissionDetails?.allottedCourse?.name,
                 pref1CourseName: student.pref1Course?.name,
                 pref2CourseName: student.pref2Course?.name,
                 pref3CourseName: student.pref3Course?.name,
