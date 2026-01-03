@@ -55,7 +55,7 @@ export const FeeService = {
     },
 
     // Fee Structure
-    createFeeStructure: async (courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, courseType?: string, yearOfStudy?: number, dueDate?: Date) => {
+    createFeeStructure: async (courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, courseType?: string, yearOfStudy?: number, dueDate?: Date, degreeId?: string) => {
         
         const existing = await prisma.feeStructure.findFirst({
             where: {
@@ -64,6 +64,7 @@ export const FeeService = {
                 academicYearId,
                 quotaType: quotaType ?? null,
                 courseType: courseType ?? null,
+                degreeId: degreeId ?? null,
                 yearOfStudy: yearOfStudy ?? null,
                 isDeleted: false
             }
@@ -83,6 +84,7 @@ export const FeeService = {
                 courseType,
                 yearOfStudy,
                 dueDate,
+                degreeId,
                 createdBy: userId,
                 updatedBy: userId
             }
@@ -140,7 +142,7 @@ export const FeeService = {
         });
     },
 
-    updateFeeStructure: async (id: string, courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, courseType?: string, yearOfStudy?: number, dueDate?: Date) => {
+    updateFeeStructure: async (id: string, courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, courseType?: string, yearOfStudy?: number, dueDate?: Date, degreeId?: string) => {
         return prisma.feeStructure.update({
             where: { id },
             data: {
@@ -149,7 +151,7 @@ export const FeeService = {
                 amount,
                 academicYearId,
                 quotaType,
-
+                degreeId,
                 courseType,
                 yearOfStudy,
                 dueDate,

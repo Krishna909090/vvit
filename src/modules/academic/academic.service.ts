@@ -1,6 +1,7 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
+import { AdmissionStatus } from '@prisma/client';
 
 export const AcademicService = {
     // School
@@ -141,7 +142,7 @@ export const AcademicService = {
     },
 
     // Course
-    async createCourse(name: string, code: string, departmentId: string, degree?: string, createdBy?: string) {
+    async createCourse(name: string, code: string, departmentId: string, degree?: string, totalSeats?: number, createdBy?: string) {
         const department = await prisma.department.findUnique({ where: { id: departmentId } });
         if (!department) {
             throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
@@ -166,7 +167,14 @@ export const AcademicService = {
         }
 
         return await prisma.course.create({
-            data: { name, code, departmentId, degree, createdBy }
+            data: { 
+                name, 
+                code, 
+                departmentId, 
+                degree, 
+                totalSeats: totalSeats !== undefined ? Number(totalSeats) : 0, 
+                createdBy 
+            }
         });
     },
 
@@ -213,14 +221,15 @@ export const AcademicService = {
         return course;
     },
 
-    async updateCourse(id: string, name: string, code: string, departmentId: string, updatedBy?: string) {
+    async updateCourse(id: string, name: string, code: string, departmentId: string, totalSeats: number | undefined, updatedBy?: string) {
         const course = await prisma.course.findUnique({ where: { id } });
         if (!course) throw new AppError("Course not found", 404);
 
         if (
             (name === undefined || course.name === name) && 
             (code === undefined || course.code === code) && 
-            (departmentId === undefined || course.departmentId === departmentId)
+            (departmentId === undefined || course.departmentId === departmentId) &&
+            (totalSeats === undefined || course.totalSeats === totalSeats)
         ) {
             throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
         }
@@ -238,9 +247,12 @@ export const AcademicService = {
             }
         }
 
+        const updateData: any = { name, code, departmentId, updatedBy };
+        if (totalSeats !== undefined) updateData.totalSeats = totalSeats;
+
         return await prisma.course.update({
             where: { id },
-            data: { name, code, departmentId, updatedBy }
+            data: updateData
         });
     },
 
@@ -330,6 +342,77 @@ export const AcademicService = {
         if (!specialization) throw new AppError("Specialization not found", 404);
 
         return await prisma.specialization.update({ where: { id }, data: { isDeleted: true } });
+    },
+
+    async getSeatStatus() {
+        const specializations = await prisma.specialization.findMany({
+            where: { isDeleted: false },
+            include: {
+                course: {
+                    include: { department: true }
+                }
+            },
+            orderBy: {
+                course: {
+                    name: 'asc'
+                }
+            }
+        });
+
+        const statusPromises = specializations.map(async (spec) => {
+            const actualCount = await prisma.studentAdmission.count({
+                where: {
+                    allottedCourseId: spec.courseId, // Approximate: Count all students in the course as we don't track specialization-level seats in StudentAdmission anymore
+                    status: {
+                        in: [
+                            AdmissionStatus.SEAT_ALLOTTED, 
+                            AdmissionStatus.ADMISSION_CONFIRMED, 
+                            AdmissionStatus.ENROLLED
+                        ]
+                    }
+                }
+            });
+
+            return {
+                id: spec.id,
+                code: spec.code,
+                name: spec.name,
+                courseName: spec.course.name,
+                departmentName: spec.course.department.name,
+                totalSeats: spec.totalSeats,
+                filledSeats: spec.filledSeats, // Count from Specialization table cache
+                availableSeats: spec.totalSeats - spec.filledSeats,
+                actualFilledCount: actualCount, // Count from StudentAdmission table (Truth)
+                isSync: spec.filledSeats === actualCount, // Verification
+                discrepancy: spec.filledSeats - actualCount
+            };
+        });
+
+        const results = await Promise.all(statusPromises);
+        
+        // Group by Course for cleaner output
+        const grouped = results.reduce((acc: any, curr) => {
+            const courseKey = `${curr.courseName} (${curr.departmentName})`;
+            if (!acc[courseKey]) {
+                acc[courseKey] = {
+                    course: curr.courseName,
+                    department: curr.departmentName,
+                    specializations: []
+                };
+            }
+            acc[courseKey].specializations.push({
+                specialization: curr.name,
+                code: curr.code,
+                totalSeats: curr.totalSeats,
+                filled: curr.filledSeats,
+                available: curr.availableSeats,
+                actualFilled: curr.actualFilledCount, // The "deducting correctly" check
+                isSync: curr.isSync
+            });
+            return acc;
+        }, {});
+
+        return Object.values(grouped);
     },
 
     // Academic Year

@@ -499,8 +499,17 @@ export const getStudentByUserId = async (userId: string) => {
             profilePhotoUrl: true,
             isKycVerified: true,
             pref1: true,
+            pref1Course: {
+                select: { name: true }
+            },
             pref2: true,
+            pref2Course: {
+                select: { name: true }
+            },
             pref3: true,
+            pref3Course: {
+                select: { name: true }
+            },
             degreeType: true,
             applicationId: true, // Generally useful
             examDetails: {
@@ -579,6 +588,9 @@ export const getStudentByUserId = async (userId: string) => {
 
     return {
         ...student,
+        pref1CourseName: student.pref1Course?.name,
+        pref2CourseName: student.pref2Course?.name,
+        pref3CourseName: student.pref3Course?.name,
         profilePhotoUrl,
         documents: documentsWithPresignedUrls,
         examDetails: student.examDetails ? {

@@ -53,7 +53,10 @@ export const AdminStudentService = {
                     documents: true,
                     academicQualifications: true,
                     eligibleScholarshipRule: true,
-                    scholarshipAllocation: { include: { rule: true } }
+                    scholarshipAllocation: { include: { rule: true } },
+                    pref1Course: { select: { name: true } },
+                    pref2Course: { select: { name: true } },
+                    pref3Course: { select: { name: true } }
                 }
             }),
             prisma.student.count({ where })
@@ -74,6 +77,9 @@ export const AdminStudentService = {
 
             return {
                 ...student,
+                pref1CourseName: student.pref1Course?.name,
+                pref2CourseName: student.pref2Course?.name,
+                pref3CourseName: student.pref3Course?.name,
                 documentsUploaded: student.documents.length,
                 pendingDocs,
                 isAllDocsUploaded: pendingDocs.length === 0,
@@ -194,9 +200,9 @@ export const AdminStudentService = {
                     data: { status: AdmissionStatus.CANCELLED }
                 });
 
-                if (request.student.admissionDetails?.allottedSpecialization) {
-                    await tx.specialization.update({
-                        where: { code: request.student.admissionDetails.allottedSpecialization },
+                if (request.student.admissionDetails?.allottedCourseId) {
+                    await tx.course.update({
+                        where: { id: request.student.admissionDetails.allottedCourseId },
                         data: { filledSeats: { decrement: 1 } }
                     });
                 }
@@ -206,13 +212,13 @@ export const AdminStudentService = {
         return { status };
     },
 
-    async verifyAndAllotSeat(studentId: string, approved: boolean, allottedSpecialization: string, adminId: string | undefined) {
+    async verifyAndAllotSeat(studentId: string, approved: boolean, allottedCourseId: string, adminId: string | undefined) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
         if (!approved) {
             return { success: false, message: MESSAGES.ERROR.DOCUMENTS_REJECTED };
         }
 
-        if (!allottedSpecialization) throw new AppError(MESSAGES.ERROR.ALLOTTED_COURSE_REQUIRED, 400);
+        if (!allottedCourseId) throw new AppError(MESSAGES.ERROR.ALLOTTED_COURSE_REQUIRED, 400);
 
         const student = await prisma.student.findUnique({ 
             where: { id: studentId },
@@ -222,26 +228,28 @@ export const AdminStudentService = {
             throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         }
 
+        // Verify Course
+        const course = await prisma.course.findUnique({ where: { id: allottedCourseId } });
+        if (!course) throw new AppError("Course not found", 404);
+
         await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
             await tx.studentAdmission.update({
                 where: { studentId },
                 data: {
                     status: AdmissionStatus.SEAT_ALLOTTED,
-                    allottedSpecialization: allottedSpecialization
+                    allottedCourseId: allottedCourseId
                 }
             });
 
-            const specialization = await tx.specialization.findUnique({ where: { code: allottedSpecialization } });
-            if (specialization) {
-                await tx.specialization.update({
-                    where: { code: allottedSpecialization },
-                    data: { filledSeats: { increment: 1 } }
-                });
-            }
+            await tx.course.update({
+                where: { id: allottedCourseId },
+                data: { filledSeats: { increment: 1 } }
+            });
+
             await tx.seatAllocation.create({
                 data: {
                     studentId,
-                    newCourse: allottedSpecialization,
+                    newCourse: course.name, // Storing Name for readability
                     allocatedBy: adminId || 'ADMIN',
                     notes: 'Initial Seat Allotment'
                 }
@@ -343,25 +351,25 @@ export const AdminStudentService = {
         return updatedDoc;
     },
 
-    async requestCourseChange(studentId: string, newSpecialization: string, reason: string) {
-        if (!studentId || !newSpecialization || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_NEWCOURSE_REASON_REQUIRED, 400);
+    async requestCourseChange(studentId: string, newCourseId: string, reason: string) {
+        if (!studentId || !newCourseId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_NEWCOURSE_REASON_REQUIRED, 400);
 
         const student = await prisma.student.findUnique({
             where: { id: studentId },
             include: { admissionDetails: true }
         });
 
-        if (!student || !student.admissionDetails?.allottedSpecialization) {
+        if (!student || !student.admissionDetails?.allottedCourseId) {
             throw new AppError(MESSAGES.ERROR.STUDENT_NO_ALLOTTED_COURSE, 400);
         }
 
-        const oldSpecialization = student.admissionDetails.allottedSpecialization;
+        const oldCourseId = student.admissionDetails.allottedCourseId;
 
         return await prisma.courseChangeRequest.create({
             data: {
                 studentId,
-                fromCourse: oldSpecialization,
-                toCourse: newSpecialization,
+                fromCourse: oldCourseId,
+                toCourse: newCourseId,
                 reason,
                 status: RequestStatus.FORWARDED,
                 forwardedTo: 'SUPER_ADMIN'
@@ -394,15 +402,15 @@ export const AdminStudentService = {
             if (approved) {
                 await tx.studentAdmission.update({
                     where: { studentId: request.studentId },
-                    data: { allottedSpecialization: request.toCourse }
+                    data: { allottedCourseId: request.toCourse }
                 });
 
-                await tx.specialization.update({
-                    where: { code: request.fromCourse },
+                await tx.course.update({
+                    where: { id: request.fromCourse },
                     data: { filledSeats: { decrement: 1 } }
                 });
-                await tx.specialization.update({
-                    where: { code: request.toCourse },
+                await tx.course.update({
+                    where: { id: request.toCourse },
                     data: { filledSeats: { increment: 1 } }
                 });
 

@@ -281,10 +281,18 @@ model Course {
   code          String         @unique 
   name          String 
   degree        String?        // e.g. "B.Tech", "M.Tech"
+  totalSeats    Int            @default(0)
+  filledSeats   Int            @default(0)
   departmentId  String
   department    Department     @relation(fields: [departmentId], references: [id])
   specializations      Specialization[]
   feeStructures FeeStructure[]
+
+  studentsPref1 Student[] @relation("Pref1")
+  studentsPref2 Student[] @relation("Pref2")
+  studentsPref3 Student[] @relation("Pref3")
+
+  allottedStudents StudentAdmission[] @relation("AllottedCourse")
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   createdBy     String?
@@ -437,8 +445,13 @@ model Student {
 
   
   pref1 String?
+  pref1Course Course? @relation("Pref1", fields: [pref1], references: [id])
+
   pref2 String?
+  pref2Course Course? @relation("Pref2", fields: [pref2], references: [id])
+
   pref3 String?
+  pref3Course Course? @relation("Pref3", fields: [pref3], references: [id])
 
   userId String? @unique
   user   User?   @relation("StudentUser", fields: [userId], references: [id])
@@ -573,7 +586,8 @@ model StudentAdmission {
   qualificationMode QualificationMode? // How student qualified (EXAM or DIRECT)
 
   
-  allottedSpecialization String?
+  allottedCourseId String?
+  allottedCourse   Course? @relation("AllottedCourse", fields: [allottedCourseId], references: [id])
 
   
   totalFee  Float     @default(0)
@@ -598,7 +612,7 @@ model StudentAdmission {
   @@index([accommodationType])
   @@index([hostelId])
   @@index([transportRouteId])
-  @@index([allottedSpecialization])
+  @@index([allottedCourseId])
 }
 
 model StudentDocument {
@@ -880,6 +894,7 @@ model FeeStructure {
   academicYear   AcademicYear       @relation(fields: [academicYearId], references: [id])
   quotaType      QuotaType?         // If null, applies to all? Or specific to Management/Convenor
   courseType     String?            // e.g., "Regular", "Lateral"
+  degreeId       String?            // Optional Degree ID
   yearOfStudy    Int?               // e.g., 1, 2, 3, 4 (If null, applies to all years)
   dueDate        DateTime?
   demands        StudentFeeDemand[]

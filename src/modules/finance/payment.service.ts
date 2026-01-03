@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
+import { format } from 'date-fns';
 import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod } from '@prisma/client';
 import { getApplicationFeeAmount } from './fee.service';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
@@ -197,54 +198,8 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
         logger.info(`Student ${payment.studentId} admission status updated to ADMISSION_CONFIRMED`);
 
         // Generate Allotment Order
-        try {
-            const studentWithDetails = await prisma.student.findUnique({
-                where: { id: payment.studentId },
-                include: { admissionDetails: true }
-            });
+        await generateAndSaveAllotmentOrder(payment.studentId);
 
-            if (studentWithDetails && studentWithDetails.admissionDetails) {
-                const allotmentData = {
-                    applicationId: studentWithDetails.applicationId,
-                    studentName: studentWithDetails.name,
-                    fatherName: studentWithDetails.fatherName,
-                    category: studentWithDetails.category,
-                    allottedCourse: studentWithDetails.admissionDetails.allottedSpecialization || 'N/A',
-                    allottedCollege: 'VVIT University',
-                    admissionFee: studentWithDetails.admissionDetails.paidFee,
-                    tuitionFee: studentWithDetails.admissionDetails.totalFee,
-                    date: new Date(),
-                    academicYear: `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`
-                };
-
-                const pdfBuffer = await generateAllotmentOrderPDF(allotmentData);
-                const s3Key = `student/${studentWithDetails.applicationId}/documents/AllotmentOrder.pdf`;
-                const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
-
-                await prisma.studentDocument.upsert({
-                    where: {
-                        studentId_documentKey: {
-                            studentId: payment.studentId,
-                            documentKey: 'ALLOTMENT_ORDER'
-                        }
-                    },
-                    create: {
-                        studentId: payment.studentId,
-                        documentKey: 'ALLOTMENT_ORDER',
-                        url: url,
-                        status: StudentDocumentStatus.APPROVED,
-                        remarks: 'Generated after College Fee Payment'
-                    },
-                    update: {
-                        url: url,
-                        updatedAt: new Date()
-                    }
-                });
-                logger.info(`Allotment order generated and saved for student ${payment.studentId}`);
-            }
-        } catch (err) {
-            logger.error(`Failed to generate/upload allotment order for ${payment.studentId}: ${err}`);
-        }
     } else if (payment.component === PaymentComponent.SCHOLARSHIP_TOKEN) {
         await ScholarshipService.lockAllocation(payment.studentId);
         await prisma.studentAdmission.update({
@@ -256,7 +211,7 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             }
         });
         logger.info(`Scholarship locked for student ${payment.studentId}`);
-        logger.info(`Scholarship locked for student ${payment.studentId}`);
+        await generateAndSaveAllotmentOrder(payment.studentId);
     }
 
     // 4. Create Ledger Entry (Financial Record)
@@ -564,6 +519,9 @@ export const initiateTokenPayment = async (studentId: string) => {
              }
         });
 
+        // Generate Allotment Order
+        await generateAndSaveAllotmentOrder(studentId);
+
         return `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}`;
     }
 
@@ -777,4 +735,71 @@ export const getStudentFinancialSummary = async (studentId: string) => {
     summary.totalPaid = summary.applicationFee.paid + summary.collegeFee.paid;
 
     return summary;
+};
+
+
+// Helper to generate and save allotment order
+export const generateAndSaveAllotmentOrder = async (studentId: string) => {
+    try {
+        const studentWithDetails = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: { 
+                admissionDetails: { include: { allottedCourse: true } },
+                examDetails: true,
+                convenorDetails: true 
+            }
+        });
+
+        if (studentWithDetails && studentWithDetails.admissionDetails) {
+             const phase = 'First Phase';
+             const reportingDate = new Date();
+             reportingDate.setDate(reportingDate.getDate() + 7); // +7 days from now
+             
+            const allotmentData = {
+                applicationId: studentWithDetails.applicationId,
+                studentName: studentWithDetails.name,
+                fatherName: studentWithDetails.fatherName,
+                gender: studentWithDetails.gender,
+                category: studentWithDetails.category,
+                region: 'AU', // Default or fetch
+                rank: studentWithDetails.convenorDetails?.rank || studentWithDetails.examDetails?.examScore?.toString() || 'N/A',
+                hallTicketNo: studentWithDetails.convenorDetails?.hallTicketNo || studentWithDetails.examDetails?.hallTicketUrl || 'N/A',
+                allottedCollege: 'VVIT UNIVERSITY (VVIT), GUNTUR',
+                allottedCourse: studentWithDetails.admissionDetails.allottedCourse?.name || 'N/A',
+                allottedCategory: studentWithDetails.convenorDetails?.category || `${studentWithDetails.category}_GEN_AU`,
+                tuitionFeeFixed: studentWithDetails.admissionDetails.totalFee,
+                tuitionFeeToPay: Math.max(0, studentWithDetails.admissionDetails.totalFee - studentWithDetails.admissionDetails.paidFee), 
+                reportingDate: format(reportingDate, 'dd.MM.yyyy'),
+                phase: phase,
+                feeReimbursement: 'NO'
+            };
+
+            const pdfBuffer = await generateAllotmentOrderPDF(allotmentData);
+            const s3Key = `student/${studentWithDetails.applicationId}/documents/AllotmentOrder.pdf`;
+            const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
+
+            await prisma.studentDocument.upsert({
+                where: {
+                    studentId_documentKey: {
+                        studentId: studentId,
+                        documentKey: 'ALLOTMENT_ORDER'
+                    }
+                },
+                create: {
+                    studentId: studentId,
+                    documentKey: 'ALLOTMENT_ORDER',
+                    url: url,
+                    status: StudentDocumentStatus.APPROVED,
+                    remarks: 'Generated after Fee Payment'
+                },
+                update: {
+                    url: url,
+                    updatedAt: new Date()
+                }
+            });
+            logger.info(`Allotment order generated and saved for student ${studentId}`);
+        }
+    } catch (err) {
+        logger.error(`Failed to generate/upload allotment order for ${studentId}: ${err}`);
+    }
 };

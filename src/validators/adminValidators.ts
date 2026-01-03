@@ -21,17 +21,17 @@ export const verifyAndAllotSeatSchema = z.object({
     body: z.object({
         studentId: z.string().uuid(),
         approved: z.boolean(),
-        allottedSpecialization: z.string().optional(), // Required if approved is true, but we can refine this
-    }).refine((data) => !data.approved || (data.approved && data.allottedSpecialization), {
-        message: "Allotted specialization is required when approved is true",
-        path: ["allottedSpecialization"],
+        allottedCourseId: z.string().uuid().optional(), // Required if approved is true, but we can refine this
+    }).refine((data) => !data.approved || (data.approved && data.allottedCourseId), {
+        message: "Allotted course ID is required when approved is true",
+        path: ["allottedCourseId"],
     }),
 });
 
 export const changeCourseSchema = z.object({
     body: z.object({
         studentId: z.string().uuid(),
-        newSpecialization: z.string().min(1, "New specialization is required"),
+        newCourseId: z.string().uuid("Invalid Course ID"),
         reason: z.string().min(1, "Reason is required"),
     }),
 });
@@ -215,6 +215,7 @@ export const createCourseSchema = z.object({
         code: z.string().min(1, "Code is required"),
         departmentId: z.string().uuid("Invalid Department ID"),
         degree: z.string().optional(),
+        totalSeats: z.number().int().min(0).optional(),
     }),
 });
 
@@ -298,6 +299,7 @@ export const createFeeStructureSchema = z.object({
         academicYearId: z.string().uuid(),
         quotaType: z.string().optional(),
         courseType: z.string().optional(),
+        degreeId: z.string().uuid().optional(),
         yearOfStudy: z.number().int().min(1).max(10).optional(),
         dueDate: z.string().datetime().or(z.date()).optional(),
     }),

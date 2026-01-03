@@ -6,7 +6,7 @@ import {
     createSchool, getSchools, getSchoolById, updateSchool, deleteSchool,
     createDepartment, getDepartments, getDepartmentById, updateDepartment, deleteDepartment,
     createCourse, getCourses, getCourseById, updateCourse, deleteCourse, getDegrees,
-    createSpecialization, getSpecializations, getSpecializationById, updateSpecialization, deleteSpecialization,
+    createSpecialization, getSpecializations, getSpecializationById, updateSpecialization, deleteSpecialization, getSeatStatus,
     createAcademicYear, getAcademicYears, updateAcademicYear, deleteAcademicYear,
     createBatch, getBatches, getBatchById, updateBatch, deleteBatch,
     createSection, getSections, getSectionById, updateSection, deleteSection
@@ -50,6 +50,7 @@ router.delete('/course/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADM
 
 // Specialization 
 router.post('/specialization', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createSpecializationSchema), createSpecialization);
+router.get('/specialization/check-seat-status', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getSeatStatus);
 router.get('/specialization', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT, Role.AGENT]), getSpecializations);
 router.get('/specialization/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT, Role.AGENT]), getSpecializationById);
 router.put('/specialization/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateSpecialization);

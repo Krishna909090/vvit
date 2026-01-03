@@ -95,9 +95,9 @@ export const approveCancellation = catchAsync(async (req: Request, res: Response
 export const verifyAndAllotSeat = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[verifyAndAllotSeat] by=${req.user?.userId || 'anonymous'}`);
 
-    const { studentId, approved, allottedSpecialization } = req.body;
+    const { studentId, approved, allottedCourseId } = req.body;
     
-    const result = await AdminStudentService.verifyAndAllotSeat(studentId, approved, allottedSpecialization, req.user?.userId);
+    const result = await AdminStudentService.verifyAndAllotSeat(studentId, approved, allottedCourseId, req.user?.userId);
 
     sendResponse({
         res,
@@ -127,9 +127,9 @@ export const verifyStudentDocument = catchAsync(async (req: Request, res: Respon
 export const requestCourseChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestCourseChange] by=${req.user?.userId || 'anonymous'}`);
 
-    const { studentId, newSpecialization, reason } = req.body;
+    const { studentId, newCourseId, reason } = req.body;
     
-    const request = await AdminStudentService.requestCourseChange(studentId, newSpecialization, reason);
+    const request = await AdminStudentService.requestCourseChange(studentId, newCourseId, reason);
 
     sendResponse({
         res,

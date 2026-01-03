@@ -48,10 +48,10 @@ export const deleteFeeHead = catchAsync(async (req: Request, res: Response, next
 
 // Fee Structure
 export const createFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { courseId, feeHeadId, amount, academicYearId, quotaType, courseType, yearOfStudy, dueDate } = req.body;
+    const { courseId, feeHeadId, amount, academicYearId, quotaType, courseType, yearOfStudy, dueDate, degreeId } = req.body;
     const adminId = req.user!.userId;
 
-    const feeStructure = await FeeService.createFeeStructure(courseId, feeHeadId, amount, academicYearId, adminId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined);
+    const feeStructure = await FeeService.createFeeStructure(courseId, feeHeadId, amount, academicYearId, adminId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined, degreeId);
     
     sendResponse({
         res,
@@ -86,9 +86,9 @@ export const getFeeStructures = catchAsync(async (req: Request, res: Response, n
 
 export const updateFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { courseId, feeHeadId, amount, academicYearId, quotaType, courseType, yearOfStudy, dueDate } = req.body;
+    const { courseId, feeHeadId, amount, academicYearId, quotaType, courseType, yearOfStudy, dueDate, degreeId } = req.body;
     
-    const updatedFeeStructure = await FeeService.updateFeeStructure(id, courseId, feeHeadId, amount, academicYearId, req.user!.userId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined);
+    const updatedFeeStructure = await FeeService.updateFeeStructure(id, courseId, feeHeadId, amount, academicYearId, req.user!.userId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined, degreeId);
     
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.FEE_STRUCTURE_UPDATED, data: updatedFeeStructure });
 });

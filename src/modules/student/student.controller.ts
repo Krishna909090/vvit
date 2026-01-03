@@ -106,8 +106,8 @@ export const requestCourseChange = catchAsync(async (req: Request, res: Response
     logger.debug && logger.debug(`[requestCourseChange] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
 
     const { studentId } = req.params;
-    const { newCourse, reason } = req.body;
-    if (!studentId || !newCourse || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_NEWCOURSE_REASON_REQUIRED, 400);
+    const { newCourseId, reason } = req.body;
+    if (!studentId || !newCourseId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_NEWCOURSE_REASON_REQUIRED, 400);
 
     const student = await prisma.student.findUnique({
         where: { id: studentId },
@@ -118,8 +118,8 @@ export const requestCourseChange = catchAsync(async (req: Request, res: Response
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
-    if (!student.admissionDetails?.allottedSpecialization) {
-        logger.warn(`[requestCourseChange] no allotted specialization for student=${studentId}`);
+    if (!student.admissionDetails?.allottedCourseId) {
+        logger.warn(`[requestCourseChange] no allotted course for student=${studentId}`);
         throw new AppError(MESSAGES.ERROR.NO_COURSE_ALLOTTED, 400);
     }
 
@@ -137,8 +137,8 @@ export const requestCourseChange = catchAsync(async (req: Request, res: Response
     const request = await prisma.courseChangeRequest.create({
         data: {
             studentId,
-            fromCourse: student.admissionDetails.allottedSpecialization,
-            toCourse: newCourse,
+            fromCourse: student.admissionDetails.allottedCourseId,
+            toCourse: newCourseId,
             reason,
             status: RequestStatus.REQUESTED,
             forwardedTo: 'SUPER_ADMIN', // Direct to Super Admin as per requirement

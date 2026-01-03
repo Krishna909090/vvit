@@ -96,10 +96,10 @@ export const deleteDepartment = catchAsync(async (req: Request, res: Response, n
 
 // Course
 export const createCourse = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { name, code, departmentId, degree } = req.body;
+    const { name, code, departmentId, degree, totalSeats } = req.body;
     const adminId = req.user?.userId;
 
-    const course = await AcademicService.createCourse(name, code, departmentId, degree, adminId);
+    const course = await AcademicService.createCourse(name, code, departmentId, degree, totalSeats, adminId);
     
     sendResponse({
         res,
@@ -131,9 +131,9 @@ export const getCourseById = catchAsync(async (req: Request, res: Response, next
 
 export const updateCourse = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { name, code, departmentId } = req.body;
+    const { name, code, departmentId, totalSeats } = req.body;
     
-    const updatedCourse = await AcademicService.updateCourse(id, name, code, departmentId, req.user?.userId);
+    const updatedCourse = await AcademicService.updateCourse(id, name, code, departmentId, totalSeats, req.user?.userId);
     
     sendResponse({ res, statusCode: 200, success: true, message: "Course updated successfully", data: updatedCourse });
 });
@@ -165,6 +165,16 @@ export const createSpecialization = catchAsync(async (req: Request, res: Respons
 export const getSpecializations = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const specializations = await AcademicService.getSpecializations();
     sendResponse({ res, statusCode: 200, success: true, data: specializations });
+});
+
+export const getSeatStatus = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const seatStatus = await AcademicService.getSeatStatus();
+    sendResponse({ 
+        res, 
+        statusCode: 200, 
+        success: true, 
+        data: seatStatus 
+    });
 });
 
 export const getSpecializationById = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
