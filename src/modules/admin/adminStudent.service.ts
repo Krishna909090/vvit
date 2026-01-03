@@ -70,13 +70,24 @@ export const AdminStudentService = {
             reqMap[r.degreeType].push(r.documentKey);
         });
 
-        const enhancedStudents = students.map((student: any) => {
+        const enhancedStudents = await Promise.all(students.map(async (student: any) => {
             const uploadedKeys = student.documents.map((d: any) => d.documentKey);
             const requiredKeys = reqMap[student.degreeType || ''] || [];
             const pendingDocs = requiredKeys.filter(key => !uploadedKeys.includes(key));
 
+            // Convert document URLs to presigned URLs
+            const documentsWithPresignedUrls = await Promise.all(student.documents.map(async (doc: any) => ({
+                ...doc,
+                url: await convertToPresignedUrl(doc.url)
+            })));
+
+            // Convert profile photo URL
+            const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
+
             return {
                 ...student,
+                profilePhotoUrl,
+                documents: documentsWithPresignedUrls,
                 pref1CourseName: student.pref1Course?.name,
                 pref2CourseName: student.pref2Course?.name,
                 pref3CourseName: student.pref3Course?.name,
@@ -85,7 +96,7 @@ export const AdminStudentService = {
                 isAllDocsUploaded: pendingDocs.length === 0,
                 s3FolderKey: (student as any).documentFolderPath || `students/${student.id}/documents/`
             };
-        });
+        }));
 
         return {
             students: enhancedStudents,
