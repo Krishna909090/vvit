@@ -4,8 +4,11 @@ import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentSta
 import { authenticate, authorize } from '../../middlewares/authMiddleware';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
+import feeRoutes from './fee.routes';
 
 const router = express.Router();
+
+router.use('/fees', feeRoutes);
 
 router.get('/:paymentId/invoice', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), getInvoice);
 
