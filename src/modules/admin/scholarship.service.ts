@@ -84,35 +84,59 @@ export const ScholarshipService = {
         const validScores: { type: string, score: number }[] = [];
 
         for (const qual of student.academicQualifications) {
-            const level = qual.level?.toUpperCase();
+            const level = (qual.level || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); // Normalize: "12th" -> "12TH"
             const examName = (qual.board || '').toUpperCase(); // Helper to identify specific exams
 
+            // Helper to check flexible keys
+            const hasDocument = (keys: string[]) => keys.some(k => approvedDocKeys.has(k));
+
             // 1. Class 12 / Intermediate
-            if (level === 'CLASS_12' || level === 'INTERMEDIATE') {
-                if (approvedDocKeys.has('DOC_INTER_MARKSHEET')) {
+            // Frontend Key: "INTERMEDIATE" (Section: 12th)
+            const isClass12 = ['CLASS12', 'INTERMEDIATE', 'INTER', '12TH', 'XII', 'HSC', 'PLUSTWO'].includes(level);
+            if (isClass12) {
+                if (hasDocument(['DOC_INTER_MARKSHEET', 'DOC_12TH_MARKSHEET', 'DOC_HSC_MARKSHEET', 'DOC_CLASS_12_MARKSHEET', 'DOC_MARKSHEET_12'])) {
                     validScores.push({ type: 'CLASS_12', score: Number(qual.gpaOrMarks) });
                 }
             }
+
+            // 2. Class 10 / SSC
+            // Frontend Key: "SSC" (Section: 10th)
+            const isClass10 = ['CLASS10', 'SSC', '10TH', 'X', 'MATRICULATION'].includes(level);
+            if (isClass10) {
+                 if (hasDocument(['DOC_SSC_MARKSHEET', 'DOC_10TH_MARKSHEET', 'DOC_CLASS_10_MARKSHEET', 'DOC_MARKSHEET_10'])) {
+                    validScores.push({ type: 'CLASS_10', score: Number(qual.gpaOrMarks) });
+                }
+            }
             
-            // 2. Entrance Exams
-            if (level === 'ENTRANCE') {
-                // EAPCET
-                if (examName.includes('EAPCET') && approvedDocKeys.has('DOC_EAPCET_RANK_CARD')) {
-                    validScores.push({ type: 'EAPCET', score: Number(qual.gpaOrMarks) });
-                }
-                // SAT
-                else if (examName.includes('SAT') && approvedDocKeys.has('DOC_SAT_RANK_CARD')) {
-                    validScores.push({ type: 'SAT', score: Number(qual.gpaOrMarks) });
-                }
-                // JEE
-                else if (examName.includes('JEE') && approvedDocKeys.has('DOC_JEE_RANK_CARD')) {
-                    validScores.push({ type: 'JEE', score: Number(qual.gpaOrMarks) });
-                }
+            // 3. Entrance Exams
+            // Frontend Keys: "EAPCET", "JEE_MAIN", "SAT_RANK"
+            // Note: Frontend config shows these do NOT have a 'board' field, so we must rely on 'level'.
+
+            // EAPCET
+            if ((level === 'EAPCET' || examName.includes('EAPCET')) && hasDocument(['DOC_EAPCET_RANK_CARD', 'DOC_RANK_CARD_EAPCET'])) {
+                validScores.push({ type: 'EAPCET', score: Number(qual.gpaOrMarks) }); 
+            }
+            
+            // JEE MAIN
+            else if ((level === 'JEEMAIN' || level === 'JEE_MAIN' || examName.includes('JEE')) && hasDocument(['DOC_JEE_RANK_CARD', 'DOC_JEE_MAIN_RANK_CARD'])) {
+                validScores.push({ type: 'JEE', score: Number(qual.gpaOrMarks) });
+            }
+            
+            // SAT
+            else if ((level === 'SATRANK' || level === 'SAT_RANK' || examName.includes('SAT')) && hasDocument(['DOC_SAT_RANK_CARD'])) {
+                validScores.push({ type: 'SAT', score: Number(qual.gpaOrMarks) });
+            }
+            
+            // NEET (Extra support)
+            else if ((level === 'NEET' || examName.includes('NEET')) && hasDocument(['DOC_NEET_RANK_CARD'])) {
+                validScores.push({ type: 'NEET', score: Number(qual.gpaOrMarks) });
             }
         }
 
         if (validScores.length === 0) {
-            return { eligible: false, reason: "No qualifications backed by approved documents" };
+            // Log what was found to assist with debugging
+            logger.warn(`Scholarship Check Failed: No qualifications matched. Student Inputs -> Levels: ${student.academicQualifications.map(q => q.level).join(', ')}, Approved Docs: ${Array.from(approvedDocKeys).join(', ')}`);
+            return { eligible: false, reason: "No qualifications backed by approved documents. Please ensure `level` matches standard accepted values (e.g., '12th', 'SSC', 'Entrance') and documents are approved." };
         }
 
         // 5. Fetch Rules (Filtered by Degree Type)

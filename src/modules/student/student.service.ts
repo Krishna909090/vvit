@@ -287,6 +287,10 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
 
     // Check if student is qualified to upload documents
     // Bypass checks for Seat Booking / Offline students
+    // Check if student is qualified to upload documents
+    // Bypass checks for Seat Booking / Offline students
+    // NOTE: Requirement changed - Allow upload even if not qualified/attended.
+    /*
     if (!student.isOffline) {
         if (!student.examDetails?.examAttended) {
             throw new AppError('Cannot upload documents: Exam not attended yet', 400);
@@ -313,6 +317,7 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
             );
         }
     }
+    */
 
     // Update Preferences
     if (pref1 || pref2 || pref3) {
