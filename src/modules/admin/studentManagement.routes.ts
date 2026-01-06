@@ -83,7 +83,7 @@ router.post('/update-personal-details', authenticate, authorize([Role.STUDENT,Ro
 router.get('/details/:studentId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(studentIdParamSchema), getStudentDetails);
 
 // Academic Qualifications Management
-router.put('/academic-qualifications/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateAcademicQualificationSchema), updateAcademicQualification);
+router.put('/academic-qualifications/:id', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateAcademicQualificationSchema), updateAcademicQualification);
 router.delete('/academic-qualifications/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(deleteAcademicQualificationSchema), deleteAcademicQualification);
 
 export default router;
