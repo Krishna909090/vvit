@@ -737,28 +737,39 @@ export const AdminStudentService = {
     async updateStudentPersonalDetails(studentId: string, data: any, adminId: string | undefined) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-        // Explicitly ban phone and aadharNumber updates
-        const { phone, aadharNumber, phoneNumber, aadhar, ...updateData } = data;
+        // Allow updates to all personal details including phone and aadhar
+        const { ...updateData } = data;
 
         const student = await prisma.student.findUnique({ where: { id: studentId } });
         if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
 
-        // Check email uniqueness if changing
+        // 1. Check Email Uniqueness
         if (updateData.email && updateData.email !== student.email) {
             const existingEmail = await prisma.student.findUnique({ where: { email: updateData.email } });
             if (existingEmail) throw new AppError('Email already in use by another student', 400);
             
-            // Allow update only if email is not taken by another user
-             if (student.userId) {
+            // Check against User table
+            if (student.userId) {
                 const existingUserEmail = await prisma.user.findUnique({ where: { email: updateData.email } });
                 if (existingUserEmail && existingUserEmail.id !== student.userId) {
                     throw new AppError('Email already in use by another user', 400);
                 }
-             } else {
-                 // Check if any user has this email
+            } else {
                  const existingUserEmail = await prisma.user.findUnique({ where: { email: updateData.email } });
                  if (existingUserEmail) throw new AppError('Email already in use by a user', 400);
-             }
+            }
+        }
+
+        // 2. Check Phone Uniqueness
+        if (updateData.phone && updateData.phone !== student.phone) {
+             const existingPhone = await prisma.student.findFirst({ where: { phone: updateData.phone } });
+             if (existingPhone) throw new AppError('Phone number already in use by another student', 400);
+        }
+
+        // 3. Check Aadhar Uniqueness
+        if (updateData.aadharNumber && updateData.aadharNumber !== student.aadharNumber) {
+             const existingAadhar = await prisma.student.findFirst({ where: { aadharNumber: updateData.aadharNumber } });
+             if (existingAadhar) throw new AppError('Aadhar number already in use by another student', 400);
         }
 
         await prisma.$transaction(async (tx) => {
