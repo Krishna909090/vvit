@@ -9,14 +9,18 @@ import {
     updateStudentStatus,
     setScholarshipEligibility,
     updateStudentPersonalDetails,
-    getStudentDetails
+    getStudentDetails,
+    updateAcademicQualification,
+    deleteAcademicQualification
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
     verifyAndAllotSeatSchema, changeCourseSchema, approveCourseChangeSchema,
     updateAdmissionDetailsSchema, studentIdParamSchema,
     setEligibleScholarshipSchema,
-    updateStudentPersonalDetailsSchema
+    updateStudentPersonalDetailsSchema,
+    updateAcademicQualificationSchema,
+    deleteAcademicQualificationSchema
 } from '../../validators/adminValidators';
 import upload from '../../config/multer';
 import {
@@ -77,5 +81,9 @@ router.post('/update-personal-details', authenticate, authorize([Role.STUDENT,Ro
 
 // Get Complete Student Details
 router.get('/details/:studentId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(studentIdParamSchema), getStudentDetails);
+
+// Academic Qualifications Management
+router.put('/academic-qualifications/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateAcademicQualificationSchema), updateAcademicQualification);
+router.delete('/academic-qualifications/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(deleteAcademicQualificationSchema), deleteAcademicQualification);
 
 export default router;

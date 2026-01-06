@@ -1,6 +1,6 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
-import { FeeStructure, SystemSetting, FeeHead, Role, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType } from '@prisma/client';
+import { FeeStructure, SystemSetting, FeeHead, Role, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType, FeeStatus } from '@prisma/client';
 import { MESSAGES } from '../../constants/messages';
 import logger from '../../utils/logger';
 
@@ -278,6 +278,23 @@ export const FeeService = {
                      data: { status: AdmissionStatus.ADMISSION_CONFIRMED }
                  });
              }
+        } else if (component === PaymentComponent.SCHOLARSHIP_TOKEN) {
+             try {
+                const { ScholarshipService } = require('../admin/scholarship.service');
+                await ScholarshipService.lockAllocation(studentId);
+             } catch (err) {
+                logger.warn(`Failed to lock scholarship for student ${studentId}: ${err}`);
+                // Continue payment recording even if scholarship lock fails (though ideally critical)
+             }
+
+             await prisma.studentAdmission.update({
+                where: { studentId: studentId },
+                data: {
+                    paidFee: { increment: amount },
+                    feeStatus: FeeStatus.PARTIAL,
+                    status: AdmissionStatus.ADMISSION_CONFIRMED 
+                }
+            });
         }
         
         // 5. Create Ledger Entry (CREDIT)

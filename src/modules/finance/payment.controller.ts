@@ -14,7 +14,8 @@ import {
     getInvoiceUrl,
     checkPaymentStatus as checkPaymentStatusService,
     getStudentFinancialHistory,
-    initiateTokenPayment
+    initiateTokenPayment,
+    recordOfflineApplicationFeePayment
 } from './payment.service';
 
 // Phase 1: Pay Test Fee
@@ -235,5 +236,22 @@ export const getFinancialSummary = catchAsync(async (req: Request, res: Response
         success: true,
         message: "Financial summary retrieved successfully",
         data: summary
+    });
+});
+
+export const payOfflineApplicationFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[payOfflineApplicationFee] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId, paymentMethod, transactionId, remarks } = req.body;
+
+    if (!studentId || !paymentMethod) throw new AppError("Student ID and Payment Method are required", 400);
+
+    const result = await recordOfflineApplicationFeePayment(studentId, paymentMethod, transactionId, remarks, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Offline application fee recorded successfully",
+        data: result
     });
 });

@@ -4,7 +4,7 @@ import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
 import { format } from 'date-fns';
-import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod } from '@prisma/client';
+import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod, PaymentMode } from '@prisma/client';
 import { getApplicationFeeAmount } from './fee.service';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
@@ -362,6 +362,48 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
     } catch (err) {
         logger.error(`Failed to create ledger entry for ${payment.providerTxId}: ${err}`);
     }
+};
+
+export const recordOfflineApplicationFeePayment = async (studentId: string, paymentMethod: PaymentMethod, transactionId?: string, remarks?: string, adminId?: string) => {
+    const amount = await getApplicationFeeAmount();
+    
+    // Check if already paid
+    const existingPayment = await prisma.payment.findFirst({
+        where: { 
+            studentId, 
+            component: PaymentComponent.APPLICATION_FEE,
+            status: PaymentStatus.SUCCESS 
+        }
+    });
+
+    if (existingPayment) {
+        throw new AppError('Application fee already paid', 400);
+    }
+
+    const student = await prisma.student.findUnique({ where: { id: studentId } });
+    if (!student) throw new AppError('Student not found', 404);
+
+    // If CASH, generate a system transaction ID
+    const providerTxId = transactionId || `CASH_${Date.now()}_${studentId.substring(0, 8)}`;
+
+    const payment = await prisma.payment.create({
+        data: {
+            studentId,
+            amount,
+            status: PaymentStatus.SUCCESS, // Direct Success
+            component: PaymentComponent.APPLICATION_FEE,
+            providerTxId,
+            method: paymentMethod,
+            mode: PaymentMode.OFFLINE,
+            collectedBy: adminId,
+            metadata: { remarks, mode: 'OFFLINE_ENTRY' }
+        }
+    });
+
+    // Reuse the success processing logic (Invoice, Admission Status, Ledger, etc.)
+    await processPaymentSuccess({ ...payment, student }, { remarks, adminId });
+
+    return payment;
 };
 
 export const handlePaymentCallback = async (base64Payload: string, xVerify: string) => {

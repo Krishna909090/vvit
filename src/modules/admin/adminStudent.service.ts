@@ -865,6 +865,40 @@ export const AdminStudentService = {
                 hallTicketUrl
             }
         };
+    },
+
+    async updateAcademicQualification(id: string, data: any, adminId: string | undefined) {
+        if (!id) throw new AppError('Qualification ID is required', 400);
+
+        const qualification = await prisma.academicQualification.findUnique({
+            where: { id }
+        });
+
+        if (!qualification) throw new AppError('Qualification not found', 404);
+
+        return await prisma.academicQualification.update({
+            where: { id },
+            data: {
+                ...data,
+                updatedBy: adminId
+            }
+        });
+    },
+
+    async deleteAcademicQualification(id: string) {
+        if (!id) throw new AppError('Qualification ID is required', 400);
+
+        const qualification = await prisma.academicQualification.findUnique({
+            where: { id }
+        });
+
+        if (!qualification) throw new AppError('Qualification not found', 404);
+
+        await prisma.academicQualification.delete({
+            where: { id }
+        });
+
+        return { success: true, message: 'Qualification deleted successfully' };
     }
 };
 

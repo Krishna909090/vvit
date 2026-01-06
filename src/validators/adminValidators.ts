@@ -372,6 +372,7 @@ export const updateStudentPersonalDetailsSchema = z.object({
         email: z.string().email().optional(),
         category: z.string().min(1).optional(),
         address: z.string().min(1).optional(),
+        address2: z.string().optional(),
         city: z.string().min(1).optional(),
         state: z.string().min(1).optional(),
         pincode: z.string().min(1).optional(),
@@ -383,6 +384,27 @@ export const updateStudentPersonalDetailsSchema = z.object({
         return !keys.some(k => forbiddenKeys.includes(k));
     }, {
         message: "Updates to phone number or Aadhar number are not allowed through this API.",
+    }),
+});
+
+export const updateAcademicQualificationSchema = z.object({
+    params: z.object({
+        id: z.string().uuid("Invalid Qualification ID"),
+    }),
+    body: z.object({
+        level: z.string().min(1).optional(),
+        board: z.string().min(1).optional(),
+        yearOfPassing: z.string().min(1).optional(),
+        hallTicketNumber: z.string().min(1).optional(),
+        gpaOrMarks: z.string().min(1).optional(),
+    }).refine(data => Object.keys(data).length > 0, {
+        message: "At least one field must be provided for update",
+    }),
+});
+
+export const deleteAcademicQualificationSchema = z.object({
+    params: z.object({
+        id: z.string().uuid("Invalid Qualification ID"),
     }),
 });
 

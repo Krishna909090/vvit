@@ -278,3 +278,35 @@ export const getStudentDetails = catchAsync(async (req: Request, res: Response, 
     });
 });
 
+// Update Academic Qualification
+export const updateAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[updateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
+    const { id } = req.params;
+    const { ...updateData } = req.body;
+
+    const result = await AdminStudentService.updateAcademicQualification(id, updateData, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Academic qualification updated successfully',
+        data: result
+    });
+});
+
+// Delete Academic Qualification
+export const deleteAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[deleteAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
+    const { id } = req.params;
+
+    const result = await AdminStudentService.deleteAcademicQualification(id);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.message
+    });
+});
+
