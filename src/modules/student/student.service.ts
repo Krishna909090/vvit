@@ -42,7 +42,14 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
     }
 
     const isOffline = data.isOffline || data.applicationMode === 'SEAT_BOOKING' || data.applicationMode === 'OFFLINE';
-    const prefix = isOffline ? 'VOF' : 'VON';
+    
+    // Determine prefix based on application mode
+    // Seat Booking and Online -> VON
+    // Offline -> VOF
+    let prefix = 'VON';
+    if (data.applicationMode === 'OFFLINE' || (data.isOffline && data.applicationMode !== 'SEAT_BOOKING')) {
+        prefix = 'VOF';
+    }
 
     // Generate unique applicationId with retry logic to handle race conditions
     let applicationId = '';
@@ -50,21 +57,28 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
     const maxAttempts = 5;
 
     while (attempts < maxAttempts) {
-        // Find the last student with the same offline status to determine the next ID
+        // Find the last student with the same prefix to determine the next ID
+        // Note: isOffline filter removed from query to ensure we look for the last ID of that series regardless of exact offline flag status in DB
+        // (though usually they match)
         const lastStudent = await prisma.student.findFirst({
             where: {
-                isOffline: data.isOffline || false,
                 applicationId: { startsWith: prefix }
             },
-            orderBy: { createdAt: 'desc' }
+            orderBy: { createdAt: 'desc' } // or orderBy applicationId length then value to get true max?
+            // Simple string sort might fail if lengths differ (VON9 vs VON10), but here we are jumping to 7 digits.
+            // Best to sort by createdAt to get the latest one.
         });
 
-        let nextIdNumber = 1;
+        let nextIdNumber = 2600001;
         if (lastStudent && lastStudent.applicationId) {
             const lastIdPart = lastStudent.applicationId.replace(prefix, '');
             const lastNumber = parseInt(lastIdPart, 10);
             if (!isNaN(lastNumber)) {
                 nextIdNumber = lastNumber + 1;
+                // Ensure we respect the minimum starting number
+                if (nextIdNumber < 2600001) {
+                    nextIdNumber = 2600001;
+                }
             }
         }
 
