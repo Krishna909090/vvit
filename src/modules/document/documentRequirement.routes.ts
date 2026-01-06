@@ -23,7 +23,7 @@ const router = Router();
 router.get(
     '/',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]),
     getDocumentRequirements
 );
 
