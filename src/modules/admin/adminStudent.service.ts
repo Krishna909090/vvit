@@ -64,7 +64,8 @@ export const AdminStudentService = {
                     scholarshipAllocation: { include: { rule: true } },
                     pref1Course: { select: { name: true } },
                     pref2Course: { select: { name: true } },
-                    pref3Course: { select: { name: true } }
+                    pref3Course: { select: { name: true } },
+                    feeDemands: true
                 }
             }),
             prisma.student.count({ where })
@@ -103,7 +104,8 @@ export const AdminStudentService = {
                 documentsUploaded: student.documents.length,
                 pendingDocs,
                 isAllDocsUploaded: pendingDocs.length === 0,
-                s3FolderKey: (student as any).documentFolderPath || `students/${student.id}/documents/`
+                s3FolderKey: (student as any).documentFolderPath || `students/${student.id}/documents/`,
+                feeDemands: student.feeDemands || []
             };
         }));
 
@@ -779,6 +781,79 @@ export const AdminStudentService = {
         });
 
         return { success: true, message: 'Student personal details updated successfully' };
+    },
+
+    async getStudentDetails(studentId: string) {
+        if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: {
+                admissionDetails: {
+                    include: {
+                        allottedCourse: true,
+                        hostel: true,
+                        transportRoute: true
+                    }
+                },
+                examDetails: true,
+                documents: true,
+                academicQualifications: true,
+                eligibleScholarshipRule: true,
+                scholarshipAllocation: { include: { rule: true } },
+                pref1Course: true,
+                pref2Course: true,
+                pref3Course: true,
+                feeDemands: {
+                    include: {
+                        feeStructure: {
+                            include: { feeHead: true }
+                        },
+                        payments: true
+                    }
+                },
+                payments: true,
+                courseChangeLogs: true,
+                discountRequests: true,
+                ledgerEntries: true,
+                enrollment: {
+                     include: {
+                         academicYear: true,
+                         section: { include: { batch: true } }
+                     }
+                },
+                hostelAllocation: { include: { bed: { include: { room: { include: { block: { include: { hostel: true } } } } } } } },
+                transportAllocation: { include: { route: true, stop: true } },
+                convenorDetails: true,
+                user: { select: { id: true, email: true, phone: true, role: true, isDeleted: true } }
+            }
+        });
+
+        if (!student) {
+            throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+        }
+
+        // Convert key documents to presigned
+        const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
+        const documentsWithPresignedUrls = await Promise.all(student.documents.map(async (doc: any) => ({
+            ...doc,
+            url: await convertToPresignedUrl(doc.url)
+        })));
+
+        let hallTicketUrl = null;
+        if (student.examDetails?.hallTicketUrl) {
+            hallTicketUrl = await convertToPresignedUrl(student.examDetails.hallTicketUrl);
+        }
+
+        return {
+            ...student,
+            profilePhotoUrl,
+            documents: documentsWithPresignedUrls,
+            examDetails: {
+                ...student.examDetails,
+                hallTicketUrl
+            }
+        };
     }
 };
 

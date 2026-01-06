@@ -180,8 +180,9 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             where: { studentId: payment.studentId },
             data: {
                 status: AdmissionStatus.ENTRANCE_FEE_PAID,
-                feeStatus: FeeStatus.PARTIAL,
-                paidFee: { increment: payment.amount }
+                feeStatus: FeeStatus.PARTIAL
+                // REMOVED paidFee increment: Application Fee is separate from College Fee tally
+                // OLD: paidFee: { increment: payment.amount }
             }
         });
         logger.info(`Student ${payment.studentId} admission status updated to ENTRANCE_FEE_PAID`);
@@ -195,10 +196,8 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             }
         });
 
-        logger.info(`Student ${payment.studentId} admission status updated to ADMISSION_CONFIRMED`);
 
-        // Generate Allotment Order
-        await generateAndSaveAllotmentOrder(payment.studentId);
+        logger.info(`Student ${payment.studentId} admission status updated to ADMISSION_CONFIRMED`);
 
     } else if (payment.component === PaymentComponent.SCHOLARSHIP_TOKEN) {
         await ScholarshipService.lockAllocation(payment.studentId);
@@ -211,7 +210,139 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             }
         });
         logger.info(`Scholarship locked for student ${payment.studentId}`);
-        await generateAndSaveAllotmentOrder(payment.studentId);
+
+        // --- GENERATE LEDGER ENTRIES FOR FEES & DISCOUNTS ---
+        // Fetch detailed student info to calculate fees
+        const detailedStudent = await prisma.student.findUnique({
+            where: { id: payment.studentId },
+            include: { 
+                admissionDetails: {
+                    include: {
+                        hostel: { include: { blocks: { include: { rooms: true } } } },
+                        transportRoute: true
+                    }
+                },
+                scholarshipAllocation: { include: { rule: true } }
+            }
+        });
+
+        if (detailedStudent && detailedStudent.admissionDetails) {
+            const ledgersToCreate = [];
+            const admission = detailedStudent.admissionDetails;
+
+            // 1. Tuition Fee (DEBIT)
+            const tuitionFee = admission.totalFee > 0 ? admission.totalFee : 25000; // Fallback
+            ledgersToCreate.push({
+                studentId: payment.studentId,
+                type: 'DEBIT' as any,
+                amount: tuitionFee,
+                description: 'Tuition Fee (Annual)',
+                referenceId: payment.id,
+                referenceType: 'FEE_GENERATION', // Custom Ref Type
+                date: new Date()
+            });
+
+            // 2. Hostel Fee (DEBIT)
+            if (admission.hostelId && admission.roomNumber) {
+                const room = admission.hostel?.blocks
+                    .flatMap(b => b.rooms)
+                    .find(r => r.number === admission.roomNumber);
+                if (room && room.cost > 0) {
+                    ledgersToCreate.push({
+                        studentId: payment.studentId,
+                        type: 'DEBIT' as any,
+                        amount: room.cost,
+                        description: `Hostel Fee - ${admission.hostel?.name} (Room ${admission.roomNumber})`,
+                        referenceId: payment.id,
+                        referenceType: 'FEE_GENERATION',
+                        date: new Date()
+                    });
+                }
+            }
+
+            // 3. Transport Fee (DEBIT)
+            if (admission.transportRouteId && admission.transportRoute) {
+                ledgersToCreate.push({
+                    studentId: payment.studentId,
+                    type: 'DEBIT' as any,
+                    amount: admission.transportRoute.cost,
+                    description: `Transport Fee - ${admission.transportRoute.name}`,
+                    referenceId: payment.id,
+                    referenceType: 'FEE_GENERATION',
+                    date: new Date()
+                });
+            }
+
+            // 4. Scholarship Discount (CREDIT)
+            // Handle both Scholarship Allocation AND Manual Discount logic if needed
+            if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) {
+                const rule = detailedStudent.scholarshipAllocation.rule;
+                // Calculate Discount Amount (Percentage of Base Tuition)
+                const discountAmount = (tuitionFee * rule.discountPercentage) / 100;
+                
+                if (discountAmount > 0) {
+                    ledgersToCreate.push({
+                        studentId: payment.studentId,
+                        type: 'CREDIT' as any,
+                        amount: discountAmount,
+                        description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`,
+                        referenceId: detailedStudent.scholarshipAllocation.id, // Link to allocation
+                        referenceType: 'SCHOLARSHIP',
+                        date: new Date()
+                    });
+                }
+            }
+            
+            // Batch Insert
+            if (ledgersToCreate.length > 0) {
+                await prisma.studentLedger.createMany({
+                    data: ledgersToCreate
+                });
+                logger.info(`Generated ${ledgersToCreate.length} fee/discount ledger entries for student ${payment.studentId}`);
+            }
+        }
+    }
+
+    // --- NEW: WATERFALL FEE SETTLEMENT LOGIC ---
+    // If payment is for College Fees (Tuition, Hostel, etc.), settle pending demands
+    // Priority: Oldest Due Date first
+    if (payment.component !== PaymentComponent.APPLICATION_FEE) {
+        try {
+            const pendingDemands = await prisma.studentFeeDemand.findMany({
+                where: {
+                    studentId: payment.studentId,
+                    status: FeeStatus.PENDING
+                },
+                orderBy: { dueDate: 'asc' }, // Settle oldest dues first
+                include: { feeStructure: true }
+            });
+
+            let remainingPayment = payment.amount;
+
+            for (const demand of pendingDemands) {
+                if (remainingPayment <= 0) break;
+
+                // Check if we can fully settle this demand
+                if (remainingPayment >= demand.amount) {
+                    await prisma.studentFeeDemand.update({
+                        where: { id: demand.id },
+                        data: { status: FeeStatus.FULL }
+                    });
+                    remainingPayment -= demand.amount;
+                    logger.info(`Fee Demand ${demand.id} marked as FULL. Remaining: ${remainingPayment}`);
+                } else {
+                    // Partial payment case
+                    await prisma.studentFeeDemand.update({
+                        where: { id: demand.id },
+                        data: { status: FeeStatus.PARTIAL }
+                    });
+                    logger.info(`Fee Demand ${demand.id} marked as PARTIAL. Remaining payment ${remainingPayment} < Demand ${demand.amount}`);
+                    break; 
+                }
+            }
+        } catch (err) {
+            logger.error(`Error settling fee demands: ${err}`);
+        }
     }
 
     // 4. Create Ledger Entry (Financial Record)
@@ -411,15 +542,64 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
     }
 };
 
-export const requestDiscount = async (studentId: string, reason: string, documentUrl?: string, userId?: string | null) => {
+export const requestDiscount = async (studentId: string, reason: string, amount: number, documentUrl?: string, userId?: string | null) => {
      return prisma.discountRequest.create({
             data: {
                 studentId,
                 reason,
+                requestedAmount: Number(amount),
                 documentUrl,
-                status: DiscountStatus.REQUESTED
+                status: DiscountStatus.REQUESTED,
+                createdBy: userId || undefined
             }
         });
+};
+
+export const approveDiscount = async (requestId: string, approvedAmount: number, component: string, adminId: string, remarks?: string) => {
+    const request = await prisma.discountRequest.findUnique({ where: { id: requestId } });
+    if (!request) throw new AppError('Discount Request not found', 404);
+    if (request.status !== DiscountStatus.REQUESTED) throw new AppError('Request already processed', 400);
+
+    return await prisma.$transaction(async (tx) => {
+         const updated = await tx.discountRequest.update({
+            where: { id: requestId },
+            data: {
+                status: DiscountStatus.APPROVED,
+                approvedAmount,
+                component,
+                remarks,
+                approvedBy: adminId,
+                approvedAt: new Date()
+            }
+         });
+         
+         // Create Ledger Entry
+         await tx.studentLedger.create({
+            data: {
+                studentId: request.studentId,
+                type: 'CREDIT' as any,
+                amount: approvedAmount,
+                description: `Discount Approved - ${component} (${remarks || 'Admin Approval'})`,
+                referenceId: updated.id,
+                referenceType: 'DISCOUNT',
+                date: new Date()
+            }
+         });
+         
+         return updated;
+    });
+};
+
+export const rejectDiscount = async (requestId: string, remarks: string, adminId: string) => {
+     return prisma.discountRequest.update({
+         where: { id: requestId },
+         data: {
+             status: DiscountStatus.REJECTED,
+             remarks,
+             approvedBy: adminId,
+             approvedAt: new Date()
+         }
+     });
 };
 
 export const getInvoiceUrl = async (paymentId: string) => {
@@ -453,6 +633,9 @@ export const getInvoiceUrl = async (paymentId: string) => {
 };
 
 export const getAllotmentOrderUrl = async (studentId: string) => {
+    // Dynamically generate (or update) the allotment order on demand
+    await generateAndSaveAllotmentOrder(studentId);
+
     const doc = await prisma.studentDocument.findUnique({
         where: {
             studentId_documentKey: {
@@ -480,10 +663,32 @@ export const getAllotmentOrderUrl = async (studentId: string) => {
     return getPresignedUrl(key);
 };
 
-export const initiateTokenPayment = async (studentId: string) => {
+export const initiateTokenPayment = async (studentId: string, data: any = {}) => {
     const TOKEN_AMOUNT = 10000; // Fixed Token Amount
+
     const student = await prisma.student.findUnique({ where: { id: studentId } });
     if (!student) throw new AppError('Student not found', 404);
+    
+    // 1. Update Selections (Hostel/Transport) if provided
+    if (data.hostelSelection || data.transportSelection) {
+        await prisma.$transaction(async (tx) => {
+             const updateData: any = {};
+             if (data.hostelSelection?.hostelId) {
+                 updateData.hostelId = data.hostelSelection.hostelId;
+                 updateData.accommodationType = 'HOSTEL';
+             }
+             if (data.transportSelection?.routeId) {
+                 updateData.accommodationType = 'TRANSPORT'; 
+                 updateData.transportRouteId = data.transportSelection.routeId;
+             }
+             if (Object.keys(updateData).length > 0) {
+                 await tx.studentAdmission.update({
+                     where: { studentId },
+                     data: updateData
+                 });
+             }
+        });
+    }
 
     const transactionId = `TOK_${Date.now()}_${studentId.substring(0, 8)}`;
 
@@ -506,21 +711,8 @@ export const initiateTokenPayment = async (studentId: string) => {
              data: { status: PaymentStatus.SUCCESS }
         });
 
-        // Lock Scholarship
-        await ScholarshipService.lockAllocation(studentId);
-
-        // Update Admission
-        await prisma.studentAdmission.update({
-             where: { studentId },
-             data: { 
-                 paidFee: { increment: TOKEN_AMOUNT },
-                 feeStatus: FeeStatus.PARTIAL,
-                 status: AdmissionStatus.ADMISSION_CONFIRMED
-             }
-        });
-
-        // Generate Allotment Order
-        await generateAndSaveAllotmentOrder(studentId);
+        // Trigger centralized success logic (updates Admission, Ledger, Allocations, and Waterfall settlement)
+        await processPaymentSuccess({ ...createdPayment, student }, {});
 
         return `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}`;
     }
@@ -732,50 +924,101 @@ export const getStudentFinancialSummary = async (studentId: string) => {
     summary.collegeFee.status = summary.collegeFee.pending === 0 ? 'PAID' : (summary.collegeFee.paid > 0 ? 'PARTIAL' : 'PENDING');
 
     // --- TOTAL PAID ---
-    summary.totalPaid = summary.applicationFee.paid + summary.collegeFee.paid;
+    summary.totalPaid = summary.collegeFee.paid;
 
     return summary;
 };
 
 
 // Helper to generate and save allotment order
-export const generateAndSaveAllotmentOrder = async (studentId: string) => {
+// Helper to generate and save allotment order
+export async function generateAndSaveAllotmentOrder(studentId: string) {
     try {
-        const studentWithDetails = await prisma.student.findUnique({
+        const student = await prisma.student.findUnique({
             where: { id: studentId },
             include: { 
-                admissionDetails: { include: { allottedCourse: true } },
-                examDetails: true,
+                admissionDetails: { 
+                    include: { 
+                        allottedCourse: true,
+                        transportRoute: true
+                    } 
+                },
                 convenorDetails: true 
             }
         });
 
-        if (studentWithDetails && studentWithDetails.admissionDetails) {
-             const phase = 'First Phase';
+        if (student && student.admissionDetails) {
              const reportingDate = new Date();
-             reportingDate.setDate(reportingDate.getDate() + 7); // +7 days from now
+             reportingDate.setDate(reportingDate.getDate() + 7);
              
+             // Get Presigned Profile Photo URL
+             let profilePhotoUrl = undefined;
+             if (student.profilePhotoUrl) {
+                 profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl) || undefined;
+             }
+             
+             // Calculate Fees
+             const feeBreakdown: { name: string; amount: number }[] = [];
+             let totalFee = 0;
+
+             // Tuition (Base Fee)
+             const tuition = student.admissionDetails.totalFee;
+             if (tuition > 0) {
+                 feeBreakdown.push({ name: 'Tuition Fee', amount: tuition });
+                 totalFee += tuition;
+             }
+
+             // Transport
+             if (student.admissionDetails.transportRoute) {
+                 const cost = student.admissionDetails.transportRoute.cost;
+                 feeBreakdown.push({ name: 'Transport Fee', amount: cost });
+                 totalFee += cost;
+             }
+
+             // Hostel (Fetch dynamic cost)
+             if (student.admissionDetails.hostelId) {
+                 const hostel = await prisma.hostel.findUnique({ 
+                    where: { id: student.admissionDetails.hostelId },
+                    include: { blocks: { include: { rooms: true } } }
+                 });
+                 let hostelCost = 0;
+                 if (student.admissionDetails.roomNumber) {
+                     const room = hostel?.blocks.flatMap(b => b.rooms).find(r => r.number === student.admissionDetails?.roomNumber);
+                     hostelCost = room?.cost || 0;
+                 }
+                 // If no room assigned yet, we might not know cost. Or fallback to generic?
+                 // For now only add if cost > 0
+                 if (hostelCost > 0) {
+                     feeBreakdown.push({ name: 'Hostel Fee', amount: hostelCost });
+                     totalFee += hostelCost;
+                 }
+             }
+             
+             const totalPaid = student.admissionDetails.paidFee;
+
             const allotmentData = {
-                applicationId: studentWithDetails.applicationId,
-                studentName: studentWithDetails.name,
-                fatherName: studentWithDetails.fatherName,
-                gender: studentWithDetails.gender,
-                category: studentWithDetails.category,
-                region: 'AU', // Default or fetch
-                rank: studentWithDetails.convenorDetails?.rank || studentWithDetails.examDetails?.examScore?.toString() || 'N/A',
-                hallTicketNo: studentWithDetails.convenorDetails?.hallTicketNo || studentWithDetails.examDetails?.hallTicketUrl || 'N/A',
+                applicationId: student.applicationId,
+                studentName: student.name,
+                fatherName: student.fatherName,
+                gender: student.gender,
+                region: 'AU', 
                 allottedCollege: 'VVIT UNIVERSITY (VVIT), GUNTUR',
-                allottedCourse: studentWithDetails.admissionDetails.allottedCourse?.name || 'N/A',
-                allottedCategory: studentWithDetails.convenorDetails?.category || `${studentWithDetails.category}_GEN_AU`,
-                tuitionFeeFixed: studentWithDetails.admissionDetails.totalFee,
-                tuitionFeeToPay: Math.max(0, studentWithDetails.admissionDetails.totalFee - studentWithDetails.admissionDetails.paidFee), 
+                allottedCourse: student.admissionDetails.allottedCourse?.name || 'N/A',
+                allottedCategory: student.convenorDetails?.category || `${student.category}_GEN_AU`,
                 reportingDate: format(reportingDate, 'dd.MM.yyyy'),
-                phase: phase,
-                feeReimbursement: 'NO'
+                phase: 'First Phase',
+                feeReimbursement: 'NO',
+                profilePhotoUrl: profilePhotoUrl,
+                
+                feeBreakdown: feeBreakdown,
+                totalFee: totalFee,
+                totalPaid: totalPaid
             };
 
             const pdfBuffer = await generateAllotmentOrderPDF(allotmentData);
-            const s3Key = `student/${studentWithDetails.applicationId}/documents/AllotmentOrder.pdf`;
+            // Force unique key to avoid cache
+            const timestamp = Date.now();
+            const s3Key = `student/${student.applicationId}/documents/AllotmentOrder_${timestamp}.pdf`;
             const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
 
             await prisma.studentDocument.upsert({
@@ -797,9 +1040,10 @@ export const generateAndSaveAllotmentOrder = async (studentId: string) => {
                     updatedAt: new Date()
                 }
             });
+            
             logger.info(`Allotment order generated and saved for student ${studentId}`);
         }
     } catch (err) {
-        logger.error(`Failed to generate/upload allotment order for ${studentId}: ${err}`);
+        logger.error(`Failed to generate allotment order for ${studentId}: ${err}`);
     }
 };

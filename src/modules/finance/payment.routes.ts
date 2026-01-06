@@ -1,6 +1,6 @@
 import express from 'express';
 import { handlePaymentCallback } from './payment.service';
-import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary } from './payment.controller';
+import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, approveDiscount, rejectDiscount } from './payment.controller';
 import { authenticate, authorize } from '../../middlewares/authMiddleware';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
@@ -13,7 +13,12 @@ router.get('/:paymentId/invoice', authenticate, authorize(['STUDENT', 'ADMIN', '
 
 router.post('/initiate-entrance-fee', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN', 'AGENT']), payTestFee);
 router.post('/initiate-college-fee', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN', 'AGENT']), payCollegeFee);
-router.post('/request-discount', authenticate, authorize(['STUDENT']), requestDiscount);
+router.post('/request-discount', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), requestDiscount);
+
+// Discount Approval Workflow (Super Admin Only)
+router.post('/discount/approve/:requestId', authenticate, authorize(['SUPER_ADMIN']), approveDiscount);
+router.post('/discount/reject/:requestId', authenticate, authorize(['SUPER_ADMIN']), rejectDiscount);
+
 router.get('/check-status/:txnId', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), checkPaymentStatus);
 // History Routes
 router.get('/history', authenticate, authorize(['STUDENT', 'ADMIN', 'SUPER_ADMIN']), getPaymentHistory);

@@ -8,7 +8,7 @@ import {
     getFeeStatistics,
     createDiscountRequest, reviewDiscountRequest, approveDiscount,
     getApplicationFee, updateApplicationFee,
-    collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands
+    collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands
 } from './fee.controller';
 
 import {
@@ -54,6 +54,9 @@ router.post('/collect-fee', authenticate, authorize([Role.STUDENT,Role.ADMIN, Ro
 
 // Ledger
 router.get('/ledger/:studentId', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN, Role.VERIFICATION_OFFICER]), getStudentLedger);
+
+// Simplified Demands List
+router.get('/student-demands/:studentId', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), getStudentFeeDemands);
 
 // Allotment Order
 router.get('/allotment-order/:studentId', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), downloadAllotmentOrder);

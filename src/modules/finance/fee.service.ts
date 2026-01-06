@@ -2,6 +2,7 @@ import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import { FeeStructure, SystemSetting, FeeHead, Role, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType } from '@prisma/client';
 import { MESSAGES } from '../../constants/messages';
+import logger from '../../utils/logger';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';
@@ -334,7 +335,14 @@ export const FeeService = {
             (!fs.yearOfStudy || fs.yearOfStudy === currentYear)
         );
 
-        if (applicableFees.length === 0) return []; // Return empty array instead of void
+        if (applicableFees.length === 0) {
+            logger.warn(`[generateFeeDemands] No applicable fees found.
+                Student: ${student.id} (Quota: ${studentQuota}, Type: ${studentCourseType}, Year: ${currentYear})
+                Total Structures Found: ${feeStructures.length}
+                Structures Info: ${JSON.stringify(feeStructures.map(f => ({ id: f.id, quota: f.quotaType, type: f.courseType, year: f.yearOfStudy })))}
+            `);
+            return []; 
+        }
 
         // 2. Create Demands & Ledger Entries
         // Using transaction to ensure ledger matches demands
@@ -393,15 +401,109 @@ export const FeeService = {
             where: { studentId, status: 'SUCCESS' }
         });
 
+        // Fetch Discounts/Scholarships from Ledger
+        const creditLedgers = await prisma.studentLedger.findMany({
+            where: { 
+                studentId, 
+                type: 'CREDIT',
+                referenceType: { in: ['SCHOLARSHIP', 'DISCOUNT'] }
+            }
+        });
+
+        let scholarshipAmount = creditLedgers
+            .filter(l => l.referenceType === 'SCHOLARSHIP')
+            .reduce((sum, l) => sum + l.amount, 0);
+
+        // Check for Locked Allocation (Pre-Payment View)
+        if (scholarshipAmount === 0) {
+            const allocation = await prisma.scholarshipAllocation.findUnique({
+                where: { studentId },
+                include: { rule: true }
+            });
+
+            logger.info(`[DEBUG] Allocation check for ${studentId}: Found=${!!allocation}, Status=${allocation?.status}, RuleID=${allocation?.ruleId}`);
+            
+            if (allocation && (allocation.status === 'LOCKED' || allocation.status === 'RESERVED')) {
+                 const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
+                 
+                 // Get actual tuition fee from demands, fallback to admission total fee, then fallback to default
+                 // Strategy 1: Precise Name Match
+                 let tuitionDemand = demands.find(d => 
+                    ['tuition', 'college', 'academic'].some(key => d.feeStructure?.feeHead?.name?.toLowerCase().includes(key))
+                 );
+
+                 // Strategy 2: Highest Amount Heuristic (Tuition is usually the largest fee)
+                 if (!tuitionDemand && demands.length > 0) {
+                     tuitionDemand = demands.reduce((max, d) => d.amount > max.amount ? d : max, demands[0]);
+                     logger.warn(`[Scholarship] Precise Tuition Fee finding failed. Used highest demand: ${tuitionDemand.amount} (${tuitionDemand.feeStructure?.feeHead?.name})`);
+                 }
+
+                 // Strategy 3: Admission Record
+                 const tuitionFee = tuitionDemand ? tuitionDemand.amount : (admission?.totalFee || 0);
+
+                 logger.info(`[DEBUG] Calculation: Rule=${allocation.rule.discountPercentage}%, BaseTuition=${tuitionFee}, Source=${tuitionDemand ? 'Demands (Highest/Matched)' : 'Admission'}`);
+
+                 scholarshipAmount = (tuitionFee * allocation.rule.discountPercentage) / 100;
+            }
+        }
+
+        const manualDiscountAmount = creditLedgers
+            .filter(l => l.referenceType === 'DISCOUNT')
+            .reduce((sum, l) => sum + l.amount, 0);
+
         const totalDemand = demands.reduce((sum, d) => sum + d.amount, 0);
         const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-        const pendingAmount = totalDemand - totalPaid;
+        const totalDiscount = scholarshipAmount + manualDiscountAmount;
+        
+        // Net Pending = Demand - (Paid + Discounts)
+        const pendingAmount = Math.max(0, totalDemand - totalPaid - totalDiscount);
+
+        // Component Level Breakdown
+        const breakdown: any = {
+            TUITION: { demand: 0, paid: 0, balance: 0 },
+            HOSTEL: { demand: 0, paid: 0, balance: 0 },
+            TRANSPORT: { demand: 0, paid: 0, balance: 0 },
+            OTHER: { demand: 0, paid: 0, balance: 0 } 
+        };
+
+        // Map Demands (Approximate via Fee Head Name)
+        demands.forEach(d => {
+            const name = d.feeStructure?.feeHead?.name?.toUpperCase() || '';
+            let key = 'OTHER';
+            if (name.includes('TUITION') || name.includes('COLLEGE')) key = 'TUITION';
+            else if (name.includes('HOSTEL')) key = 'HOSTEL';
+            else if (name.includes('TRANSPORT') || name.includes('BUS')) key = 'TRANSPORT';
+            
+            breakdown[key].demand += d.amount;
+        });
+
+        // Map Payments (Via Component Enum)
+        payments.forEach(p => {
+             const comp = p.component as string; 
+             let key = 'OTHER';
+             if (comp === 'TUITION' || comp === 'SCHOLARSHIP_TOKEN') key = 'TUITION'; 
+             else if (comp === 'HOSTEL') key = 'HOSTEL';
+             else if (comp === 'TRANSPORT') key = 'TRANSPORT';
+             
+             breakdown[key].paid += p.amount;
+        });
+
+        // Calc Balance
+        Object.keys(breakdown).forEach(key => {
+            breakdown[key].balance = breakdown[key].demand - breakdown[key].paid;
+        });
 
         return {
             summary: {
                 totalDemand,
                 totalPaid,
-                pendingAmount
+                pendingAmount,
+                breakdown
+            },
+            discounts: {
+                scholarship: scholarshipAmount,
+                manual: manualDiscountAmount,
+                total: totalDiscount
             },
             demands,
             payments

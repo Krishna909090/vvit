@@ -41,7 +41,8 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
         }
     }
 
-    const prefix = data.isOffline ? 'VOF' : 'VON';
+    const isOffline = data.isOffline || data.applicationMode === 'SEAT_BOOKING' || data.applicationMode === 'OFFLINE';
+    const prefix = isOffline ? 'VOF' : 'VON';
 
     // Generate unique applicationId with retry logic to handle race conditions
     let applicationId = '';
@@ -121,8 +122,10 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
                 pincode: data.pincode,
                 profilePhotoUrl: data.profilePhotoUrl,
                 agentId,
-                isOffline: data.isOffline || false,
+                isOffline: data.isOffline || data.applicationMode === 'SEAT_BOOKING' || data.applicationMode === 'OFFLINE' || false,
                 degreeType: data.degreeType,
+                applicationMode: data.applicationMode,
+                quotaType: data.quotaType,
                 pref1: data.pref1,
                 pref2: data.pref2,
                 pref3: data.pref3,
@@ -269,29 +272,32 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
     }
 
     // Check if student is qualified to upload documents
-    if (!student.examDetails?.examAttended) {
-        throw new AppError('Cannot upload documents: Exam not attended yet', 400);
-    }
+    // Bypass checks for Seat Booking / Offline students
+    if (!student.isOffline) {
+        if (!student.examDetails?.examAttended) {
+            throw new AppError('Cannot upload documents: Exam not attended yet', 400);
+        }
 
-    if (!student.examDetails?.isQualified) {
-        throw new AppError('Cannot upload documents: Student not qualified in entrance exam', 400);
-    }
+        if (!student.examDetails?.isQualified) {
+            throw new AppError('Cannot upload documents: Student not qualified in entrance exam', 400);
+        }
 
-    // Check admission status - must be EXAM_ATTENDED or later
-    const validStatuses: AdmissionStatus[] = [
-        AdmissionStatus.EXAM_ATTENDED,
-        AdmissionStatus.EXAM_QUALIFIED,
-        AdmissionStatus.DOCUMENTS_PENDING,
-        AdmissionStatus.DOCUMENTS_SUBMITTED,
-        AdmissionStatus.SEAT_ALLOTTED,
-        AdmissionStatus.ADMISSION_CONFIRMED
-    ];
+        // Check admission status - must be EXAM_ATTENDED or later
+        const validStatuses: AdmissionStatus[] = [
+            AdmissionStatus.EXAM_ATTENDED,
+            AdmissionStatus.EXAM_QUALIFIED,
+            AdmissionStatus.DOCUMENTS_PENDING,
+            AdmissionStatus.DOCUMENTS_SUBMITTED,
+            AdmissionStatus.SEAT_ALLOTTED,
+            AdmissionStatus.ADMISSION_CONFIRMED
+        ];
 
-    if (!student.admissionDetails || !validStatuses.includes(student.admissionDetails.status)) {
-        throw new AppError(
-            `Cannot upload documents: Current status is ${student.admissionDetails?.status || 'UNKNOWN'}. Must be EXAM_ATTENDED or later.`,
-            400
-        );
+        if (!student.admissionDetails || !validStatuses.includes(student.admissionDetails.status)) {
+            throw new AppError(
+                `Cannot upload documents: Current status is ${student.admissionDetails?.status || 'UNKNOWN'}. Must be EXAM_ATTENDED or later.`,
+                400
+            );
+        }
     }
 
     // Update Preferences
@@ -427,32 +433,8 @@ export const addAcademicDetails = async (studentId: string, details: any[], curr
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
-    // Check if student is qualified to add academic details
-    // Student must have attended exam and be qualified
-    if (!student.examDetails?.examAttended) {
-        throw new AppError('Cannot add academic details: Exam not attended yet', 400);
-    }
-
-    if (!student.examDetails?.isQualified) {
-        throw new AppError('Cannot add academic details: Student not qualified in entrance exam', 400);
-    }
-
-    // Check admission status - must be EXAM_ATTENDED or later
-    const validStatuses: AdmissionStatus[] = [
-        AdmissionStatus.EXAM_ATTENDED,
-        AdmissionStatus.EXAM_QUALIFIED,
-        AdmissionStatus.DOCUMENTS_PENDING,
-        AdmissionStatus.DOCUMENTS_SUBMITTED,
-        AdmissionStatus.SEAT_ALLOTTED,
-        AdmissionStatus.ADMISSION_CONFIRMED
-    ];
-
-    if (!student.admissionDetails || !validStatuses.includes(student.admissionDetails.status)) {
-        throw new AppError(
-            `Cannot add academic details: Current status is ${student.admissionDetails?.status || 'UNKNOWN'}. Must be EXAM_ATTENDED or later.`,
-            400
-        );
-    }
+    // Requirement Update: Allow adding academic details at any stage (Online/Offline/SeatBooking)
+    // Exam attendance/qualification checks removed.
 
     // Use transaction to create multiple records
     const result = await prisma.$transaction(
@@ -522,7 +504,34 @@ export const getStudentByUserId = async (userId: string) => {
                     examAttended: true
                 }
             },
-            admissionDetails: true,
+            admissionDetails: {
+                select: {
+                    id: true,
+                    studentId: true,
+                    status: true,
+                    qualificationMode: true,
+                    allottedCourseId: true,
+                    allottedCourse: {
+                        select: { name: true }
+                    },
+                    totalFee: true,
+                    paidFee: true,
+                    feeStatus: true,
+                    accommodationType: true,
+                    hostelType: true,
+                    hostelId: true,
+                    hostel: {
+                        select: { name: true }
+                    },
+                    roomNumber: true,
+                    transportRouteId: true,
+                    transportRoute: {
+                        select: { name: true }
+                    },
+                    createdAt: true,
+                    updatedAt: true
+                }
+            },
             documents: {
                 where: { isDeleted: false },
                 select: {
@@ -599,6 +608,9 @@ export const getStudentByUserId = async (userId: string) => {
         } : null,
         admissionDetails: {
             ...student.admissionDetails,
+            allottedCourseName: student.admissionDetails?.allottedCourse?.name,
+            hostelName: student.admissionDetails?.hostel?.name,
+            transportRouteName: student.admissionDetails?.transportRoute?.name,
             completedStatuses,
             currentStatus
         }
@@ -651,3 +663,66 @@ export const searchStudents = async (query: string, page: number = 1, limit: num
     };
 };
 
+
+export const updatePersonalDetails = async (studentId: string, data: any, currentUserId: string | null) => {
+    // 1. Verify Ownership
+    const student = await prisma.student.findUnique({
+        where: { id: studentId }
+    });
+
+    if (!student) {
+        throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+    }
+
+    if (student.userId !== currentUserId) {
+        throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+    }
+
+    // 2. Filter forbidden fields (just in case validator missed something or direct call)
+    const { phone, aadharNumber, phoneNumber, aadhar, applicationId, ...updateData } = data;
+
+    // 3. Check Email Uniqueness if changing
+    if (updateData.email && updateData.email !== student.email) {
+        // Check Student table
+        const existingStudentEmail = await prisma.student.findFirst({
+            where: { 
+                email: updateData.email,
+                id: { not: studentId }
+            }
+        });
+        if (existingStudentEmail) {
+            throw new AppError('Email already in use by another student', 400);
+        }
+
+        // Check User table
+        const existingUserEmail = await prisma.user.findFirst({
+            where: { 
+                email: updateData.email,
+                id: { not: currentUserId || undefined } 
+            }
+        });
+        if (existingUserEmail) {
+            throw new AppError('Email already in use by another user', 400);
+        }
+    }
+
+    // 4. Update
+    await prisma.$transaction(async (tx) => {
+        await tx.student.update({
+            where: { id: studentId },
+            data: {
+                ...updateData,
+                updatedBy: currentUserId
+            }
+        });
+
+        if (currentUserId && updateData.email && updateData.email !== student.email) {
+            await tx.user.update({
+                where: { id: currentUserId },
+                data: { email: updateData.email }
+            });
+        }
+    });
+
+    return { message: 'Personal details updated successfully' };
+};

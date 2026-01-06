@@ -5,11 +5,13 @@ import {
     uploadDocumentsAndPreferences,
     getStudentDetails,
     addAcademicDetails,
-    selectExam
+    selectExam,
+    updatePersonalDetails
 } from './student.controller';
 import {
     payTestFee,
     payCollegeFee,
+    payTokenFee,
     requestDiscount
 } from '../finance/payment.controller';
 
@@ -21,7 +23,8 @@ import {
     studentIdParamSchema,
     uploadDocumentsAndPreferencesSchema,
     addAcademicDetailsSchema,
-    selectExamSchema
+    selectExamSchema,
+    updatePersonalDetailsSchema
 } from '../../validators/studentValidators';
 import { getAvailableSlots } from '../exam/exam.controller';
 import { getMyRequirements, deleteStudentDocument } from '../document/document.controller';
@@ -37,6 +40,8 @@ router.post('/:studentId/pay-test-fee', authenticate, authorize([Role.STUDENT]),
 router.get('/:studentId/hall-ticket', authenticate, authorize([Role.STUDENT]), validateRequest(studentIdParamSchema), getHallTicket);
 
 router.post('/:studentId/upload-docs', authenticate, authorize([Role.STUDENT]), validateRequest(uploadDocumentsAndPreferencesSchema), uploadDocumentsAndPreferences);
+
+router.post('/:studentId/pay-token-fee', authenticate, authorize([Role.STUDENT]), validateRequest(studentIdParamSchema), payTokenFee);
 
 router.post('/:studentId/pay-college-fee', authenticate, authorize([Role.STUDENT]), validateRequest(studentIdParamSchema), payCollegeFee);
 
@@ -65,5 +70,7 @@ router.get('/document-requirements', authenticate, authorize([Role.STUDENT]), ge
 router.delete('/:studentId/document', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), deleteStudentDocument);
 
 router.get('/details', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getStudentDetails);
+
+router.post('/:studentId/personal-details', authenticate, authorize([Role.STUDENT]), validateRequest(updatePersonalDetailsSchema), updatePersonalDetails);
 
 export default router;

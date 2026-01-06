@@ -8,7 +8,8 @@ import {
     updateAdmissionDetails, getStudentCertificates, downloadStudentDocuments, updateRollNumber,
     updateStudentStatus,
     setScholarshipEligibility,
-    updateStudentPersonalDetails
+    updateStudentPersonalDetails,
+    getStudentDetails
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -72,6 +73,9 @@ router.post('/update-status', authenticate, authorize([Role.ADMIN, Role.SUPER_AD
 router.post('/scholarship-eligibility', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(setEligibleScholarshipSchema), setScholarshipEligibility);
 
 // Update Personal Details
-router.post('/update-personal-details', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateStudentPersonalDetailsSchema), updateStudentPersonalDetails);
+router.post('/update-personal-details', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateStudentPersonalDetailsSchema), updateStudentPersonalDetails);
+
+// Get Complete Student Details
+router.get('/details/:studentId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(studentIdParamSchema), getStudentDetails);
 
 export default router;

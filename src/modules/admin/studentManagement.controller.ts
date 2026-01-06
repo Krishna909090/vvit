@@ -263,3 +263,18 @@ export const updateStudentPersonalDetails = catchAsync(async (req: Request, res:
     });
 });
 
+// Get All Student Details
+export const getStudentDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+
+    const data = await AdminStudentService.getStudentDetails(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data
+    });
+});
+

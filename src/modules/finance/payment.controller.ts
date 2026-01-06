@@ -9,9 +9,12 @@ import {
     payTestFee as payTestFeeService,
     payCollegeFee as payCollegeFeeService,
     requestDiscount as requestDiscountService,
+    approveDiscount as approveDiscountService,
+    rejectDiscount as rejectDiscountService,
     getInvoiceUrl,
     checkPaymentStatus as checkPaymentStatusService,
-    getStudentFinancialHistory
+    getStudentFinancialHistory,
+    initiateTokenPayment
 } from './payment.service';
 
 // Phase 1: Pay Test Fee
@@ -43,6 +46,31 @@ export const payTestFee = catchAsync(async (req: Request, res: Response, next: N
         success: true,
         message: MESSAGES.SUCCESS.PAYMENT_SUCCESS,
         data: student
+    });
+});
+
+export const payTokenFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[payTokenFee] by=${req.user?.userId || 'anonymous'}`);
+
+    let { studentId } = req.params;
+    if (!studentId && req.body.studentId) studentId = req.body.studentId;
+
+    if (!studentId && req.user?.role === 'STUDENT') {
+         const { getStudentByUserId } = await import('../student/student.service');
+         const s = await getStudentByUserId(req.user.userId);
+         if (s) studentId = s.id;
+    }
+
+    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+    const result = await initiateTokenPayment(studentId, req.body);
+    
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Token payment initiated",
+        data: { redirectUrl: result }
     });
 });
 
@@ -83,12 +111,12 @@ export const requestDiscount = catchAsync(async (req: Request, res: Response, ne
     logger.info(`[requestDiscount] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[requestDiscount] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
 
-    const { studentId } = req.params;
-    const { reason, documentUrl } = req.body;
+
+    const { studentId,reason, documentUrl, amount } = req.body;
     if (!studentId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_REASON_REQUIRED, 400);
 
     const currentUserId = req.user?.userId || null;
-    const discountRequest = await requestDiscountService(studentId, reason, documentUrl, currentUserId);
+    const discountRequest = await requestDiscountService(studentId, reason, amount || 0, documentUrl, currentUserId || undefined);
 
     logger.info(`[requestDiscount] created for studentId=${studentId}`);
     sendResponse({
@@ -97,6 +125,38 @@ export const requestDiscount = catchAsync(async (req: Request, res: Response, ne
         success: true,
         message: MESSAGES.SUCCESS.DISCOUNT_REQUESTED,
         data: discountRequest
+    });
+});
+
+export const approveDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { requestId } = req.params;
+    const { approvedAmount, component, remarks } = req.body;
+    
+    if (!approvedAmount || !component) throw new AppError("Approved Amount and Component are required", 400);
+
+    const result = await approveDiscountService(requestId, approvedAmount, component, req.user!.userId, remarks);
+    
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Discount Approved",
+        data: result
+    });
+});
+
+export const rejectDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { requestId } = req.params;
+    const { remarks } = req.body; 
+    
+    const result = await rejectDiscountService(requestId, remarks, req.user!.userId);
+    
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Discount Rejected",
+        data: result
     });
 });
 

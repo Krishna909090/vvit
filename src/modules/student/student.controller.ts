@@ -3,7 +3,7 @@ import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { Role, AdmissionStatus, RequestStatus } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
-import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService } from './student.service';
+import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService, updatePersonalDetails as updatePersonalDetailsService } from './student.service';
 import { bookExamSlot } from '../exam/exam.service';
 import QRCode from 'qrcode';
 import { catchAsync } from '../../utils/catchAsync';
@@ -204,6 +204,25 @@ export const getStudentDetails = catchAsync(async (req: Request, res: Response, 
         success: true,
         message: MESSAGES.SUCCESS.STUDENT_DETAILS_FETCHED,
         data: student
+    });
+});
+
+export const updatePersonalDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[updatePersonalDetails] by=${req.user?.userId || 'anonymous'}`);
+
+    const { studentId } = req.params;
+    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+    const currentUserId = req.user?.userId || null;
+    
+    // Call service with ownership verification inside
+    const result = await updatePersonalDetailsService(studentId, req.body, currentUserId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.message
     });
 });
 

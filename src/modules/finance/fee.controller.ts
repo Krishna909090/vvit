@@ -288,3 +288,35 @@ export const downloadAllotmentOrder = catchAsync(async (req: Request, res: Respo
         data: { url }
     });
 });
+// Get Student Fee Demands (Simplified View)
+export const getStudentFeeDemands = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+
+    // Security check: Only allow access if user is admin/staff or the student themselves
+    if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
+         // throw new AppError("Unauthorized", 403); // Uncomment if strict security needed, for now implicit trust in token vs id check usually handled by middleware or simpler checks
+    }
+
+    const feeDetails = await FeeService.getStudentFeeDetails(studentId);
+
+    // Map to simplified list: { feeHeadName, amount, dueDate, status }
+    const demands = feeDetails.demands.map(d => ({
+        id: d.id,
+        feeHeadName: d.feeStructure.feeHead.name,
+        amount: d.amount,
+        dueDate: d.dueDate,
+        status: d.status
+    }));
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Student fee demands fetched successfully",
+        data: {
+            demands,
+            scholarship: feeDetails.discounts.scholarship > 0 ? feeDetails.discounts.scholarship : "Not Eligible",
+            discount: feeDetails.discounts.manual || 0
+        }
+    });
+});

@@ -1,28 +1,49 @@
 import PDFDocument from 'pdfkit';
 import path from 'path';
+import axios from 'axios';
 import fs from 'fs';
 import { format } from 'date-fns';
+
+export interface FeeComponent {
+    name: string;
+    amount: number;
+}
 
 export interface AllotmentData {
     applicationId: string;
     studentName: string;
     fatherName: string;
     gender: string;
-    category: string;
-    region: string; // e.g. AU, SVU
-    rank: string;
-    hallTicketNo: string;
+    region: string;
     allottedCollege: string;
     allottedCourse: string;
-    allottedCategory: string; // e.g. SC_GEN_AU
-    tuitionFeeFixed: number;
-    tuitionFeeToPay: number;
-    reportingDate: string; // "26.07.2025"
-    phase: string; // "First Phase"
-    feeReimbursement: string; // "YES" or "NO"
+    allottedCategory: string;
+    reportingDate: string;
+    phase: string;
+    feeReimbursement: string;
+    profilePhotoUrl?: string; 
+    
+    // Fee Details
+    feeBreakdown: FeeComponent[];
+    totalFee: number;
+    totalPaid: number;
+}
+
+async function fetchImage(url: string): Promise<Buffer | null> {
+    try {
+        const response = await axios.get(url, { responseType: 'arraybuffer' });
+        return Buffer.from(response.data);
+    } catch (e) {
+        return null;
+    }
 }
 
 export const generateAllotmentOrderPDF = async (data: AllotmentData): Promise<Buffer> => {
+    let photoBuffer: Buffer | null = null;
+    if (data.profilePhotoUrl) {
+        photoBuffer = await fetchImage(data.profilePhotoUrl);
+    }
+
     return new Promise((resolve, reject) => {
         try {
             const doc = new PDFDocument({ size: 'A4', margin: 40 });
@@ -32,9 +53,10 @@ export const generateAllotmentOrderPDF = async (data: AllotmentData): Promise<Bu
             doc.on('end', () => resolve(Buffer.concat(buffers)));
             doc.on('error', (err) => reject(err));
 
-            drawHeader(doc);
+            drawHeader(doc, photoBuffer);
             drawStudentTable(doc, data);
             drawAllotmentBody(doc, data);
+            drawFeeTable(doc, data);
             drawInstructions(doc, data);
             drawFooter(doc);
 
@@ -45,80 +67,76 @@ export const generateAllotmentOrderPDF = async (data: AllotmentData): Promise<Bu
     });
 };
 
-function drawHeader(doc: PDFKit.PDFDocument) {
-    const logoLeft = path.join(process.cwd(), 'src/assets/govt_logo.png'); // Placeholder path
-    const logoRight = path.join(process.cwd(), 'src/assets/council_logo.png'); // Placeholder path
+function drawHeader(doc: PDFKit.PDFDocument, photoBuffer: Buffer | null) {
+    const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png');
+    const fallbackLogo = path.join(process.cwd(), 'src/assets/logo.png');
 
-    // If logos exist, draw them. For now, we simulate positioning.
-    // doc.image(logoLeft, 40, 30, { width: 50 });
-    // doc.image(logoRight, 500, 30, { width: 50 });
+    // Logo Left
+    if (fs.existsSync(logoPath)) {
+        doc.image(logoPath, 40, 30, { width: 60 });
+    } else if (fs.existsSync(fallbackLogo)) {
+        doc.image(fallbackLogo, 40, 30, { width: 60 });
+    }
 
-    doc.font('Helvetica-Bold');
-    doc.fontSize(10);
+    // Photo Right
+    if (photoBuffer) {
+        doc.image(photoBuffer, 480, 30, { width: 70, height: 80 }); 
+        doc.rect(480, 30, 70, 80).stroke(); 
+    } else {
+        doc.rect(480, 30, 70, 80).stroke();
+        doc.fontSize(8).text('PHOTO', 480, 65, { width: 70, align: 'center' });
+    }
+
+    // Center Text
+    doc.font('Helvetica-Bold').fontSize(16).fillColor('#800000'); 
+    doc.text('VVIT UNIVERSITY', 110, 40, { align: 'center', width: 360 });
     
-    const startY = 40;
-    doc.text('DEPARTMENT OF TECHNICAL EDUCATION', 100, startY, { align: 'center', width: 400 });
-    doc.text('&', 100, startY + 12, { align: 'center', width: 400 });
-    doc.text('ANDHRA PRADESH STATE COUNCIL OF HIGHER EDUCATION', 100, startY + 24, { align: 'center', width: 400 });
-    
-    doc.fontSize(12).fillColor('#000000');
-    doc.text('APEAPCET - 2025 ADMISSIONS', 100, startY + 45, { align: 'center', width: 400 });
-    
-    // Draw box around header
-    doc.lineWidth(0.5).rect(40, 30, 515, 75).stroke();
-    
-    // Vertical lines for logos (simulated if logos were there)
-    doc.moveTo(110, 30).lineTo(110, 105).stroke();
-    doc.moveTo(485, 30).lineTo(485, 105).stroke();
+    doc.font('Helvetica').fontSize(10).fillColor('#000');
+    doc.text('(Established under Andhra Pradesh Private Universities Act 2016)', 110, 65, { align: 'center', width: 360 });
+    doc.text('Nambur (V), Peda Kakani (Md), Guntur (Dt) - 522508', 110, 80, { align: 'center', width: 360 });
+    doc.text('Guntur District, Andhra Pradesh, India.', 110, 95, { align: 'center', width: 360 });
+
+    doc.moveTo(40, 120).lineTo(555, 120).stroke();
 }
 
 function drawStudentTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    const startY = 105; // Connected to header
+    const startY = 140; 
     const col1X = 40;
-    const col2X = 140; // Value starts
-    const col3X = 300; // middle line
-    const col4X = 400; // Value starts
-    const rowHeight = 35; // increased height to accommodate wrapping if needed
+    const col2X = 140; 
+    const col3X = 300; 
+    const col4X = 400; 
+    const rowHeight = 35; 
     
-    // Draw Grid
-    doc.rect(40, startY, 515, rowHeight * 3).stroke();
-    
-    // Horizontal lines
-    doc.moveTo(40, startY + rowHeight).lineTo(555, startY + rowHeight).stroke();
-    doc.moveTo(40, startY + rowHeight * 2).lineTo(555, startY + rowHeight * 2).stroke();
-    
-    // Vertical lines
-    doc.moveTo(140, startY).lineTo(140, startY + rowHeight * 3).stroke(); // Split Label/Value 1
-    doc.moveTo(300, startY).lineTo(300, startY + rowHeight * 3).stroke(); // Middle Split
-    doc.moveTo(400, startY).lineTo(400, startY + rowHeight * 3).stroke(); // Split Label/Value 2
+    // Removed Row 1 (Hall Ticket / Rank)
+    // Removed Row 3 (Caste / Fee Reimb) -> Keeping Fee Reimb merged with Gender/Region?
+    // User said remove "caste". 
+    // I'll simplify to 2 Rows.
 
-    // Content
+    doc.lineWidth(0.5).rect(40, startY, 515, rowHeight * 2).stroke();
+    
+    doc.moveTo(40, startY + rowHeight).lineTo(555, startY + rowHeight).stroke();
+    
+    doc.moveTo(140, startY).lineTo(140, startY + rowHeight * 2).stroke(); 
+    doc.moveTo(300, startY).lineTo(300, startY + rowHeight * 2).stroke(); 
+    doc.moveTo(400, startY).lineTo(400, startY + rowHeight * 2).stroke(); 
+
     doc.font('Helvetica-Bold').fontSize(9).fillColor('#000');
     
-    // Row 1
-    // Hall Ticket No
-    drawCell(doc, 'Hall Ticket No.', col1X + 5, startY + 12);
-    doc.font('Helvetica').text(data.hallTicketNo, col2X + 5, startY + 12);
+    // Row 1: Candidate Name & Father Name
+    drawCell(doc, "Candidate's Name", col1X + 5, startY + 12);
+    doc.font('Helvetica').text(data.studentName.toUpperCase(), col2X + 5, startY + 12, { width: 150 });
     
-    // Rank
-    doc.font('Helvetica-Bold').text('Rank', col3X + 5, startY + 12);
-    doc.font('Helvetica').text(data.rank, col4X + 5, startY + 12);
+    doc.font('Helvetica-Bold').text("Father's Name", col3X + 5, startY + 12);
+    doc.font('Helvetica').text(data.fatherName.toUpperCase(), col4X + 5, startY + 12, { width: 150 });
 
-    // Row 2
+    // Row 2: Gender/Region & Allotted Category 
+    // (Replacing Caste/Fee Reimb with simpler fields)
     const r2Y = startY + rowHeight;
-    doc.font('Helvetica-Bold').text("Candidate's Name", col1X + 5, r2Y + 12, { width: 90 });
-    doc.font('Helvetica').text(data.studentName.toUpperCase(), col2X + 5, r2Y + 12, { width: 150 });
+    doc.font('Helvetica-Bold').text('Gender / Region', col1X + 5, r2Y + 12);
+    doc.font('Helvetica').text(`${data.gender} / ${data.region}`, col2X + 5, r2Y + 12);
     
-    doc.font('Helvetica-Bold').text("Father's Name", col3X + 5, r2Y + 12);
-    doc.font('Helvetica').text(data.fatherName.toUpperCase(), col4X + 5, r2Y + 12, { width: 150 });
-
-    // Row 3
-    const r3Y = startY + rowHeight * 2;
-    doc.font('Helvetica-Bold').text('Gender / Region', col1X + 5, r3Y + 12);
-    doc.font('Helvetica').text(`${data.gender} / ${data.region}`, col2X + 5, r3Y + 12);
-    
-    doc.font('Helvetica-Bold').text('Caste / Fee Reimb.', col3X + 5, r3Y + 12);
-    doc.font('Helvetica').text(`${data.category} / ${data.feeReimbursement}`, col4X + 5, r3Y + 12);
+    doc.font('Helvetica-Bold').text('Category', col3X + 5, r2Y + 12);
+    doc.font('Helvetica').text(data.allottedCategory, col4X + 5, r2Y + 12);
 }
 
 function drawCell(doc: PDFKit.PDFDocument, text: string, x: number, y: number) {
@@ -126,44 +144,73 @@ function drawCell(doc: PDFKit.PDFDocument, text: string, x: number, y: number) {
 }
 
 function drawAllotmentBody(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    let y = 220;
+    let y = 230;
     
-    // Title
-    doc.font('Helvetica-Bold').fontSize(11).fillColor('#000080'); // Dark Blue
-    doc.text(`PROVISIONAL ALLOTMENT ORDER (${data.phase})`, 40, y, { align: 'center', width: 515 });
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('#000080'); 
+    doc.text(`PROVISIONAL ALLOTMENT ORDER`, 40, y, { align: 'center', width: 515 });
     
     y += 25;
     
-    // Paragraph
     doc.font('Helvetica').fontSize(9).fillColor('#000000');
     const text = `This is to inform that the options exercised by the candidate have been processed for allotment of seat in Colleges/Institutions based on rank, local area, gender, category, EWS, Special Reservation Category (CAP/PWD/SCOUTS) etc. The Convenor, APEAPCET-2025 admissions is pleased to allot a seat to the above candidate in`;
-    doc.text(text, 40, y, { align: 'justify', width: 515 }); //, block: true 
+    doc.text(text, 40, y, { align: 'justify', width: 515 }); 
     
-    y += 45;
+    y += 45; // specific spacing for long text
     
-    // Allotment Details (Center aligned bold)
+    // Allotted Details Box
+    doc.rect(40, y, 515, 60).stroke();
+    
     doc.font('Helvetica-Bold').fontSize(10);
-    // College
-    doc.text(`${data.allottedCollege}`, 40, y, { align: 'center', width: 515 });
-    y += 15;
-    // Course
-    doc.text(`in ${data.allottedCourse}`, 40, y, { align: 'center', width: 515 });
-    y += 15;
-    // Category
-    doc.text(`under ${data.allottedCategory} category.`, 40, y, { align: 'center', width: 515 });
+    doc.text(`College: ${data.allottedCollege}`, 50, y + 10);
+    doc.text(`Course: ${data.allottedCourse}`, 50, y + 35);
+}
+
+function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
+    let y = 330;
     
-    y += 25;
-    
-    // Fee Details
-    doc.font('Helvetica-Bold').fontSize(10);
-    doc.text(`Tuition Fee fixed for the college/course is Rs. ${data.tuitionFeeFixed} /-`, 40, y, { align: 'center', width: 515 });
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#000');
+    doc.text('Fee Details:', 40, y);
     y += 15;
-    doc.text(`Tuition fee to be paid by the candidate at the time of admission is Rs. ${data.tuitionFeeToPay} /-`, 40, y, { align: 'center', width: 515 });
+
+    // Table Header
+    doc.rect(40, y, 300, 20).fill('#eee').stroke();
+    doc.fillColor('#000').text('Description', 50, y + 5);
+    doc.text('Amount (Rs)', 250, y + 5);
+    
+    y += 20;
+
+    // Rows
+    data.feeBreakdown.forEach(fee => {
+        doc.rect(40, y, 300, 20).stroke();
+        doc.font('Helvetica').text(fee.name, 50, y + 5);
+        doc.text(fee.amount.toLocaleString('en-IN'), 250, y + 5);
+        y += 20;
+    });
+
+    // Total Expected
+    doc.rect(40, y, 300, 20).stroke();
+    doc.font('Helvetica-Bold').text('Total Fee', 50, y + 5);
+    doc.text(data.totalFee.toLocaleString('en-IN'), 250, y + 5);
+    y += 20;
+
+    // Total Paid
+    doc.rect(40, y, 300, 20).stroke();
+    doc.fillColor('#008000').text('Total Paid', 50, y + 5); // Green
+    doc.text(data.totalPaid.toLocaleString('en-IN'), 250, y + 5);
+    y += 20;
+
+    // Balance
+    const balance = Math.max(0, data.totalFee - data.totalPaid);
+    doc.rect(40, y, 300, 20).stroke();
+    doc.fillColor('#FF0000').text('Balance Due', 50, y + 5); // Red
+    doc.text(balance.toLocaleString('en-IN'), 250, y + 5);
 }
 
 function drawInstructions(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    let y = 370;
-    
+    let y = 600; // Push down
+    // Ensure we don't overlap if table is long (unlikely)
+    if (doc.y > 580) y = doc.y + 20;
+
     doc.font('Helvetica-Bold').fontSize(10).fillColor('#000000');
     doc.text('Instructions to Candidates', 40, y);
     y += 15;
@@ -171,11 +218,8 @@ function drawInstructions(doc: PDFKit.PDFDocument, data: AllotmentData) {
     doc.font('Helvetica').fontSize(9);
     
     const instructions = [
-        `1. The candidate is instructed to download the allotment order from https://cets.apsche.ap.gov.in`,
-        `2. The candidate is instructed to report by clicking on "Download of Allotment Order" under "Forms" tab from website https://cets.apsche.ap.gov.in`,
-        `3. Further, the candidate is instructed to take print out of two copies of joining report and allotment order and report to the allotted College. Submit a copy of joining report, allotment order and obtain acknowledgement on 2nd copy of joining report from the College where candidate has reported and retain the acknowledged copy with the candidate.`,
-        `4. The candidate is instructed that self-reporting in portal and physical reporting at the allotted college is compulsory to retain the present allotment. The last date for self-reporting and reporting at the allotted college is ${data.reportingDate}.`,
-        `5. If the candidate does not report through self-reporting system and/or not physically reporting at the allotted college, the provisional allotment will be treated as a vacancy for the subsequent phase and the provisional allotment of ${data.phase} of APEAPCET-2025 Admissions will automatically stands cancelled and the candidate has no claim on the seat allotted. Further, if the candidate reports through self-reporting and does not report physically at the college on or before ${data.reportingDate}, the candidate's allotment/admission will be cancelled.`
+        `1. Report to the college with this allotment order.`,
+        `2. Pay the balance fee before the due date.`
     ];
 
     instructions.forEach(inst => {
@@ -187,6 +231,6 @@ function drawInstructions(doc: PDFKit.PDFDocument, data: AllotmentData) {
 function drawFooter(doc: PDFKit.PDFDocument) {
     const bottomY = 750;
     doc.fontSize(8).fillColor('#444');
-    doc.text('https://eapcet-sche.aptonline.in/EAPCET/eapAllotment/getAllotmentP1', 40, bottomY);
-    doc.text('1/2', 540, bottomY);
+    doc.text('Computer Generated Report.', 40, bottomY);
+    doc.text('1/1', 540, bottomY);
 }

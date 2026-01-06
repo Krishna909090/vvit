@@ -96,7 +96,7 @@ app.use('/exam', examRoutes);
 app.use('/invigilator', invigilatorRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/document-requirements', documentRequirementRoutes);
-app.use('/payment', paymentRoutes);
+app.use('/finance', paymentRoutes);
 app.use('/api/admission', dataImportRoutes);
 app.use('/verification', verificationRoutes);
 app.use('/admin/academic', academicRoutes);

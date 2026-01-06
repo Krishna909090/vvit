@@ -1,13 +1,1129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
+model User {
+  id                String             @id @default(uuid())
+  name              String?
+  email             String?            @unique
+  phone             String             @unique
+  role              Role               @default(STUDENT)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  customRoleId      String?
+  isDeleted         Boolean            @default(false)
+  password          String?
+  adminActivityLogs AdminActivityLog[]
+  agentCommissions  AgentCommission[]
+  auditLogs         AuditLog[]
+  notifications     Notification[]
+  agentStudents     Student[]          @relation("AgentStudents")
+  studentProfile    Student?           @relation("StudentUser")
+  customRole        CustomRole?        @relation(fields: [customRoleId], references: [id])
+  otps              UserOtp[]
+
+  @@index([role])
+  @@index([createdAt])
+  @@index([isDeleted])
 }
 
+model UserOtp {
+  id          String   @id @default(uuid())
+  userId      String
+  type        String
+  otpHash     String
+  expiresAt   DateTime
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(5)
+  used        Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id])
 
+  @@index([userId, type, used, expiresAt])
+}
+
+model School {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  code        String       @unique
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  createdBy   String?
+  updatedBy   String?
+  isDeleted   Boolean      @default(false)
+  departments Department[]
+
+  @@index([isDeleted])
+}
+
+model Department {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  code      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+  updatedBy String?
+  isDeleted Boolean  @default(false)
+  schoolId  String?
+  courses   Course[]
+  school    School?  @relation(fields: [schoolId], references: [id])
+
+  @@index([isDeleted])
+}
+
+model Course {
+  id               String             @id @default(uuid())
+  code             String             @unique
+  name             String
+  departmentId     String
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  createdBy        String?
+  updatedBy        String?
+  isDeleted        Boolean            @default(false)
+  degree           String?
+  filledSeats      Int                @default(0)
+  totalSeats       Int                @default(0)
+  department       Department         @relation(fields: [departmentId], references: [id])
+  feeStructures    FeeStructure[]
+  specializations  Specialization[]
+  studentsPref1    Student[]          @relation("Pref1")
+  studentsPref2    Student[]          @relation("Pref2")
+  studentsPref3    Student[]          @relation("Pref3")
+  allottedStudents StudentAdmission[] @relation("AllottedCourse")
+
+  @@unique([name, departmentId])
+  @@index([departmentId])
+  @@index([isDeleted])
+}
+
+model Batch {
+  id               String         @id @default(uuid())
+  name             String
+  startDate        DateTime
+  endDate          DateTime
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  createdBy        String?
+  updatedBy        String?
+  isDeleted        Boolean        @default(false)
+  specializationId String
+  specialization   Specialization @relation(fields: [specializationId], references: [id])
+  sections         Section[]
+
+  @@index([specializationId])
+  @@index([isDeleted])
+  @@index([startDate, endDate])
+}
+
+model Section {
+  id        String              @id @default(uuid())
+  name      String
+  batchId   String
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  createdBy String?
+  updatedBy String?
+  isDeleted Boolean             @default(false)
+  batch     Batch               @relation(fields: [batchId], references: [id])
+  students  StudentEnrollment[]
+
+  @@index([batchId])
+  @@index([isDeleted])
+}
+
+model AcademicYear {
+  id            String              @id @default(uuid())
+  code          String              @unique
+  startDate     DateTime
+  endDate       DateTime
+  isActive      Boolean             @default(true)
+  isLocked      Boolean             @default(false)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  createdBy     String?
+  updatedBy     String?
+  isDeleted     Boolean             @default(false)
+  feeStructures FeeStructure[]
+  enrollments   StudentEnrollment[]
+
+  @@index([isActive])
+  @@index([isDeleted])
+}
+
+model StudentEnrollment {
+  id              String           @id @default(uuid())
+  studentId       String           @unique
+  sectionId       String
+  rollNumber      String           @unique
+  currentSemester Int              @default(1)
+  academicYearId  String
+  status          EnrollmentStatus @default(ACTIVE)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  createdBy       String?
+  updatedBy       String?
+  academicYear    AcademicYear     @relation(fields: [academicYearId], references: [id])
+  section         Section          @relation(fields: [sectionId], references: [id])
+  student         Student          @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+  @@index([rollNumber])
+  @@index([sectionId])
+  @@index([academicYearId])
+  @@index([status])
+  @@index([currentSemester])
+}
+
+model Student {
+  id                        String                  @id @default(uuid())
+  applicationId             String                  @unique
+  name                      String
+  fatherName                String
+  motherName                String
+  gender                    String
+  dob                       DateTime
+  phone                     String
+  email                     String                  @unique
+  aadharNumber              String
+  category                  String
+  country                   String
+  address                   String
+  address2                  String?
+  city                      String
+  state                     String
+  pincode                   String
+  profilePhotoUrl           String?
+  documentFolderPath        String?
+  source                    AdmissionSource         @default(WEBSITE)
+  quotaType                 QuotaType               @default(MANAGEMENT)
+  applicationMode           ApplicationMode         @default(ONLINE)
+  isOffline                 Boolean                 @default(false)
+  isKycVerified             Boolean                 @default(false)
+  pref1                     String?
+  pref2                     String?
+  pref3                     String?
+  userId                    String?                 @unique
+  agentId                   String?
+  createdAt                 DateTime                @default(now())
+  updatedAt                 DateTime                @updatedAt
+  createdBy                 String?
+  updatedBy                 String?
+  eligibleScholarshipRuleId String?
+  degreeType                String?
+  courseType                String?
+  scholarshipRemarks        String?
+  scholarshipVerified       Boolean                 @default(false)
+  scholarshipVerifiedAt     DateTime?
+  scholarshipVerifiedBy     String?
+  academicQualifications    AcademicQualification[]
+  agentCommissions          AgentCommission[]
+  attendanceRecords         AttendanceRecord[]
+  cancellationRequests      CancellationRequest[]
+  convenorDetails           ConvenorAdmission?
+  courseChangeLogs          CourseChangeLog[]
+  courseChangeRequests      CourseChangeRequest[]
+  discountRequests          DiscountRequest[]
+  fileUploads               FileUpload[]
+  hallTickets               HallTicket[]
+  hostelAllocation          HostelAllocation?
+  payments                  Payment[]
+  scholarshipAllocation     ScholarshipAllocation?
+  seatAllocations           SeatAllocation[]
+  agent                     User?                   @relation("AgentStudents", fields: [agentId], references: [id])
+  eligibleScholarshipRule   ScholarshipRule?        @relation(fields: [eligibleScholarshipRuleId], references: [id])
+  pref1Course               Course?                 @relation("Pref1", fields: [pref1], references: [id])
+  pref2Course               Course?                 @relation("Pref2", fields: [pref2], references: [id])
+  pref3Course               Course?                 @relation("Pref3", fields: [pref3], references: [id])
+  user                      User?                   @relation("StudentUser", fields: [userId], references: [id])
+  admissionDetails          StudentAdmission?
+  documents                 StudentDocument[]
+  enrollment                StudentEnrollment?
+  examDetails               StudentExam?
+  feeDemands                StudentFeeDemand[]
+  ledgerEntries             StudentLedger[]
+  transportAllocation       TransportAllocation?
+
+  @@index([userId])
+  @@index([agentId])
+  @@index([phone])
+  @@index([aadharNumber])
+  @@index([degreeType])
+  @@index([quotaType])
+  @@index([applicationMode])
+  @@index([isKycVerified])
+  @@index([createdAt])
+  @@index([category])
+  @@index([city, state])
+}
+
+model ConvenorAdmission {
+  id             String   @id @default(uuid())
+  studentId      String   @unique
+  rank           String?
+  hallTicketNo   String?
+  allotmentOrder String?
+  councilId      String?
+  category       String?
+  joiningReport  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String?
+  updatedBy      String?
+  student        Student  @relation(fields: [studentId], references: [id])
+}
+
+model DataImportMapping {
+  id        String     @id @default(uuid())
+  name      String     @unique
+  type      ImportType
+  mapping   Json
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  createdBy String?
+  updatedBy String?
+}
+
+model StudentExam {
+  id               String    @id @default(uuid())
+  studentId        String    @unique
+  hallTicketUrl    String?
+  testDate         DateTime?
+  testCenter       String?
+  examAttended     Boolean   @default(false)
+  examScore        Float?
+  isQualified      Boolean?  @default(false)
+  examSlotId       String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  class12Aggregate Float?
+  jeePercentile    Float?
+  satScore         Float?
+  vvitPercentile   Float?
+  createdBy        String?
+  updatedBy        String?
+  examSlot         ExamSlot? @relation(fields: [examSlotId], references: [id])
+  student          Student   @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+  @@index([examSlotId])
+  @@index([examAttended])
+  @@index([isQualified])
+  @@index([testDate])
+}
+
+model StudentAdmission {
+  id                String             @id @default(uuid())
+  studentId         String             @unique
+  status            AdmissionStatus    @default(REGISTERED)
+  qualificationMode QualificationMode?
+  totalFee          Float              @default(0)
+  paidFee           Float              @default(0)
+  feeStatus         FeeStatus          @default(PENDING)
+  accommodationType AccommodationType  @default(NONE)
+  hostelType        HostelType?
+  hostelId          String?
+  transportRouteId  String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  roomNumber        String?
+  allottedCourseId  String?
+  allottedCourse    Course?            @relation("AllottedCourse", fields: [allottedCourseId], references: [id])
+  hostel            Hostel?            @relation(fields: [hostelId], references: [id])
+  student           Student            @relation(fields: [studentId], references: [id])
+  transportRoute    TransportRoute?    @relation(fields: [transportRouteId], references: [id])
+
+  @@index([studentId])
+  @@index([status])
+  @@index([feeStatus])
+  @@index([accommodationType])
+  @@index([hostelId])
+  @@index([transportRouteId])
+  @@index([allottedCourseId])
+}
+
+model StudentDocument {
+  id          String                @id @default(uuid())
+  studentId   String
+  documentKey String
+  url         String
+  status      StudentDocumentStatus @default(PENDING)
+  remarks     String?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  createdBy   String?
+  updatedBy   String?
+  isDeleted   Boolean               @default(false)
+  student     Student               @relation(fields: [studentId], references: [id])
+
+  @@unique([studentId, documentKey])
+  @@index([studentId])
+}
+
+model Specialization {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  courseId    String
+  totalSeats  Int
+  filledSeats Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String?
+  updatedBy   String?
+  isDeleted   Boolean  @default(false)
+  batches     Batch[]
+  course      Course   @relation(fields: [courseId], references: [id])
+
+  @@index([courseId])
+  @@index([isDeleted])
+}
+
+model Hostel {
+  id                String             @id @default(uuid())
+  name              String
+  type              String
+  wardenName        String?
+  capacity          Int
+  filled            Int                @default(0)
+  blockName         String?
+  roomNumber        String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  isDeleted         Boolean            @default(false)
+  blocks            HostelBlock[]
+  studentAdmissions StudentAdmission[]
+
+  @@index([type])
+  @@index([isDeleted])
+}
+
+model HostelBlock {
+  id        String       @id @default(uuid())
+  hostelId  String
+  name      String
+  type      String
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  createdBy String?
+  updatedBy String?
+  isDeleted Boolean      @default(false)
+  hostel    Hostel       @relation(fields: [hostelId], references: [id])
+  rooms     HostelRoom[]
+
+  @@index([hostelId])
+  @@index([isDeleted])
+}
+
+model HostelRoom {
+  id        String      @id @default(uuid())
+  blockId   String
+  number    String
+  capacity  Int
+  type      String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  createdBy String?
+  updatedBy String?
+  isDeleted Boolean     @default(false)
+  cost      Float       @default(0)
+  beds      HostelBed[]
+  block     HostelBlock @relation(fields: [blockId], references: [id])
+
+  @@index([blockId])
+  @@index([isDeleted])
+}
+
+model HostelPriceCategory {
+  id        String         @id @default(uuid())
+  sharing   Int
+  roomType  HostelRoomType
+  price     Float
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  createdBy String?
+  updatedBy String?
+
+  @@unique([sharing, roomType])
+}
+
+model HostelBed {
+  id         String            @id @default(uuid())
+  roomId     String
+  number     String
+  isOccupied Boolean           @default(false)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  createdBy  String?
+  updatedBy  String?
+  allocation HostelAllocation?
+  room       HostelRoom        @relation(fields: [roomId], references: [id])
+
+  @@index([roomId])
+  @@index([isOccupied])
+}
+
+model HostelAllocation {
+  id        String                 @id @default(uuid())
+  studentId String                 @unique
+  bedId     String                 @unique
+  startDate DateTime
+  endDate   DateTime?
+  status    HostelAllocationStatus @default(ACTIVE)
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+  createdBy String?
+  updatedBy String?
+  bed       HostelBed              @relation(fields: [bedId], references: [id])
+  student   Student                @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+  @@index([bedId])
+  @@index([status])
+  @@index([startDate, endDate])
+}
+
+model Vehicle {
+  id          String           @id @default(uuid())
+  number      String           @unique
+  capacity    Int
+  driverName  String
+  driverPhone String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  createdBy   String?
+  updatedBy   String?
+  isDeleted   Boolean          @default(false)
+  routes      TransportRoute[]
+
+  @@index([isDeleted])
+}
+
+model TransportRoute {
+  id                String                @id @default(uuid())
+  name              String
+  cost              Float
+  city              String
+  busNumber         String?
+  capacity          Int                   @default(0)
+  filled            Int                   @default(0)
+  vehicleId         String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  isDeleted         Boolean               @default(false)
+  studentAdmissions StudentAdmission[]
+  allocations       TransportAllocation[]
+  vehicle           Vehicle?              @relation(fields: [vehicleId], references: [id])
+  stops             TransportStop[]
+
+  @@index([vehicleId])
+  @@index([city])
+  @@index([isDeleted])
+}
+
+model TransportStop {
+  id          String                @id @default(uuid())
+  routeId     String
+  name        String
+  sequence    Int
+  pickupTime  DateTime
+  dropTime    DateTime
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  createdBy   String?
+  updatedBy   String?
+  isDeleted   Boolean               @default(false)
+  allocations TransportAllocation[]
+  route       TransportRoute        @relation(fields: [routeId], references: [id])
+
+  @@index([routeId])
+  @@index([isDeleted])
+  @@index([sequence])
+}
+
+model TransportAllocation {
+  id        String                    @id @default(uuid())
+  studentId String                    @unique
+  routeId   String
+  stopId    String
+  startDate DateTime
+  endDate   DateTime?
+  status    TransportAllocationStatus @default(ACTIVE)
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+  createdBy String?
+  updatedBy String?
+  route     TransportRoute            @relation(fields: [routeId], references: [id])
+  stop      TransportStop             @relation(fields: [stopId], references: [id])
+  student   Student                   @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+  @@index([routeId])
+  @@index([stopId])
+  @@index([status])
+  @@index([startDate, endDate])
+}
+
+model FeeHead {
+  id          String         @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  createdBy   String?
+  updatedBy   String?
+  isDeleted   Boolean        @default(false)
+  structures  FeeStructure[]
+
+  @@index([isDeleted])
+}
+
+model FeeStructure {
+  id             String             @id @default(uuid())
+  courseId       String
+  feeHeadId      String
+  amount         Float
+  currency       String             @default("INR")
+  academicYearId String
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  createdBy      String?
+  updatedBy      String?
+  isDeleted      Boolean            @default(false)
+  quotaType      QuotaType?
+  courseType     String?
+  dueDate        DateTime?
+  yearOfStudy    Int?
+  degreeId       String?
+  academicYear   AcademicYear       @relation(fields: [academicYearId], references: [id])
+  course         Course             @relation(fields: [courseId], references: [id])
+  feeHead        FeeHead            @relation(fields: [feeHeadId], references: [id])
+  demands        StudentFeeDemand[]
+
+  @@index([courseId, academicYearId])
+  @@index([quotaType])
+  @@index([yearOfStudy])
+}
+
+model StudentFeeDemand {
+  id             String       @id @default(uuid())
+  studentId      String
+  feeStructureId String
+  amount         Float
+  dueDate        DateTime
+  status         FeeStatus
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  createdBy      String?
+  updatedBy      String?
+  payments       Payment[]
+  feeStructure   FeeStructure @relation(fields: [feeStructureId], references: [id])
+  student        Student      @relation(fields: [studentId], references: [id])
+
+  @@index([studentId, status])
+}
+
+model Payment {
+  id              String            @id @default(uuid())
+  studentId       String
+  amount          Float
+  currency        String            @default("INR")
+  status          PaymentStatus     @default(PENDING)
+  mode            PaymentMode       @default(ONLINE)
+  method          PaymentMethod?
+  providerTxId    String?
+  merchantOrderId String?
+  signature       String?
+  referenceNumber String?
+  bankName        String?
+  branchName      String?
+  instrumentDate  DateTime?
+  collectedBy     String?
+  component       PaymentComponent
+  metadata        Json?
+  invoiceUrl      String?
+  feeDemandId     String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  createdBy       String?
+  updatedBy       String?
+  feeDemand       StudentFeeDemand? @relation(fields: [feeDemandId], references: [id])
+  student         Student           @relation(fields: [studentId], references: [id])
+
+  @@index([studentId, status])
+  @@index([providerTxId])
+  @@index([referenceNumber])
+  @@index([mode])
+}
+
+model AcademicQualification {
+  id               String   @id @default(uuid())
+  studentId        String
+  level            String
+  board            String
+  yearOfPassing    String
+  hallTicketNumber String
+  gpaOrMarks       String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  createdBy        String?
+  updatedBy        String?
+  student          Student  @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+}
+
+model CourseChangeLog {
+  id         String   @id @default(uuid())
+  studentId  String
+  oldCourse  String
+  newCourse  String
+  approvedBy String
+  date       DateTime @default(now())
+  createdBy  String?
+  updatedBy  String?
+  student    Student  @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+}
+
+model DiscountRequest {
+  id              String         @id @default(uuid())
+  studentId       String
+  reason          String
+  documentUrl     String?
+  status          DiscountStatus @default(REQUESTED)
+  remarks         String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  createdBy       String?
+  updatedBy       String?
+  approvedAmount  Float?
+  approvedAt      DateTime?
+  approvedBy      String?
+  component       String?
+  requestedAmount Float          @default(0)
+  student         Student        @relation(fields: [studentId], references: [id])
+
+  @@index([studentId, status])
+}
+
+model Permission {
+  id                    String                 @id @default(uuid())
+  code                  String                 @unique
+  description           String?
+  module                String
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  customRolePermissions CustomRolePermission[]
+  rolePermissions       RolePermission[]
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  role         Role
+  permissionId String
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@unique([role, permissionId])
+}
+
+model CustomRole {
+  id          String                 @id @default(uuid())
+  name        String                 @unique
+  description String?
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+  createdBy   String?
+  updatedBy   String?
+  permissions CustomRolePermission[]
+  users       User[]
+}
+
+model CustomRolePermission {
+  id           String     @id @default(uuid())
+  roleId       String
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id])
+  role         CustomRole @relation(fields: [roleId], references: [id])
+
+  @@unique([roleId, permissionId])
+}
+
+model StudentLedger {
+  id             String                @id @default(uuid())
+  studentId      String
+  type           LedgerTransactionType
+  amount         Float
+  description    String
+  date           DateTime              @default(now())
+  referenceId    String?
+  referenceType  String?
+  runningBalance Float?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  createdBy      String?
+  student        Student               @relation(fields: [studentId], references: [id])
+}
+
+model SystemSetting {
+  key         String   @id
+  value       String
+  description String?
+  isLocked    Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+  updatedBy   String?
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  details   Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+model CancellationRequest {
+  id           String             @id @default(uuid())
+  studentId    String
+  reason       String
+  refundAmount Float?
+  status       CancellationStatus @default(REQUESTED)
+  approvedBy   String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  createdBy    String?
+  updatedBy    String?
+  student      Student            @relation(fields: [studentId], references: [id])
+
+  @@index([studentId, status])
+}
+
+model FileUpload {
+  id         String   @id @default(uuid())
+  studentId  String?
+  uploadedBy String?
+  url        String
+  kind       FileKind
+  fileName   String?
+  mime       String?
+  size       Int?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  createdBy  String?
+  updatedBy  String?
+  student    Student? @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+}
+
+model ExamDate {
+  id                String             @id @default(uuid())
+  name              String?
+  date              DateTime
+  startTime         DateTime?
+  endTime           DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  attendanceRecords AttendanceRecord[]
+
+  @@index([date])
+}
+
+model ExamCenter {
+  id        String     @id @default(uuid())
+  name      String
+  address   String?
+  city      String?
+  capacity  Int?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  createdBy String?
+  updatedBy String?
+  isDeleted Boolean    @default(false)
+  examSlots ExamSlot[]
+
+  @@index([city])
+  @@index([isDeleted])
+}
+
+model ExamSlot {
+  id               String        @id @default(uuid())
+  examCenterId     String
+  date             DateTime
+  startTime        DateTime
+  endTime          DateTime
+  capacity         Int
+  filled           Int           @default(0)
+  isBookingEnabled Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  createdBy        String?
+  updatedBy        String?
+  isDeleted        Boolean       @default(false)
+  examCenter       ExamCenter    @relation(fields: [examCenterId], references: [id])
+  studentExams     StudentExam[]
+
+  @@index([examCenterId])
+  @@index([date])
+  @@index([isBookingEnabled])
+  @@index([isDeleted])
+  @@index([date, examCenterId])
+}
+
+model HallTicket {
+  id          String   @id @default(uuid())
+  studentId   String
+  fileId      String?
+  url         String?
+  qrHash      String?
+  generatedAt DateTime @default(now())
+  createdBy   String?
+  updatedBy   String?
+  student     Student  @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+}
+
+model InvigilatorCredential {
+  id         String   @id @default(uuid())
+  adminId    String
+  token      String
+  validFrom  DateTime
+  validUntil DateTime
+  createdAt  DateTime @default(now())
+  createdBy  String?
+  updatedBy  String?
+
+  @@index([adminId])
+  @@index([token])
+  @@index([validFrom, validUntil])
+}
+
+model AttendanceRecord {
+  id            String    @id @default(uuid())
+  studentId     String
+  examDateId    String?
+  invigilatorId String?
+  scannedAt     DateTime  @default(now())
+  verified      Boolean   @default(false)
+  verifiedAt    DateTime?
+  createdBy     String?
+  updatedBy     String?
+  examDate      ExamDate? @relation(fields: [examDateId], references: [id])
+  student       Student   @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+  @@index([examDateId])
+  @@index([invigilatorId])
+  @@index([scannedAt])
+  @@index([verified])
+}
+
+model SeatAllocation {
+  id          String   @id @default(uuid())
+  studentId   String
+  oldCourse   String?
+  newCourse   String?
+  allocatedBy String?
+  allocatedAt DateTime @default(now())
+  notes       String?
+  createdBy   String?
+  updatedBy   String?
+  student     Student  @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+}
+
+model CourseChangeRequest {
+  id          String        @id @default(uuid())
+  studentId   String
+  fromCourse  String
+  toCourse    String
+  reason      String
+  status      RequestStatus @default(REQUESTED)
+  forwardedTo String?
+  actionedBy  String?
+  actionedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  createdBy   String?
+  updatedBy   String?
+  student     Student       @relation(fields: [studentId], references: [id])
+
+  @@index([studentId, status])
+}
+
+model AgentCommission {
+  id        String                @id @default(uuid())
+  agentId   String
+  studentId String
+  amount    Float
+  component String
+  status    AgentCommissionStatus @default(PENDING)
+  createdAt DateTime              @default(now())
+  createdBy String?
+  updatedBy String?
+  agent     User                  @relation(fields: [agentId], references: [id])
+  student   Student               @relation(fields: [studentId], references: [id])
+
+  @@index([agentId])
+  @@index([studentId, status])
+}
+
+model AdminActivityLog {
+  id           String   @id @default(uuid())
+  adminId      String
+  action       String
+  resourceType String?
+  resourceId   String?
+  details      Json?
+  createdAt    DateTime @default(now())
+  createdBy    String?
+  updatedBy    String?
+  admin        User     @relation(fields: [adminId], references: [id])
+
+  @@index([adminId])
+  @@index([action])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  recipientId String
+  type        String
+  title       String
+  body        String
+  link        String?
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  createdBy   String?
+  updatedBy   String?
+  recipient   User     @relation(fields: [recipientId], references: [id])
+
+  @@index([recipientId])
+  @@index([isRead])
+  @@index([type])
+  @@index([createdAt])
+  @@index([recipientId, isRead])
+}
+
+model OfflineUploadBatch {
+  id            String                   @id @default(uuid())
+  agentId       String?
+  uploadedBy    String?
+  sourceFileUrl String?
+  status        OfflineUploadBatchStatus @default(PENDING)
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  createdBy     String?
+  updatedBy     String?
+
+  @@index([agentId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model DocumentRequirement {
+  id           String   @id @default(uuid())
+  documentName String
+  documentKey  String
+  isRequired   Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdBy    String?
+  updatedBy    String?
+  isDeleted    Boolean  @default(false)
+  degreeType   String
+
+  @@unique([degreeType, documentKey])
+  @@index([degreeType])
+  @@index([isDeleted])
+}
+
+model Configuration {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String?
+  updatedBy   String?
+}
+
+model ScholarshipRule {
+  id                 String                  @id @default(uuid())
+  name               String
+  minPercentile      Float
+  discountPercentage Float
+  totalSlots         Int
+  filledSlots        Int                     @default(0)
+  degreeType         String?
+  isActive           Boolean                 @default(true)
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  allocations        ScholarshipAllocation[]
+  eligibleStudents   Student[]
+}
+
+model ScholarshipAllocation {
+  id         String            @id @default(uuid())
+  studentId  String            @unique
+  ruleId     String
+  status     ScholarshipStatus @default(RESERVED)
+  reservedAt DateTime          @default(now())
+  lockedAt   DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  rule       ScholarshipRule   @relation(fields: [ruleId], references: [id])
+  student    Student           @relation(fields: [studentId], references: [id])
+
+  @@index([status])
+  @@index([expiresAt])
+}
+
+model QualificationRequirement {
+  id                String   @id @default(uuid())
+  degreeType        String
+  ruleType          String   @default("SINGLE")
+  qualificationKeys String[]
+  isRequired        Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  isDeleted         Boolean  @default(false)
+
+  @@index([degreeType])
+  @@index([isDeleted])
+}
 
 enum Role {
   SUPER_ADMIN
@@ -19,66 +1135,33 @@ enum Role {
   VERIFICATION_OFFICER
 }
 
-// ... lines 20-523 ... (Need to split edits if they are far apart)
-// Actually, I should use multi_replace for far apart edits.
-// But first, let me just use replace_file_content for Role, then another for StudentExam.
-
-
-
-// ============================================================================
-// ADMISSION STATUS LIFECYCLE ENUM (Final Enterprise-Grade)
-// ============================================================================
-// Defines the complete student admission journey from application to enrollment
-// Supports: Management Quota (EXAM) and Convenor Quota (DIRECT qualification)
-// ERP Access: Granted ONLY at ADMISSION_CONFIRMED or ENROLLED (NO EXCEPTIONS)
-// See: src/types/admissionStatus.ts for complete documentation
-// ============================================================================
-
 enum AdmissionStatus {
-  // PHASE 1: APPLICATION (Portal)
-  REGISTERED                  // Initial registration complete
-  ENTRANCE_FEE_PAID           // Entrance/exam fee paid
-  EXAM_SCHEDULED              // Exam slot booked (EXAM mode only)
-  EXAM_ATTENDED               // Attended exam (EXAM mode only)
-  EXAM_QUALIFIED              // Qualified (via exam OR direct admission)
-  EXAM_NOT_QUALIFIED          // Failed to qualify
-  
-  // PHASE 2: DOCUMENT VERIFICATION (Portal ONLY - NOT ERP)
-  DOCUMENTS_PENDING           // Awaiting document upload
-  DOCUMENTS_SUBMITTED         // Documents uploaded, awaiting admin verification
-  DOCUMENTS_VERIFIED          // Admin verified documents in ERP
-  
-  // PHASE 3: ADMISSION CONFIRMATION (ERP)
-  SEAT_ALLOTTED               // Seat allocated, admission number assigned
-  ADMISSION_CONFIRMED         // Token fee paid, admission confirmed
-                              // ⚠️ ERP ACCESS GRANTED FROM HERE ⚠️
-  
-  // PHASE 4: ENROLLMENT (University assigns roll number)
-  ENROLLED                    // Roll number assigned, academic lifecycle begins
-  
-  // TERMINAL STATES
-  REJECTED                    // Application rejected (terminal)
-  CANCELLED                   // Application/admission cancelled (terminal)
+  REGISTERED
+  ENTRANCE_FEE_PAID
+  EXAM_SCHEDULED
+  EXAM_ATTENDED
+  EXAM_QUALIFIED
+  DOCUMENTS_PENDING
+  DOCUMENTS_SUBMITTED
+  DOCUMENTS_VERIFIED
+  SEAT_ALLOTTED
+  ADMISSION_CONFIRMED
+  ENROLLED
+  REJECTED
+  CANCELLED
+  EXAM_NOT_QUALIFIED
 }
-
-// ============================================================================
-// QUALIFICATION MODE (How student qualified for admission)
-// ============================================================================
 
 enum QualificationMode {
-  EXAM                        // Qualified via entrance examination
-  DIRECT                      // Direct admission (convenor quota, transfer, etc.)
+  EXAM
+  DIRECT
 }
 
-// ============================================================================
-// ENROLLMENT STATUS (Academic Lifecycle - Separate from Admission)
-// ============================================================================
-
 enum EnrollmentStatus {
-  ACTIVE                      // Currently enrolled and attending
-  SUSPENDED                   // Temporarily suspended (academic/disciplinary)
-  DROPPED                     // Dropped out / Discontinued
-  COMPLETED                   // Graduated / Program completed
+  ACTIVE
+  SUSPENDED
+  DROPPED
+  COMPLETED
 }
 
 enum AdmissionSource {
@@ -189,206 +1272,6 @@ enum ScholarshipStatus {
   UTILIZED
 }
 
-
-
-model User {
-  id        String    @id @default(uuid())
-  name      String?
-  email     String?   @unique
-  phone     String    @unique
-  password  String?   // For Admins/Staff
-  role      Role      @default(STUDENT)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  createdBy String?
-  updatedBy String?
-
-  otps UserOtp[]
-
-  studentProfile    Student?           @relation("StudentUser")
-  agentStudents     Student[]          @relation("AgentStudents")
-  agentCommissions  AgentCommission[]
-  adminActivityLogs AdminActivityLog[]
-  notifications     Notification[]
-  
-  customRoleId String?
-  customRole   CustomRole? @relation(fields: [customRoleId], references: [id])
-  auditLogs    AuditLog[]
-  isDeleted Boolean @default(false)
-
-  @@index([role])
-  @@index([createdAt])
-  @@index([isDeleted])
-}
-
-model UserOtp {
-  id          String   @id @default(uuid())
-  userId      String
-  type        String   // e.g. "LOGIN", "PASSWORD_RESET"
-  otpHash     String
-  expiresAt   DateTime
-  attempts    Int      @default(0)
-  maxAttempts Int      @default(5)
-  used        Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id])
-
-  @@index([userId, type, used, expiresAt])
-}
-
-
-
-
-model School {
-  id        String   @id @default(uuid())
-  name      String   @unique // e.g. "School of Management"
-  code      String   @unique // e.g. "SOM"
-  
-  departments Department[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean  @default(false)
-
-  @@index([isDeleted])
-}
-
-model Department {
-  id        String    @id @default(uuid())
-  name      String    @unique
-  code      String    @unique 
-  courses   Course[]
-
-  schoolId  String?
-  school    School?   @relation(fields: [schoolId], references: [id])
-
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean @default(false)
-
-  @@index([isDeleted])
-}
-
-// Course model updated
-model Course {
-  id            String         @id @default(uuid())
-  code          String         @unique 
-  name          String 
-  degree        String?        // e.g. "B.Tech", "M.Tech"
-  totalSeats    Int            @default(0)
-  filledSeats   Int            @default(0)
-  departmentId  String
-  department    Department     @relation(fields: [departmentId], references: [id])
-  specializations      Specialization[]
-  feeStructures FeeStructure[]
-
-  studentsPref1 Student[] @relation("Pref1")
-  studentsPref2 Student[] @relation("Pref2")
-  studentsPref3 Student[] @relation("Pref3")
-
-  allottedStudents StudentAdmission[] @relation("AllottedCourse")
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  createdBy     String?
-  updatedBy     String?
-  isDeleted     Boolean  @default(false)
-
-  @@unique([name, departmentId])
-  @@index([departmentId])
-  @@index([isDeleted])
-}
-
-model Batch {
-  id        String    @id @default(uuid())
-  name      String 
-  specializationId  String
-  specialization    Specialization   @relation(fields: [specializationId], references: [id])
-  sections  Section[]
-  startDate DateTime
-  endDate   DateTime
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean @default(false)
-
-  @@index([specializationId])
-  @@index([isDeleted])
-  @@index([startDate, endDate])
-}
-
-model Section {
-  id        String              @id @default(uuid())
-  name      String 
-  batchId   String
-  batch     Batch               @relation(fields: [batchId], references: [id])
-  students  StudentEnrollment[]
-  createdAt DateTime            @default(now())
-  updatedAt DateTime            @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean @default(false)
-
-  @@index([batchId])
-  @@index([isDeleted])
-}
-
-
-model AcademicYear {
-  id        String   @id @default(uuid())
-  code      String   @unique 
-  startDate DateTime
-  endDate   DateTime
-  isActive  Boolean  @default(true)
-
-  enrollments   StudentEnrollment[]
-  feeStructures FeeStructure[]
-  isLocked      Boolean      @default(false)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean @default(false)
-
-  @@index([isActive])
-  @@index([isDeleted])
-}
-
-
-model StudentEnrollment {
-  id              String           @id @default(uuid())
-  studentId       String           @unique
-  student         Student          @relation(fields: [studentId], references: [id])
-  sectionId       String
-  section         Section          @relation(fields: [sectionId], references: [id])
-  rollNumber      String           @unique
-  currentSemester Int              @default(1)
-  academicYearId  String
-  academicYear    AcademicYear     @relation(fields: [academicYearId], references: [id])
-  status          EnrollmentStatus @default(ACTIVE)
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  createdBy       String?
-  updatedBy       String?
-
-  @@index([studentId])
-  @@index([rollNumber])
-  @@index([sectionId])
-  @@index([academicYearId])
-  @@index([status])
-  @@index([currentSemester])
-}
-
-
-
-
 enum QuotaType {
   MANAGEMENT
   CONVENOR
@@ -405,528 +1288,10 @@ enum ImportType {
   CONVENOR_ADMISSION
 }
 
-model Student {
-  id            String @id @default(uuid())
-  applicationId String @unique 
-
-  
-  name            String
-  fatherName      String
-  motherName      String
-  gender          String
-  dob             DateTime
-  phone           String
-  email           String   @unique
-  aadharNumber    String
-  category        String
-  country         String
-  address         String
-  address2        String?
-  city            String
-  state           String
-  pincode         String
-  profilePhotoUrl String? 
-  documentFolderPath String? // S3 Key prefix for student docs
-
-  source    AdmissionSource @default(WEBSITE)
-  ledgerEntries StudentLedger[]
-
-  // Use new enums for better flow control
-  quotaType       QuotaType       @default(MANAGEMENT)
-  applicationMode ApplicationMode @default(ONLINE)
-  
-  // Keep isOffline for backward compatibility if needed, but mark deprecated or sync with applicationMode
-  isOffline Boolean @default(false) 
-  isKycVerified Boolean @default(false)
-
-  
-  degreeType String? 
-  courseType String? // e.g., "Regular", "Lateral" 
-
-  
-  pref1 String?
-  pref1Course Course? @relation("Pref1", fields: [pref1], references: [id])
-
-  pref2 String?
-  pref2Course Course? @relation("Pref2", fields: [pref2], references: [id])
-
-  pref3 String?
-  pref3Course Course? @relation("Pref3", fields: [pref3], references: [id])
-
-  userId String? @unique
-  user   User?   @relation("StudentUser", fields: [userId], references: [id])
-  
-  agentId String?
-  agent   User?   @relation("AgentStudents", fields: [agentId], references: [id])
-
-  examDetails      StudentExam?
-  admissionDetails StudentAdmission?
-  convenorDetails  ConvenorAdmission?
-  documents        StudentDocument[]
-
-  academicQualifications AcademicQualification[]
-  courseChangeLogs       CourseChangeLog[]
-  discountRequests       DiscountRequest[]
-  cancellationRequests   CancellationRequest[]
-  courseChangeRequests   CourseChangeRequest[]
-  agentCommissions       AgentCommission[]
-  seatAllocations        SeatAllocation[]
-  hallTickets            HallTicket[]
-  attendanceRecords      AttendanceRecord[]
-  payments               Payment[]
-  fileUploads            FileUpload[]
-
-  
-  enrollment          StudentEnrollment?
-  hostelAllocation    HostelAllocation?
-  transportAllocation TransportAllocation?
-  feeDemands          StudentFeeDemand[]
-  scholarshipAllocation ScholarshipAllocation?
-
-  eligibleScholarshipRuleId String? // Admin manually selects this rule
-  eligibleScholarshipRule   ScholarshipRule? @relation(fields: [eligibleScholarshipRuleId], references: [id])
-
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-
-  @@index([userId])
-  @@index([agentId])
-  @@index([phone])
-  @@index([aadharNumber])
-  @@index([degreeType])
-  @@index([quotaType])
-  @@index([applicationMode])
-  @@index([isKycVerified])
-  @@index([createdAt])
-  @@index([category])
-  @@index([city, state])
-}
-
-model ConvenorAdmission {
-  id        String   @id @default(uuid())
-  studentId String   @unique
-  student   Student  @relation(fields: [studentId], references: [id])
-  
-  // Specific fields for Convenor/EMCET data
-  rank           String?
-  hallTicketNo   String? 
-  allotmentOrder String? // File URL or Number
-  councilId      String? // Unique ID in council DB
-  category       String? // Council specific category if different
-  joiningReport  String? // File URL
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-}
-
-model DataImportMapping {
-  id        String     @id @default(uuid())
-  name      String     @unique // e.g., "OMR_MAPPING_V1", "EMCET_2025"
-  type      ImportType
-  
-  // JSON Key-Value pair: "ExcelHeader": "DBField"
-  // e.g., { "Candidate Name": "name", "Mobile No": "phone" }
-  mapping   Json       
-  
-  isActive  Boolean    @default(true)
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  createdBy String?
-  updatedBy String?
-}
-
-
-
-
-model StudentExam {
-  id        String  @id @default(uuid())
-  studentId String  @unique
-  student   Student @relation(fields: [studentId], references: [id])
-
-  hallTicketUrl String?
-  testDate      DateTime?
-  testCenter    String?
-  examAttended  Boolean   @default(false)
-  examScore     Float? // Internal raw score or legacy
-  
-  // External / Standardized Scores
-  class12Aggregate Float?
-  jeePercentile    Float? 
-  satScore         Float?
-  vvitPercentile   Float?
-
-  isQualified   Boolean?  @default(false)
-  createdBy     String?
-  updatedBy     String? // ID of Verification Officer
-
-  examSlotId String?
-  examSlot   ExamSlot? @relation(fields: [examSlotId], references: [id])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([studentId])
-  @@index([examSlotId])
-  @@index([examAttended])
-  @@index([isQualified])
-  @@index([testDate])
-}
-
-model StudentAdmission {
-  id        String  @id @default(uuid())
-  studentId String  @unique
-  student   Student @relation(fields: [studentId], references: [id])
-
-  status AdmissionStatus @default(REGISTERED)
-  qualificationMode QualificationMode? // How student qualified (EXAM or DIRECT)
-
-  
-  allottedCourseId String?
-  allottedCourse   Course? @relation("AllottedCourse", fields: [allottedCourseId], references: [id])
-
-  
-  totalFee  Float     @default(0)
-  paidFee   Float     @default(0)
-  feeStatus FeeStatus @default(PENDING)
-
-  
-  accommodationType AccommodationType @default(NONE)
-  hostelType        HostelType?
-  hostelId          String?
-  hostel            Hostel?           @relation(fields: [hostelId], references: [id])
-  roomNumber        String?
-  transportRouteId  String?
-  transportRoute    TransportRoute?   @relation(fields: [transportRouteId], references: [id])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([studentId])
-  @@index([status])
-  @@index([feeStatus])
-  @@index([accommodationType])
-  @@index([hostelId])
-  @@index([transportRouteId])
-  @@index([allottedCourseId])
-}
-
-model StudentDocument {
-  id        String  @id @default(uuid())
-  studentId String
-  student   Student @relation(fields: [studentId], references: [id])
-
-  documentKey String 
-  url         String
-  status      StudentDocumentStatus @default(PENDING)
-  remarks     String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-
-  @@unique([studentId, documentKey])
-  @@index([studentId])
-  isDeleted Boolean @default(false)
-}
-
-model Specialization {
-  id          String   @id @default(uuid())
-  code        String   @unique 
-  name        String
-  courseId   String
-  course     Course  @relation(fields: [courseId], references: [id])
-  totalSeats  Int
-  filledSeats Int      @default(0)
-  batches     Batch[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  isDeleted   Boolean  @default(false)
-
-  @@index([courseId])
-  @@index([isDeleted])
-}
-
-
-
-model Hostel {
-  id       String     @id @default(uuid())
-  name     String
-  type     String // 'Boys' or 'Girls'
-  wardenName String?
-  capacity Int
-  filled   Int        @default(0)
-
-  // cost removed from Hostel, moved to HostelRoom
-
-
-  
-  blockName  String?
-  roomNumber String?
-
-  studentAdmissions StudentAdmission[] 
-  blocks            HostelBlock[] 
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean @default(false)
-
-  @@index([type])
-  @@index([isDeleted])
-}
-
-model HostelBlock {
-  id        String       @id @default(uuid())
-  hostelId  String
-  hostel    Hostel       @relation(fields: [hostelId], references: [id])
-  name      String 
-  type      String 
-  rooms     HostelRoom[]
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean @default(false)
-
-  @@index([hostelId])
-  @@index([isDeleted])
-}
-
-model HostelRoom {
-  id        String      @id @default(uuid())
-  blockId   String
-  block     HostelBlock @relation(fields: [blockId], references: [id])
-  number    String
-  capacity  Int
-  type      String 
-  cost      Float    @default(0) // Room-wise fee (e.g. AC vs Non-AC)
-  beds      HostelBed[]
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean @default(false)
-
-  @@index([blockId])
-  @@index([isDeleted])
-}
-
 enum HostelRoomType {
   AC
   NON_AC
 }
-
-model HostelPriceCategory {
-  id        String         @id @default(uuid())
-  sharing   Int            // 2, 4, 6, 8, 10
-  roomType  HostelRoomType
-  price     Float
-  
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
-  createdBy String?
-  updatedBy String?
-
-  @@unique([sharing, roomType])
-}
-
-model HostelBed {
-  id         String            @id @default(uuid())
-  roomId     String
-  room       HostelRoom        @relation(fields: [roomId], references: [id])
-  number     String
-  isOccupied Boolean           @default(false)
-  allocation HostelAllocation?
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
-  createdBy  String?
-  updatedBy  String?
-
-  @@index([roomId])
-  @@index([isOccupied])
-}
-
-model HostelAllocation {
-  id        String                 @id @default(uuid())
-  studentId String                 @unique
-  student   Student                @relation(fields: [studentId], references: [id])
-  bedId     String                 @unique
-  bed       HostelBed              @relation(fields: [bedId], references: [id])
-  startDate DateTime
-  endDate   DateTime?
-  status    HostelAllocationStatus @default(ACTIVE)
-  createdAt DateTime               @default(now())
-  updatedAt DateTime               @updatedAt
-  createdBy String?
-  updatedBy String?
-
-  @@index([studentId])
-  @@index([bedId])
-  @@index([status])
-  @@index([startDate, endDate])
-}
-
-
-
-model Vehicle {
-  id          String           @id @default(uuid())
-  number      String           @unique
-  capacity    Int
-  driverName  String
-  driverPhone String
-  routes      TransportRoute[]
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  isDeleted   Boolean  @default(false)
-
-  @@index([isDeleted])
-}
-
-model TransportRoute {
-  id   String @id @default(uuid())
-  name String 
-  cost Float
-  city String
-
-  
-  busNumber String?
-  capacity  Int     @default(0)
-  filled    Int     @default(0)
-
-  
-  vehicleId   String?
-  vehicle     Vehicle?              @relation(fields: [vehicleId], references: [id])
-  stops       TransportStop[]
-  allocations TransportAllocation[]
-
-  studentAdmissions StudentAdmission[] 
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean @default(false)
-
-  @@index([vehicleId])
-  @@index([city])
-  @@index([isDeleted])
-}
-
-model TransportStop {
-  id          String                @id @default(uuid())
-  routeId     String
-  route       TransportRoute        @relation(fields: [routeId], references: [id])
-  name        String
-  sequence    Int
-  pickupTime  DateTime
-  dropTime    DateTime
-  allocations TransportAllocation[]
-  createdAt   DateTime              @default(now())
-  updatedAt   DateTime              @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  isDeleted   Boolean  @default(false)
-
-  @@index([routeId])
-  @@index([isDeleted])
-  @@index([sequence])
-}
-
-model TransportAllocation {
-  id        String                    @id @default(uuid())
-  studentId String                    @unique
-  student   Student                   @relation(fields: [studentId], references: [id])
-  routeId   String
-  route     TransportRoute            @relation(fields: [routeId], references: [id])
-  stopId    String
-  stop      TransportStop             @relation(fields: [stopId], references: [id])
-  startDate DateTime
-  endDate   DateTime?
-  status    TransportAllocationStatus @default(ACTIVE)
-  createdAt DateTime                  @default(now())
-  updatedAt DateTime                  @updatedAt
-  createdBy String?
-  updatedBy String?
-
-  @@index([studentId])
-  @@index([routeId])
-  @@index([stopId])
-  @@index([status])
-  @@index([startDate, endDate])
-}
-
-
-
-model FeeHead {
-  id          String         @id @default(uuid())
-  name        String 
-  description String?
-  structures  FeeStructure[]
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  isDeleted   Boolean  @default(false)
-
-  @@index([isDeleted])
-}
-
-model FeeStructure {
-  id             String             @id @default(uuid())
-  courseId      String
-  course        Course             @relation(fields: [courseId], references: [id])
-  feeHeadId      String
-  feeHead        FeeHead            @relation(fields: [feeHeadId], references: [id])
-  amount         Float
-  currency       String             @default("INR")
-  academicYearId String
-  academicYear   AcademicYear       @relation(fields: [academicYearId], references: [id])
-  quotaType      QuotaType?         // If null, applies to all? Or specific to Management/Convenor
-  courseType     String?            // e.g., "Regular", "Lateral"
-  degreeId       String?            // Optional Degree ID
-  yearOfStudy    Int?               // e.g., 1, 2, 3, 4 (If null, applies to all years)
-  dueDate        DateTime?
-  demands        StudentFeeDemand[]
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
-  createdBy      String?
-  updatedBy      String?
-  isDeleted      Boolean  @default(false)
-
-  @@index([courseId, academicYearId])
-  @@index([quotaType])
-  @@index([yearOfStudy])
-}
-
-model StudentFeeDemand {
-  id             String       @id @default(uuid())
-  studentId      String
-  student        Student      @relation(fields: [studentId], references: [id])
-  feeStructureId String
-  feeStructure   FeeStructure @relation(fields: [feeStructureId], references: [id])
-  amount         Float
-  dueDate        DateTime
-  status         FeeStatus 
-  payments       Payment[]
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  createdBy      String?
-  updatedBy      String?
-
-  @@index([studentId, status])
-}
-
 
 enum PaymentMode {
   ONLINE
@@ -934,560 +1299,18 @@ enum PaymentMode {
 }
 
 enum PaymentMethod {
-  // Online Methods
   UPI
   CREDIT_CARD
   DEBIT_CARD
   NET_BANKING
   WALLET
-  
-  // Offline Methods
   CASH
   CHEQUE
   DEMAND_DRAFT
-  NEFT_RTGS // Direct bank transfer by student (verified by admin)
+  NEFT_RTGS
 }
 
-model Payment {
-  id         String           @id @default(uuid())
-  studentId  String
-  student    Student          @relation(fields: [studentId], references: [id])
-  
-  // Amount Details
-  amount     Float
-  currency   String           @default("INR")
-  
-  // Tracking
-  status     PaymentStatus    @default(PENDING)
-  mode       PaymentMode      @default(ONLINE) 
-  method     PaymentMethod?
-  
-  // Online Specifics
-  providerTxId   String?  // e.g. Razorpay Payment ID
-  merchantOrderId String? // Our internal Order ID sent to gateway
-  signature      String?  // Verification signature
-  
-  // Offline Specifics
-  referenceNumber String? // DD Number, Cheque Number, or UTR
-  bankName        String? // Bank issuing the DD/Cheque
-  branchName      String?
-  instrumentDate  DateTime? // Date on DD/Cheque
-  collectedBy     String?   // User ID of the admin/staff who collected cash
-  
-  // Categorization
-  component  PaymentComponent
-  metadata   Json? // Extra gateway details or remarks
-  invoiceUrl String?
-
-  
-  feeDemandId String?
-  feeDemand   StudentFeeDemand? @relation(fields: [feeDemandId], references: [id])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-
-  @@index([studentId, status])
-  @@index([providerTxId])
-  @@index([referenceNumber])
-  @@index([mode])
-}
-
-
-
-
-model AcademicQualification {
-  id               String  @id @default(uuid())
-  studentId        String
-  student          Student @relation(fields: [studentId], references: [id])
-  level            String 
-  board            String
-  yearOfPassing    String
-  hallTicketNumber String
-  gpaOrMarks       String 
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-
-  @@index([studentId])
-}
-
-model CourseChangeLog {
-  id         String   @id @default(uuid())
-  studentId  String
-  student    Student  @relation(fields: [studentId], references: [id])
-  oldCourse  String
-  newCourse  String
-  approvedBy String 
-  date       DateTime @default(now())
-  createdBy  String?
-  updatedBy  String?
-
-  @@index([studentId])
-}
-
-model DiscountRequest {
-  id          String         @id @default(uuid())
-  studentId   String
-  student     Student        @relation(fields: [studentId], references: [id])
-  reason      String
-  documentUrl String?
-  status      DiscountStatus @default(REQUESTED)
-  remarks     String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-
-  @@index([studentId, status])
-}
-
-
-// ... (Existing Enums)
-
-
-
-// RBAC Models
-model Permission {
-  id          String   @id @default(uuid())
-  code        String   @unique // e.g. "STUDENT_VIEW", "FEES_EDIT"
-  description String?
-  module      String   // e.g. "FINANCE", "ACADEMIC"
-  
-  rolePermissions RolePermission[]
-  customRolePermissions CustomRolePermission[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model RolePermission {
-  id           String     @id @default(uuid())
-  role         Role       // Links Enum Role to Permissions (Static Roles)
-  permissionId String
-  permission   Permission @relation(fields: [permissionId], references: [id])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([role, permissionId])
-}
-
-model CustomRole {
-  id          String   @id @default(uuid())
-  name        String   @unique // e.g. "Guest Lecturer", "Exam Cell Clerk"
-  description String?
-  
-  users       User[]
-  permissions CustomRolePermission[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-}
-
-model CustomRolePermission {
-  id           String     @id @default(uuid())
-  roleId       String
-  role         CustomRole @relation(fields: [roleId], references: [id])
-  permissionId String
-  permission   Permission @relation(fields: [permissionId], references: [id])
-
-  @@unique([roleId, permissionId])
-}
-
-
-
-// Financial Ledger System
 enum LedgerTransactionType {
-  CREDIT  // Payment, Scholarship, Waiver
-  DEBIT   // Fee Demand, Penalty
+  CREDIT
+  DEBIT
 }
-
-model StudentLedger {
-  id          String                @id @default(uuid())
-  studentId   String
-  student     Student               @relation(fields: [studentId], references: [id])
-  
-  type        LedgerTransactionType
-  amount      Float
-  description String
-  date        DateTime              @default(now())
-  
-  // Linking to source documents
-  referenceId   String?  // ID of Payment or FeeDemand
-  referenceType String?  // "PAYMENT", "FEE_DEMAND", "DISCOUNT"
-  
-  // Balance Snapshot (Optional but useful for quick checks)
-  runningBalance Float?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?  // Audit: Who created this entry
-}
-
-// System Core
-model SystemSetting {
-  key         String   @id // e.g., "ADMISSION_OPEN"
-  value       String   // JSON value: "true", "2025-05-20"
-  description String?
-  isLocked    Boolean  @default(false) // If true, even admins can't easy-edit without super-admin
-  
-  updatedAt   DateTime @updatedAt
-  updatedBy   String?
-}
-
-model AuditLog {
-  id        String   @id @default(uuid())
-  userId    String?
-  user      User?    @relation(fields: [userId], references: [id])
-  
-  action    String   // "UPDATE", "DELETE", "LOGIN"
-  entity    String   // "Student", "FeeStructure"
-  entityId  String?
-  details   Json?    // Before/After state
-  
-  ipAddress String?
-  userAgent String?
-  
-  createdAt DateTime @default(now())
-}
-
-
-
-model CancellationRequest {
-  id           String             @id @default(uuid())
-  studentId    String
-  student      Student            @relation(fields: [studentId], references: [id])
-  reason       String
-  refundAmount Float?
-  status       CancellationStatus @default(REQUESTED)
-  approvedBy   String? 
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
-  createdBy    String?
-  updatedBy    String?
-
-  @@index([studentId, status])
-}
-
-model FileUpload {
-  id         String   @id @default(uuid())
-  studentId  String?
-  student    Student? @relation(fields: [studentId], references: [id])
-  uploadedBy String? 
-  url        String
-  kind       FileKind
-  fileName   String?
-  mime       String?
-  size       Int?
-  metadata   Json?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  createdBy  String?
-  updatedBy  String?
-
-  @@index([studentId])
-}
-
-model ExamDate {
-  id                String             @id @default(uuid())
-  name              String?
-  date              DateTime
-  startTime         DateTime?
-  endTime           DateTime?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  attendanceRecords AttendanceRecord[]
-  createdBy         String?
-  updatedBy         String?
-
-  @@index([date])
-}
-
-model ExamCenter {
-  id        String     @id @default(uuid())
-  name      String
-  address   String?
-  city      String?
-  capacity  Int?
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  examSlots ExamSlot[]
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean @default(false)
-
-  @@index([city])
-  @@index([isDeleted])
-}
-
-model ExamSlot {
-  id               String        @id @default(uuid())
-  examCenterId     String
-  examCenter       ExamCenter    @relation(fields: [examCenterId], references: [id])
-  date             DateTime
-  startTime        DateTime
-  endTime          DateTime
-  capacity         Int
-  filled           Int           @default(0)
-  isBookingEnabled Boolean       @default(false)  // Admin controls this
-  studentExams     StudentExam[]
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-  createdBy        String?
-  updatedBy        String?
-  isDeleted        Boolean  @default(false)
-
-  @@index([examCenterId])
-  @@index([date])
-  @@index([isBookingEnabled])
-  @@index([isDeleted])
-  @@index([date, examCenterId])
-}
-
-model HallTicket {
-  id          String   @id @default(uuid())
-  studentId   String
-  student     Student  @relation(fields: [studentId], references: [id])
-  fileId      String? 
-  url         String?
-  qrHash      String?
-  generatedAt DateTime @default(now())
-  createdBy   String?
-  updatedBy   String?
-
-  @@index([studentId])
-}
-
-model InvigilatorCredential {
-  id         String   @id @default(uuid())
-  adminId    String 
-  token      String
-  validFrom  DateTime
-  validUntil DateTime
-  createdAt  DateTime @default(now())
-  createdBy  String?
-  updatedBy  String?
-
-  @@index([adminId])
-  @@index([token])
-  @@index([validFrom, validUntil])
-}
-
-model AttendanceRecord {
-  id            String    @id @default(uuid())
-  studentId     String
-  student       Student   @relation(fields: [studentId], references: [id])
-  examDateId    String?
-  examDate      ExamDate? @relation(fields: [examDateId], references: [id])
-  invigilatorId String?
-  scannedAt     DateTime  @default(now())
-  verified      Boolean   @default(false)
-  verifiedAt    DateTime?
-  createdBy     String?
-  updatedBy     String?
-
-  @@index([studentId])
-  @@index([examDateId])
-  @@index([invigilatorId])
-  @@index([scannedAt])
-  @@index([verified])
-}
-
-model SeatAllocation {
-  id          String   @id @default(uuid())
-  studentId   String
-  student     Student  @relation(fields: [studentId], references: [id])
-  oldCourse   String?
-  newCourse   String?
-  allocatedBy String? 
-  allocatedAt DateTime @default(now())
-  notes       String?
-  createdBy   String?
-  updatedBy   String?
-
-  @@index([studentId])
-}
-
-model CourseChangeRequest {
-  id          String        @id @default(uuid())
-  studentId   String
-  student     Student       @relation(fields: [studentId], references: [id])
-  fromCourse  String
-  toCourse    String
-  reason      String
-  status      RequestStatus @default(REQUESTED)
-  forwardedTo String?
-  actionedBy  String?
-  actionedAt  DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  createdBy   String?
-  updatedBy   String?
-
-  @@index([studentId, status])
-}
-
-model AgentCommission {
-  id        String                @id @default(uuid())
-  agentId   String
-  agent     User                  @relation(fields: [agentId], references: [id])
-  studentId String
-  student   Student               @relation(fields: [studentId], references: [id])
-  amount    Float
-  component String
-  status    AgentCommissionStatus @default(PENDING)
-  createdAt DateTime              @default(now())
-  createdBy String?
-  updatedBy String?
-
-  @@index([agentId])
-  @@index([studentId, status])
-}
-
-model AdminActivityLog {
-  id           String   @id @default(uuid())
-  adminId      String
-  admin        User     @relation(fields: [adminId], references: [id])
-  action       String
-  resourceType String?
-  resourceId   String?
-  details      Json?
-  createdAt    DateTime @default(now())
-  createdBy    String?
-  updatedBy    String?
-
-  @@index([adminId])
-  @@index([action])
-  @@index([resourceType, resourceId])
-  @@index([createdAt])
-}
-
-model Notification {
-  id          String   @id @default(uuid())
-  recipientId String
-  recipient   User     @relation(fields: [recipientId], references: [id])
-  type        String
-  title       String
-  body        String
-  link        String?
-  isRead      Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  createdBy   String?
-  updatedBy   String?
-
-  @@index([recipientId])
-  @@index([isRead])
-  @@index([type])
-  @@index([createdAt])
-  @@index([recipientId, isRead])
-}
-
-model OfflineUploadBatch {
-  id            String                   @id @default(uuid())
-  agentId       String?
-  uploadedBy    String?
-  sourceFileUrl String?
-  status        OfflineUploadBatchStatus @default(PENDING)
-  createdAt     DateTime                 @default(now())
-  updatedAt     DateTime                 @updatedAt
-  createdBy     String?
-  updatedBy     String?
-
-  @@index([agentId])
-  @@index([status])
-  @@index([createdAt])
-}
-
-model DocumentRequirement {
-  id           String   @id @default(uuid())
-  degreeType   String 
-  documentName String 
-  documentKey  String 
-  isRequired   Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  createdBy    String?
-  updatedBy    String?
-  isDeleted    Boolean  @default(false)
-
-  @@unique([degreeType, documentKey])
-  @@index([degreeType])
-  @@index([isDeleted])
-}
-
-model Configuration {
-  id        String   @id @default(uuid())
-  key       String   @unique
-  value     String
-  description String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  createdBy String?
-  updatedBy String?
-}
-
-model ScholarshipRule {
-  id                 String   @id @default(uuid())
-  name               String
-  minPercentile      Float
-  discountPercentage Float
-  totalSlots         Int
-  filledSlots        Int      @default(0)
-  isActive           Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-  
-  eligibleStudents Student[]
-  allocations        ScholarshipAllocation[]
-}
-
-model ScholarshipAllocation {
-  id            String            @id @default(uuid())
-  studentId     String            @unique 
-  student       Student           @relation(fields: [studentId], references: [id])
-
-  ruleId        String
-  rule          ScholarshipRule   @relation(fields: [ruleId], references: [id])
-  
-  status        ScholarshipStatus @default(RESERVED)
-  reservedAt    DateTime          @default(now())
-  lockedAt      DateTime?
-  expiresAt     DateTime?
-  
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
-
-  @@index([status])
-  @@index([expiresAt])
-}
-
-model QualificationRequirement {
-  id               String   @id @default(uuid())
-  degreeType       String
-  
-  // Rule Logic
-  ruleType         String   @default("SINGLE") // "SINGLE", "OR", "AND"
-  
-  // Content
-  qualificationKeys String[] // e.g., ["SSC"] or ["EAPCET", "JEE"]
-  
-  isRequired       Boolean  @default(true)
-  
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  createdBy        String?
-  updatedBy        String?
-  isDeleted        Boolean  @default(false)
-
-  @@index([degreeType])
-  @@index([isDeleted])
-}
-
-
