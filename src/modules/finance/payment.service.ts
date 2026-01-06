@@ -137,9 +137,28 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
 const processPaymentSuccess = async (payment: any, metadata: any) => {
     let invoiceUrl = null;
     try {
+        // Generate Invoice Number: FEE_HEADER/YEAR/APPLICATION_NUMBER/RECEIPT_NUMBER
+        // Example: VVIT/2026/VON202600001/001
+        
+        const feeHeader = 'VVIT'; // Or fetch dynamically if needed
+        const year = new Date().getFullYear();
+        const applicationNumber = payment.student.applicationId; // Assuming applicationId is the VON... number
+
+        // Count existing successful payments for this student to generate serial number
+        const paymentCount = await prisma.payment.count({
+            where: {
+                studentId: payment.studentId,
+                status: PaymentStatus.SUCCESS
+            }
+        });
+        
+        // Next receipt number (current count + 1). Pad with leading zeros (e.g., 001)
+        const receiptNumber = (paymentCount + 1).toString().padStart(3, '0');
+        const invoiceNumber = `${feeHeader}/${year}/${applicationNumber}/${receiptNumber}`;
+
         // Generate Invoice
         const invoiceData:any = {
-            invoiceNumber: payment.providerTxId,
+            invoiceNumber: invoiceNumber,
             date: new Date(),
             studentName: payment.student.name,
             studentId: payment.student.applicationId,
