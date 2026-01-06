@@ -62,7 +62,7 @@ router.post('/verify-document/:studentId', authenticate, authorize([Role.ADMIN, 
 
 // Document Requirements Management (from documentController)
 router.post('/document-requirements', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), addRequirement);
-router.get('/document-requirements', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), listRequirements);
+router.get('/document-requirements', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]), listRequirements);
 
 router.put('/document-requirements/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateRequirement);
 router.delete('/document-requirements/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), removeRequirement);

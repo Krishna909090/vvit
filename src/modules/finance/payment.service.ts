@@ -156,14 +156,22 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
         const receiptNumber = (paymentCount + 1).toString().padStart(3, '0');
         const invoiceNumber = `${feeHeader}/${year}/${applicationNumber}/${receiptNumber}`;
 
+        // Extract Real Transaction ID from PhonePe Metadata if available
+        let realTransactionId = payment.providerTxId;
+        if (metadata?.paymentDetails?.[0]?.transactionId) {
+            realTransactionId = metadata.paymentDetails[0].transactionId;
+        } else if (metadata?.data?.paymentDetails?.[0]?.transactionId) { // Some responses wrap it in 'data'
+            realTransactionId = metadata.data.paymentDetails[0].transactionId;
+        }
+
         // Generate Invoice
         const invoiceData:any = {
             invoiceNumber: invoiceNumber,
             date: new Date(),
             studentName: payment.student.name,
-            studentId: payment.student.applicationId,
+            studentId: payment.student.applicationId, // Label MUST be "Student ID" or "Application ID" as per PDF template expectation, here passing App ID as requested.
             paymentMethod: payment.method || 'ONLINE',
-            transactionId: payment.providerTxId,
+            transactionId: realTransactionId,
             amount: payment.amount,
             description: payment.component === 'APPLICATION_FEE' ? 'Entrance Exam Application Fee' : 'Payment',
             address: {

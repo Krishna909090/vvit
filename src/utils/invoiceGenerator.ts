@@ -139,9 +139,8 @@ function drawStudentAndInvoiceInfo(doc: PDFKit.PDFDocument, data: InvoiceData) {
     .fontSize(10)
     .text(`Invoice No: ${data.invoiceNumber}`, rightX, top + 18)
     .text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, top + 33)
-    .text('Transaction ID:', rightX, top + 48)
-    .text(data.transactionId, rightX, top + 63, { width: 200 })
-    .text(`Payment Method: ${data.paymentMethod}`, rightX, top + 78)
+    .text(`Txn Id: ${data.transactionId}`, rightX, top + 48, { width: 300 })
+    .text(`Payment Method: ${data.paymentMethod}`, rightX, top + 63)
 
   drawLine(doc, top + 115)
 }
