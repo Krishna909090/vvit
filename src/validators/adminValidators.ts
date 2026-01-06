@@ -378,12 +378,13 @@ export const updateStudentPersonalDetailsSchema = z.object({
         pincode: z.string().min(1).optional(),
         country: z.string().min(1).optional(),
         profilePhotoUrl: z.string().url().optional(),
+        aadharNumber: z.string().optional(),
     }).refine(data => {
-        const forbiddenKeys = ['phone', 'phoneNumber', 'aadharNumber', 'aadhar'];
+        const forbiddenKeys = ['phone', 'phoneNumber'];
         const keys = Object.keys(data);
         return !keys.some(k => forbiddenKeys.includes(k));
     }, {
-        message: "Updates to phone number or Aadhar number are not allowed through this API.",
+        message: "Updates to phone number are not allowed through this API.",
     }),
 });
 
