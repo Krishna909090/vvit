@@ -5,6 +5,9 @@ import logger from '../../utils/logger';
 import { MESSAGES } from '../../constants/messages';
 import { sendResponse } from '../../utils/response';
 import { AdminStudentService } from './adminStudent.service';
+import * as StudentService from '../student/student.service';
+import prisma from '../../config/prisma';
+import { Role } from '@prisma/client';
 import fs from 'fs';
 import path from 'path';
 
@@ -251,6 +254,20 @@ export const setScholarshipEligibility = catchAsync(async (req: Request, res: Re
 // Update Student Personal Details
 export const updateStudentPersonalDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateStudentPersonalDetails] by=${req.user?.userId || 'anonymous'}`);
+    
+    // SECURITY: If Student Role, enforce Own Data Check
+    if (req.user?.role === Role.STUDENT) {
+        if (!req.user.userId) throw new AppError('User ID missing', 400);
+
+        const student = await StudentService.getStudentByUserId(req.user.userId);
+        if (!student) {
+            throw new AppError('Student profile not found for this user', 404);
+        }
+        
+        // Force the studentId to match their own profile
+        req.body.studentId = student.id;
+    }
+
     const { studentId, ...updateData } = req.body;
 
     const result = await AdminStudentService.updateStudentPersonalDetails(studentId, updateData, req.user?.userId);
@@ -282,6 +299,28 @@ export const getStudentDetails = catchAsync(async (req: Request, res: Response, 
 export const updateAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
+
+    // SECURITY: If Student Role, enforce Ownership Check
+    if (req.user?.role === Role.STUDENT) {
+        if (!req.user.userId) throw new AppError('User ID missing', 400);
+
+        const student = await StudentService.getStudentByUserId(req.user.userId);
+        if (!student) {
+            throw new AppError('Student profile not found', 404);
+        }
+
+        const qualification = await prisma.academicQualification.findUnique({
+            where: { id }
+        });
+
+        if (!qualification) throw new AppError('Qualification not found', 404);
+
+        if (qualification.studentId !== student.id) {
+            logger.warn(`[Security] Student ${student.id} tried to update qualification ${id} belonging to ${qualification.studentId}`);
+            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
+    }
+
     const { ...updateData } = req.body;
 
     const result = await AdminStudentService.updateAcademicQualification(id, updateData, req.user?.userId);
@@ -299,6 +338,26 @@ export const updateAcademicQualification = catchAsync(async (req: Request, res: 
 export const deleteAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[deleteAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
+
+    // SECURITY: If Student Role, enforce Ownership Check
+    if (req.user?.role === Role.STUDENT) {
+        if (!req.user.userId) throw new AppError('User ID missing', 400);
+
+        const student = await StudentService.getStudentByUserId(req.user.userId);
+        if (!student) {
+            throw new AppError('Student profile not found', 404);
+        }
+
+        const qualification = await prisma.academicQualification.findUnique({
+            where: { id }
+        });
+
+        if (!qualification) throw new AppError('Qualification not found', 404);
+
+        if (qualification.studentId !== student.id) {
+            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
+    }
 
     const result = await AdminStudentService.deleteAcademicQualification(id);
 

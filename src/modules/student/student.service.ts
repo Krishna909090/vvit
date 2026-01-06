@@ -324,7 +324,9 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
 
     // Upsert Documents
     const docPromises = Object.keys(documentData).map(key => {
-        if (key.endsWith('Url')) {
+        // Accept keys that either end in 'Url' OR start with 'DOC_' (common pattern) OR just treating all remaining string values as potential docs
+        const value = documentData[key];
+        if (typeof value === 'string' && (key.endsWith('Url') || key.startsWith('DOC_'))) {
             return prisma.studentDocument.upsert({
                 where: {
                     studentId_documentKey: {
