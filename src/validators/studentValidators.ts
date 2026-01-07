@@ -18,7 +18,7 @@ export const registerStudentSchema = z.object({
         state: z.string().min(1, "State is required"),
         pincode: z.string().min(6, "Pincode must be 6 digits"),
         degreeType: z.string().min(1, "Degree Type is required"), // e.g., B.Tech, MBA
-        pref1: z.string().min(1, "Preference 1 is required"),
+        pref1: z.string().optional(),
         pref2: z.string().optional(),
         pref3: z.string().optional(),
         profilePhotoUrl: z.string().url("Profile Photo URL is required"),
