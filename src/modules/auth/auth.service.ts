@@ -306,7 +306,10 @@ export const generateAadhaarOtp = async (idNumber: string) => {
     );
     return response.data;
   } catch (error: any) {
-    logger.error(`[generateAadhaarOtp] Error: ${error.message}`, error);
+    logger.error(`[generateAadhaarOtp] Error: ${error.message}`, {
+       response: error.response?.data,
+       status: error.response?.status
+    });
     throw new AppError(
       error.response?.data?.message || "Failed to generate Aadhaar OTP",
       error.response?.status || 500
@@ -331,7 +334,10 @@ export const submitAadhaarOtp = async (requestId: string | number, otp: string) 
     );
     return response.data;
   } catch (error: any) {
-    logger.error(`[submitAadhaarOtp] Error: ${error.message}`, error);
+    logger.error(`[submitAadhaarOtp] Error: ${error.message}`, {
+       response: error.response?.data,
+       status: error.response?.status
+    });
     throw new AppError(
       error.response?.data?.message || "Failed to submit Aadhaar OTP",
       error.response?.status || 500
