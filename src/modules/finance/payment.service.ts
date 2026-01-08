@@ -695,7 +695,8 @@ export const rejectDiscount = async (requestId: string, remarks: string, adminId
 
 export const getInvoiceUrl = async (paymentId: string) => {
     const payment = await prisma.payment.findUnique({
-        where: { id: paymentId }
+        where: { id: paymentId },
+        include: { student: true }
     });
 
     if (!payment) {
