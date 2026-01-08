@@ -16,8 +16,7 @@ export const uploadFileToS3 = async (
             Bucket: BUCKET_NAME,
             Key: key,
             Body: fileContent,
-            ContentType: contentType,
-            ACL: 'public-read' // Depending on bucket settings
+            ContentType: contentType
         });
 
         await s3Client.send(command);
