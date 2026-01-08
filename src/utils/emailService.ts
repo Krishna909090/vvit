@@ -18,6 +18,13 @@ interface EmailData {
     date: Date;
     invoiceUrl: string;
     supportEmail?: string;
+    address?: {
+        line1: string;
+        line2?: string;
+        city: string;
+        state: string;
+        pincode: string;
+    }
 }
 
 // Environment variables
@@ -113,7 +120,7 @@ export const sendEntranceFeeReceipt = async (
             signerName: 'Registrar',
             signerTitle: 'Registrar, VVIT University',
             signedDate: new Date(),
-            address: {
+            address: data.address || {
                 line1: 'Nambur',
                 city: 'Guntur',
                 state: 'Andhra Pradesh',

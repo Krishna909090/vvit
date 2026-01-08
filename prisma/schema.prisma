@@ -668,6 +668,7 @@ model Payment {
   @@index([providerTxId])
   @@index([referenceNumber])
   @@index([mode])
+  @@index([createdAt])
 }
 
 model AcademicQualification {
@@ -1332,6 +1333,7 @@ model EmailLog {
 
   @@index([status])
   @@index([recipientEmail])
+  @@index([createdAt])
 }
 
 enum EmailStatus {
