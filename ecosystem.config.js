@@ -1,15 +1,30 @@
 module.exports = {
     apps: [
         {
-            name: 'vvitu-prod',
+            name: 'vvitu-prod-api',
             script: 'dist/server.js',
-            instances: 1,
+            instances: 'max', // Scale to all available CPUs
             exec_mode: 'cluster',
             autorestart: true,
             watch: false,
             max_memory_restart: '1G',
             env: {
                 NODE_ENV: 'production',
+                ENABLE_SCHEDULER: 'false', // Disable scheduler in API nodes
+            }
+        },
+        {
+            name: 'vvitu-prod-worker',
+            script: 'dist/server.js',
+            instances: 1, // Single instance for background jobs
+            exec_mode: 'fork',
+            autorestart: true,
+            watch: false,
+            max_memory_restart: '500M',
+            env: {
+                NODE_ENV: 'production',
+                ENABLE_SCHEDULER: 'true',  // Enable scheduler
+                DISABLE_WEB_SERVER: 'true' // Disable API on worker
             }
         },
         {
@@ -23,6 +38,7 @@ module.exports = {
             max_memory_restart: '500M',
             env: {
                 NODE_ENV: 'development',
+                ENABLE_SCHEDULER: 'true',
                 USE_LOCAL_DB: 'true',
                 DB_HOST: 'localhost',
                 DB_PORT: '5432',
@@ -43,8 +59,9 @@ module.exports = {
             max_memory_restart: '300M',
             env: {
                 NODE_ENV: 'local',
+                ENABLE_SCHEDULER: 'true',
                 USE_LOCAL_DB: 'true',
-                DATABASE_URL: 'postgresql://postgres@localhost:5432/vvit',
+                // Using DATABASE_URL from .env or fallback
                 SKIP_DATE_VALIDATION: 'true', // Skip date check for testing
             }
         }

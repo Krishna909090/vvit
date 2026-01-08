@@ -46,14 +46,23 @@ const startServer = async () => {
         }
         
         // Start Schedulers
-        const { startScholarshipExpiryJob } = require('./jobs/scheduler');
-        startScholarshipExpiryJob();
+        // Start Schedulers: Only if explicitly enabled (default false in prod, true in dev/local recommended)
+        if (process.env.ENABLE_SCHEDULER === 'true') {
+            const { startScholarshipExpiryJob } = require('./jobs/scheduler');
+            startScholarshipExpiryJob();
+            logger.info('🕒 Job Scheduler started');
+        }
 
-        app.listen(PORT, () => {
-            logger.info(`🚀 Server is running on port ${PORT}`);
-            logger.info(`📚 Swagger docs available at http://localhost:${PORT}/api-docs`);
-            logger.info(`🔒 Security: Environment validation passed`);
-        });
+        // Start Web Server: Only if NOT disabled (enabled by default)
+        if (process.env.DISABLE_WEB_SERVER !== 'true') {
+            app.listen(PORT, () => {
+                logger.info(`🚀 Server is running on port ${PORT}`);
+                logger.info(`📚 Swagger docs available at http://localhost:${PORT}/api-docs`);
+                logger.info(`🔒 Security: Environment validation passed`);
+            });
+        } else {
+            logger.info('🔕 Web Server disabled (Worker Mode active)');
+        }
 
     } catch (error: any) {
         logger.error(`❌ Failed to start server: ${error.message}`);

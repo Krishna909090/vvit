@@ -703,24 +703,48 @@ export const getInvoiceUrl = async (paymentId: string) => {
     }
 
     if (!payment.invoiceUrl) {
+        // Self-healing: If payment is success but invoice is missing, try to generate it again
+        if (payment.status === PaymentStatus.SUCCESS) {
+            logger.warn(`Payment ${paymentId} is SUCCESS but missing invoiceUrl. Attempting to regenerate...`);
+            await processPaymentSuccess(payment, payment.metadata);
+            
+            // Refetch to get the updated URL
+            const updatedPayment = await prisma.payment.findUnique({ where: { id: paymentId } });
+            if (updatedPayment?.invoiceUrl) {
+                const key = getS3KeyFromUrl(updatedPayment.invoiceUrl);
+                if (key) return getPresignedUrl(key);
+            }
+        }
+        
+        if (payment.status === PaymentStatus.PENDING) {
+             throw new AppError('Payment is still PENDING. Invoice not generated.', 400);
+        }
+        if (payment.status === PaymentStatus.FAILED) {
+             throw new AppError('Payment FAILED. Cannot generate invoice.', 400);
+        }
+
         throw new AppError('Invoice not generated yet', 404);
     }
 
     // Extract Key from URL
-    const keyMatch = payment.invoiceUrl.match(/(student\/.*\.pdf)/);
-    
-    let key = keyMatch ? keyMatch[1] : null;
-    if (!key) {
-        const parts = payment.invoiceUrl.split('amazonaws.com/');
-        if (parts.length > 1) key = parts[1];
-    }
-
+    const key = getS3KeyFromUrl(payment.invoiceUrl);
     if (!key) {
          throw new AppError('Invalid invoice URL format', 500);
     }
     
     const presignedUrl = await getPresignedUrl(key);
     return presignedUrl;
+};
+
+// Helper to extract key from various URL formats
+const getS3KeyFromUrl = (url: string): string | null => {
+    const keyMatch = url.match(/(student\/.*\.pdf)/);
+    if (keyMatch) return keyMatch[1];
+    
+    const parts = url.split('amazonaws.com/');
+    if (parts.length > 1) return parts[1];
+
+    return null;
 };
 
 export const getAllotmentOrderUrl = async (studentId: string) => {
