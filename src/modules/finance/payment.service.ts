@@ -202,7 +202,14 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
                 transactionId: realTransactionId,
                 amount: payment.amount,
                 date: new Date(),
-                invoiceUrl: invoiceUrl
+                invoiceUrl: invoiceUrl,
+                address: {
+                    line1: payment.student.address,
+                    line2: payment.student.address2 || '',
+                    city: payment.student.city,
+                    state: payment.student.state,
+                    pincode: payment.student.pincode
+                }
             });
             logger.info(`[Payment] Email send result: ${emailSent}`);
         } else {
