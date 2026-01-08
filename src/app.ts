@@ -18,6 +18,7 @@ import dataImportRoutes from './modules/admission/dataImport.routes';
 import verificationRoutes from './modules/admin/verification.routes';
 import academicRoutes from './modules/academic/academic.routes';
 import qualificationRequirementRoutes from './modules/qualification/qualificationRequirement.routes';
+import emailLogRoutes from './modules/system/emailLog.routes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
 import { generalRateLimiter } from './middlewares/rateLimitMiddleware';
@@ -101,6 +102,7 @@ app.use('/api/admission', dataImportRoutes);
 app.use('/verification', verificationRoutes);
 app.use('/admin/academic', academicRoutes);
 app.use('/qualification-requirements', qualificationRequirementRoutes);
+app.use('/admin/email-logs', emailLogRoutes);
 
 
 

@@ -31,7 +31,12 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
     });
 
     if (existingStudent) {
-        throw new AppError(MESSAGES.ERROR.STUDENT_ALREADY_REGISTERED, 400);
+        let conflict = 'details';
+        if (existingStudent.email === data.email) conflict = 'Email';
+        else if (existingStudent.aadharNumber === data.aadharNumber) conflict = 'Aadhar Number';
+        else if (userId && existingStudent.userId === userId) conflict = 'User Account';
+        
+        throw new AppError(`Student conflict: A student is already registered with this ${conflict}`, 400);
     }
 
     if (data.aadharNumber) {

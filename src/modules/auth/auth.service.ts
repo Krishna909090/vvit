@@ -304,6 +304,14 @@ export const generateAadhaarOtp = async (idNumber: string) => {
         id_number: idNumber,
       }
     );
+
+    if (response.data && (response.data.status === 'error' || response.data.status === 'fail')) {
+        throw new AppError(
+            response.data.message || "Failed to generate Aadhaar OTP", 
+            response.data.status_code || 400
+        );
+    }
+
     return response.data;
   } catch (error: any) {
     logger.error(`[generateAadhaarOtp] Error: ${error.message}`, {
@@ -332,6 +340,14 @@ export const submitAadhaarOtp = async (requestId: string | number, otp: string) 
         otp: otp
       }
     );
+
+    if (response.data && (response.data.status === 'error' || response.data.status === 'fail')) {
+        throw new AppError(
+            response.data.message || "Failed to submit Aadhaar OTP verification", 
+            response.data.status_code || 400
+        );
+    }
+
     return response.data;
   } catch (error: any) {
     logger.error(`[submitAadhaarOtp] Error: ${error.message}`, {
@@ -339,8 +355,8 @@ export const submitAadhaarOtp = async (requestId: string | number, otp: string) 
        status: error.response?.status
     });
     throw new AppError(
-      error.response?.data?.message || "Failed to submit Aadhaar OTP",
-      error.response?.status || 500
+      error.message || error.response?.data?.message || "Failed to submit Aadhaar OTP",
+      (error.statusCode && error.statusCode !== 500) ? error.statusCode : (error.response?.status || 500)
     );
   }
 };

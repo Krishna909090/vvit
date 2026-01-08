@@ -1314,3 +1314,28 @@ enum LedgerTransactionType {
   CREDIT
   DEBIT
 }
+
+model EmailLog {
+  id              String      @id @default(uuid())
+  recipientEmail  String
+  subject         String
+  content         String      @db.Text // Store HTML content
+  status          EmailStatus @default(PENDING)
+  invoiceData     Json?       // Store the invoice data used for generation
+  templateType    String      // e.g., 'ENTRANCE_FEE_RECEIPT'
+  messageId       String?     // ZeptoMail message ID
+  errorResponse   Json?       // Store error details if any
+  metadata        Json?       // Any other relevant data like studentId, transactionId
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  retryCount      Int         @default(0)
+
+  @@index([status])
+  @@index([recipientEmail])
+}
+
+enum EmailStatus {
+  PENDING
+  SENT
+  FAILED
+}

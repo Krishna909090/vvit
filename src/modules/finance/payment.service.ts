@@ -11,12 +11,13 @@ import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../ut
 import { ScholarshipService } from '../admin/scholarship.service';
 import { generateAllotmentOrderPDF } from '../../utils/allotmentGenerator';
 import { StudentDocumentStatus } from '@prisma/client';
+import { sendEntranceFeeReceipt } from '../../utils/emailService';
 
 
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
 
-const MERCHANTABILITY = (process.env.PHONEPE_MERCHANT_ID || 'VVITFEEONLINE_2512111619').trim();
-const SALT_KEY = (process.env.PHONEPE_SALT_KEY || 'MGQ4MzNmMmEtNmEzZC00M2JiLWE1NGUtZDdlNjA1MTI0ZTcx').trim();
+const MERCHANTABILITY = (process.env.PHONEPE_MERCHANT_ID || '').trim();
+const SALT_KEY = (process.env.PHONEPE_SALT_KEY || '').trim();
 const SALT_INDEX = (process.env.PHONEPE_SALT_INDEX || '1').trim();
 const CLIENT_VERSION = 1;
 const ENV = process.env.NODE_ENV === 'production' ? Env.PRODUCTION : Env.SANDBOX;
@@ -187,8 +188,29 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
         const s3Key = `student/${payment.student.applicationId}/invoices/${payment.providerTxId}.pdf`;
         invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
         logger.info(`Invoice generated and uploaded: ${invoiceUrl}`);
+
+        // Send Email Notification
+        logger.info(`[Payment] Process email check. Component=${payment.component}, Email=${payment.student.email}`);
+        
+        if (payment.component === PaymentComponent.APPLICATION_FEE && payment.student.email) {
+            logger.info('[Payment] Condition met. Sending Entrance Fee Receipt email...');
+            const emailSent = await sendEntranceFeeReceipt(payment.student.email, {
+                studentName: payment.student.name,
+                invoiceNumber: invoiceNumber,
+                applicationId: payment.student.applicationId,
+                programName: 'Entrance Examination 2026',
+                transactionId: realTransactionId,
+                amount: payment.amount,
+                date: new Date(),
+                invoiceUrl: invoiceUrl
+            });
+            logger.info(`[Payment] Email send result: ${emailSent}`);
+        } else {
+            logger.info('[Payment] Email skipped. Condition not met.');
+        }
     } catch (err) {
-        logger.error(`Failed to generate/upload invoice for ${payment.providerTxId}: ${err}`);
+        logger.error(`Failed to generate/upload invoice or send email for ${payment.providerTxId}: ${err}`);
+        console.error(err); // Ensure it prints to stdout too
     }
 
     // Update Payment Status

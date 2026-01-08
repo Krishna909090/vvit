@@ -5,7 +5,7 @@ import logger from './utils/logger';
 import { getDatabaseSecret } from './config/awsConfig';
 
 const PORT = process.env.PORT || 3000;
-const SECRET_NAME = "rds-secretname";
+const SECRET_NAME = process.env.AWS_SECRET_NAME || "rds-secretname";
 
 const startServer = async () => {
     try {
@@ -27,9 +27,9 @@ const startServer = async () => {
                 const { username, password, host, port, dbname } = dbCredentials;
                 const dbUser = username;
                 const dbPass = encodeURIComponent(password); // Encode password to handle special chars
-                const dbHost = host || "database-1.cixc0u4ee9uo.us-east-1.rds.amazonaws.com";
-                const dbPort = port || 5432;
-                const dbName = "postgres"; // Default DB name for RDS Postgres usually 'postgres' unless specified
+                const dbHost = host || process.env.DB_HOST;
+                const dbPort = port || process.env.DB_PORT || 5432;
+                const dbName = process.env.DB_NAME || "postgres";
 
                 const databaseUrl = `postgresql://${dbUser}:${dbPass}@${dbHost}:${dbPort}/${dbName}?schema=public`;
 

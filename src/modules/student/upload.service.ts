@@ -54,7 +54,7 @@ export const generatePresignedUrl = async (fileUrl: string) => {
 
     if (!key) throw new AppError('Could not extract key from URL', 400);
 
-    const bucketName = process.env.AWS_BUCKET_NAME || 'vvit-college-erp'; // Fallback to avoid error if env missing, but should be in env
+    const bucketName = process.env.AWS_BUCKET_NAME || '';
     
     // Create the command
     const command = new GetObjectCommand({

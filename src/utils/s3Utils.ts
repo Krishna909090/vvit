@@ -4,7 +4,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import logger from '../utils/logger';
 import { AppError } from './AppError';
 
-const BUCKET_NAME = process.env.AWS_BUCKET_NAME || 'vvitu-uploads';
+const BUCKET_NAME = process.env.AWS_BUCKET_NAME || '';
 
 export const uploadFileToS3 = async (
     fileContent: Buffer | string,
@@ -17,7 +17,7 @@ export const uploadFileToS3 = async (
             Key: key,
             Body: fileContent,
             ContentType: contentType,
-            // ACL: 'public-read' // Depending on bucket settings
+            ACL: 'public-read' // Depending on bucket settings
         });
 
         await s3Client.send(command);
