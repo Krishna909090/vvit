@@ -2,13 +2,16 @@ import dotenv from 'dotenv';
 import path from 'path';
 
 // Load environment variables before anything else
-const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
+const rootDir = path.resolve(__dirname, '../../'); // always project root
 
-// Resolve path relative to CWD or __dirname
-// Assuming running from root or dist
-dotenv.config({ path: path.resolve(process.cwd(), envFile) });
+const envFile =
+  process.env.NODE_ENV === 'production'
+    ? '.env.production'
+    : '.env.development';
 
-// Fallback to default .env if specific file doesn't exist or for local dev
-if (process.env.NODE_ENV !== 'production') {
-    dotenv.config();
-}
+dotenv.config({
+  path: path.join(rootDir, envFile),
+});
+
+// Fallback
+dotenv.config();

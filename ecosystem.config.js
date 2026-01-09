@@ -3,6 +3,7 @@ module.exports = {
         {
             name: 'vvitu-prod-api',
             script: 'dist/server.js',
+            cwd: '/var/www/erp/vvit',
             instances: 'max', // Scale to all available CPUs
             exec_mode: 'cluster',
             autorestart: true,
@@ -16,6 +17,7 @@ module.exports = {
         {
             name: 'vvitu-prod-worker',
             script: 'dist/server.js',
+            cwd: '/var/www/erp/vvit',
             instances: 1, // Single instance for background jobs
             exec_mode: 'fork',
             autorestart: true,
