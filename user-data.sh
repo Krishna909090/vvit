@@ -1,4 +1,5 @@
 #!/bin/bash
+set -x
 exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 
 # ==========================================
@@ -48,7 +49,7 @@ mkdir -p /var/www/erp
 cd /var/www/erp
 
 # Using OAuth token for clone
-git clone -b dev "https://x-access-token:${GITHUB_TOKEN}@github.com/Krishna909090/vvit.git" vvit
+git clone -b prod "https://x-access-token:${GITHUB_TOKEN}@github.com/Krishna909090/vvit.git" vvit
 cd vvit
 
 # Check if clone successful
