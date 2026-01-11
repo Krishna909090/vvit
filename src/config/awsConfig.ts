@@ -6,14 +6,12 @@ import logger from "../utils/logger";
 // AWS Configuration
 const REGION = process.env.AWS_REGION || "us-east-1";
 
-if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-    throw new Error('AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) are missing from environment variables');
-}
-
-const AWS_CREDENTIALS = {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-};
+const AWS_CREDENTIALS = (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) 
+    ? {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+      }
+    : undefined;
 
 export const secretsManagerClient = new SecretsManagerClient({
     region: REGION,
