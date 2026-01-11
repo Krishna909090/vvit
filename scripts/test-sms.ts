@@ -1,23 +1,18 @@
 
-import { sendBsnlOtp } from '../src/modules/integration/integration.service';
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Load .env.production
+// Load .env.production BEFORE importing any modules that use Prisma
 dotenv.config({ path: path.resolve(__dirname, '../.env.production') });
 
-const PHONE = '9398185097';
-const OTP = '123456';
-
 async function main() {
-    console.log(`Testing SMS to ${PHONE}...`);
+    console.log(`Testing SMS to 9398185097...`);
     
-    // Check if BSNL_TOKEN is in process.env (loaded by dotenv or AWS SSM)
-    // Note: integration.service.ts uses getDatabaseSecret which fetches from Secrets Manager if not found? 
-    // Actually, integration logic tries getDatabaseSecret('BsnlToken')
+    // Dynamic import to ensure config is loaded first
+    const { sendBsnlOtp } = require('../src/modules/integration/integration.service');
     
     // Using the service function directly
-    const result = await sendBsnlOtp(PHONE, OTP);
+    const result = await sendBsnlOtp('9398185097', '123456');
     
     if (result) {
         console.log('✅ SMS Sent Successfully!');
