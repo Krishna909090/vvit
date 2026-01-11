@@ -9,10 +9,10 @@ dotenv.config({ path: path.resolve(__dirname, '../.env.production') });
 const prisma = new PrismaClient();
 
 async function main() {
-    const PHONE = '8297592829';
-    const NAME = 'Madhu';
-    const EMAIL = 'madhubabujanjanam@vvitu.com';
-
+    const PHONE = '9493697463';
+    const NAME = 'Krishna';
+    // Removed specific email to avoid conflicts if it already exists differently
+    
     console.log(`Checking for user with phone: ${PHONE}...`);
 
     const user = await prisma.user.upsert({
@@ -20,13 +20,11 @@ async function main() {
         update: {
             role: Role.ADMIN,
             name: NAME,
-            email: EMAIL,
             isDeleted: false
         },
         create: {
             phone: PHONE,
             name: NAME,
-            email: EMAIL,
             role: Role.ADMIN,
             isDeleted: false
         }
