@@ -24,7 +24,8 @@ interface EmailData {
         city: string;
         state: string;
         pincode: string;
-    }
+    };
+    items?: { description: string; amount: number }[];
 }
 
 // Environment variables
@@ -116,7 +117,13 @@ export const sendEntranceFeeReceipt = async (
             paymentMethod: 'Online',
             transactionId: data.transactionId,
             amount: data.amount,
-            description: `Entrance Exam Fee`,
+            description: `Application Fee`,
+            items: data.items || [
+                {
+                    description: 'Application Fee',
+                    amount: data.amount
+                }
+            ],
             signerName: 'Registrar',
             signerTitle: 'Registrar, VVIT University',
             signedDate: new Date(),

@@ -29,6 +29,11 @@ export const sendOtp = catchAsync(async (req: Request, res: Response) => {
     `[sendOtp] success: phone=${maskPhone(phone)}, email=${maskEmail(email)}`
   );
 
+  // Security: Do not expose OTP in response unless in DEV environment
+  if (process.env.NODE_ENV !== 'dev' && process.env.NODE_ENV !== 'development') {
+      delete (result as any).otp;
+  }
+
   sendResponse({
     res,
     statusCode: 200,

@@ -2,26 +2,26 @@ import { z } from 'zod';
 
 export const registerStudentSchema = z.object({
     body: z.object({
-        name: z.string().min(1, "Name is required"),
+        name: z.string().min(1, "Name is required. Please enter your full name."),
         fatherName: z.string().min(1, "Father's name is required"),
         motherName: z.string().min(1, "Mother's name is required"),
-        email: z.string().email("Invalid email"),
-        phone: z.string().min(10, "Phone number must be at least 10 digits"),
-        gender: z.string().min(1, "Gender is required"),
-        dob: z.string().datetime().or(z.date()).or(z.string()), // Allow string date
-        aadharNumber: z.string().min(12, "Aadhar number must be 12 digits"),
+        email: z.string().email("Please enter a valid email address (e.g., user@example.com)"),
+        phone: z.string().regex(/^\d{10}$/, "Phone number must be exactly 10 digits"),
+        gender: z.string().transform((val) => val.toUpperCase()).pipe(z.enum(["MALE", "FEMALE", "OTHER"])),
+        dob: z.coerce.date(), 
+        aadharNumber: z.string().regex(/^\d{12}$/, "Aadhaar number must be exactly 12 digits"),
         category: z.string().min(1, "Category is required"),
         country: z.string().min(1, "Country is required"),
         address: z.string().min(1, "Address is required"),
         address2: z.string().optional(),
         city: z.string().min(1, "City is required"),
         state: z.string().min(1, "State is required"),
-        pincode: z.string().min(6, "Pincode must be 6 digits"),
+        pincode: z.string().regex(/^\d{6}$/, "Pincode must be exactly 6 digits"),
         degreeType: z.string().min(1, "Degree Type is required"), // e.g., B.Tech, MBA
         pref1: z.string().optional(),
         pref2: z.string().optional(),
         pref3: z.string().optional(),
-        profilePhotoUrl: z.string().url("Profile Photo URL is required"),
+        profilePhotoUrl: z.string().url("Profile Photo must be a valid URL"),
         isOffline: z.boolean().optional(),
     }),
 });
@@ -85,7 +85,7 @@ export const updatePersonalDetailsSchema = z.object({
         name: z.string().min(1).optional(),
         fatherName: z.string().min(1).optional(),
         motherName: z.string().min(1).optional(),
-        gender: z.string().min(1).optional(),
+        gender: z.string().transform((val) => val.toUpperCase()).pipe(z.enum(["MALE", "FEMALE", "OTHER"])).optional(),
         dob: z.coerce.date().optional(),
         email: z.string().email().optional(),
         category: z.string().min(1).optional(),

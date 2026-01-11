@@ -13,36 +13,30 @@ const startServer = async () => {
         logger.info('🔍 Validating environment configuration...');
         validateEnvironment();
         
-        if (process.env.USE_LOCAL_DB === 'true') {
-            logger.info('Using local database configuration from environment variables.');
-            if (!process.env.DATABASE_URL) {
-                logger.warn('DATABASE_URL is not set in environment variables for local usage.');
-            }
+        // Check if DATABASE_URL is already provided (e.g. from .env or SSM)
+        if (process.env.DATABASE_URL) {
+            logger.info('Using configured DATABASE_URL from environment.');
+        } else if (process.env.USE_LOCAL_DB === 'true') {
+             // Local DB fallback (already handled logically by the first check if validated, but keeping structure)
+             logger.info('Using local database configuration.');
         } else {
-            // Fetch Database Credentials
+            // Only fetch from Secrets Manager if DATABASE_URL is NOT present
             logger.info('Fetching database credentials from Secrets Manager...');
-            const dbCredentials = await getDatabaseSecret(SECRET_NAME);
+            try {
+                const dbCredentials = await getDatabaseSecret(SECRET_NAME);
+                if (dbCredentials) {
+                    const { username, password, host, port, dbname } = dbCredentials;
+                    const dbPass = encodeURIComponent(password);
+                    const dbHost = host || process.env.DB_HOST;
+                    const dbPort = port || process.env.DB_PORT || 5432;
+                    const dbName = process.env.DB_NAME || "postgres";
 
-            if (dbCredentials) {
-                const { username, password, host, port, dbname } = dbCredentials;
-                const dbUser = username;
-                const dbPass = encodeURIComponent(password); // Encode password to handle special chars
-                const dbHost = host || process.env.DB_HOST;
-                const dbPort = port || process.env.DB_PORT || 5432;
-                const dbName = process.env.DB_NAME || "postgres";
-
-                const databaseUrl = `postgresql://${dbUser}:${dbPass}@${dbHost}:${dbPort}/${dbName}?schema=public`;
-
-                // Set env var for Prisma
-                process.env.DATABASE_URL = databaseUrl;
-                logger.info('Database credentials configured successfully.');
-            } else {
-                logger.warn('No secret string found. Using existing DATABASE_URL if available.');
+                    process.env.DATABASE_URL = `postgresql://${username}:${dbPass}@${dbHost}:${dbPort}/${dbName}?schema=public`;
+                    logger.info('Database credentials configured from Secrets Manager.');
+                }
+            } catch (err) {
+                 logger.warn(`Failed to fetch secret '${SECRET_NAME}'. Ensure AWS_SECRET_NAME is set or DATABASE_URL is provided.`);
             }
-        }
-
-        if (process.env.USE_LOCAL_DB !== 'true' && !process.env.DATABASE_URL) {
-            // Already handled above
         }
         
         // Start Schedulers

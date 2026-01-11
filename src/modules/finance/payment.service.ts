@@ -175,6 +175,12 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             transactionId: realTransactionId,
             amount: payment.amount,
             description: payment.component === 'APPLICATION_FEE' ? 'Entrance Exam Application Fee' : 'Payment',
+            items: [
+                {
+                    description: payment.component === 'APPLICATION_FEE' ? 'Application Fee' : 'Payment',
+                    amount: payment.amount
+                }
+            ],
             address: {
                 line1: payment.student.address,
                 line2: payment.student.address2 || '',
