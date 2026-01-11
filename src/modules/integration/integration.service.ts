@@ -49,6 +49,9 @@ export const sendBsnlOtp = async (phone: string, otp: string, expiry: string = "
             }
           }
         });
+        
+        logger.info(`[SMS Config Debug] Found ${configs.length} configs for keys: ${configKeys.join(', ')}`);
+        configs.forEach(c => logger.info(`[SMS Config Debug] Key: ${c.key}, Value: ${c.value}`));
 
         const configMap = configs.reduce((acc: Record<string, string>, curr: { key: string; value: string }) => {
           acc[curr.key] = curr.value;
@@ -58,7 +61,7 @@ export const sendBsnlOtp = async (phone: string, otp: string, expiry: string = "
         // Validate required configurations
         const missingConfigs = configKeys.filter(key => !configMap[key]);
         if (missingConfigs.length > 0) {
-            logger.error(`Missing SMS configurations: ${missingConfigs.join(', ')}`);
+            logger.error(`Missing SMS configurations: ${missingConfigs.join(', ')}`); // Log matches exactly what user saw
             return false;
         }
 
