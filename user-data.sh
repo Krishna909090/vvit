@@ -81,6 +81,23 @@ aws ssm get-parameters-by-path \
 jq -r '.[] | "\(.Name | split("/") | last)=\"\(.Value)\""' secrets.json > .env.production
 rm secrets.json
 
+# 8b. Run Database Migrations & Seeding
+# Prisma needs .env to verify database connection
+cp .env.production .env
+
+echo "Running migrations..."
+npx prisma migrate deploy || echo "Migration failed"
+
+# Scripts load .env.production internally, so they are fine
+echo "Seeding SMS..."
+npx ts-node scripts/seed-sms-config.ts || true
+
+echo "Seeding Admins..."
+npx ts-node scripts/create-admin-user.ts || true
+
+# Cleanup .env (optional, but good practice if we want to rely only on .env.production)
+# rm .env  <-- Actually, start script might fallback to it, keeping it is harmless/safer.
+
 # Ensure permissions
 chown -R ubuntu:ubuntu /var/www/erp
 
