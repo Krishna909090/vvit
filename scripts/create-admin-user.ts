@@ -9,8 +9,9 @@ dotenv.config({ path: path.resolve(__dirname, '../.env.production') });
 const prisma = new PrismaClient();
 
 async function main() {
-    const PHONE = '9493697463';
-    const NAME = 'krishna';
+    const PHONE = '8297592829';
+    const NAME = 'Madhu';
+    const EMAIL = 'madhubabujanjanam@vvitu.com';
 
     console.log(`Checking for user with phone: ${PHONE}...`);
 
@@ -19,11 +20,13 @@ async function main() {
         update: {
             role: Role.ADMIN,
             name: NAME,
+            email: EMAIL,
             isDeleted: false
         },
         create: {
             phone: PHONE,
             name: NAME,
+            email: EMAIL,
             role: Role.ADMIN,
             isDeleted: false
         }
