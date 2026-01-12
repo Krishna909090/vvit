@@ -17,7 +17,6 @@ model User {
   updatedAt         DateTime           @updatedAt
   createdBy         String?
   updatedBy         String?
-  customRoleId      String?
   isDeleted         Boolean            @default(false)
   password          String?
   adminActivityLogs AdminActivityLog[]
@@ -26,8 +25,8 @@ model User {
   notifications     Notification[]
   agentStudents     Student[]          @relation("AgentStudents")
   studentProfile    Student?           @relation("StudentUser")
-  customRole        CustomRole?        @relation(fields: [customRoleId], references: [id])
   otps              UserOtp[]
+  
 
   @@index([role])
   @@index([createdAt])
@@ -45,6 +44,8 @@ model UserOtp {
   used        Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  createdBy   String?
+  updatedBy   String?
   user        User     @relation(fields: [userId], references: [id])
 
   @@index([userId, type, used, expiresAt])
@@ -723,49 +724,6 @@ model DiscountRequest {
   @@index([studentId, status])
 }
 
-model Permission {
-  id                    String                 @id @default(uuid())
-  code                  String                 @unique
-  description           String?
-  module                String
-  createdAt             DateTime               @default(now())
-  updatedAt             DateTime               @updatedAt
-  customRolePermissions CustomRolePermission[]
-  rolePermissions       RolePermission[]
-}
-
-model RolePermission {
-  id           String     @id @default(uuid())
-  role         Role
-  permissionId String
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  permission   Permission @relation(fields: [permissionId], references: [id])
-
-  @@unique([role, permissionId])
-}
-
-model CustomRole {
-  id          String                 @id @default(uuid())
-  name        String                 @unique
-  description String?
-  createdAt   DateTime               @default(now())
-  updatedAt   DateTime               @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  permissions CustomRolePermission[]
-  users       User[]
-}
-
-model CustomRolePermission {
-  id           String     @id @default(uuid())
-  roleId       String
-  permissionId String
-  permission   Permission @relation(fields: [permissionId], references: [id])
-  role         CustomRole @relation(fields: [roleId], references: [id])
-
-  @@unique([roleId, permissionId])
-}
 
 model StudentLedger {
   id             String                @id @default(uuid())
@@ -798,10 +756,10 @@ model AuditLog {
   action    String
   entity    String
   entityId  String?
+  timestamp DateTime @default(now())
   details   Json?
   ipAddress String?
   userAgent String?
-  createdAt DateTime @default(now())
   user      User?    @relation(fields: [userId], references: [id])
 }
 
@@ -1341,3 +1299,4 @@ enum EmailStatus {
   SENT
   FAILED
 }
+

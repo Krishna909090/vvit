@@ -46,7 +46,7 @@ app.use(hpp()); // Prevent HTTP Parameter Pollution
 // app.use(sanitizeInput); // Input sanitization (XSS, NoSQL injection prevention) - TEMPORARILY DISABLED FOR DEMO
 
 app.use(morgan('combined', {
-    stream: { write: (message) => logger.info(message.trim()) }
+    stream: { write: (message: string) => logger.info(message.trim()) }
 }));
 
 // Swagger Setup
@@ -100,7 +100,6 @@ app.use('/document-requirements', documentRequirementRoutes);
 app.use('/finance', paymentRoutes);
 app.use('/api/admission', dataImportRoutes);
 app.use('/verification', verificationRoutes);
-app.use('/admin/academic', academicRoutes);
 app.use('/qualification-requirements', qualificationRequirementRoutes);
 app.use('/admin/email-logs', emailLogRoutes);
 

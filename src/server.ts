@@ -3,6 +3,7 @@ import { validateEnvironment } from './config/envValidator'; // Validate environ
 import app from './app';
 import logger from './utils/logger';
 import { getDatabaseSecret } from './config/awsConfig';
+import { version } from '../package.json';
 
 const PORT = process.env.PORT || 3000;
 const SECRET_NAME = process.env.AWS_SECRET_NAME || "rds-secretname";
@@ -50,7 +51,7 @@ const startServer = async () => {
         // Start Web Server: Only if NOT disabled (enabled by default)
         if (process.env.DISABLE_WEB_SERVER !== 'true') {
             app.listen(PORT, () => {
-                logger.info(`🚀 Server is running on port ${PORT}`);
+                logger.info(`🚀 Server (v${version}) is running on port ${PORT}`);
                 logger.info(`📚 Swagger docs available at http://localhost:${PORT}/api-docs`);
                 logger.info(`🔒 Security: Environment validation passed`);
             });

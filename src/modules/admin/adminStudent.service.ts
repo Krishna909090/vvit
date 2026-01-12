@@ -624,7 +624,7 @@ export const AdminStudentService = {
                 resolve(zipFilePath);
             });
     
-            archive.on('error', (err) => {
+            archive.on('error', (err: any) => {
                 reject(err);
             });
     
@@ -637,7 +637,7 @@ export const AdminStudentService = {
                             const response = await axios.get(doc.url, { responseType: 'stream' });
                             const ext = path.extname(doc.url) || '.pdf'; 
                             archive.append(response.data, { name: `${doc.name}${ext}` });
-                        } catch (err) {
+                        } catch (err: any) {
                             logger.error(`Failed to download ${doc.name} from ${doc.url}`);
                         }
                     }

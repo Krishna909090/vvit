@@ -114,48 +114,47 @@ export const verifyAadhar = async (aadharNumber: string) => {
     return true;
 };
 
-// Netcore Email API
-export const sendNetcoreEmail = async (email: string, subject: string, content: string) => {
-    logger.info(`[Netcore Email] Sending email to ${email}`);
+// ZeptoMail (Zoho) Email API
+export const sendZeptoEmail = async (email: string, subject: string, content: string) => {
+    logger.info(`[ZeptoMail] Sending email to ${email}`);
     try {
+        const apiKey = process.env.ZEPTO_API_KEY;
+        if (!apiKey) {
+            logger.error('[ZeptoMail] Missing ZEPTO_API_KEY environment variable');
+            return false;
+        }
+
         const response = await axios.post(
-            'https://emailapi.netcorecloud.net/v5/mail/send',
+            'https://api.zeptomail.in/v1.1/email',
             {
                 from: {
-                    email: 'info@mail.demo-thefreela.com',
-                    name: 'VVITU Admissions'
+                    address: process.env.ZEPTO_FROM_EMAIL || 'noreply@mail.vvitu.com',
+                    name: process.env.ZEPTO_FROM_NAME || 'VVITU Admissions'
                 },
-                subject: subject,
-                content: [
+                to: [
                     {
-                        type: 'html',
-                        value: content
+                        email_address: {
+                            address: email,
+                            name: 'User'
+                        }
                     }
                 ],
-                personalizations: [
-                    {
-                        to: [
-                            {
-                                email: email,
-                                name: 'User'
-                            }
-                        ]
-                    }
-                ]
+                subject: subject,
+                htmlbody: content
             },
             {
                 headers: {
-                    'api_key': process.env.NETCORE_API_KEY,
+                    'Authorization': apiKey,
                     'Content-Type': 'application/json'
                 }
             }
         );
-        logger.info(`[Netcore Email] Response: ${JSON.stringify(response.data)}`);
+        logger.info(`[ZeptoMail] Response: ${JSON.stringify(response.data)}`);
         return true;
     } catch (error: any) {
-        logger.error(`[Netcore Email] Error: ${error.message}`);
+        logger.error(`[ZeptoMail] Error: ${error.message}`);
         if (error.response) {
-            logger.error(`[Netcore Email] Response Data: ${JSON.stringify(error.response.data)}`);
+            logger.error(`[ZeptoMail] Response Data: ${JSON.stringify(error.response.data)}`);
         }
         return false;
     }
