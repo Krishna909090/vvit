@@ -273,7 +273,7 @@ export const createStudentDocumentZip = async (studentId: string) => {
             resolve({ filePath: zipFilePath, fileName: zipFileName });
         });
 
-        archive.on('error', (err) => {
+        archive.on('error', (err: any) => {
             reject(err);
         });
 
@@ -286,7 +286,7 @@ export const createStudentDocumentZip = async (studentId: string) => {
                         const response = await axios.get(doc.url, { responseType: 'stream' });
                         const ext = path.extname(doc.url) || '.pdf';
                         archive.append(response.data, { name: `${doc.name}${ext}` });
-                    } catch (err) {
+                    } catch (err: any) {
                         logger.error(`Failed to download ${doc.name} from ${doc.url}`);
                     }
                 }
