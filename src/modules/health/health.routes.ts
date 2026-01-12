@@ -11,6 +11,7 @@ const router = Router();
 router.get('/health', (req: Request, res: Response) => {
     res.status(200).json({
         status: 'ok',
+        version: version || '1.0.1',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
     });
