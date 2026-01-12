@@ -6,7 +6,7 @@ import prisma from '../../config/prisma';
 import { Role } from "@prisma/client";
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
-import { sendBsnlOtp, sendNetcoreEmail } from '../integration/integration.service';
+import { sendBsnlOtp, sendZeptoEmail } from '../integration/integration.service';
 import { MESSAGES } from '../../constants/messages';
 import { maskPhone, maskEmail } from '../../utils/mask';
 
@@ -105,7 +105,7 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
 
     if (user.email && user.role !== Role.STUDENT) {
       notifications.push(
-        sendNetcoreEmail(
+        sendZeptoEmail(
           user.email,
           "VVITU Login OTP",
           `Your OTP for login is <b>${otp}</b>. Valid for ${expiresInMinutes} minutes.`
