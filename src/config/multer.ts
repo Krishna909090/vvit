@@ -7,7 +7,7 @@ import { s3Client } from './awsConfig';
 // S3 Storage Configuration
 const storage = multerS3({
     s3: s3Client,
-    bucket: 'vvitu-uploads',
+    bucket: process.env.AWS_BUCKET_NAME || 'vvitu-prod-files',
     metadata: function (req: any, file: any, cb: any) {
         cb(null, { fieldName: file.fieldname });
     },
