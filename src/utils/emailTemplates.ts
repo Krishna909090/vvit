@@ -171,7 +171,7 @@ export const getEntranceExamReceiptTemplate = (data: {
       text-align: center;
       font-size: 96px;
       font-weight: 800;
-      color: rgba(19,16,16,0.05);
+      color: #FFCC99; /* Peach Orange */
       letter-spacing: 10px;
       margin: 8px 0 30px;
       line-height: 1;
