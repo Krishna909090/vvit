@@ -71,36 +71,40 @@ function drawHeader(doc: PDFKit.PDFDocument, photoBuffer: Buffer | null) {
     const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png');
     const fallbackLogo = path.join(process.cwd(), 'src/assets/logo.png');
 
-    // Logo Left
+    // University Header - Centered at top
+    doc
+        .font('Helvetica-Bold')
+        .fontSize(11) // Smaller font for long name
+        .fillColor('#C0392B')
+        .text('VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY', 0, 20, { align: 'center', width: doc.page.width });
+
+    // Logo Left - Shifted down to Y=50
     if (fs.existsSync(logoPath)) {
-        doc.image(logoPath, 40, 30, { width: 60 });
+        doc.image(logoPath, 40, 50, { width: 60 });
     } else if (fs.existsSync(fallbackLogo)) {
-        doc.image(fallbackLogo, 40, 30, { width: 60 });
+        doc.image(fallbackLogo, 40, 50, { width: 60 });
     }
 
-    // Photo Right
+    // Photo Right - Shifted down to Y=50
     if (photoBuffer) {
-        doc.image(photoBuffer, 480, 30, { width: 70, height: 80 }); 
-        doc.rect(480, 30, 70, 80).stroke(); 
+        doc.image(photoBuffer, 480, 50, { width: 70, height: 80 }); 
+        doc.rect(480, 50, 70, 80).stroke(); 
     } else {
-        doc.rect(480, 30, 70, 80).stroke();
-        doc.fontSize(8).text('PHOTO', 480, 65, { width: 70, align: 'center' });
+        doc.rect(480, 50, 70, 80).stroke();
+        doc.fontSize(8).text('PHOTO', 480, 85, { width: 70, align: 'center' });
     }
 
-    // Center Text
-    doc.font('Helvetica-Bold').fontSize(16).fillColor('#800000'); 
-    doc.text('VVIT UNIVERSITY', 110, 40, { align: 'center', width: 360 });
-    
+    // Center Text (Address) - Shifted down
     doc.font('Helvetica').fontSize(10).fillColor('#000');
     doc.text('(Established under Andhra Pradesh Private Universities Act 2016)', 110, 65, { align: 'center', width: 360 });
     doc.text('Nambur (V), Peda Kakani (Md), Guntur (Dt) - 522508', 110, 80, { align: 'center', width: 360 });
     doc.text('Guntur District, Andhra Pradesh, India.', 110, 95, { align: 'center', width: 360 });
 
-    doc.moveTo(40, 120).lineTo(555, 120).stroke();
+    doc.moveTo(40, 140).lineTo(555, 140).stroke();
 }
 
 function drawStudentTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    const startY = 140; 
+    const startY = 160; 
     const col1X = 40;
     const col2X = 140; 
     const col3X = 300; 
@@ -144,7 +148,7 @@ function drawCell(doc: PDFKit.PDFDocument, text: string, x: number, y: number) {
 }
 
 function drawAllotmentBody(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    let y = 230;
+    let y = 250;
     
     doc.font('Helvetica-Bold').fontSize(11).fillColor('#000080'); 
     doc.text(`PROVISIONAL ALLOTMENT ORDER`, 40, y, { align: 'center', width: 515 });
@@ -166,7 +170,7 @@ function drawAllotmentBody(doc: PDFKit.PDFDocument, data: AllotmentData) {
 }
 
 function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    let y = 330;
+    let y = 350;
     
     doc.font('Helvetica-Bold').fontSize(10).fillColor('#000');
     doc.text('Fee Details:', 40, y);

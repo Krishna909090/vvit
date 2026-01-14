@@ -283,10 +283,10 @@ export const getEntranceExamReceiptTemplate = (data: {
         <div class="welcome-text">
           <h3>Welcome to VVITU</h3>
           <p>
-            Lorem ipsum is a dummy or placeholder text commonly used in graphic design, publishing,
-            and web development to demonstrate the visual form of a document or a typeface.
+           VVITU continues to grow as a beacon of innovation and excellence, striving to empower the next generation of engineers, technologists, and leaders who are capable of making meaningful contributions to society, both nationally and globally.
+
           </p>
-          <a href="https://vvit.edu.in" class="cta">Check out About VVITU</a>
+          <a href="https://vvit.ac.in" class="cta">Check out About VVITU</a>
         </div>
         <img src="cid:students" class="welcome-img" alt="Students" />
       </div>

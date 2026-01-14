@@ -174,7 +174,7 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             paymentMethod: payment.method || 'ONLINE',
             transactionId: realTransactionId,
             amount: payment.amount,
-            description: payment.component === 'APPLICATION_FEE' ? 'Entrance Exam Application Fee' : 'Payment',
+            description: payment.component === 'APPLICATION_FEE' ? 'Application Fee' : 'Payment',
             items: [
                 {
                     description: payment.component === 'APPLICATION_FEE' ? 'Application Fee' : 'Payment',
