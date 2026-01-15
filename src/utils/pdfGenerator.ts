@@ -47,27 +47,31 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
             // --- 2. Header ---
             // Logo
             // --- 2. Header ---
+            
+            // University Header - Centered at top
+            doc
+                .font('Helvetica-Bold')
+                .fontSize(11) // Smaller font for long name
+                .fillColor('#C0392B')
+                .text('VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY', 0, currentY, { align: 'center', width: pageWidth });
+
             // Logo
             const logoPath = path.join(process.cwd(), 'src/assets/logo.png');
             const logoWidth = 80;
             const logoHeight = 80; // Assuming ~square aspect ratio for layout reservation
+            const logoY = currentY + 30;
 
             try {
                 // Logo top-left
-                doc.image(logoPath, startX + 10, currentY + 10, { width: logoWidth }); 
+                doc.image(logoPath, startX + 10, logoY, { width: logoWidth }); 
             } catch (logoErr) {
                 logger.warn('Logo file not found, skipping logo render.');
-                doc.fontSize(10).text('VVITU', startX + 10, currentY + 10);
+                doc.fontSize(10).text('VVITU', startX + 10, logoY);
             }
 
-            // College Name & Subtitle (Centered)
-            const headerTextY = currentY + 15;
-            doc.font('Helvetica-Bold').fontSize(18).text('VVIT University', 0, headerTextY, { align: 'center' });
-            
-
             // Adjust Y to clear the header area
-            // We want enough space for the logo (height 80) + padding
-            currentY += Math.max(logoHeight, 60) + 30; // 80 + 30 = 110 offset
+            // We need space for text (20) + padding (10) + Logo (80) + padding (20)
+            currentY += 130;  
 
             // Hall Ticket Title
             doc.font('Helvetica-Bold').fontSize(14).text('Hall Ticket – Entrance Examination', 0, currentY, { align: 'center' });

@@ -73,35 +73,42 @@ export const generateInvoicePDF = async (data: InvoiceData): Promise<Buffer> => 
 function drawHeader(doc: PDFKit.PDFDocument) {
   const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
 
+  // University Header - Centered at top
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(12)
+    .fillColor('#C0392B') // VVIT Red
+    .text('VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY', 0, 20, { align: 'center', width: doc.page.width })
+
   // Logo (Left)
   if (fs.existsSync(logoPath)) {
-    doc.image(logoPath, 40, 30, { width: 80 })
+    doc.image(logoPath, 40, 50, { width: 80 })
   } else {
     // Fallback if logo missing
     doc
       .font('Helvetica-Bold')
       .fontSize(20)
       .fillColor('#C0392B') // Red color like VVIT
-      .text('VVIT', 40, 40)
+      .text('VVIT', 40, 60)
       .fontSize(10)
-      .text('UNIVERSITY', 40, 65)
+      .text('UNIVERSITY', 40, 85)
   }
 
   // Address (Right)
   const rightX = 350
-  const topY = 40
+  const topY = 60
 
   doc.font('Helvetica').fontSize(9).fillColor('#555555')
 
-  doc.text('Business address', rightX, topY, { align: 'right' })
-  doc.text('City, State, IN - 000 000', rightX, topY + 14, { align: 'right' })
-  doc.text('TAX ID 00XXXX1234X0XX', rightX, topY + 28, { align: 'right' })
+  doc.text('VVIT University, Uppalapadu Road', rightX, topY, { align: 'right' })
+  doc.text('Nambur, DT, Pedhakakani Mandal,', rightX, topY + 14, { align: 'right' })
+  doc.text('Guntur, Andhra Pradesh 522508', rightX, topY + 28, { align: 'right' })
 }
 
 /* ================= INFO GRID ================= */
 function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData) {
   // Container Box (Rounded) - Optional, mimicking the "card" look
-  const containerTop = 110
+  const containerTop = 130
   const containerHeight = 150
   const containerWidth = 515
   
@@ -178,7 +185,7 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData) {
 
 /* ================= SUBJECT & TOTAL BAR ================= */
 function drawSubjectAndTotalBar(doc: PDFKit.PDFDocument, data: InvoiceData) {
-  const y = 275 // Increased spacing below Info Grid
+  const y = 295 // Increased spacing below Info Grid
   const subjectX = 60
   const dateX = 320
 
@@ -201,7 +208,7 @@ function drawSubjectAndTotalBar(doc: PDFKit.PDFDocument, data: InvoiceData) {
 
 /* ================= TABLE ================= */
 function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData) {
-  const tableTop = 340
+  const tableTop = 360
   
   // Header Row Line (Top)
   drawLine(doc, tableTop)

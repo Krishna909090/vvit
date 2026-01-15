@@ -15,12 +15,15 @@ export const getEntranceExamReceiptTemplate = (data: {
     supportEmail = "admissions@vvit.edu.in"
   } = data;
 
-  const formattedDate = new Date(date).toLocaleString("en-IN", {
+  const dateObj = date ? new Date(date) : new Date();
+  const formattedDate = dateObj.toLocaleString("en-IN", {
     day: "2-digit",
     month: "short",
     year: "numeric",
     hour: "2-digit",
-    minute: "2-digit"
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Kolkata"
   });
 
   return `
@@ -171,7 +174,7 @@ export const getEntranceExamReceiptTemplate = (data: {
       text-align: center;
       font-size: 96px;
       font-weight: 800;
-      color: rgba(19,16,16,0.05);
+      color: #FFCC99; /* Peach Orange */
       letter-spacing: 10px;
       margin: 8px 0 30px;
       line-height: 1;
@@ -283,17 +286,17 @@ export const getEntranceExamReceiptTemplate = (data: {
         <div class="welcome-text">
           <h3>Welcome to VVITU</h3>
           <p>
-            Lorem ipsum is a dummy or placeholder text commonly used in graphic design, publishing,
-            and web development to demonstrate the visual form of a document or a typeface.
+           VVITU continues to grow as a beacon of innovation and excellence, striving to empower the next generation of engineers, technologists, and leaders who are capable of making meaningful contributions to society, both nationally and globally.
+
           </p>
-          <a href="https://vvit.edu.in" class="cta">Check out About VVITU</a>
+          <a href="https://vvitu.ac.in" class="cta">Check out About VVITU</a>
         </div>
         <img src="cid:students" class="welcome-img" alt="Students" />
       </div>
     </div>
 
     <!-- Watermark -->
-    <div class="watermark">VVIT</div>
+    <div class="watermark">VVITU</div>
 
   </div>
 
