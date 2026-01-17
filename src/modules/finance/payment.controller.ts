@@ -23,16 +23,18 @@ export const payTestFee = catchAsync(async (req: Request, res: Response, next: N
     logger.info(`[payTestFee] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[payTestFee] params=${JSON.stringify(req.params)}`);
 
-    let { studentId } = req.params;
-    if (!studentId && req.body.studentId) {
-        studentId = req.body.studentId;
-    }
-    
-    // Self-service fallback
-    if (!studentId && req.user?.role === 'STUDENT') {
+    const permissions = req.user?.permissions || [];
+    const hasAll = permissions.includes('finance.create.all');
+    const hasOwn = permissions.includes('finance.create.own');
+
+    let studentId = req.params.studentId || req.body.studentId;
+
+    if (!hasAll && hasOwn) {
+        // Enforce Own ID
         const { getStudentByUserId } = await import('../student/student.service');
-        const s = await getStudentByUserId(req.user.userId);
+        const s = await getStudentByUserId(req.user!.userId);
         if (s) studentId = s.id;
+        else throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
@@ -53,13 +55,17 @@ export const payTestFee = catchAsync(async (req: Request, res: Response, next: N
 export const payTokenFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[payTokenFee] by=${req.user?.userId || 'anonymous'}`);
 
-    let { studentId } = req.params;
-    if (!studentId && req.body.studentId) studentId = req.body.studentId;
+    const permissions = req.user?.permissions || [];
+    const hasAll = permissions.includes('finance.create.all');
+    const hasOwn = permissions.includes('finance.create.own');
 
-    if (!studentId && req.user?.role === 'STUDENT') {
-         const { getStudentByUserId } = await import('../student/student.service');
-         const s = await getStudentByUserId(req.user.userId);
-         if (s) studentId = s.id;
+    let studentId = req.params.studentId || req.body.studentId;
+
+    if (!hasAll && hasOwn) {
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user!.userId);
+        if (s) studentId = s.id;
+        else throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
@@ -80,16 +86,17 @@ export const payCollegeFee = catchAsync(async (req: Request, res: Response, next
     logger.info(`[payCollegeFee] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[payCollegeFee] params=${JSON.stringify(req.params)}`);
 
-    let { studentId } = req.params;
-    if (!studentId && req.body.studentId) {
-        studentId = req.body.studentId;
-    }
-    
-    // Self-service fallback
-    if (!studentId && req.user?.role === 'STUDENT') {
+    const permissions = req.user?.permissions || [];
+    const hasAll = permissions.includes('finance.create.all');
+    const hasOwn = permissions.includes('finance.create.own');
+
+    let studentId = req.params.studentId || req.body.studentId;
+
+    if (!hasAll && hasOwn) {
         const { getStudentByUserId } = await import('../student/student.service');
-        const s = await getStudentByUserId(req.user.userId);
+        const s = await getStudentByUserId(req.user!.userId);
         if (s) studentId = s.id;
+        else throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
@@ -196,11 +203,15 @@ export const checkPaymentStatus = catchAsync(async (req: Request, res: Response,
 export const getPaymentHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     let { studentId } = req.params;
     
-    // Self-service fallback
-    if (!studentId && req.user?.role === 'STUDENT') {
+    const permissions = req.user?.permissions || [];
+    const hasAll = permissions.includes('finance.read.all');
+    const hasOwn = permissions.includes('finance.read.own');
+
+    if (!hasAll && hasOwn) {
          const { getStudentByUserId } = await import('../student/student.service');
-         const s = await getStudentByUserId(req.user.userId);
+         const s = await getStudentByUserId(req.user!.userId);
          if (s) studentId = s.id;
+         else throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
@@ -219,10 +230,15 @@ export const getPaymentHistory = catchAsync(async (req: Request, res: Response, 
 export const getFinancialSummary = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     let { studentId } = req.params;
     
-    if (!studentId && req.user?.role === 'STUDENT') {
+    const permissions = req.user?.permissions || [];
+    const hasAll = permissions.includes('finance.read.all');
+    const hasOwn = permissions.includes('finance.read.own');
+    
+    if (!hasAll && hasOwn) {
          const { getStudentByUserId } = await import('../student/student.service');
-         const s = await getStudentByUserId(req.user.userId);
+         const s = await getStudentByUserId(req.user!.userId);
          if (s) studentId = s.id;
+         else throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);

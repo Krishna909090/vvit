@@ -12,7 +12,8 @@ model User {
   name              String?
   email             String?            @unique
   phone             String             @unique
-  role              Role               @default(STUDENT)
+  // ⚠️ LEGACY FIELD – DO NOT USE FOR AUTHORIZATION
+  role              UserRole           @default(STUDENT)
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   createdBy         String?
@@ -26,9 +27,10 @@ model User {
   agentStudents     Student[]          @relation("AgentStudents")
   studentProfile    Student?           @relation("StudentUser")
   otps              UserOtp[]
-  
 
-  @@index([role])
+  userGroups          UserGroup[]
+  permissionOverrides UserPermissionOverride[]
+
   @@index([createdAt])
   @@index([isDeleted])
 }
@@ -117,10 +119,12 @@ model Batch {
   createdBy        String?
   updatedBy        String?
   isDeleted        Boolean        @default(false)
+  courseId         String
   specializationId String
   specialization   Specialization @relation(fields: [specializationId], references: [id])
   sections         Section[]
 
+  @@index([courseId])
   @@index([specializationId])
   @@index([isDeleted])
   @@index([startDate, endDate])
@@ -404,6 +408,7 @@ model Hostel {
   createdBy         String?
   updatedBy         String?
   isDeleted         Boolean            @default(false)
+  cost              Float              @default(0)
   blocks            HostelBlock[]
   studentAdmissions StudentAdmission[]
 
@@ -723,7 +728,6 @@ model DiscountRequest {
 
   @@index([studentId, status])
 }
-
 
 model StudentLedger {
   id             String                @id @default(uuid())
@@ -1084,7 +1088,7 @@ model QualificationRequirement {
   @@index([isDeleted])
 }
 
-enum Role {
+enum UserRole {
   SUPER_ADMIN
   ADMIN
   AGENT
@@ -1092,6 +1096,109 @@ enum Role {
   INVIGILATOR
   STAFF
   VERIFICATION_OFFICER
+}
+
+model Group {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  type      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users UserGroup[]
+  roles GroupRole[]
+
+  @@index([type])
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  groups      GroupRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  description String?
+  moduleId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles     RolePermission[]
+  overrides UserPermissionOverride[]
+  module    Module                   @relation(fields: [moduleId], references: [id])
+
+  @@index([moduleId])
+}
+
+model Module {
+  id        String   @id @default(uuid())
+  name      String
+  code      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  permissions Permission[]
+}
+
+model UserGroup {
+  userId     String
+  groupId    String
+  assignedAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id])
+  group Group @relation(fields: [groupId], references: [id])
+
+  @@id([userId, groupId])
+  @@index([groupId])
+}
+
+model GroupRole {
+  groupId    String
+  roleId     String
+  assignedAt DateTime @default(now())
+
+  group Group @relation(fields: [groupId], references: [id])
+  role  Role  @relation(fields: [roleId], references: [id])
+
+  @@id([groupId, roleId])
+  @@index([roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  assignedAt   DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+model UserPermissionOverride {
+  userId       String
+  permissionId String
+  type         OverrideType
+  createdAt    DateTime     @default(now())
+
+  user       User       @relation(fields: [userId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([userId, permissionId])
+  @@index([permissionId])
+}
+
+enum OverrideType {
+  GRANT
+  REVOKE
 }
 
 enum AdmissionStatus {
@@ -1275,19 +1382,19 @@ enum LedgerTransactionType {
 }
 
 model EmailLog {
-  id              String      @id @default(uuid())
-  recipientEmail  String
-  subject         String
-  content         String      @db.Text // Store HTML content
-  status          EmailStatus @default(PENDING)
-  invoiceData     Json?       // Store the invoice data used for generation
-  templateType    String      // e.g., 'ENTRANCE_FEE_RECEIPT'
-  messageId       String?     // ZeptoMail message ID
-  errorResponse   Json?       // Store error details if any
-  metadata        Json?       // Any other relevant data like studentId, transactionId
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  retryCount      Int         @default(0)
+  id             String      @id @default(uuid())
+  recipientEmail String
+  subject        String
+  content        String      @db.Text // Store HTML content
+  status         EmailStatus @default(PENDING)
+  invoiceData    Json? // Store the invoice data used for generation
+  templateType   String // e.g., 'ENTRANCE_FEE_RECEIPT'
+  messageId      String? // ZeptoMail message ID
+  errorResponse  Json? // Store error details if any
+  metadata       Json? // Any other relevant data like studentId, transactionId
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  retryCount     Int         @default(0)
 
   @@index([status])
   @@index([recipientEmail])
@@ -1299,4 +1406,3 @@ enum EmailStatus {
   SENT
   FAILED
 }
-

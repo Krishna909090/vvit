@@ -68,10 +68,10 @@ CREATE TYPE "OfflineUploadBatchStatus" AS ENUM ('PENDING', 'PROCESSING', 'COMPLE
 BEGIN;
 CREATE TYPE "AdmissionStatus_new" AS ENUM ('REGISTERED', 'TEST_FEE_PAID', 'HALL_TICKET_GENERATED', 'EXAM_ATTENDED', 'DOCUMENTS_UPLOADED', 'SEAT_ALLOTTED', 'ADMISSION_CONFIRMED', 'CANCELLED');
 ALTER TABLE "Student" ALTER COLUMN "status" DROP DEFAULT;
-ALTER TABLE "StudentAdmission" ALTER COLUMN "status" TYPE "AdmissionStatus_new" USING ("status"::text::"AdmissionStatus_new");
+-- ALTER TABLE "StudentAdmission" ALTER COLUMN "status" TYPE "AdmissionStatus_new" USING ("status"::text::"AdmissionStatus_new");
 ALTER TYPE "AdmissionStatus" RENAME TO "AdmissionStatus_old";
 ALTER TYPE "AdmissionStatus_new" RENAME TO "AdmissionStatus";
-DROP TYPE "AdmissionStatus_old";
+-- DROP TYPE "AdmissionStatus_old";
 COMMIT;
 
 -- AlterEnum
@@ -825,3 +825,6 @@ ALTER TABLE "CourseChangeLog" ADD CONSTRAINT "CourseChangeLog_studentId_fkey" FO
 
 -- AddForeignKey
 ALTER TABLE "CourseChangeRequest" ADD CONSTRAINT "CourseChangeRequest_studentId_fkey" FOREIGN KEY ("studentId") REFERENCES "Student"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- Drop the old enum type after all dependencies are removed
+DROP TYPE "AdmissionStatus_old";

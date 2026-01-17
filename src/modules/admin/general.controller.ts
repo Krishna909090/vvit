@@ -4,8 +4,9 @@ import logger from '../../utils/logger';
 import { MESSAGES } from '../../constants/messages';
 import { sendResponse } from '../../utils/response';
 import { AdminService } from './admin.service';
-import { Role, AgentCommissionStatus } from '@prisma/client';
+import { AgentCommissionStatus } from '@prisma/client';
 import { AppError } from '../../utils/AppError';
+import prisma from '../../config/prisma';
 
 export const getDashboardStats = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getDashboardStats] by=${req.user?.userId || 'anonymous'}`);
@@ -28,7 +29,8 @@ export const addAdmin = catchAsync(async (req: Request, res: Response, next: Nex
         phone?: string;
         name?: string;
         email?: string;
-        role?: Role;
+        groupIds?: string[];
+        password?: string;
     }, req.user?.userId);
 
     sendResponse({
@@ -70,9 +72,12 @@ export const getUserDetails = catchAsync(async (req: Request, res: Response, nex
 });
 
 export const addInvigilator = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[addInvigilator] by=${req.user?.userId || "anonymous"}`);
+    const invigilatorGroup = await prisma.group.findUnique({ where: { name: 'Invigilators' } });
+    if (!invigilatorGroup) {
+        throw new AppError('Invigilator group not configured', 500);
+    }
 
-    const payload = { ...req.body, role: Role.INVIGILATOR };
+    const payload = { ...req.body, groupIds: [invigilatorGroup.id] };
 
     const user = await AdminService.addAdmin(payload, req.user?.userId);
 
@@ -95,7 +100,7 @@ export const getStaffUsers = catchAsync(async (req: Request, res: Response, next
     const { role, search } = req.query;
     
     const users = await AdminService.getStaffUsers({
-        role: role as Role | undefined,
+        role: role as any,
         search: search as string | undefined
     });
 
@@ -115,11 +120,11 @@ export const updateStaffUser = catchAsync(async (req: Request, res: Response, ne
     logger.info(`[updateStaffUser] by=${req.user?.userId || 'anonymous'}`);
     
     const { userId } = req.params;
-    const { name, email, role } = req.body;
+    const { name, email, groupIds } = req.body;
     
     const updatedUser = await AdminService.updateStaffUser(
         userId,
-        { name, email, role },
+        { name, email, groupIds },
         req.user?.userId
     );
 

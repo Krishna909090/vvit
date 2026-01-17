@@ -1,30 +1,31 @@
 import express from 'express';
 import multer from 'multer';
-import { authenticate, authorize } from '../../middlewares/authMiddleware';
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import * as bulkImportController from './bulkImport.controller';
-import { Role } from '@prisma/client';
 
 const router = express.Router();
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 router.use(authenticate);
-router.use(authorize([Role.ADMIN, Role.SUPER_ADMIN]));
 
 router.post(
     '/offline-students', 
+    authorizePermission('admin.create'),
     upload.single('file'), 
     bulkImportController.importOfflineStudents
 );
 
 router.post(
     '/seat-booking-students',
+    authorizePermission('admin.create'),
     upload.single('file'),
     bulkImportController.importSeatBookingStudents
 );
 
 router.post(
     '/verify-payment',
+    authorizePermission('admin.update'),
     bulkImportController.verifyPayment
 );
 

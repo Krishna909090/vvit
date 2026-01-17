@@ -1,6 +1,5 @@
 import { Router } from 'express';
-import { authenticate, authorize } from '../../middlewares/authMiddleware';
-import { Role } from '@prisma/client';
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import { submitVerificationSchema, setEligibleScholarshipSchema } from '../../validators/adminValidators';
 import { AdminStudentService } from './adminStudent.service';
@@ -14,10 +13,11 @@ const router = Router();
 // Submit Verification Scores
 router.post('/submit-scores', 
     authenticate, 
-    authorize([Role.VERIFICATION_OFFICER, Role.ADMIN, Role.SUPER_ADMIN]), 
+    authorizePermission('student.update'), 
     validateRequest(submitVerificationSchema),
     catchAsync(async (req, res) => {
         const { studentId, ...scores } = req.body;
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         const result = await AdminStudentService.updateStudentScores(studentId, scores, req.user!.userId);
         sendResponse({
             res,
@@ -32,7 +32,7 @@ router.post('/submit-scores',
 // Set Scholarship Eligibility (Reuse existing controller logic)
 router.post('/scholarship-eligibility', 
     authenticate, 
-    authorize([Role.VERIFICATION_OFFICER, Role.ADMIN, Role.SUPER_ADMIN]), 
+    authorizePermission('student.update'), 
     validateRequest(setEligibleScholarshipSchema),
     setScholarshipEligibility
 );

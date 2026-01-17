@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { authorize, authenticate } from '../../middlewares/authMiddleware';
-import { Role } from '@prisma/client';
+import { authorizePermission, authenticate } from '../../middleware/rbac.middleware';
+
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     getAllApplications, uploadBulkApplications, requestCancellation, approveCancellation,
@@ -34,56 +34,56 @@ const router = Router();
 
 // Applications
 // Applications
-router.get('/applications', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(getAllApplicationsSchema), getAllApplications);
+router.get('/applications', authenticate, authorizePermission('student.read'), validateRequest(getAllApplicationsSchema), getAllApplications);
 
-router.post('/upload-applications', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), upload.single('file'), uploadBulkApplications);
+router.post('/upload-applications', authenticate, authorizePermission('student.create'), upload.single('file'), uploadBulkApplications); // Import creates students
 
 // Cancellation
-router.post('/request-cancellation', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(requestCancellationSchema), requestCancellation);
+router.post('/request-cancellation', authenticate, authorizePermission('student.update'), validateRequest(requestCancellationSchema), requestCancellation); // Updates status
 
-router.post('/approve-cancellation', authenticate, authorize([Role.SUPER_ADMIN]), validateRequest(approveCancellationSchema), approveCancellation);
+router.post('/approve-cancellation', authenticate, authorizePermission('student.update'), validateRequest(approveCancellationSchema), approveCancellation);
 
 // Seat & Course Change
-router.post('/verify-allot', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(verifyAndAllotSeatSchema), verifyAndAllotSeat);
+router.post('/verify-allot', authenticate, authorizePermission('student.update'), validateRequest(verifyAndAllotSeatSchema), verifyAndAllotSeat); // Allotment updates student record
 
-router.post('/change-course', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(changeCourseSchema), requestCourseChange);
+router.post('/change-course', authenticate, authorizePermission('student.update'), validateRequest(changeCourseSchema), requestCourseChange);
 
-router.post('/approve-course-change', authenticate, authorize([Role.SUPER_ADMIN]), validateRequest(approveCourseChangeSchema), approveCourseChange);
+router.post('/approve-course-change', authenticate, authorizePermission('student.update'), validateRequest(approveCourseChangeSchema), approveCourseChange);
 
 // Admission Details
-router.post('/update-admission', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateAdmissionDetailsSchema), updateAdmissionDetails);
+router.post('/update-admission', authenticate, authorizePermission('student.update'), validateRequest(updateAdmissionDetailsSchema), updateAdmissionDetails);
 
 // Documents
-router.get('/certificates/:studentId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(studentIdParamSchema), getStudentCertificates);
+router.get('/certificates/:studentId', authenticate, authorizePermission('student.read'), validateRequest(studentIdParamSchema), getStudentCertificates);
 
-router.get('/download-documents/:studentId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(studentIdParamSchema), downloadStudentDocuments);
+router.get('/download-documents/:studentId', authenticate, authorizePermission('student.read'), validateRequest(studentIdParamSchema), downloadStudentDocuments);
 
-router.post('/verify-document/:studentId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), verifyStudentDocument);
+router.post('/verify-document/:studentId', authenticate, authorizePermission('student.update'), verifyStudentDocument);
 
 // Document Requirements Management (from documentController)
-router.post('/document-requirements', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), addRequirement);
-router.get('/document-requirements', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]), listRequirements);
+router.post('/document-requirements', authenticate, authorizePermission('document.create'), addRequirement);
+router.get('/document-requirements', authenticate, authorizePermission('document.read'), listRequirements);
 
-router.put('/document-requirements/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateRequirement);
-router.delete('/document-requirements/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), removeRequirement);
+router.put('/document-requirements/:id', authenticate, authorizePermission('document.update'), updateRequirement);
+router.delete('/document-requirements/:id', authenticate, authorizePermission('document.delete'), removeRequirement);
 
 // Enrollment
-router.post('/update-roll-number', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateRollNumber);
+router.post('/update-roll-number', authenticate, authorizePermission('student.update'), updateRollNumber);
 
 // Manual Status Update
-router.post('/update-status', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateStudentStatus);
+router.post('/update-status', authenticate, authorizePermission('student.update'), updateStudentStatus);
 
 // Scholarship Eligibility
-router.post('/scholarship-eligibility', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(setEligibleScholarshipSchema), setScholarshipEligibility);
+router.post('/scholarship-eligibility', authenticate, authorizePermission('student.update'), validateRequest(setEligibleScholarshipSchema), setScholarshipEligibility);
 
 // Update Personal Details
-router.post('/update-personal-details', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateStudentPersonalDetailsSchema), updateStudentPersonalDetails);
+router.post('/update-personal-details', authenticate, authorizePermission('student.update'), validateRequest(updateStudentPersonalDetailsSchema), updateStudentPersonalDetails);
 
 // Get Complete Student Details
-router.get('/details/:studentId', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(studentIdParamSchema), getStudentDetails);
+router.get('/details/:studentId', authenticate, authorizePermission('student.read'), validateRequest(studentIdParamSchema), getStudentDetails);
 
 // Academic Qualifications Management
-router.put('/academic-qualifications/:id', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(updateAcademicQualificationSchema), updateAcademicQualification);
-router.delete('/academic-qualifications/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(deleteAcademicQualificationSchema), deleteAcademicQualification);
+router.put('/academic-qualifications/:id', authenticate, authorizePermission('student.update'), validateRequest(updateAcademicQualificationSchema), updateAcademicQualification);
+router.delete('/academic-qualifications/:id', authenticate, authorizePermission('student.delete'), validateRequest(deleteAcademicQualificationSchema), deleteAcademicQualification);
 
 export default router;

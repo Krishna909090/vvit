@@ -1,38 +1,16 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { Role } from '@prisma/client';
-import logger from '../utils/logger';
 import { AppError } from '../utils/AppError';
+import { authenticate as rbacAuthenticate } from '../middleware/rbac.middleware';
 
-// JWT_SECRET is validated on startup by envValidator - no fallback needed
-const JWT_SECRET = process.env.JWT_SECRET!;
+export const authenticate = rbacAuthenticate;
 
-
-export const authenticate = (req: Request, res: Response, next: NextFunction) => {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader) {
-        return next(new AppError('No token provided', 401));
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    try {
-        const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; role: Role };
-        req.user = decoded;
-        next();
-    } catch (error) {
-        logger.error(`Authentication failed: ${error}`);
-        return next(new AppError('Invalid token', 401));
-    }
-};
-
-export const authorize = (roles: (Role | string)[]) => {
+/**
+ * @deprecated Legacy Role-Based Authorization. Use `authorizePermission` from `rbac.middleware.ts`.
+ */
+export const authorize = (roles: any[]) => {
     return (req: Request, res: Response, next: NextFunction) => {
-        logger.info(req.user)
-        if (!req.user || !roles.includes(req.user.role)) {
-            return next(new AppError('Forbidden: Insufficient permissions', 403));
-        }
-        next();
+        // Enforce migration to Permission-Based Access Control
+        // Since we removed 'role' from req.user, this function cannot work as intended anyway.
+        next(new AppError('Legacy Role-Based Authorization is deprecated and disabled. Please use "authorizePermission" with specific permission keys.', 500));
     };
 };

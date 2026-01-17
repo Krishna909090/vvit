@@ -7,7 +7,7 @@ import {
     PaymentStatus, 
     PaymentComponent, 
     PaymentMethod, 
-    Role, 
+    UserRole, 
     FeeStatus, 
     Prisma
 } from '@prisma/client';
@@ -197,7 +197,7 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
                 email: data.email,
                 phone: data.phone,
                 password: hashedPassword,
-                role: Role.STUDENT,
+                role: UserRole.STUDENT,
                 isDeleted: false
             }
         });
@@ -271,7 +271,7 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 email: data.email,
                 phone: data.phone,
                 password: hashedPassword,
-                role: Role.STUDENT
+                role: UserRole.STUDENT
             }
         });
 

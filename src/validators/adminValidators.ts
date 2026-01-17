@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AccommodationType, HostelType } from '@prisma/client';
-import { Role } from "@prisma/client";
+import { UserRole } from "@prisma/client";
 
 export const enableExamSchema = z.object({
     body: z.object({
@@ -325,7 +325,7 @@ export const updateStaffUserSchema = z.object({
     body: z.object({
         name: z.string().trim().min(1, 'Name cannot be empty').optional(),
         email: z.string().email('Invalid email address').optional(),
-        role: z.nativeEnum(Role).optional(),
+        role: z.nativeEnum(UserRole).optional(),
     }).refine(
         (data) => data.name !== undefined || data.email !== undefined || data.role !== undefined,
         {

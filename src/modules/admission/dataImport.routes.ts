@@ -1,8 +1,7 @@
 import express from "express";
 import multer from "multer";
 import { importAdmissionData, createImportMapping } from './dataImport.controller';
-import { authenticate, authorize } from '../../middlewares/authMiddleware';
-import { Role } from "@prisma/client";
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 
 const router = express.Router();
 
@@ -15,7 +14,7 @@ const upload = multer({
 router.post(
   "/import",
   authenticate,
-  authorize([Role.SUPER_ADMIN, Role.ADMIN]),
+  authorizePermission('admission.create'),
   upload.single("file"),
   importAdmissionData
 );
@@ -23,7 +22,7 @@ router.post(
 router.post(
   "/mapping",
   authenticate,
-  authorize([Role.SUPER_ADMIN, Role.ADMIN]),
+  authorizePermission('admission.create'),
   createImportMapping
 );
 

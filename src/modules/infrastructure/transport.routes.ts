@@ -1,6 +1,5 @@
 import { Router } from 'express';
-import { authorize, authenticate } from '../../middlewares/authMiddleware';
-import { Role } from '@prisma/client';
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     createTransportRoute, getTransportRoutes, getTransportRouteById, updateTransportRoute, deleteTransportRoute,
@@ -15,24 +14,24 @@ const router = Router();
 
 
 // Transport Route
-router.post('/transport-route', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createTransportRouteSchema), createTransportRoute);
-router.get('/transport-route', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getTransportRoutes);
-router.get('/transport-route/:id', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getTransportRouteById);
-router.put('/transport-route/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateTransportRoute);
-router.delete('/transport-route/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteTransportRoute);
+router.post('/transport-route', authenticate, authorizePermission('transport.create'), validateRequest(createTransportRouteSchema), createTransportRoute);
+router.get('/transport-route', authenticate, authorizePermission('transport.read'), getTransportRoutes);
+router.get('/transport-route/:id', authenticate, authorizePermission('transport.read'), getTransportRouteById);
+router.put('/transport-route/:id', authenticate, authorizePermission('transport.update'), updateTransportRoute);
+router.delete('/transport-route/:id', authenticate, authorizePermission('transport.delete'), deleteTransportRoute);
 
 // Vehicle
-router.post('/vehicle', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createVehicleSchema), createVehicle);
-router.get('/vehicle', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getVehicles);
-router.get('/vehicle/:id', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getVehicleById);
-router.put('/vehicle/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateVehicle);
-router.delete('/vehicle/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteVehicle);
+router.post('/vehicle', authenticate, authorizePermission('transport.create'), validateRequest(createVehicleSchema), createVehicle);
+router.get('/vehicle', authenticate, authorizePermission('transport.read'), getVehicles);
+router.get('/vehicle/:id', authenticate, authorizePermission('transport.read'), getVehicleById);
+router.put('/vehicle/:id', authenticate, authorizePermission('transport.update'), updateVehicle);
+router.delete('/vehicle/:id', authenticate, authorizePermission('transport.delete'), deleteVehicle);
 
 // Transport Stop
-router.post('/transport-stop', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createTransportStopSchema), createTransportStop);
-router.get('/transport-stop', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getTransportStops);
-router.get('/transport-stop/:id', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getTransportStopById);
-router.put('/transport-stop/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateTransportStop);
-router.delete('/transport-stop/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteTransportStop);
+router.post('/transport-stop', authenticate, authorizePermission('transport.create'), validateRequest(createTransportStopSchema), createTransportStop);
+router.get('/transport-stop', authenticate, authorizePermission('transport.read'), getTransportStops);
+router.get('/transport-stop/:id', authenticate, authorizePermission('transport.read'), getTransportStopById);
+router.put('/transport-stop/:id', authenticate, authorizePermission('transport.update'), updateTransportStop);
+router.delete('/transport-stop/:id', authenticate, authorizePermission('transport.delete'), deleteTransportStop);
 
 export default router;

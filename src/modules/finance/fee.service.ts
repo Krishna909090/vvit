@@ -1,6 +1,6 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
-import { FeeStructure, SystemSetting, FeeHead, Role, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType, FeeStatus } from '@prisma/client';
+import { FeeStructure, SystemSetting, FeeHead, UserRole, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType, FeeStatus } from '@prisma/client';
 import { MESSAGES } from '../../constants/messages';
 import logger from '../../utils/logger';
 
@@ -207,16 +207,18 @@ export const FeeService = {
         });
     },
 
-    approveDiscount: async (requestId: string, approved: boolean, role: Role) => {
-         if (role !== Role.SUPER_ADMIN) {
-             throw new AppError("Only Super Admin can approve discounts", 403);
-         }
-         return prisma.discountRequest.update({
-            where: { id: requestId },
-            data: {
-                status: approved ? DiscountStatus.APPROVED : DiscountStatus.REJECTED
-            }
-         });
+    approveDiscount: async (requestId: string, approved: boolean, permissions: string[]) => {
+          // RBAC: Check for specific high-level permission instead of SUPER_ADMIN role
+          // Assuming 'finance.update.all' includes approval rights, or better 'finance.approve.discount'
+          if (!permissions.includes('finance.update.all')) { 
+              throw new AppError("Insufficient permissions to approve discounts", 403);
+          }
+          return prisma.discountRequest.update({
+             where: { id: requestId },
+             data: {
+                 status: approved ? DiscountStatus.APPROVED : DiscountStatus.REJECTED
+             }
+          });
     },
 
     // Manual Payment Collection

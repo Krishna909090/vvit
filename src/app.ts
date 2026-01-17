@@ -23,6 +23,7 @@ import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
 import { generalRateLimiter } from './middlewares/rateLimitMiddleware';
 import { enhancedSecurityHeaders, additionalSecurityHeaders } from './middlewares/securityHeaders';
+import rbacRoutes from './modules/rbac/routes/rbac.routes';
 
 const app = express();
 
@@ -102,12 +103,17 @@ app.use('/api/admission', dataImportRoutes);
 app.use('/verification', verificationRoutes);
 app.use('/qualification-requirements', qualificationRequirementRoutes);
 app.use('/admin/email-logs', emailLogRoutes);
+app.use('/rbac', rbacRoutes);
 
 
 
 
 // Global Error Handler
 app.use(globalErrorHandler);
+
+// RBAC Routes
+
+app.use('/', rbacRoutes);
 
 app.get('/', (req, res) => {
     res.send('College Admission API is running');

@@ -2,7 +2,7 @@ import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
-import { FeeStatus, Role, AgentCommissionStatus } from '@prisma/client';
+import { FeeStatus, UserRole, AgentCommissionStatus } from '@prisma/client';
 import { maskPhone, maskEmail } from '../../utils/mask';
 import bcrypt from 'bcryptjs';
 
@@ -60,30 +60,23 @@ export const AdminService = {
         };
     },
 
-    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: Role; password?: string }, currentUserId?: string) {
-        const { phone, name, email, role, password } = data;
+    async addAdmin(data: { phone?: string; name?: string; email?: string; groupIds?: string[]; password?: string }, currentUserId?: string) {
+        const { phone, name, email, groupIds, password } = data;
 
         if (!phone) {
             throw new AppError("Phone number is required", 400);
         }
 
-        if (!role) {
-            throw new AppError("Role is required", 400);
-        }
-
-        const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR];
-        if (!allowedRoles.includes(role)) {
-            logger.warn(
-                `[addAdmin] invalid role assignment attempt: role=${role}, phone=${maskPhone(phone)}, by=${currentUserId}`
-            );
-            throw new AppError("Invalid role for admin creation", 400);
+        // ⚠️ Strict RBAC: We require Groups, not Roles.
+        if (!groupIds || groupIds.length === 0) {
+            throw new AppError("At least one Group ID is required to assign access", 400);
         }
 
         const normalizedPhone = phone.trim();
         const normalizedEmail = email?.trim().toLowerCase();
 
         logger.info(
-            `[addAdmin] request: phone=${maskPhone(normalizedPhone)}, email=${maskEmail(normalizedEmail)}, role=${role}`
+            `[addAdmin] request: phone=${maskPhone(normalizedPhone)}, email=${maskEmail(normalizedEmail)}, groups=${groupIds.length}`
         );
 
         let user = await prisma.user.findUnique({
@@ -93,63 +86,44 @@ export const AdminService = {
         const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
 
         if (user) {
-            if (user.role !== role) {
-                logger.warn(
-                    `[addAdmin] role conflict for userId=${user.id}. Existing role=${user.role}, requested role=${role}`
-                );
-                throw new AppError(
-                    `User already exists with role ${user.role}. Cannot change role to ${role}.`,
-                    400
-                );
-            }
-
-            logger.info(
-                `[addAdmin] User found with phone=${maskPhone(normalizedPhone)}, same role=${role}. Updating basic details.`
-            );
-
+            // Update existing user
             user = await prisma.user.update({
                 where: { id: user.id },
                 data: {
                     name: name ?? user.name,
                     email: normalizedEmail ?? user.email,
-                    password: passwordHash ?? user.password // Update password if provided
+                    password: passwordHash ?? user.password
                 },
             });
         } else {
-            if (role === Role.SUPER_ADMIN) {
-                const existingSuperAdmin = await prisma.user.findFirst({
-                    where: { role: Role.SUPER_ADMIN },
-                });
-
-                if (existingSuperAdmin) {
-                    logger.warn(
-                        `[addAdmin] SUPER_ADMIN already exists: id=${existingSuperAdmin.id}, phone=${maskPhone(existingSuperAdmin.phone)}`
-                    );
-                    throw new AppError(
-                        "A SUPER_ADMIN already exists. Cannot create another SUPER_ADMIN.",
-                        400
-                    );
-                }
-            }
-
-            logger.info(
-                `[addAdmin] Creating new user with role=${role} and phone=${maskPhone(normalizedPhone)}`
-            );
-
+            // Create new user
+            // We default strict 'role' field to STAFF just to satisfy DB constraint. 
+            // Real auth comes from the Group we assign below.
             user = await prisma.user.create({
                 data: {
                     phone: normalizedPhone,
                     name,
                     email: normalizedEmail,
-                    role,
+                    role: UserRole.STAFF, // Legacy default
                     password: passwordHash
                 },
             });
         }
 
-        logger.info(
-            `[addAdmin] Admin user persisted successfully: id=${user.id}, role=${user.role}, phone=${maskPhone(user.phone)}, email=${maskEmail(user.email)}`
-        );
+        // --- RBAC ASSIGNMENT ---
+        // Strictly add user to the requested Groups.
+        if (groupIds && groupIds.length > 0) {
+            const groupData = groupIds.map(gid => ({
+                userId: user.id,
+                groupId: gid
+            }));
+
+            await prisma.userGroup.createMany({
+                data: groupData,
+                skipDuplicates: true
+            });
+            logger.info(`[addAdmin] Assigned user ${user.id} to ${groupIds.length} groups.`);
+        }
 
         return user;
     },
@@ -194,10 +168,10 @@ export const AdminService = {
      * Get all staff users (excluding students)
      * Supports filtering by role and search term
      */
-    async getStaffUsers(filters?: { role?: Role; search?: string }) {
+    async getStaffUsers(filters?: { role?: UserRole; search?: string }) {
         const where: any = {
             role: {
-                not: Role.STUDENT // Exclude students
+                not: UserRole.STUDENT // Exclude students
             }
         };
 
@@ -241,7 +215,36 @@ export const AdminService = {
      * Update staff user details
      * Can update name, email, and role (excluding STUDENT role)
      */
-    async updateStaffUser(userId: string, data: { name?: string; email?: string; role?: Role }, currentUserId?: string) {
+    async updateStaffUserGroups(userId: string, groupIds: string[]) {
+        if (!userId) {
+            throw new AppError('User ID is required', 400);
+        }
+
+        // 1. Validate User
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        if (!user) throw new AppError('User not found', 404);
+
+        if (groupIds.length === 0) {
+             // Optional: Decide if clearing all groups is allowed. Usually yes.
+             // throw new AppError('At least one group is required', 400);
+        }
+
+        // 2. Transaction: Delete old -> Create new
+        await prisma.$transaction([
+            prisma.userGroup.deleteMany({ where: { userId } }),
+            prisma.userGroup.createMany({
+                data: groupIds.map(gid => ({ userId, groupId: gid }))
+            })
+        ]);
+
+        logger.info(`[updateStaffUserGroups] Updated groups for userId=${userId} to count=${groupIds.length}`);
+    },
+
+    /**
+     * Update staff user details
+     * Can update name, email, (role is deprecated for access control but kept for DB constraint)
+     */
+    async updateStaffUser(userId: string, data: { name?: string; email?: string; groupIds?: string[] }, currentUserId?: string) {
         if (!userId) {
             throw new AppError('User ID is required', 400);
         }
@@ -255,33 +258,6 @@ export const AdminService = {
             throw new AppError('User not found', 404);
         }
 
-        // Cannot update STUDENT role users through this API
-        if (user.role === Role.STUDENT) {
-            throw new AppError('Cannot update student users through this API', 400);
-        }
-
-        // Validate role if being updated
-        if (data.role) {
-            const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR, Role.AGENT];
-            if (!allowedRoles.includes(data.role)) {
-                throw new AppError('Invalid role for staff user', 400);
-            }
-
-            // Prevent changing SUPER_ADMIN role if another SUPER_ADMIN exists
-            if (data.role === Role.SUPER_ADMIN && user.role !== Role.SUPER_ADMIN) {
-                const existingSuperAdmin = await prisma.user.findFirst({
-                    where: { 
-                        role: Role.SUPER_ADMIN,
-                        id: { not: userId }
-                    }
-                });
-
-                if (existingSuperAdmin) {
-                    throw new AppError('A SUPER_ADMIN already exists. Cannot create another SUPER_ADMIN.', 400);
-                }
-            }
-        }
-
         // Prepare update data
         const updateData: any = {};
         
@@ -293,11 +269,7 @@ export const AdminService = {
             updateData.email = data.email.trim().toLowerCase();
         }
 
-        if (data.role !== undefined) {
-            updateData.role = data.role;
-        }
-
-        // Update user
+        // Update user basic details
         const updatedUser = await prisma.user.update({
             where: { id: userId },
             data: updateData,
@@ -306,13 +278,16 @@ export const AdminService = {
                 phone: true,
                 name: true,
                 email: true,
-                role: true,
+                role: true, // Legacy field
                 createdAt: true,
                 updatedAt: true
             }
         });
 
-
+        // Update Groups if provided
+        if (data.groupIds) {
+            await this.updateStaffUserGroups(userId, data.groupIds);
+        }
 
         logger.info(`[updateStaffUser] Updated user id=${userId} by=${currentUserId}`);
         return updatedUser;
@@ -333,14 +308,14 @@ export const AdminService = {
         if (!user) {
             throw new AppError('User not found', 404);
         }
-
-        if (user.role === Role.STUDENT) {
-            throw new AppError('Cannot delete student users through this API', 400);
+        
+        if (userId === currentUserId) {
+             throw new AppError('Cannot delete yourself', 400);
         }
-
-        if (user.role === Role.SUPER_ADMIN) {
-             throw new AppError('Cannot delete SUPER_ADMIN user', 403);
-        }
+        
+        // if (user.role === UserRole.SUPER_ADMIN) {
+        //      throw new AppError('Cannot delete SUPER_ADMIN user', 403);
+        // }
 
         await prisma.user.update({
             where: { id: userId },

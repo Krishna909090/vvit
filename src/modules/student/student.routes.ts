@@ -15,8 +15,8 @@ import {
     requestDiscount
 } from '../finance/payment.controller';
 
-import { authenticate, authorize } from '../../middlewares/authMiddleware';
-import { Role } from '@prisma/client';
+import { authorizePermission, authenticate } from '../../middleware/rbac.middleware';
+
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     registerStudentSchema,
@@ -32,45 +32,46 @@ import { getMyRequirements, deleteStudentDocument } from '../document/document.c
 const router = Router();
 
 // Public or Agent/Student accessible
-router.post('/register', authenticate, authorize([Role.AGENT, Role.STUDENT]), validateRequest(registerStudentSchema), registerStudent);
+// Public or Agent/Student accessible
+router.post('/register', authenticate, authorizePermission('student.create.own'), validateRequest(registerStudentSchema), registerStudent);
 
 // Student specific
-router.post('/:studentId/pay-test-fee', authenticate, authorize([Role.STUDENT]), validateRequest(studentIdParamSchema), payTestFee);
+router.post('/:studentId/pay-test-fee', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), validateRequest(studentIdParamSchema), payTestFee); // Payment creates transaction
 
-router.get('/:studentId/hall-ticket', authenticate, authorize([Role.STUDENT]), validateRequest(studentIdParamSchema), getHallTicket);
+router.get('/:studentId/hall-ticket', authenticate, authorizePermission(['exam.read.own', 'exam.read.all']), validateRequest(studentIdParamSchema), getHallTicket); // Hall Ticket is Exam module
 
-router.post('/:studentId/upload-docs', authenticate, authorize([Role.STUDENT]), validateRequest(uploadDocumentsAndPreferencesSchema), uploadDocumentsAndPreferences);
+router.post('/:studentId/upload-docs', authenticate, authorizePermission(['document.create.own', 'document.create.all']), validateRequest(uploadDocumentsAndPreferencesSchema), uploadDocumentsAndPreferences); // Upload creates docs
 
-router.post('/:studentId/pay-token-fee', authenticate, authorize([Role.STUDENT]), validateRequest(studentIdParamSchema), payTokenFee);
+router.post('/:studentId/pay-token-fee', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), validateRequest(studentIdParamSchema), payTokenFee);
 
-router.post('/:studentId/pay-college-fee', authenticate, authorize([Role.STUDENT]), validateRequest(studentIdParamSchema), payCollegeFee);
-
-
+router.post('/:studentId/pay-college-fee', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), validateRequest(studentIdParamSchema), payCollegeFee);
 
 
 
-router.post('/:studentId/academic-details', authenticate, authorize([Role.STUDENT]), validateRequest(addAcademicDetailsSchema), addAcademicDetails);
+
+
+router.post('/:studentId/academic-details', authenticate, authorizePermission(['student.update.own', 'student.update.all']), validateRequest(addAcademicDetailsSchema), addAcademicDetails); // Adds details to existing student
 
 
 
 // ... existing routes ...
 
 // Select Exam
-router.post('/:studentId/select-exam', authenticate, authorize([Role.STUDENT]), validateRequest(selectExamSchema), selectExam);
-router.get('/exam-slots', authenticate, authorize([Role.STUDENT]), getAvailableSlots);
+router.post('/:studentId/select-exam', authenticate, authorizePermission(['exam.create.own', 'exam.create.all']), validateRequest(selectExamSchema), selectExam); // Creates exam selection
+router.get('/exam-slots', authenticate, authorizePermission(['exam.read.own', 'exam.read.all']), getAvailableSlots);
 
 
 
 // Get Document Requirements
-router.get('/document-requirements', authenticate, authorize([Role.STUDENT]), getMyRequirements);
+router.get('/document-requirements', authenticate, authorizePermission(['document.read.own', 'document.read.all']), getMyRequirements);
 
 
 
 // Delete Document
-router.delete('/:studentId/document', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), deleteStudentDocument);
+router.delete('/:studentId/document', authenticate, authorizePermission(['document.delete.own', 'document.delete.all']), deleteStudentDocument);
 
-router.get('/details', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN, Role.AGENT]), getStudentDetails);
+router.get('/details', authenticate, authorizePermission(['student.read.own', 'student.read.all']), getStudentDetails);
 
-router.post('/:studentId/personal-details', authenticate, authorize([Role.STUDENT]), validateRequest(updatePersonalDetailsSchema), updatePersonalDetails);
+router.post('/:studentId/personal-details', authenticate, authorizePermission(['student.update.own', 'student.update.all']), validateRequest(updatePersonalDetailsSchema), updatePersonalDetails); // Updates personal details
 
 export default router;

@@ -3,12 +3,13 @@ import jwt from "jsonwebtoken";
 import axios from "axios";
 import bcrypt from "bcryptjs";
 import prisma from '../../config/prisma';
-import { Role } from "@prisma/client";
+import { UserRole } from "@prisma/client";
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { sendBsnlOtp, sendZeptoEmail } from '../integration/integration.service';
 import { MESSAGES } from '../../constants/messages';
 import { maskPhone, maskEmail } from '../../utils/mask';
+import { getUserPermissions, getUserModules } from '../rbac/services/rbac.service';
 
 // JWT_SECRET is validated on startup by envValidator - no fallback needed
 const JWT_SECRET = process.env.JWT_SECRET!;
@@ -34,34 +35,48 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
   let user = null;
   let isNewUser = false;
 
+  // Query relations to determine "role" type logic
+  // include studentProfile to check if they are a student
   if (phone) {
-    user = await prisma.user.findUnique({ where: { phone } });
+    user = await prisma.user.findUnique({ where: { phone }, include: { studentProfile: true } });
   } else if (email) {
-    user = await prisma.user.findUnique({ where: { email } });
+    user = await prisma.user.findUnique({ where: { email }, include: { studentProfile: true } });
 
-    if (user && user.role === Role.STUDENT) {
+    // Students must login using Phone Number
+    if (user && user.role === UserRole.STUDENT) {
       throw new AppError("Students must login using Phone Number", 400);
     }
   }
 
   if (!user) {
     if (phone) {
+      // Find default Student Group
+      const studentGroup = await prisma.group.findUnique({ where: { name: 'Students' } });
+
       user = await prisma.user.create({
         data: {
           phone,
-          role: Role.STUDENT,
+          role: UserRole.STUDENT, // Legacy Role Field - Kept for data compatibility
+          userGroups: studentGroup ? {
+             create: {
+                 groupId: studentGroup.id
+             }
+          } : undefined
         },
+        include: { studentProfile: true } // Include for consistency, will be null but type-safe
+        // Actually newly created user doesn't have studentProfile yet until registration step 1.
+        // But for our logic, they are a "Student" candidate because they are using phone login and created on fly.
       });
       isNewUser = true;
       logger.info(
-        `[sendOtp] New STUDENT user created: id=${user.id}, phone=${maskPhone(phone)}`
+        `[sendOtp] New user created: id=${user.id}, phone=${maskPhone(phone)}`
       );
     } else {
       throw new AppError(MESSAGES.ERROR.USER_NOT_FOUND, 404);
     }
   } else {
     logger.info(
-      `[sendOtp] Existing user: id=${user.id}, role=${user.role}, phone=${maskPhone(
+      `[sendOtp] Existing user: id=${user.id}, phone=${maskPhone(
         user.phone
       )}, email=${maskEmail(user.email)}`
     );
@@ -70,8 +85,10 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
   const otp = generateOtp(); // e.g. 6-digit numeric
   const otpHash = await bcrypt.hash(otp, OTP_SALT_ROUNDS);
 
-  const expiresInMinutes =
-    user.role === Role.STUDENT ? STUDENT_OTP_EXPIRY_MIN : STAFF_OTP_EXPIRY_MIN;
+  // If user has studentProfile OR is a new user created via phone, default to Student expiry
+  // Otherwise default to Staff expiry
+  const isStudent = user.role === UserRole.STUDENT || isNewUser;
+  const expiresInMinutes = isStudent ? STUDENT_OTP_EXPIRY_MIN : STAFF_OTP_EXPIRY_MIN;
 
   const now = new Date();
   const expiresAt = new Date(now.getTime() + expiresInMinutes * 60 * 1000);
@@ -103,7 +120,7 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
       notifications.push(sendBsnlOtp(user.phone, otp, String(expiresInMinutes)));
     }
 
-    if (user.email && user.role !== Role.STUDENT) {
+    if (user.email && !isStudent) {
       notifications.push(
         sendZeptoEmail(
           user.email,
@@ -140,12 +157,13 @@ export const verifyOtp = async (
 ) => {
   let user = null;
 
+  // Include studentProfile to check role-like type
   if (identifier.phone) {
-    user = await prisma.user.findUnique({ where: { phone: identifier.phone } });
+    user = await prisma.user.findUnique({ where: { phone: identifier.phone }, include: { studentProfile: true } });
   } else if (identifier.email) {
-    user = await prisma.user.findUnique({ where: { email: identifier.email } });
+    user = await prisma.user.findUnique({ where: { email: identifier.email }, include: { studentProfile: true } });
 
-    if (user && user.role === Role.STUDENT) {
+    if (user && user.role === UserRole.STUDENT) {
       throw new AppError("Students must login using Phone Number", 400);
     }
   }
@@ -240,23 +258,32 @@ export const verifyOtp = async (
     },
   });
 
+  // No role in JWT
   const token = jwt.sign(
-    { userId: user.id, role: user.role },
+    { userId: user.id },
     JWT_SECRET,
     { expiresIn: "1d" }
   );
 
   logger.info(
-    `[verifyOtp] Login successful: userId=${user.id}, role=${user.role}, phone=${maskPhone(
+    `[verifyOtp] Login successful: userId=${user.id}, phone=${maskPhone(
       user.phone
     )}, email=${maskEmail(user.email)}`
   );
 
+  // RBAC Resolution
+  const { permissions } = await getUserPermissions(user.id);
+  const modules = await getUserModules(permissions);
+
+  // LOGIN RESPONSE FORMAT (MANDATORY)
   return {
     token,
-    role: user.role,
-    id: user.id,
-    phone:user.phone
+    user: {
+      id: user.id,
+      name: user.name,
+      modules,
+      permissions
+    }
   };
 };
 
@@ -264,30 +291,43 @@ export const verifyOtp = async (
 export const login = async (identifier: { phone?: string; email?: string }, password: string) => {
   let user = null;
   if (identifier.phone) {
-    user = await prisma.user.findUnique({ where: { phone: identifier.phone } });
+    user = await prisma.user.findUnique({ where: { phone: identifier.phone }, include: { studentProfile: true } });
   } else if (identifier.email) {
-    user = await prisma.user.findUnique({ where: { email: identifier.email } });
+    user = await prisma.user.findUnique({ where: { email: identifier.email }, include: { studentProfile: true } });
   }
 
   if (!user) throw new AppError("Invalid credentials", 400);
 
   // Students use OTP
-  if (user.role === Role.STUDENT) throw new AppError("Students must login via OTP", 400);
+  if (user.role === UserRole.STUDENT) throw new AppError("Students must login via OTP", 400);
 
   if (!user.password) throw new AppError("Password login not enabled for this user", 400);
 
   const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) throw new AppError("Invalid credentials", 400);
 
+  // No role in JWT
   const token = jwt.sign(
-    { userId: user.id, role: user.role },
+    { userId: user.id },
     JWT_SECRET,
     { expiresIn: "1d" }
   );
 
   logger.info(`[login] Password login success: userId=${user.id}`);
 
-  return { token, role: user.role, id: user.id };
+  // RBAC Resolution
+  const { permissions } = await getUserPermissions(user.id);
+  const modules = await getUserModules(permissions);
+
+  return {
+    token,
+    user: {
+      id: user.id,
+      name: user.name,
+      modules,
+      permissions
+    }
+  };
 };
 
 export const generateAadhaarOtp = async (idNumber: string) => {
@@ -360,6 +400,3 @@ export const submitAadhaarOtp = async (requestId: string | number, otp: string) 
     );
   }
 };
-
-
-

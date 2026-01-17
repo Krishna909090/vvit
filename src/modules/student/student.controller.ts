@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
-import { Role, AdmissionStatus, RequestStatus } from '@prisma/client';
+import { AdmissionStatus, RequestStatus } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService, updatePersonalDetails as updatePersonalDetailsService } from './student.service';
 import { bookExamSlot } from '../exam/exam.service';
@@ -16,9 +16,26 @@ export const registerStudent = catchAsync(async (req: Request, res: Response, ne
     logger.info(`[registerStudent] attempt by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[registerStudent] payload=${JSON.stringify(req.body)}`);
 
-    const agentId = req.user?.role === Role.AGENT ? (req.user?.userId || null) : null;
-    const userId = req.user?.role === Role.STUDENT ? (req.user?.userId || null) : null;
+    const permissions = req.user?.permissions || [];
+    const isOwnRegistration = permissions.includes('student.create.own');
+    const isAgentOrAdmin = permissions.includes('student.create.all');
+
+    let agentId = null;
+    let userId = null;
     const currentUserId = req.user?.userId || null;
+
+    if (isAgentOrAdmin) {
+        // If Agent/Admin, they are the "Agent" if they have commission permission, or just creator.
+        // For simplicity, if they have 'student.create.all' and NOT 'student.create.own', treat as Agent/Staff logic
+        // But strictly, agents earn commission.
+        if (permissions.includes('finance.commission.read') || permissions.includes('agent.read.own')) { 
+             agentId = currentUserId;
+        }
+        // userId remains null as they are registering a third party
+    } else if (isOwnRegistration) {
+        userId = currentUserId;
+    }
+
     const student = await registerStudentService(req.body, agentId, userId, currentUserId);
 
     logger.info(`[registerStudent] success applicationId=${student.applicationId}`);

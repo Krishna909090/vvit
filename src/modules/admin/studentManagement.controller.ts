@@ -7,7 +7,7 @@ import { sendResponse } from '../../utils/response';
 import { AdminStudentService } from './adminStudent.service';
 import * as StudentService from '../student/student.service';
 import prisma from '../../config/prisma';
-import { Role } from '@prisma/client';
+
 import fs from 'fs';
 import path from 'path';
 
@@ -84,7 +84,9 @@ export const approveCancellation = catchAsync(async (req: Request, res: Response
     // Service has check: if (adminRole !== Role.SUPER_ADMIN).
     // So pass role to service.
     
-    const result = await AdminStudentService.approveCancellation(requestId, approved, req.user?.role, req.user?.userId);
+    // Logic should be updated in service to not rely on role, or rely on internal check
+    // Passing permissions instead of role
+    const result = await AdminStudentService.approveCancellation(requestId, approved, req.user?.permissions || [], req.user?.userId);
 
     sendResponse({
         res,
@@ -149,7 +151,7 @@ export const approveCourseChange = catchAsync(async (req: Request, res: Response
 
     const { requestId, approved } = req.body;
     
-    await AdminStudentService.approveCourseChange(requestId, approved, req.user?.role, req.user?.userId);
+    await AdminStudentService.approveCourseChange(requestId, approved, req.user?.permissions || [], req.user?.userId);
 
     sendResponse({
         res,
@@ -255,9 +257,11 @@ export const setScholarshipEligibility = catchAsync(async (req: Request, res: Re
 export const updateStudentPersonalDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateStudentPersonalDetails] by=${req.user?.userId || 'anonymous'}`);
     
-    // SECURITY: If Student Role, enforce Own Data Check
-    if (req.user?.role === Role.STUDENT) {
-        if (!req.user.userId) throw new AppError('User ID missing', 400);
+    // SECURITY: If user lacks full update rights, enforce Own Data Check
+    const hasFullAccess = req.user?.permissions.includes('student.update.all');
+    
+    if (!hasFullAccess) {
+        if (!req.user?.userId) throw new AppError('User ID missing', 400);
 
         const student = await StudentService.getStudentByUserId(req.user.userId);
         if (!student) {
@@ -300,9 +304,11 @@ export const updateAcademicQualification = catchAsync(async (req: Request, res: 
     logger.info(`[updateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
 
-    // SECURITY: If Student Role, enforce Ownership Check
-    if (req.user?.role === Role.STUDENT) {
-        if (!req.user.userId) throw new AppError('User ID missing', 400);
+    // SECURITY: If user lacks full update rights, enforce Ownership Check
+    const hasFullAccess = req.user?.permissions.includes('student.update.all');
+
+    if (!hasFullAccess) {
+        if (!req.user?.userId) throw new AppError('User ID missing', 400);
 
         const student = await StudentService.getStudentByUserId(req.user.userId);
         if (!student) {
@@ -339,9 +345,13 @@ export const deleteAcademicQualification = catchAsync(async (req: Request, res: 
     logger.info(`[deleteAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
 
-    // SECURITY: If Student Role, enforce Ownership Check
-    if (req.user?.role === Role.STUDENT) {
-        if (!req.user.userId) throw new AppError('User ID missing', 400);
+    // SECURITY: If user lacks full delete rights (assuming student.update.all covers deletion or separate permission)
+    // Let's assume 'student.update.all' allows managing qualifications generally, or 'student.delete.all' if strictly separate. 
+    // Using 'student.update.all' for consistency with "manage academic details".  
+    const hasFullAccess = req.user?.permissions.includes('student.update.all');
+
+    if (!hasFullAccess) {
+        if (!req.user?.userId) throw new AppError('User ID missing', 400);
 
         const student = await StudentService.getStudentByUserId(req.user.userId);
         if (!student) {

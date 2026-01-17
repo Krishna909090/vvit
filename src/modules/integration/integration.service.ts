@@ -129,7 +129,7 @@ export const sendZeptoEmail = async (email: string, subject: string, content: st
             {
                 from: {
                     address: process.env.ZEPTO_FROM_EMAIL || 'noreply@mail.vvitu.com',
-                    name: process.env.ZEPTO_FROM_NAME || 'VVITU Admissions'
+                    name: process.env.ZEPTO_FROM_NAME || 'VVITU'
                 },
                 to: [
                     {

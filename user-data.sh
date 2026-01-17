@@ -1,73 +1,74 @@
 #!/bin/bash
-set -x
-exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+set -euxo pipefail
 
-# ==========================================
-# VVIT ERP - Production Launch Script
-# ==========================================
+exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
-echo "Starting user-data script..."
+echo "===== VVIT ERP - PRODUCTION DEPLOY START (SSM) ====="
 
-# 1. Install System Dependencies
-echo "Installing dependencies..."
+# -----------------------------
+# 1. System Dependencies
+# -----------------------------
 apt-get update -y
-apt-get install -y unzip jq git
+apt-get install -y unzip jq git build-essential curl
 
+# -----------------------------
 # 2. Install Node.js 20.x
+# -----------------------------
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 apt-get install -y nodejs
 
+# -----------------------------
 # 3. Install AWS CLI v2
-echo "Installing AWS CLI..."
+# -----------------------------
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
 unzip -q awscliv2.zip
 ./aws/install
-rm awscliv2.zip
+rm -rf aws awscliv2.zip
 
-# 4. Install Global Node Packages
-echo "Installing PM2 and TypeScript..."
+# -----------------------------
+# 4. Install Global NPM Packages
+# -----------------------------
 npm install -g pm2 typescript ts-node
 
-# 5. Fetch Secrets & Configure Environment
-echo "Fetching GITHUB_TOKEN..."
+# -----------------------------
+# 5. Configuration
+# -----------------------------
 REGION="ap-south-1"
 SSM_PATH="/vvitu/prod"
+BASE_DIR="/var/www/erp"
+APP_DIR="$BASE_DIR/vvit"
 
-# Fetch GITHUB_TOKEN individually to clone
-GITHUB_TOKEN=$(aws ssm get-parameter --name "$SSM_PATH/GITHUB_TOKEN" --with-decryption --query "Parameter.Value" --output text --region $REGION)
+# -----------------------------
+# 6. Fetch GitHub Token from SSM
+# -----------------------------
+echo "Fetching GITHUB_TOKEN from SSM..."
+GITHUB_TOKEN=$(aws ssm get-parameter \
+  --name "$SSM_PATH/GITHUB_TOKEN" \
+  --with-decryption \
+  --query "Parameter.Value" \
+  --output text \
+  --region "$REGION")
 
 if [ -z "$GITHUB_TOKEN" ] || [ "$GITHUB_TOKEN" == "None" ]; then
-    echo "ERROR: GITHUB_TOKEN not found in SSM ($SSM_PATH/GITHUB_TOKEN). Cannot clone repo."
-    # Fallback or exit? We can try to proceed if repo is public, but it's likely private.
+    echo "❌ ERROR: GITHUB_TOKEN not found in SSM. Exiting."
     exit 1
 fi
 
-# 6. Clone Repository
+# -----------------------------
+# 7. Setup Directory & Clone Repo
+# -----------------------------
 echo "Cloning repository..."
-APP_DIR="/var/www/erp/vvit"
-mkdir -p /var/www/erp
-cd /var/www/erp
+mkdir -p $BASE_DIR
+cd $BASE_DIR
+rm -rf vvit
 
-# Using OAuth token for clone
-git clone -b prod "https://x-access-token:${GITHUB_TOKEN}@github.com/Krishna909090/vvit.git" vvit
+git clone --depth 1 -b prod "https://x-access-token:${GITHUB_TOKEN}@github.com/Krishna909090/vvit.git" vvit
 cd vvit
 
-# Check if clone successful
-if [ ! -d ".git" ]; then
-    echo "ERROR: Git clone failed."
-    exit 1
-fi
-
-# 7. Install Dependencies & Build
-echo "Installing project dependencies..."
-npm ci
-
-echo "Building project..."
-npm run build
-
-# 8. Generate .env.production from SSM
-echo "Generating .env.production..."
-# Fetch all parameters in path
+# -----------------------------
+# 8. Generate .env from SSM
+# -----------------------------
+echo "Generating .env from SSM..."
 aws ssm get-parameters-by-path \
     --path "$SSM_PATH/" \
     --recursive \
@@ -76,44 +77,58 @@ aws ssm get-parameters-by-path \
     --query "Parameters[*].{Name:Name,Value:Value}" \
     --output json > secrets.json
 
-# Parse JSON to .env format
-# Removes the prefix /vvitu/prod/ from the key name
 jq -r '.[] | "\(.Name | split("/") | last)=\"\(.Value)\""' secrets.json > .env.production
+cp .env.production .env
 rm secrets.json
 
-# 8b. Run Database Migrations & Seeding
-# Prisma needs .env to verify database connection
-cp .env.production .env
+# -----------------------------
+# 9. Permissions
+# -----------------------------
+chown -R ubuntu:ubuntu $BASE_DIR
 
-echo "Running migrations..."
-npx prisma migrate deploy || echo "Migration failed"
+# -----------------------------
+# 10. Build, Migrate, Seed, PM2
+# -----------------------------
+sudo -u ubuntu bash << 'EOF'
+set -euxo pipefail
 
-# Scripts load .env.production internally, so they are fine
-echo "Seeding SMS..."
+export PATH=$PATH:/usr/bin:/usr/local/bin
+export NODE_ENV=production
+
+cd /var/www/erp/vvit
+
+echo "Installing dependencies..."
+rm -rf node_modules
+npm ci
+
+echo "Generating Prisma Client..."
+npx prisma generate
+
+echo "Building project..."
+npx tsc
+
+echo "Running Prisma migrations..."
+npx prisma migrate deploy
+
+echo "Seeding data (safe mode)..."
 npx ts-node scripts/seed-sms-config.ts || true
-
-echo "Seeding Admins..."
 npx ts-node scripts/create-admin-user.ts || true
 
-# Cleanup .env (optional, but good practice if we want to rely only on .env.production)
-# rm .env  <-- Actually, start script might fallback to it, keeping it is harmless/safer.
+echo "Restarting PM2 processes..."
+pm2 delete vvitu-prod-api || true
+pm2 delete vvitu-prod-worker || true
 
-# Ensure permissions
-chown -R ubuntu:ubuntu /var/www/erp
+pm2 start ecosystem.config.js --only vvitu-prod-api
+pm2 start ecosystem.config.js --only vvitu-prod-worker
+pm2 save
+EOF
 
-# 9. Start Application with PM2
-echo "Starting application with PM2..."
-# We run PM2 as 'ubuntu' user so it has the right home directory and permissions
-sudo -u ubuntu pm2 start ecosystem.config.js --only vvitu-prod-api,vvitu-prod-worker
+# -----------------------------
+# 11. Enable PM2 on Boot
+# -----------------------------
+echo "Configuring PM2 startup..."
+env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ubuntu --hp /home/ubuntu | bash
+systemctl enable pm2-ubuntu
+systemctl restart pm2-ubuntu
 
-# 10. Enable PM2 Persistence
-echo "Enabling PM2 startup..."
-sudo -u ubuntu pm2 save
-
-# Generate and run startup script for ubuntu user
-# This command mimics what 'pm2 startup' tells you to run
-env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ubuntu --hp /home/ubuntu
-sudo -u ubuntu pm2 save
-systemctl start pm2-ubuntu
-
-echo "User data script completed successfully!"
+echo "===== ✅ VVIT ERP - DEPLOY COMPLETED SUCCESSFULLY ====="

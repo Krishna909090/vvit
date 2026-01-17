@@ -1,30 +1,30 @@
 import { Router } from 'express';
-import { authenticate, authorize } from '../../middlewares/authMiddleware';
-import { Role } from '@prisma/client';
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import * as controller from './qualificationRequirement.controller';
 import { createQualificationRequirementSchema, updateQualificationRequirementSchema } from '../../validators/qualificationRequirementValidators';
 
 const router = Router();
 
+// Routes definition
 router.get(
     '/',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT]), // Students need to see reqs
+    authorizePermission('qualification.read'), 
     controller.getQualificationRequirements
 );
 
 router.get(
     '/:id',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT]),
+    authorizePermission('qualification.read'),
     controller.getQualificationRequirementById
 );
 
 router.post(
     '/',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission('qualification.create'),
     validateRequest(createQualificationRequirementSchema),
     controller.createQualificationRequirement
 );
@@ -32,7 +32,7 @@ router.post(
 router.put(
     '/:id',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission('qualification.update'),
     validateRequest(updateQualificationRequirementSchema),
     controller.updateQualificationRequirement
 );
@@ -40,14 +40,14 @@ router.put(
 router.delete(
     '/:id',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission('qualification.delete'),
     controller.deleteQualificationRequirement
 );
 
 router.post(
     '/validate',
     authenticate,
-    // authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT]), // All can validate
+    authorizePermission('qualification.read'), // Validate is checking existing against rules.
     controller.validate
 );
 

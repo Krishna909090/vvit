@@ -6,7 +6,7 @@ import { FeeService, getApplicationFeeAmount, setApplicationFeeAmount } from './
 import { getAllotmentOrderUrl } from './payment.service';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
-import { Role } from '@prisma/client';
+
 
 // Fee Head
 export const createFeeHead = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -179,7 +179,9 @@ export const approveDiscount = catchAsync(async (req: Request, res: Response, ne
 
     const { requestId, approved } = req.body;
     
-    await FeeService.approveDiscount(requestId, approved, req.user!.role as Role);
+    // RBAC: Pass permissions to service to decide if they are "Super Admin" equivalent (e.g. can approve any amount)
+    // or just Admin (limited approval). Logic should be in service based on permission keys.
+    await FeeService.approveDiscount(requestId, approved, req.user!.permissions);
 
     sendResponse({
         res,
@@ -258,10 +260,10 @@ export const collectFee = catchAsync(async (req: Request, res: Response, next: N
 export const getStudentLedger = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     
-    // Security: Students can only see their own
-    if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
-        // Simple unauthorized check, can be expanded
-        // throw new AppError("Unauthorized", 403);
+    // Security: Students can only see their own. Admins can see all.
+    const hasFullAccess = req.user!.permissions.includes('finance.read.all');
+    if (!hasFullAccess && req.user!.userId !== studentId) {
+        throw new AppError("Unauthorized access to another student's ledger", 403);
     }
 
     const ledger = await FeeService.getStudentFeeDetails(studentId);
@@ -293,8 +295,9 @@ export const getStudentFeeDemands = catchAsync(async (req: Request, res: Respons
     const { studentId } = req.params;
 
     // Security check: Only allow access if user is admin/staff or the student themselves
-    if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
-         // throw new AppError("Unauthorized", 403); // Uncomment if strict security needed, for now implicit trust in token vs id check usually handled by middleware or simpler checks
+    const hasFullAccess = req.user!.permissions.includes('finance.read.all');
+    if (!hasFullAccess && req.user!.userId !== studentId) {
+         throw new AppError("Unauthorized access to another student's fee demands", 403);
     }
 
     const feeDetails = await FeeService.getStudentFeeDetails(studentId);

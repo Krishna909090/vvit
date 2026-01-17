@@ -6,7 +6,7 @@ import prisma from '../../config/prisma';
 import * as examService from './exam.service';
 import logger from '../../utils/logger';
 import jwt from 'jsonwebtoken';
-import { Role, AdmissionStatus } from '@prisma/client';
+import { AdmissionStatus } from '@prisma/client';
 import { catchAsync } from '../../utils/catchAsync';
 import { AppError } from '../../utils/AppError';
 import { sendResponse } from '../../utils/response';
@@ -47,7 +47,7 @@ export const createExamCenter = catchAsync(
 /**
  * Controller: Scan QR code and return student details for validation.
  * Route: POST /exam/attendance/scan
- * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR
+ * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR ==> Permissions: exam.update.all
  */
 export const scanAttendance = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
@@ -59,7 +59,7 @@ export const scanAttendance = catchAsync(
 
         const { qrHash } = req.body;
 
-        logger.info(`[scanAttendance] user=${userId} role=${req.user?.role} scanning`);
+        logger.info(`[scanAttendance] user=${userId} scanning`);
         
         try {
             const result = await examService.markAttendanceByScan(qrHash, userId);
@@ -103,7 +103,7 @@ export const scanAttendance = catchAsync(
 /**
  * Controller: Manual scan by Application ID and return student details for validation.
  * Route: POST /exam/attendance/manual-scan
- * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR
+ * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR ==> Permissions: exam.update.all
  */
 export const manualScan = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
@@ -115,7 +115,7 @@ export const manualScan = catchAsync(
 
         const { applicationId } = req.body;
 
-        logger.info(`[manualScan] user=${userId} role=${req.user?.role} manually scanning appId=${applicationId}`);
+        logger.info(`[manualScan] user=${userId} manually scanning appId=${applicationId}`);
         
         try {
             const result = await examService.markAttendanceByApplicationId(applicationId, userId);
@@ -160,7 +160,7 @@ export const manualScan = catchAsync(
 /**
  * Controller: Verify and mark student attendance after validation.
  * Route: POST /exam/attendance/verify
- * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR
+ * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR ==> Permissions: exam.update.all
  */
 export const verifyAttendance = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
@@ -172,7 +172,7 @@ export const verifyAttendance = catchAsync(
 
         const { attendanceRecordId } = req.body;
 
-        logger.info(`[verifyAttendance] user=${userId} role=${req.user?.role} verifying record=${attendanceRecordId}`);
+        logger.info(`[verifyAttendance] user=${userId} verifying record=${attendanceRecordId}`);
         
         try {
             const result = await examService.verifyStudentAttendance(attendanceRecordId, userId);
@@ -265,8 +265,11 @@ export const bookExamSlot = catchAsync(
         const { slotId } = req.body;
         let { studentId } = req.params;
 
-        // If no param, try to find from logged in user (Student Role)
-        if (!studentId && req.user?.role === Role.STUDENT) {
+        // If no param, try to find from logged in user (if they lack 'all' permission, they are likely student)
+        const hasFullAccess = req.user?.permissions.includes('exam.create.all');
+        
+        if (!studentId && !hasFullAccess) {
+            if (!req.user) throw new AppError('User not found', 404);
             const student = await prisma.student.findUnique({
                  where: { userId: req.user.userId }
             });
@@ -503,9 +506,12 @@ export const getHallTicketDetails = catchAsync(
         logger.info(`[getHallTicketDetails] by=${req.user?.userId || 'anonymous'}`);
         const { studentId } = req.params;
 
-        // Security check: Students can only view their own hall ticket
-        if (req.user?.role === Role.STUDENT) {
+        // Security check: If no full access, enforce own ticket check
+        const hasFullAccess = req.user?.permissions.includes('exam.read.all');
+        
+        if (!hasFullAccess) {
             // Find student profile to verify ID
+            if (!req.user) throw new AppError('User not found', 404);
             const student = await prisma.student.findUnique({
                 where: { userId: req.user.userId }
             });

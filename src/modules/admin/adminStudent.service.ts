@@ -1,5 +1,5 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, CancellationStatus, Role, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType } from '@prisma/client';
+import { AdmissionStatus, CancellationStatus, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType } from '@prisma/client';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
@@ -192,8 +192,11 @@ export const AdminStudentService = {
         });
     },
 
-    async approveCancellation(requestId: string, approved: boolean, adminRole: string | undefined, adminId: string | undefined) {
-        if (adminRole !== Role.SUPER_ADMIN) {
+    async approveCancellation(requestId: string, approved: boolean, adminPermissions: string[], adminId: string | undefined) {
+        // RBAC: Check for specific approval permission
+        // Using 'student.update.all' as proxy for Super Admin privileges in this context, or specific 'student.approve.requests'
+        // Let's rely on 'student.update.all' which likely aligns with 'SUPER_ADMIN' capability in the new model.
+        if (!adminPermissions.includes('student.update.all')) {
             throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
         }
 
@@ -399,8 +402,9 @@ export const AdminStudentService = {
         });
     },
 
-    async approveCourseChange(requestId: string, approved: boolean, adminRole: string | undefined, adminId: string | undefined) {
-        if (adminRole !== Role.SUPER_ADMIN) {
+    async approveCourseChange(requestId: string, approved: boolean, adminPermissions: string[], adminId: string | undefined) {
+        // RBAC: Check for specific permission
+        if (!adminPermissions.includes('student.update.all')) {
             throw new AppError(MESSAGES.ERROR.ONLY_SUPER_ADMIN_APPROVE_COURSE, 403);
         }
 

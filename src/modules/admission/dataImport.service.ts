@@ -2,7 +2,7 @@ import ExcelJS from "exceljs";
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
-import { ImportType, QuotaType, Role, ApplicationMode, AdmissionStatus } from "@prisma/client";
+import { ImportType, QuotaType, UserRole, ApplicationMode, AdmissionStatus } from "@prisma/client";
 
 interface ExcelRow {
   [key: string]: any;
@@ -126,7 +126,7 @@ export const processExcelImport = async (
               phone,
               email: email || undefined, // Email might be optional or missing in OMR
               name,
-              role: Role.STUDENT,
+              role: UserRole.STUDENT,
               createdBy: adminId,
             },
           });

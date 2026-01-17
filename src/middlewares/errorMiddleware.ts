@@ -28,6 +28,7 @@ const sendErrorDev = (err: any, res: Response) => {
         status: err.status,
         error: err,
         message: err.message,
+        details: err.details,
         // stack: err.stack,
     });
 };
@@ -38,6 +39,7 @@ const sendErrorProd = (err: any, res: Response) => {
         res.status(err.statusCode).json({
             status: err.status,
             message: err.message,
+            details: err.details,
         });
     } else {
         // Programming or other unknown error: don't leak details
