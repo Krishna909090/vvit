@@ -4,7 +4,7 @@ import logger from "../utils/logger";
 
 // AWS Configuration
 // AWS Configuration
-const REGION = process.env.AWS_REGION || "us-east-1";
+const REGION = process.env.AWS_REGION || "ap-south-1";
 
 const AWS_CREDENTIALS = (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) 
     ? {
