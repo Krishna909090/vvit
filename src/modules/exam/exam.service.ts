@@ -61,15 +61,8 @@ const assertPositiveInt = (value: any, fieldName: string) => {
 /**
  * Format time in UTC (HH:mm A) - e.g. "09:00 AM"
  */
-const formatTimeUTC = (date: any) => {
-    if (!date) return null;
-    return new Date(date).toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: 'UTC'
-    });
-};
+// Helper formatTimeUTC removed as we are standardizing on IST using formatTime from utils
+
 
 /**
  * Transform exam center with examSlots into a UI-friendly structure.
@@ -79,12 +72,14 @@ const transformExamCenterWithSlots = (center: any) => {
         ...center,
         slots: center.examSlots.map((slot: any) => ({
             id: slot.id,
+            examCenterId: center.id,
+            examCenterName: center.name,
             capacity: slot.capacity,
             filled: slot.filled,
             isBookingEnabled: slot.isBookingEnabled,
-            date: formatDate(slot.date), // Restore generic format or keep raw? User "in book-slot... starttime and endtime" focus. Let's format Date too for consistency? User said "using utility i need...". Usually formatTime goes with formatDate.
-            startTime: formatTimeUTC(slot.startTime),
-            endTime: formatTimeUTC(slot.endTime),
+            date: formatDate(slot.date), 
+            startTime: formatTime(slot.startTime),
+            endTime: formatTime(slot.endTime),
         })),
         examSlots: undefined,
     };
@@ -101,8 +96,8 @@ const transformSlot = (slot: any) => ({
     filled: slot.filled,
     isBookingEnabled: slot.isBookingEnabled,
     date: formatDate(slot.date),
-    startTime: formatTimeUTC(slot.startTime),
-    endTime: formatTimeUTC(slot.endTime),
+    startTime: formatTime(slot.startTime),
+    endTime: formatTime(slot.endTime),
 });
 
 /* -------------------------------------------------------------------------- */
@@ -329,8 +324,8 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
             examCenter: student.examDetails?.examSlot?.examCenter?.name,
             examCenterAddress: student.examDetails?.examSlot?.examCenter?.address,
             examDate: student.examDetails?.testDate ? formatDate(student.examDetails.testDate) : null,
-            startTime: student.examDetails?.examSlot?.startTime ? formatTimeUTC(student.examDetails.examSlot.startTime) : null,
-            endTime: student.examDetails?.examSlot?.endTime ? formatTimeUTC(student.examDetails.examSlot.endTime) : null,
+            startTime: student.examDetails?.examSlot?.startTime ? formatTime(student.examDetails.examSlot.startTime) : null,
+            endTime: student.examDetails?.examSlot?.endTime ? formatTime(student.examDetails.examSlot.endTime) : null,
         },
         message: 'Student details retrieved. Please verify and call verify API to mark attendance.'
     };
@@ -729,8 +724,8 @@ export const getAvailableSlots = async () => {
         centerData.availableSlots.push({
             id: slot.id,
             date: formatDate(slot.date),
-            startTime: formatTimeUTC(slot.startTime),
-            endTime: formatTimeUTC(slot.endTime),
+            startTime: formatTime(slot.startTime),
+            endTime: formatTime(slot.endTime),
             capacity: slot.capacity,
             filled: slot.filled,
             seatsAvailable: slot.capacity - slot.filled,
@@ -946,8 +941,8 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         examCenterCity: result.slot.examCenter.city,
         examDate: formatDate(result.slot.date),
         examDay: new Date(result.slot.date).toLocaleDateString('en-US', { weekday: 'long' }),
-        startTime: formatTimeUTC(result.slot.startTime),
-        endTime: formatTimeUTC(result.slot.endTime),
+        startTime: formatTime(result.slot.startTime),
+        endTime: formatTime(result.slot.endTime),
         
         // Hall Ticket Info
         hallTicketNumber: result.hallTicketId,
@@ -1430,8 +1425,8 @@ export const getHallTicketDetails = async (studentId: string) => {
         examCenterCity: slot.examCenter.city,
         examDate: formatDate(slot.date),
         examDay: new Date(slot.date).toLocaleDateString('en-US', { weekday: 'long' }),
-        startTime: formatTimeUTC(slot.startTime),
-        endTime: formatTimeUTC(slot.endTime),
+        startTime: formatTime(slot.startTime),
+        endTime: formatTime(slot.endTime),
         
         // Hall Ticket Info
         hallTicketNumber: hallTicket.id,
@@ -1546,8 +1541,8 @@ export const markAttendanceByApplicationId = async (applicationId: string, userI
             examCenter: student.examDetails?.examSlot?.examCenter?.name,
             examCenterAddress: student.examDetails?.examSlot?.examCenter?.address,
             examDate: student.examDetails?.testDate ? formatDate(student.examDetails.testDate) : null,
-            startTime: student.examDetails?.examSlot?.startTime ? formatTimeUTC(student.examDetails.examSlot.startTime) : null,
-            endTime: student.examDetails?.examSlot?.endTime ? formatTimeUTC(student.examDetails.examSlot.endTime) : null,
+            startTime: student.examDetails?.examSlot?.startTime ? formatTime(student.examDetails.examSlot.startTime) : null,
+            endTime: student.examDetails?.examSlot?.endTime ? formatTime(student.examDetails.examSlot.endTime) : null,
         },
         message: 'Student details retrieved. Please verify and call verify API to mark attendance.'
     };
