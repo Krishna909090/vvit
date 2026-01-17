@@ -697,9 +697,10 @@ export const getAvailableSlots = async () => {
         include: {
             examCenter: true,
         },
-        orderBy: {
-            date: 'asc',
-        },
+        orderBy: [
+            { date: 'asc' },
+            { startTime: 'asc' }
+        ],
     });
 
     // 2. Filter out full slots
