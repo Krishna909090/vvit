@@ -61,23 +61,22 @@ export const AdminService = {
         };
     },
 
-    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: RoleType; password?: string }, currentUserId?: string) {
-        const { phone, name, email, role, password } = data;
+    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: RoleType; password?: string; groupIds?: string[] }, currentUserId?: string) {
+        const { phone, name, email, role, password, groupIds } = data;
 
         if (!phone) {
             throw new AppError("Phone number is required", 400);
         }
 
-        if (!role) {
-            throw new AppError("Role is required", 400);
-        }
+        // Role is optional now, as permissions come from Groups
+        // if (!role) { throw new AppError("Role is required", 400); }
 
-        const allowedRoles: RoleType[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR];
-        if (!allowedRoles.includes(role)) {
+        // Allow any role EXCEPT Student (Students must use admission flow)
+        if (role === Role.STUDENT) {
             logger.warn(
-                `[addAdmin] invalid role assignment attempt: role=${role}, phone=${maskPhone(phone)}, by=${currentUserId}`
+                `[addAdmin] attempt to create STUDENT via admin API: phone=${maskPhone(phone)}, by=${currentUserId}`
             );
-            throw new AppError("Invalid role for admin creation", 400);
+            throw new AppError("Cannot create Student users via this API. Use Admission flow.", 400);
         }
 
         const normalizedPhone = phone.trim();
@@ -113,7 +112,8 @@ export const AdminService = {
                 data: {
                     name: name ?? user.name,
                     email: normalizedEmail ?? user.email,
-                    password: passwordHash ?? user.password // Update password if provided
+                    password: passwordHash ?? user.password, // Update password if provided
+                    updatedBy: currentUserId
                 },
             });
         } else {
@@ -143,24 +143,29 @@ export const AdminService = {
                     name,
                     email: normalizedEmail,
                     role,
-                    password: passwordHash
+                    password: passwordHash,
+                    createdBy: currentUserId,
+                    updatedBy: currentUserId
                 },
             });
 
-            // SYNC GROUP
-            const groupName = role === Role.SUPER_ADMIN ? 'SuperAdminGroup' :
-                              role === Role.ADMIN ? 'AdminGroup' :
-                              role === Role.AGENT ? 'AgentGroup' :
-                              role === Role.STAFF ? 'StaffGroup' :
-                              role === Role.INVIGILATOR ? 'InvigilatorGroup' : null;
-
-            if (groupName) {
-                 const group = await prisma.group.findUnique({ where: { name: groupName } });
-                 if (group) {
-                     await prisma.userGroup.create({
-                         data: { userId: user.id, groupId: group.id }
-                     });
-                 }
+            // Explicit Group Assignment via Payload
+            if (user && groupIds && groupIds.length > 0) {
+                logger.info(`[addAdmin] Assigning user=${user.id} to groups=${groupIds.join(', ')}`);
+                const userGroupsData = groupIds.map(groupId => ({
+                    userId: user!.id,
+                    groupId
+                }));
+                // Use createMany if supported or loop upsert/create
+                // createMany is supported in Cockroach/Postgres recent versions via Prisma
+                // But to be safe and handle errors individually:
+                for (const ug of userGroupsData) {
+                    try {
+                        await prisma.userGroup.create({ data: ug });
+                    } catch (e) {
+                         logger.error(`[addAdmin] Failed to assign group ${ug.groupId} to user ${user!.id}: ${e}`);
+                    }
+                }
             }
         }
 
@@ -279,9 +284,9 @@ export const AdminService = {
 
         // Validate role if being updated
         if (data.role) {
-            const allowedRoles: RoleType[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR, Role.AGENT];
-            if (!allowedRoles.includes(data.role)) {
-                throw new AppError('Invalid role for staff user', 400);
+            // Allow any role EXCEPT Student
+            if (data.role == Role.STUDENT) { // matching check roughly, Role enum is string usually
+                 throw new AppError('Cannot set user role to STUDENT via this API', 400);
             }
 
             // Prevent changing SUPER_ADMIN role if another SUPER_ADMIN exists
@@ -329,41 +334,12 @@ export const AdminService = {
             }
         });
 
-        // SYNC GROUP IF ROLE CHANGED
+        // SYNC GROUP REMOVED - Groups must be managed explicitly via RBAC APIs
+        /*
         if (data.role) {
-             const groupName = data.role === Role.SUPER_ADMIN ? 'SuperAdminGroup' :
-                               data.role === Role.ADMIN ? 'AdminGroup' :
-                               data.role === Role.AGENT ? 'AgentGroup' :
-                               data.role === Role.STAFF ? 'StaffGroup' :
-                               data.role === Role.INVIGILATOR ? 'InvigilatorGroup' : null;
-            
-             if (groupName) {
-                 const group = await prisma.group.findUnique({ where: { name: groupName } });
-                 
-                 // Remove from old system groups (Optional: or simple wipe all system groups for this user)
-                 // detailed logic: find all system groups, delete userGroup where groupId in systemGroups
-                 // For now, let's just ADD to the new group. 
-                 // Ideally we should remove old one to prevent multi-role confusion unless intended.
-                 
-                 // Remove from other 'System' groups to keep it clean (1 user = 1 system role)
-                 const systemGroups = ['SuperAdminGroup', 'AdminGroup', 'AgentGroup', 'StaffGroup', 'InvigilatorGroup', 'StudentGroup'];
-                 const groupsToRemove = await prisma.group.findMany({ where: { name: { in: systemGroups } } });
-                 const groupIdsToRemove = groupsToRemove.map(g => g.id);
-
-                 await prisma.userGroup.deleteMany({
-                     where: { 
-                         userId: userId,
-                         groupId: { in: groupIdsToRemove }
-                     }
-                 });
-
-                 if (group) {
-                     await prisma.userGroup.create({
-                         data: { userId: userId, groupId: group.id }
-                     });
-                 }
-             }
+             // ... Logic removed to support manual assignment workflow
         }
+        */
 
 
 

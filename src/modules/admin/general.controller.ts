@@ -30,6 +30,7 @@ export const addAdmin = catchAsync(async (req: Request, res: Response, next: Nex
         name?: string;
         email?: string;
         role?: RoleType;
+        groupIds?: string[];
     }, req.user?.userId);
 
     sendResponse({

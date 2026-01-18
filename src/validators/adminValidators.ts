@@ -155,11 +155,12 @@ export const addAdminSchema = z.object({
 
     role: z
       .string()
-      .min(1, "Role is required")                
-      .transform((val) => val.toUpperCase())    
-      .refine((val) => AllowedRoles.includes(val as any), {
+      .optional()
+      .transform((val) => val ? val.toUpperCase() : val)
+      .refine((val) => !val || AllowedRoles.includes(val as any), {
         message: "Invalid role for admin creation",
       }),
+    groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
   }),
 });
 

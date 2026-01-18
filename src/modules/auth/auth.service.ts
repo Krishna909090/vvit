@@ -272,12 +272,21 @@ export const verifyOtp = async (
   const { permissions } = await getUserPermissions(user.id);
   const modules = await getUserModules(permissions);
 
+  // Group permissions by module
+  // Group permissions by module
+  const groupedPermissions = permissions.reduce((acc: any, p: string) => {
+    const key = p.split('.')[0];
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(p);
+    return acc;
+  }, {});
+
   return {
     token,
     role: user.role,
     id: user.id,
     phone: user.phone,
-    permissions,
+    permissions: groupedPermissions,
     modules
   };
 };
@@ -294,7 +303,7 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
   if (!user) throw new AppError("Invalid credentials", 400);
 
   // Students use OTP
-  if (user.role === Role.STUDENT) throw new AppError("Students must login via OTP", 400);
+  if (user?.role === Role.STUDENT) throw new AppError("Students must login via OTP", 400);
 
   if (!user.password) throw new AppError("Password login not enabled for this user", 400);
 
@@ -313,9 +322,18 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
   const { permissions } = await getUserPermissions(user.id);
   const modules = await getUserModules(permissions);
 
-  logger.info(`[login] Returning data: role=${user.role}, permissionsOfUser=${permissions.length}, modulesOfUser=${modules.length}`);
+  // Group permissions by module
+  // Group permissions by module
+  const groupedPermissions = permissions.reduce((acc: any, p: string) => {
+    const key = p.split('.')[0];
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(p);
+    return acc;
+  }, {});
 
-  return { token, role: user.role, id: user.id, permissions, modules };
+  logger.info(`[login] Returning data: role=${user.role}, permissionsCount=${permissions.length}, modulesCount=${modules.length}`);
+
+  return { token, role: user.role, id: user.id, permissions: groupedPermissions, modules };
 };
 
 export const generateAadhaarOtp = async (idNumber: string) => {

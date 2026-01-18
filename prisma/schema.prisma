@@ -12,7 +12,7 @@ model User {
   name                   String?
   email                  String?                  @unique
   phone                  String?                  @unique
-  role                   UserRole?
+  role                   String?
   createdAt              DateTime?                @default(now())
   updatedAt              DateTime                 @updatedAt
   createdBy              String?
@@ -1204,3 +1204,5 @@ model Configuration {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+
