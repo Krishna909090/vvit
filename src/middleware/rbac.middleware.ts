@@ -3,18 +3,9 @@ import jwt from 'jsonwebtoken';
 import { getUserPermissions } from '../modules/rbac/services/rbac.service';
 import { AppError } from '../utils/AppError';
 import logger from '../utils/logger';
+import { RoleType } from '../constants/roles';
 
-// Extend Request type to include user
-declare global {
-  namespace Express {
-    interface Request {
-      user?: {
-        userId: string;
-        permissions: string[];
-      };
-    }
-  }
-}
+
 
 export const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -25,7 +16,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 
     const token = authHeader.split(' ')[1];
     
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string };
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string, role: RoleType };
     
     // Resolve permissions here for efficiency and attach to request
     // This makes 'authorizePermission' very fast (sync check)
@@ -35,6 +26,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
     logger.info(`[RBAC Debug] User Permissions Count: ${permissions.length}`);
     req.user = {
       userId: decoded.userId,
+      role: decoded.role,
       permissions
     };
     
@@ -52,7 +44,7 @@ export const authorizePermission = (requiredPermission: string | string[]) => {
       return next(new AppError('User not authenticated', 401));
     }
 
-    const userPermissions = req.user.permissions;
+    const userPermissions = req.user.permissions || [];
     let hasPermission = false;
 
     logger.info(`[RBAC Debug] Checking Required Permission: ${JSON.stringify(requiredPermission)}`);

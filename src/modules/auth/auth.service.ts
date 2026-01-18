@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import axios from "axios";
 import bcrypt from "bcryptjs";
 import prisma from '../../config/prisma';
-import { Role } from "@prisma/client";
+import { Role } from '../../constants/roles'; // Updated Import
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { sendBsnlOtp, sendZeptoEmail } from '../integration/integration.service';
@@ -46,12 +46,27 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
 
   if (!user) {
     if (phone) {
+      // 1. Create User
       user = await prisma.user.create({
         data: {
           phone,
           role: Role.STUDENT,
         },
       });
+
+      // 2. Assign to Student Group
+      const studentGroup = await prisma.group.findUnique({ where: { name: 'StudentGroup' } });
+      if (studentGroup) {
+        await prisma.userGroup.create({
+          data: {
+            userId: user.id,
+            groupId: studentGroup.id,
+          },
+        });
+      } else {
+        logger.error(`[sendOtp] CRITICAL: StudentGroup not found. User ${user.id} created without group.`);
+      }
+
       isNewUser = true;
       logger.info(
         `[sendOtp] New STUDENT user created: id=${user.id}, phone=${maskPhone(phone)}`

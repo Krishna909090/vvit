@@ -2,7 +2,8 @@ import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
-import { FeeStatus, Role, AgentCommissionStatus } from '@prisma/client';
+import { FeeStatus, AgentCommissionStatus } from '@prisma/client';
+import { Role, RoleType } from '../../constants/roles';
 import { maskPhone, maskEmail } from '../../utils/mask';
 import bcrypt from 'bcryptjs';
 
@@ -60,7 +61,7 @@ export const AdminService = {
         };
     },
 
-    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: Role; password?: string }, currentUserId?: string) {
+    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: RoleType; password?: string }, currentUserId?: string) {
         const { phone, name, email, role, password } = data;
 
         if (!phone) {
@@ -71,7 +72,7 @@ export const AdminService = {
             throw new AppError("Role is required", 400);
         }
 
-        const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR];
+        const allowedRoles: RoleType[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR];
         if (!allowedRoles.includes(role)) {
             logger.warn(
                 `[addAdmin] invalid role assignment attempt: role=${role}, phone=${maskPhone(phone)}, by=${currentUserId}`
@@ -145,6 +146,22 @@ export const AdminService = {
                     password: passwordHash
                 },
             });
+
+            // SYNC GROUP
+            const groupName = role === Role.SUPER_ADMIN ? 'SuperAdminGroup' :
+                              role === Role.ADMIN ? 'AdminGroup' :
+                              role === Role.AGENT ? 'AgentGroup' :
+                              role === Role.STAFF ? 'StaffGroup' :
+                              role === Role.INVIGILATOR ? 'InvigilatorGroup' : null;
+
+            if (groupName) {
+                 const group = await prisma.group.findUnique({ where: { name: groupName } });
+                 if (group) {
+                     await prisma.userGroup.create({
+                         data: { userId: user.id, groupId: group.id }
+                     });
+                 }
+            }
         }
 
         logger.info(
@@ -194,7 +211,7 @@ export const AdminService = {
      * Get all staff users (excluding students)
      * Supports filtering by role and search term
      */
-    async getStaffUsers(filters?: { role?: Role; search?: string }) {
+    async getStaffUsers(filters?: { role?: RoleType; search?: string }) {
         const where: any = {
             role: {
                 not: Role.STUDENT // Exclude students
@@ -241,7 +258,7 @@ export const AdminService = {
      * Update staff user details
      * Can update name, email, and role (excluding STUDENT role)
      */
-    async updateStaffUser(userId: string, data: { name?: string; email?: string; role?: Role }, currentUserId?: string) {
+    async updateStaffUser(userId: string, data: { name?: string; email?: string; role?: RoleType }, currentUserId?: string) {
         if (!userId) {
             throw new AppError('User ID is required', 400);
         }
@@ -262,7 +279,7 @@ export const AdminService = {
 
         // Validate role if being updated
         if (data.role) {
-            const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR, Role.AGENT];
+            const allowedRoles: RoleType[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR, Role.AGENT];
             if (!allowedRoles.includes(data.role)) {
                 throw new AppError('Invalid role for staff user', 400);
             }
@@ -311,6 +328,42 @@ export const AdminService = {
                 updatedAt: true
             }
         });
+
+        // SYNC GROUP IF ROLE CHANGED
+        if (data.role) {
+             const groupName = data.role === Role.SUPER_ADMIN ? 'SuperAdminGroup' :
+                               data.role === Role.ADMIN ? 'AdminGroup' :
+                               data.role === Role.AGENT ? 'AgentGroup' :
+                               data.role === Role.STAFF ? 'StaffGroup' :
+                               data.role === Role.INVIGILATOR ? 'InvigilatorGroup' : null;
+            
+             if (groupName) {
+                 const group = await prisma.group.findUnique({ where: { name: groupName } });
+                 
+                 // Remove from old system groups (Optional: or simple wipe all system groups for this user)
+                 // detailed logic: find all system groups, delete userGroup where groupId in systemGroups
+                 // For now, let's just ADD to the new group. 
+                 // Ideally we should remove old one to prevent multi-role confusion unless intended.
+                 
+                 // Remove from other 'System' groups to keep it clean (1 user = 1 system role)
+                 const systemGroups = ['SuperAdminGroup', 'AdminGroup', 'AgentGroup', 'StaffGroup', 'InvigilatorGroup', 'StudentGroup'];
+                 const groupsToRemove = await prisma.group.findMany({ where: { name: { in: systemGroups } } });
+                 const groupIdsToRemove = groupsToRemove.map(g => g.id);
+
+                 await prisma.userGroup.deleteMany({
+                     where: { 
+                         userId: userId,
+                         groupId: { in: groupIdsToRemove }
+                     }
+                 });
+
+                 if (group) {
+                     await prisma.userGroup.create({
+                         data: { userId: userId, groupId: group.id }
+                     });
+                 }
+             }
+        }
 
 
 

@@ -2,7 +2,8 @@ import ExcelJS from "exceljs";
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
-import { ImportType, QuotaType, Role, ApplicationMode, AdmissionStatus } from "@prisma/client";
+import { ImportType, QuotaType, ApplicationMode, AdmissionStatus } from "@prisma/client";
+import { Role } from '../../constants/roles';
 
 interface ExcelRow {
   [key: string]: any;

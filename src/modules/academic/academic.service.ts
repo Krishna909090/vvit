@@ -381,10 +381,10 @@ export const AcademicService = {
                 departmentName: spec.course.department.name,
                 totalSeats: spec.totalSeats,
                 filledSeats: spec.filledSeats, // Count from Specialization table cache
-                availableSeats: spec.totalSeats - spec.filledSeats,
+                availableSeats: spec.totalSeats - (spec.filledSeats ?? 0),
                 actualFilledCount: actualCount, // Count from StudentAdmission table (Truth)
                 isSync: spec.filledSeats === actualCount, // Verification
-                discrepancy: spec.filledSeats - actualCount
+                discrepancy: (spec.filledSeats ?? 0) - actualCount
             };
         });
 
@@ -485,6 +485,7 @@ export const AcademicService = {
             data: {
                 name,
                 specializationId,
+                courseId: specialization.courseId,
                 startDate: new Date(startDate),
                 endDate: new Date(endDate),
                 createdBy

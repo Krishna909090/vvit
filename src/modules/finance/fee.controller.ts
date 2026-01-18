@@ -6,7 +6,7 @@ import { FeeService, getApplicationFeeAmount, setApplicationFeeAmount } from './
 import { getAllotmentOrderUrl } from './payment.service';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
-import { Role } from '@prisma/client';
+import { Role, RoleType } from '../../constants/roles';
 
 // Fee Head
 export const createFeeHead = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -179,7 +179,7 @@ export const approveDiscount = catchAsync(async (req: Request, res: Response, ne
 
     const { requestId, approved } = req.body;
     
-    await FeeService.approveDiscount(requestId, approved, req.user!.role as Role);
+    await FeeService.approveDiscount(requestId, approved, req.user!.role as RoleType);
 
     sendResponse({
         res,

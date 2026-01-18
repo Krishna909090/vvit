@@ -54,7 +54,7 @@ async function run() {
         const sbStudent = await registerStudent(sbData, null, null, "ADMIN_SCRIPT");
         console.log(`[SEAT_BOOKING] Registered. ID: ${sbStudent.applicationId}`);
         
-        if (!sbStudent.applicationId.startsWith("VON")) {
+        if (!sbStudent.applicationId?.startsWith("VON")) {
             throw new Error(`[FAIL] SEAT_BOOKING Expected VON prefix, got ${sbStudent.applicationId}`);
         }
 
@@ -89,7 +89,7 @@ async function run() {
         const onStudent = await registerStudent(onData, null, null, "ADMIN_SCRIPT");
         console.log(`[ONLINE] Registered. ID: ${onStudent.applicationId}`);
         
-        if (!onStudent.applicationId.startsWith("VON")) {
+        if (!onStudent.applicationId?.startsWith("VON")) {
              throw new Error(`[FAIL] ONLINE Expected VON prefix, got ${onStudent.applicationId}`);
         }
 
@@ -119,7 +119,7 @@ async function run() {
         const offStudent = await registerStudent(offData, null, null, "ADMIN_SCRIPT");
         console.log(`[OFFLINE] Registered. ID: ${offStudent.applicationId}`);
         
-        if (!offStudent.applicationId.startsWith("VOF")) {
+        if (!offStudent.applicationId?.startsWith("VOF")) {
              throw new Error(`[FAIL] OFFLINE Expected VOF prefix, got ${offStudent.applicationId}`);
         }
 

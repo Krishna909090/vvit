@@ -293,7 +293,7 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             const admission = detailedStudent.admissionDetails;
 
             // 1. Tuition Fee (DEBIT)
-            const tuitionFee = admission.totalFee > 0 ? admission.totalFee : 25000; // Fallback
+            const tuitionFee = (admission.totalFee ?? 0) > 0 ? (admission.totalFee ?? 0) : 25000; // Fallback
             ledgersToCreate.push({
                 studentId: payment.studentId,
                 type: 'DEBIT' as any,
@@ -309,11 +309,11 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
                 const room = admission.hostel?.blocks
                     .flatMap(b => b.rooms)
                     .find(r => r.number === admission.roomNumber);
-                if (room && room.cost > 0) {
+                if (room && (room.cost ?? 0) > 0) {
                     ledgersToCreate.push({
                         studentId: payment.studentId,
                         type: 'DEBIT' as any,
-                        amount: room.cost,
+                        amount: room.cost ?? 0,
                         description: `Hostel Fee - ${admission.hostel?.name} (Room ${admission.roomNumber})`,
                         referenceId: payment.id,
                         referenceType: 'FEE_GENERATION',
@@ -358,7 +358,7 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             // Batch Insert
             if (ledgersToCreate.length > 0) {
                 await prisma.studentLedger.createMany({
-                    data: ledgersToCreate
+                    data: ledgersToCreate as any
                 });
                 logger.info(`Generated ${ledgersToCreate.length} fee/discount ledger entries for student ${payment.studentId}`);
             }
@@ -540,11 +540,11 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
     const transactionId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
 
     // 3. Calculate Dynamic Fees
-    let collegeFee = student.admissionDetails.totalFee > 0 ? student.admissionDetails.totalFee : 25000;
+    let collegeFee = (student.admissionDetails.totalFee ?? 0) > 0 ? (student.admissionDetails.totalFee ?? 0) : 25000;
     
     // Deduct already paid amount (e.g. Token Fee)
-    if (student.admissionDetails.paidFee > 0) {
-        collegeFee = Math.max(0, collegeFee - student.admissionDetails.paidFee);
+    if ((student.admissionDetails.paidFee ?? 0) > 0) {
+        collegeFee = Math.max(0, collegeFee - (student.admissionDetails.paidFee ?? 0));
     }
 
     let hostelFee = 0;
@@ -563,7 +563,7 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
             // Flatten rooms to find the matching one (simplified lookup)
             const room = hostel.blocks.flatMap(b => b.rooms).find(r => r.number === student.admissionDetails?.roomNumber);
             if (room) {
-                hostelFee = room.cost;
+                hostelFee = room.cost ?? 0;
             }
         }
     }
@@ -950,7 +950,7 @@ export const getStudentFinancialSummary = async (studentId: string) => {
 
     // --- COLLEGE FEE (Tuition + Hostel + Transport) ---
     // Calculate Breakdown
-    const baseTuition = student.admissionDetails.totalFee > 0 ? student.admissionDetails.totalFee : 25000; // Default or DB value
+    const baseTuition = (student.admissionDetails.totalFee ?? 0) > 0 ? (student.admissionDetails.totalFee ?? 0) : 25000; // Default or DB value
     let hostelFee = 0;
     let transportFee = 0;
 
@@ -960,7 +960,7 @@ export const getStudentFinancialSummary = async (studentId: string) => {
          const room = student.admissionDetails.hostel?.blocks
             .flatMap(b => b.rooms)
             .find(r => r.number === student.admissionDetails?.roomNumber);
-         hostelFee = room ? room.cost : 0;
+         hostelFee = room ? (room.cost ?? 0) : 0;
     }
 
     // Transport Cost
@@ -1091,7 +1091,7 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
              let totalFee = 0;
 
              // Tuition (Base Fee)
-             const tuition = student.admissionDetails.totalFee;
+             const tuition = student.admissionDetails.totalFee ?? 0;
              if (tuition > 0) {
                  feeBreakdown.push({ name: 'Tuition Fee', amount: tuition });
                  totalFee += tuition;
@@ -1123,10 +1123,10 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                  }
              }
              
-             const totalPaid = student.admissionDetails.paidFee;
+             const totalPaid = student.admissionDetails.paidFee ?? 0;
 
             const allotmentData = {
-                applicationId: student.applicationId,
+                applicationId: student.applicationId ?? '',
                 studentName: student.name,
                 fatherName: student.fatherName,
                 gender: student.gender,

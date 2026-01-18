@@ -1,6 +1,7 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
-import { FeeStructure, SystemSetting, FeeHead, Role, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType, FeeStatus } from '@prisma/client';
+import { FeeStructure, SystemSetting, FeeHead, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType, FeeStatus } from '@prisma/client';
+import { Role, RoleType } from '../../constants/roles';
 import { MESSAGES } from '../../constants/messages';
 import logger from '../../utils/logger';
 
@@ -207,7 +208,7 @@ export const FeeService = {
         });
     },
 
-    approveDiscount: async (requestId: string, approved: boolean, role: Role) => {
+    approveDiscount: async (requestId: string, approved: boolean, role: RoleType) => {
          if (role !== Role.SUPER_ADMIN) {
              throw new AppError("Only Super Admin can approve discounts", 403);
          }

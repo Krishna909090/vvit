@@ -1,6 +1,5 @@
 import { Router } from 'express';
-import { authenticate, authorize } from '../../middlewares/authMiddleware';
-import { Role } from '@prisma/client';
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import * as controller from './qualificationRequirement.controller';
 import { createQualificationRequirementSchema, updateQualificationRequirementSchema } from '../../validators/qualificationRequirementValidators';
@@ -10,21 +9,21 @@ const router = Router();
 router.get(
     '/',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT]), // Students need to see reqs
+    authorizePermission(['admin.read.all', 'student.view.profile', 'student.create']), // Students need to see reqs
     controller.getQualificationRequirements
 );
 
 router.get(
     '/:id',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT]),
+    authorizePermission(['admin.read.all', 'student.view.profile']),
     controller.getQualificationRequirementById
 );
 
 router.post(
     '/',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission('admin.update.all'),
     validateRequest(createQualificationRequirementSchema),
     controller.createQualificationRequirement
 );
@@ -32,7 +31,7 @@ router.post(
 router.put(
     '/:id',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission('admin.update.all'),
     validateRequest(updateQualificationRequirementSchema),
     controller.updateQualificationRequirement
 );
@@ -40,14 +39,14 @@ router.put(
 router.delete(
     '/:id',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission('admin.delete.all'),
     controller.deleteQualificationRequirement
 );
 
 router.post(
     '/validate',
     authenticate,
-    // authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT]), // All can validate
+    // authorizePermission(['admin.read.all', 'student.view.profile']), // All can validate
     controller.validate
 );
 

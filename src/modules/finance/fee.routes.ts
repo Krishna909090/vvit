@@ -1,6 +1,5 @@
 import { Router } from 'express';
-import { authorize, authenticate } from '../../middlewares/authMiddleware';
-import { Role } from '@prisma/client';
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     createFeeHead, getFeeHeads, updateFeeHead, deleteFeeHead,
@@ -20,45 +19,45 @@ const router = Router();
 
 // Fee Head
 // Fee Head
-router.post('/fee-head', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createFeeHeadSchema), createFeeHead);
-router.get('/fee-head', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getFeeHeads);
-router.put('/fee-head/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateFeeHead);
-router.delete('/fee-head/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteFeeHead);
+router.post('/fee-head', authenticate, authorizePermission('finance.fee.collect'), validateRequest(createFeeHeadSchema), createFeeHead);
+router.get('/fee-head', authenticate, authorizePermission('finance.fee.view'), getFeeHeads);
+router.put('/fee-head/:id', authenticate, authorizePermission('finance.fee.collect'), updateFeeHead);
+router.delete('/fee-head/:id', authenticate, authorizePermission('finance.fee.collect'), deleteFeeHead);
 
 // Fee Structure
-router.post('/fee-structure/bulk', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createBulkFeeStructureSchema), createBulkFeeStructure);
-router.post('/fee-structure', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createFeeStructureSchema), createFeeStructure);
-router.get('/fee-structure', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getFeeStructures);
-router.put('/fee-structure/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateFeeStructure);
-router.delete('/fee-structure/:id', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), deleteFeeStructure);
+router.post('/fee-structure/bulk', authenticate, authorizePermission('finance.fee.collect'), validateRequest(createBulkFeeStructureSchema), createBulkFeeStructure);
+router.post('/fee-structure', authenticate, authorizePermission('finance.fee.collect'), validateRequest(createFeeStructureSchema), createFeeStructure);
+router.get('/fee-structure', authenticate, authorizePermission('finance.fee.view'), getFeeStructures);
+router.put('/fee-structure/:id', authenticate, authorizePermission('finance.fee.collect'), updateFeeStructure);
+router.delete('/fee-structure/:id', authenticate, authorizePermission('finance.fee.collect'), deleteFeeStructure);
 
 // Fee Generation
-router.post('/generate-demands', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(generateFeeDemandsSchema), generateFeeDemands);
+router.post('/generate-demands', authenticate, authorizePermission('finance.fee.collect'), validateRequest(generateFeeDemandsSchema), generateFeeDemands);
 
 // Fee Statistics
-router.get('/fee-stats', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getFeeStatistics);
+router.get('/fee-stats', authenticate, authorizePermission('finance.report.view'), getFeeStatistics);
 
 // Discounts
-router.post('/create-discount', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(createDiscountRequestSchema), createDiscountRequest);
+router.post('/create-discount', authenticate, authorizePermission('finance.fee.collect'), validateRequest(createDiscountRequestSchema), createDiscountRequest);
 
-router.post('/review-discount', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), validateRequest(reviewDiscountRequestSchema), reviewDiscountRequest);
+router.post('/review-discount', authenticate, authorizePermission('finance.fee.collect'), validateRequest(reviewDiscountRequestSchema), reviewDiscountRequest);
 
-router.post('/approve-discount', authenticate, authorize([Role.SUPER_ADMIN]), validateRequest(approveDiscountSchema), approveDiscount);
+router.post('/approve-discount', authenticate, authorizePermission('finance.fee.collect'), validateRequest(approveDiscountSchema), approveDiscount);
 
 // Application Fee Configuration
-router.get('/application-fee', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), getApplicationFee);
+router.get('/application-fee', authenticate, authorizePermission('finance.fee.view'), getApplicationFee);
 
-router.post('/application-fee', authenticate, authorize([Role.ADMIN, Role.SUPER_ADMIN]), updateApplicationFee);
+router.post('/application-fee', authenticate, authorizePermission('finance.fee.collect'), updateApplicationFee);
 
-router.post('/collect-fee', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]), collectFee);
+router.post('/collect-fee', authenticate, authorizePermission('finance.fee.collect'), collectFee);
 
 // Ledger
-router.get('/ledger/:studentId', authenticate, authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN, Role.VERIFICATION_OFFICER]), getStudentLedger);
+router.get('/ledger/:studentId', authenticate, authorizePermission('finance.fee.view'), getStudentLedger);
 
 // Simplified Demands List
-router.get('/student-demands/:studentId', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), getStudentFeeDemands);
+router.get('/student-demands/:studentId', authenticate, authorizePermission('finance.fee.view'), getStudentFeeDemands);
 
 // Allotment Order
-router.get('/allotment-order/:studentId', authenticate, authorize([Role.STUDENT, Role.ADMIN, Role.SUPER_ADMIN]), downloadAllotmentOrder);
+router.get('/allotment-order/:studentId', authenticate, authorizePermission('finance.fee.view'), downloadAllotmentOrder);
 
 export default router;

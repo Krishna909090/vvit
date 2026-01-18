@@ -1,5 +1,6 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, CancellationStatus, Role, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType } from '@prisma/client';
+import { AdmissionStatus, CancellationStatus, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType } from '@prisma/client';
+import { Role } from '../../constants/roles';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
@@ -490,7 +491,7 @@ export const AdminStudentService = {
                     const hostel = await tx.hostel.findUnique({ where: { id: hostelId } });
                     if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
 
-                    if (hostel.filled >= hostel.capacity) throw new AppError(MESSAGES.ERROR.HOSTEL_FULL, 400);
+                    if ((hostel.filled ?? 0) >= hostel.capacity) throw new AppError(MESSAGES.ERROR.HOSTEL_FULL, 400);
 
                     await tx.hostel.update({
                         where: { id: hostelId },
@@ -511,7 +512,7 @@ export const AdminStudentService = {
                     const route = await tx.transportRoute.findUnique({ where: { id: transportRouteId } });
                     if (!route) throw new AppError(MESSAGES.ERROR.TRANSPORT_ROUTE_NOT_FOUND, 404);
 
-                    if (route.filled >= route.capacity) throw new AppError(MESSAGES.ERROR.TRANSPORT_ROUTE_FULL, 400);
+                    if ((route.filled ?? 0) >= (route.capacity ?? 0)) throw new AppError(MESSAGES.ERROR.TRANSPORT_ROUTE_FULL, 400);
 
                     await tx.transportRoute.update({
                         where: { id: transportRouteId },
@@ -524,7 +525,7 @@ export const AdminStudentService = {
                 }
             }
 
-            const currentPaid = admission.paidFee + Number(paidAmount || 0);
+            const currentPaid = (admission.paidFee ?? 0) + Number(paidAmount || 0);
             let feeStatus: FeeStatus = FeeStatus.PENDING;
             if (currentPaid >= totalFee) feeStatus = FeeStatus.FULL;
             else if (currentPaid > 0) feeStatus = FeeStatus.PARTIAL;

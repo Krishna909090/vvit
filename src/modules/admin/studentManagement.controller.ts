@@ -7,7 +7,7 @@ import { sendResponse } from '../../utils/response';
 import { AdminStudentService } from './adminStudent.service';
 import * as StudentService from '../student/student.service';
 import prisma from '../../config/prisma';
-import { Role } from '@prisma/client';
+import { Role } from '../../constants/roles';
 import fs from 'fs';
 import path from 'path';
 

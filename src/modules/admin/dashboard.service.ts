@@ -115,7 +115,7 @@ export const DashboardService = {
         const trendMap: Record<string, number> = {};
         
         rawStudents.forEach(s => {
-            const dateStr = s.createdAt.toISOString().split('T')[0];
+            const dateStr = (s.createdAt ?? new Date()).toISOString().split('T')[0];
             trendMap[dateStr] = (trendMap[dateStr] || 0) + 1;
         });
 

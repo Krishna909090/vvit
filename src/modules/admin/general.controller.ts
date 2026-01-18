@@ -4,7 +4,8 @@ import logger from '../../utils/logger';
 import { MESSAGES } from '../../constants/messages';
 import { sendResponse } from '../../utils/response';
 import { AdminService } from './admin.service';
-import { Role, AgentCommissionStatus } from '@prisma/client';
+import { AgentCommissionStatus } from '@prisma/client';
+import { Role, RoleType } from '../../constants/roles';
 import { AppError } from '../../utils/AppError';
 
 export const getDashboardStats = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -28,7 +29,7 @@ export const addAdmin = catchAsync(async (req: Request, res: Response, next: Nex
         phone?: string;
         name?: string;
         email?: string;
-        role?: Role;
+        role?: RoleType;
     }, req.user?.userId);
 
     sendResponse({
@@ -95,7 +96,7 @@ export const getStaffUsers = catchAsync(async (req: Request, res: Response, next
     const { role, search } = req.query;
     
     const users = await AdminService.getStaffUsers({
-        role: role as Role | undefined,
+        role: role as RoleType | undefined,
         search: search as string | undefined
     });
 

@@ -398,7 +398,7 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
         AdmissionStatus.EXAM_SCHEDULED
     ];
     
-    if (!student.admissionDetails || !validStatuses.includes(student.admissionDetails.status)) {
+    if (!student.admissionDetails || !student.admissionDetails.status || !validStatuses.includes(student.admissionDetails.status)) {
         throw new AppError(
             `Student admission status (${student.admissionDetails?.status}) is not eligible for exam attendance. Must be TEST_FEE_PAID or HALL_TICKET_GENERATED.`,
             400
@@ -457,7 +457,7 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
     }
 
     // STRICT VALIDATION 6: Check scan time validity (attendance record should not be too old)
-    const scanTime = new Date(attendanceRecord.scannedAt);
+    const scanTime = new Date(attendanceRecord.scannedAt ?? new Date());
     const now = new Date();
     const hoursSinceScan = (now.getTime() - scanTime.getTime()) / (1000 * 60 * 60);
     
@@ -782,7 +782,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         });
         if (!slot) throw new AppError(MESSAGES.ERROR.SLOT_NOT_FOUND, 404);
 
-        if (slot.filled >= slot.capacity) {
+        if ((slot.filled ?? 0) >= slot.capacity) {
             throw new AppError(MESSAGES.ERROR.SLOT_FULL, 400);
         }
 
@@ -1105,7 +1105,7 @@ export const updateExamSlot = async (id: string, data: any, userId?: string) => 
     const slot = await prisma.examSlot.findUnique({ where: { id } });
     if (!slot) throw new AppError(MESSAGES.ERROR.SLOT_NOT_FOUND, 404);
 
-    if (data.capacity && data.capacity < slot.filled) {
+    if (data.capacity && data.capacity < (slot.filled ?? 0)) {
         throw new AppError(MESSAGES.ERROR.CAPACITY_REDUCTION_ERROR, 400);
     }
 
@@ -1157,7 +1157,7 @@ export const deleteExamSlot = async (id: string) => {
         throw new AppError(MESSAGES.ERROR.SLOT_NOT_FOUND, 404);
     }
 
-    if (slot.filled > 0) {
+    if ((slot.filled ?? 0) > 0) {
         logger.warn(
             `[deleteExamSlot] Cannot delete slot with booked students: id=${id} filled=${slot.filled}`
         );

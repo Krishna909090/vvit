@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
-import { Role, AdmissionStatus, RequestStatus } from '@prisma/client';
+import { AdmissionStatus, RequestStatus } from '@prisma/client';
+import { Role } from '../../constants/roles';
 import { v4 as uuidv4 } from 'uuid';
 import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService, updatePersonalDetails as updatePersonalDetailsService } from './student.service';
 import { bookExamSlot } from '../exam/exam.service';

@@ -5,7 +5,12 @@ import { sendOtpSchema, verifyOtpSchema, generateAadhaarOtpSchema, submitAadhaar
 
 const router = Router();
 
+
+/**
+ * This API related to authentication of users
+ */
 router.post('/send-otp', validateRequest(sendOtpSchema), sendOtp);
+
 router.post('/login', login);
 
 router.post('/verify-otp', validateRequest(verifyOtpSchema), verifyOtp);

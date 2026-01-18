@@ -1,9 +1,5 @@
-// routes/documentRequirementRoutes.ts
-// Routes for document requirement management
-
 import { Router } from 'express';
-import { authenticate, authorize } from '../../middlewares/authMiddleware';
-import { Role } from '@prisma/client';
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     getDocumentRequirements,
@@ -23,21 +19,21 @@ const router = Router();
 router.get(
     '/',
     authenticate,
-    authorize([Role.STUDENT,Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission(['admin.read.all', 'student.view.profile', 'student.create']),
     getDocumentRequirements
 );
 
 router.get(
     '/:id',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission(['admin.read.all']),
     getDocumentRequirementById
 );
 
 router.post(
     '/',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission('admin.update.all'),
     validateRequest(createDocumentRequirementSchema),
     createDocumentRequirement
 );
@@ -45,7 +41,7 @@ router.post(
 router.put(
     '/:id',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission('admin.update.all'),
     validateRequest(updateDocumentRequirementSchema),
     updateDocumentRequirement
 );
@@ -53,14 +49,14 @@ router.put(
 router.delete(
     '/:id',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN]),
+    authorizePermission('admin.delete.all'),
     deleteDocumentRequirement
 );
 
 router.get(
     '/students/:studentId',
     authenticate,
-    authorize([Role.ADMIN, Role.SUPER_ADMIN, Role.STUDENT]),
+    authorizePermission(['admin.read.all', 'student.view.profile']),
     getStudentDocumentRequirements
 );
 

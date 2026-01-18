@@ -8,193 +8,163 @@ datasource db {
 }
 
 model User {
-  id                String             @id @default(uuid())
-  name              String?
-  email             String?            @unique
-  phone             String             @unique
-  role              Role               @default(STUDENT)
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  createdBy         String?
-  updatedBy         String?
-  isDeleted         Boolean            @default(false)
-  password          String?
-  adminActivityLogs AdminActivityLog[]
-  agentCommissions  AgentCommission[]
-  auditLogs         AuditLog[]
-  notifications     Notification[]
-  agentStudents     Student[]          @relation("AgentStudents")
-  studentProfile    Student?           @relation("StudentUser")
-  otps              UserOtp[]
-  
-
-  @@index([role])
-  @@index([createdAt])
-  @@index([isDeleted])
+  id                     String                   @id @default(dbgenerated("gen_random_uuid()"))
+  name                   String?
+  email                  String?                  @unique
+  phone                  String?                  @unique
+  role                   String?
+  createdAt              DateTime?                @default(now())
+  updatedAt              DateTime                 @updatedAt
+  createdBy              String?
+  updatedBy              String?
+  isDeleted              Boolean?                 @default(false)
+  password               String?
+  agentCommissions       AgentCommission[]
+  auditLogs              AuditLog[]
+  notifications          Notification[]
+  agentStudents          Student[]                @relation("AgentStudents")
+  studentProfile         Student?                 @relation("StudentUser")
+  userGroups             UserGroup[]
+  otps                   UserOtp[]
+  permissionOverrides    UserPermissionOverride[]
 }
 
 model UserOtp {
-  id          String   @id @default(uuid())
+  id          String    @id @default(dbgenerated("gen_random_uuid()"))
   userId      String
   type        String
   otpHash     String
   expiresAt   DateTime
-  attempts    Int      @default(0)
-  maxAttempts Int      @default(5)
-  used        Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  used        Boolean?  @default(false)
+  createdAt   DateTime? @default(now())
+  updatedAt   DateTime  @updatedAt
   createdBy   String?
   updatedBy   String?
-  user        User     @relation(fields: [userId], references: [id])
-
-  @@index([userId, type, used, expiresAt])
+  user        User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model School {
-  id          String       @id @default(uuid())
+  id          String       @id @default(dbgenerated("gen_random_uuid()"))
   name        String       @unique
   code        String       @unique
-  createdAt   DateTime     @default(now())
+  createdAt   DateTime?    @default(now())
   updatedAt   DateTime     @updatedAt
   createdBy   String?
   updatedBy   String?
-  isDeleted   Boolean      @default(false)
+  isDeleted   Boolean?     @default(false)
   departments Department[]
-
-  @@index([isDeleted])
 }
 
 model Department {
-  id        String   @id @default(uuid())
-  name      String   @unique
-  code      String   @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id        String    @id @default(dbgenerated("gen_random_uuid()"))
+  name      String    @unique
+  code      String    @unique
+  schoolId  String?
+  createdAt DateTime? @default(now())
+  updatedAt DateTime  @updatedAt
   createdBy String?
   updatedBy String?
-  isDeleted Boolean  @default(false)
-  schoolId  String?
+  isDeleted Boolean?  @default(false)
   courses   Course[]
-  school    School?  @relation(fields: [schoolId], references: [id])
-
-  @@index([isDeleted])
+  school    School?   @relation(fields: [schoolId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Course {
-  id               String             @id @default(uuid())
-  code             String             @unique
+  id               String             @id @default(dbgenerated("gen_random_uuid()"))
+  code             String?            @unique
   name             String
   departmentId     String
-  createdAt        DateTime           @default(now())
+  createdAt        DateTime?          @default(now())
   updatedAt        DateTime           @updatedAt
   createdBy        String?
   updatedBy        String?
-  isDeleted        Boolean            @default(false)
+  isDeleted        Boolean?           @default(false)
   degree           String?
-  filledSeats      Int                @default(0)
-  totalSeats       Int                @default(0)
-  department       Department         @relation(fields: [departmentId], references: [id])
+  filledSeats      Int?               @default(0)
+  totalSeats       Int?               @default(0)
+  department       Department         @relation(fields: [departmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeStructures    FeeStructure[]
   specializations  Specialization[]
   studentsPref1    Student[]          @relation("Pref1")
   studentsPref2    Student[]          @relation("Pref2")
   studentsPref3    Student[]          @relation("Pref3")
   allottedStudents StudentAdmission[] @relation("AllottedCourse")
-
-  @@unique([name, departmentId])
-  @@index([departmentId])
-  @@index([isDeleted])
 }
 
 model Batch {
-  id               String         @id @default(uuid())
+  id               String         @id @default(dbgenerated("gen_random_uuid()"))
   name             String
   startDate        DateTime
   endDate          DateTime
-  createdAt        DateTime       @default(now())
+  courseId         String
+  specializationId String
+  createdAt        DateTime?      @default(now())
   updatedAt        DateTime       @updatedAt
   createdBy        String?
   updatedBy        String?
-  isDeleted        Boolean        @default(false)
-  specializationId String
-  specialization   Specialization @relation(fields: [specializationId], references: [id])
+  isDeleted        Boolean?       @default(false)
+  specialization   Specialization @relation(fields: [specializationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections         Section[]
-
-  @@index([specializationId])
-  @@index([isDeleted])
-  @@index([startDate, endDate])
 }
 
 model Section {
-  id        String              @id @default(uuid())
+  id        String              @id @default(dbgenerated("gen_random_uuid()"))
   name      String
   batchId   String
-  createdAt DateTime            @default(now())
+  createdAt DateTime?           @default(now())
   updatedAt DateTime            @updatedAt
   createdBy String?
   updatedBy String?
-  isDeleted Boolean             @default(false)
-  batch     Batch               @relation(fields: [batchId], references: [id])
+  isDeleted Boolean?            @default(false)
+  batch     Batch               @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students  StudentEnrollment[]
-
-  @@index([batchId])
-  @@index([isDeleted])
 }
 
 model AcademicYear {
-  id            String              @id @default(uuid())
+  id            String              @id @default(dbgenerated("gen_random_uuid()"))
   code          String              @unique
   startDate     DateTime
   endDate       DateTime
-  isActive      Boolean             @default(true)
-  isLocked      Boolean             @default(false)
-  createdAt     DateTime            @default(now())
+  isActive      Boolean?            @default(true)
+  isLocked      Boolean?            @default(false)
+  createdAt     DateTime?           @default(now())
   updatedAt     DateTime            @updatedAt
   createdBy     String?
   updatedBy     String?
-  isDeleted     Boolean             @default(false)
+  isDeleted     Boolean?            @default(false)
   feeStructures FeeStructure[]
   enrollments   StudentEnrollment[]
-
-  @@index([isActive])
-  @@index([isDeleted])
 }
 
 model StudentEnrollment {
-  id              String           @id @default(uuid())
-  studentId       String           @unique
+  id              String            @id @default(dbgenerated("gen_random_uuid()"))
+  studentId       String            @unique
   sectionId       String
-  rollNumber      String           @unique
-  currentSemester Int              @default(1)
+  rollNumber      String            @unique
+  currentSemester Int?              @default(1)
   academicYearId  String
-  status          EnrollmentStatus @default(ACTIVE)
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  status          EnrollmentStatus? @default(ACTIVE)
+  createdAt       DateTime?         @default(now())
+  updatedAt       DateTime          @updatedAt
   createdBy       String?
   updatedBy       String?
-  academicYear    AcademicYear     @relation(fields: [academicYearId], references: [id])
-  section         Section          @relation(fields: [sectionId], references: [id])
-  student         Student          @relation(fields: [studentId], references: [id])
-
-  @@index([studentId])
-  @@index([rollNumber])
-  @@index([sectionId])
-  @@index([academicYearId])
-  @@index([status])
-  @@index([currentSemester])
+  academicYear    AcademicYear      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  section         Section           @relation(fields: [sectionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student         Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Student {
-  id                        String                  @id @default(uuid())
-  applicationId             String                  @unique
+  id                        String                @id @default(dbgenerated("gen_random_uuid()"))
+  applicationId             String?               @unique
   name                      String
   fatherName                String
   motherName                String
   gender                    String
   dob                       DateTime
   phone                     String
-  email                     String                  @unique
+  email                     String?               @unique
   aadharNumber              String
   category                  String
   country                   String
@@ -205,28 +175,27 @@ model Student {
   pincode                   String
   profilePhotoUrl           String?
   documentFolderPath        String?
-  source                    AdmissionSource         @default(WEBSITE)
-  quotaType                 QuotaType               @default(MANAGEMENT)
-  applicationMode           ApplicationMode         @default(ONLINE)
-  isOffline                 Boolean                 @default(false)
-  isKycVerified             Boolean                 @default(false)
+  source                    AdmissionSource?      @default(WEBSITE)
+  quotaType                 QuotaType?            @default(MANAGEMENT)
+  applicationMode           ApplicationMode?      @default(ONLINE)
+  isOffline                 Boolean?              @default(false)
+  isKycVerified             Boolean?              @default(false)
   pref1                     String?
   pref2                     String?
   pref3                     String?
-  userId                    String?                 @unique
+  userId                    String?               @unique
   agentId                   String?
-  createdAt                 DateTime                @default(now())
-  updatedAt                 DateTime                @updatedAt
-  createdBy                 String?
-  updatedBy                 String?
   eligibleScholarshipRuleId String?
   degreeType                String?
   courseType                String?
   scholarshipRemarks        String?
-  scholarshipVerified       Boolean                 @default(false)
+  scholarshipVerified       Boolean?              @default(false)
   scholarshipVerifiedAt     DateTime?
   scholarshipVerifiedBy     String?
-  academicQualifications    AcademicQualification[]
+  createdAt                 DateTime?             @default(now())
+  updatedAt                 DateTime              @updatedAt
+  createdBy                 String?
+  updatedBy                 String?
   agentCommissions          AgentCommission[]
   attendanceRecords         AttendanceRecord[]
   cancellationRequests      CancellationRequest[]
@@ -238,221 +207,184 @@ model Student {
   hallTickets               HallTicket[]
   hostelAllocation          HostelAllocation?
   payments                  Payment[]
-  scholarshipAllocation     ScholarshipAllocation?
   seatAllocations           SeatAllocation[]
-  agent                     User?                   @relation("AgentStudents", fields: [agentId], references: [id])
-  eligibleScholarshipRule   ScholarshipRule?        @relation(fields: [eligibleScholarshipRuleId], references: [id])
-  pref1Course               Course?                 @relation("Pref1", fields: [pref1], references: [id])
-  pref2Course               Course?                 @relation("Pref2", fields: [pref2], references: [id])
-  pref3Course               Course?                 @relation("Pref3", fields: [pref3], references: [id])
-  user                      User?                   @relation("StudentUser", fields: [userId], references: [id])
+  agent                     User?                 @relation("AgentStudents", fields: [agentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  eligibleScholarshipRule   ScholarshipRule?      @relation(fields: [eligibleScholarshipRuleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  pref1Course               Course?               @relation("Pref1", fields: [pref1], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  pref2Course               Course?               @relation("Pref2", fields: [pref2], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  pref3Course               Course?               @relation("Pref3", fields: [pref3], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user                      User?                 @relation("StudentUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   admissionDetails          StudentAdmission?
   documents                 StudentDocument[]
   enrollment                StudentEnrollment?
   examDetails               StudentExam?
   feeDemands                StudentFeeDemand[]
-  ledgerEntries             StudentLedger[]
   transportAllocation       TransportAllocation?
-
-  @@index([userId])
-  @@index([agentId])
-  @@index([phone])
-  @@index([aadharNumber])
-  @@index([degreeType])
-  @@index([quotaType])
-  @@index([applicationMode])
-  @@index([isKycVerified])
-  @@index([createdAt])
-  @@index([category])
-  @@index([city, state])
+  academicQualifications    AcademicQualification[]
+  ledgerEntries             StudentLedger[]
+  scholarshipAllocation     ScholarshipAllocation?
 }
 
 model ConvenorAdmission {
-  id             String   @id @default(uuid())
-  studentId      String   @unique
+  id             String    @id @default(dbgenerated("gen_random_uuid()"))
+  studentId      String    @unique
   rank           String?
   hallTicketNo   String?
   allotmentOrder String?
   councilId      String?
   category       String?
   joiningReport  String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime  @updatedAt
   createdBy      String?
   updatedBy      String?
-  student        Student  @relation(fields: [studentId], references: [id])
+  student        Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model DataImportMapping {
-  id        String     @id @default(uuid())
+  id        String     @id @default(dbgenerated("gen_random_uuid()"))
   name      String     @unique
   type      ImportType
   mapping   Json
-  isActive  Boolean    @default(true)
-  createdAt DateTime   @default(now())
+  isActive  Boolean?   @default(true)
+  createdAt DateTime?  @default(now())
   updatedAt DateTime   @updatedAt
   createdBy String?
   updatedBy String?
 }
 
 model StudentExam {
-  id               String    @id @default(uuid())
+  id               String    @id @default(dbgenerated("gen_random_uuid()"))
   studentId        String    @unique
   hallTicketUrl    String?
   testDate         DateTime?
   testCenter       String?
-  examAttended     Boolean   @default(false)
+  examAttended     Boolean?  @default(false)
   examScore        Float?
   isQualified      Boolean?  @default(false)
   examSlotId       String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
   class12Aggregate Float?
   jeePercentile    Float?
   satScore         Float?
   vvitPercentile   Float?
+  createdAt        DateTime? @default(now())
+  updatedAt        DateTime  @updatedAt
   createdBy        String?
   updatedBy        String?
-  examSlot         ExamSlot? @relation(fields: [examSlotId], references: [id])
-  student          Student   @relation(fields: [studentId], references: [id])
-
-  @@index([studentId])
-  @@index([examSlotId])
-  @@index([examAttended])
-  @@index([isQualified])
-  @@index([testDate])
+  examSlot         ExamSlot? @relation(fields: [examSlotId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student          Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model StudentAdmission {
-  id                String             @id @default(uuid())
+  id                String             @id @default(dbgenerated("gen_random_uuid()"))
   studentId         String             @unique
-  status            AdmissionStatus    @default(REGISTERED)
+  status            AdmissionStatus?   @default(REGISTERED)
   qualificationMode QualificationMode?
-  totalFee          Float              @default(0)
-  paidFee           Float              @default(0)
-  feeStatus         FeeStatus          @default(PENDING)
-  accommodationType AccommodationType  @default(NONE)
+  totalFee          Float?             @default(0)
+  paidFee           Float?             @default(0)
+  feeStatus         FeeStatus?         @default(PENDING)
+  accommodationType AccommodationType? @default(NONE)
   hostelType        HostelType?
   hostelId          String?
   transportRouteId  String?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
   roomNumber        String?
   allottedCourseId  String?
-  allottedCourse    Course?            @relation("AllottedCourse", fields: [allottedCourseId], references: [id])
-  hostel            Hostel?            @relation(fields: [hostelId], references: [id])
-  student           Student            @relation(fields: [studentId], references: [id])
-  transportRoute    TransportRoute?    @relation(fields: [transportRouteId], references: [id])
-
-  @@index([studentId])
-  @@index([status])
-  @@index([feeStatus])
-  @@index([accommodationType])
-  @@index([hostelId])
-  @@index([transportRouteId])
-  @@index([allottedCourseId])
+  createdAt         DateTime?          @default(now())
+  updatedAt         DateTime           @updatedAt
+  allottedCourse    Course?            @relation("AllottedCourse", fields: [allottedCourseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  hostel            Hostel?            @relation(fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student           Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  transportRoute    TransportRoute?    @relation(fields: [transportRouteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model StudentDocument {
-  id          String                @id @default(uuid())
+  id          String                 @id @default(dbgenerated("gen_random_uuid()"))
   studentId   String
   documentKey String
   url         String
-  status      StudentDocumentStatus @default(PENDING)
+  status      StudentDocumentStatus? @default(PENDING)
   remarks     String?
-  createdAt   DateTime              @default(now())
-  updatedAt   DateTime              @updatedAt
+  isDeleted   Boolean?               @default(false)
+  createdAt   DateTime?              @default(now())
+  updatedAt   DateTime               @updatedAt
   createdBy   String?
   updatedBy   String?
-  isDeleted   Boolean               @default(false)
-  student     Student               @relation(fields: [studentId], references: [id])
+  student     Student                @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([studentId, documentKey])
-  @@index([studentId])
 }
 
 model Specialization {
-  id          String   @id @default(uuid())
-  code        String   @unique
+  id          String    @id @default(dbgenerated("gen_random_uuid()"))
+  code        String?   @unique
   name        String
   courseId    String
   totalSeats  Int
-  filledSeats Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  filledSeats Int?      @default(0)
+  createdAt   DateTime? @default(now())
+  updatedAt   DateTime  @updatedAt
   createdBy   String?
   updatedBy   String?
-  isDeleted   Boolean  @default(false)
+  isDeleted   Boolean?  @default(false)
   batches     Batch[]
-  course      Course   @relation(fields: [courseId], references: [id])
-
-  @@index([courseId])
-  @@index([isDeleted])
+  course      Course    @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Hostel {
-  id                String             @id @default(uuid())
+  id                String             @id @default(dbgenerated("gen_random_uuid()"))
   name              String
-  type              String
+  type              String?
   wardenName        String?
   capacity          Int
-  filled            Int                @default(0)
+  filled            Int?               @default(0)
   blockName         String?
   roomNumber        String?
-  createdAt         DateTime           @default(now())
+  isDeleted         Boolean?           @default(false)
+  cost              Float?             @default(0)
+  createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
   createdBy         String?
   updatedBy         String?
-  isDeleted         Boolean            @default(false)
   blocks            HostelBlock[]
   studentAdmissions StudentAdmission[]
-
-  @@index([type])
-  @@index([isDeleted])
 }
 
 model HostelBlock {
-  id        String       @id @default(uuid())
+  id        String       @id @default(dbgenerated("gen_random_uuid()"))
   hostelId  String
   name      String
   type      String
-  createdAt DateTime     @default(now())
+  createdAt DateTime?    @default(now())
   updatedAt DateTime     @updatedAt
   createdBy String?
   updatedBy String?
-  isDeleted Boolean      @default(false)
-  hostel    Hostel       @relation(fields: [hostelId], references: [id])
+  isDeleted Boolean?     @default(false)
+  hostel    Hostel       @relation(fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   rooms     HostelRoom[]
-
-  @@index([hostelId])
-  @@index([isDeleted])
 }
 
 model HostelRoom {
-  id        String      @id @default(uuid())
+  id        String      @id @default(dbgenerated("gen_random_uuid()"))
   blockId   String
   number    String
   capacity  Int
   type      String
-  createdAt DateTime    @default(now())
+  cost      Float?      @default(0)
+  createdAt DateTime?   @default(now())
   updatedAt DateTime    @updatedAt
   createdBy String?
   updatedBy String?
-  isDeleted Boolean     @default(false)
-  cost      Float       @default(0)
+  isDeleted Boolean?    @default(false)
   beds      HostelBed[]
-  block     HostelBlock @relation(fields: [blockId], references: [id])
-
-  @@index([blockId])
-  @@index([isDeleted])
+  block     HostelBlock @relation(fields: [blockId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model HostelPriceCategory {
-  id        String         @id @default(uuid())
+  id        String         @id @default(dbgenerated("gen_random_uuid()"))
   sharing   Int
   roomType  HostelRoomType
   price     Float
-  createdAt DateTime       @default(now())
+  createdAt DateTime?      @default(now())
   updatedAt DateTime       @updatedAt
   createdBy String?
   updatedBy String?
@@ -461,191 +393,159 @@ model HostelPriceCategory {
 }
 
 model HostelBed {
-  id         String            @id @default(uuid())
+  id         String            @id @default(dbgenerated("gen_random_uuid()"))
   roomId     String
   number     String
-  isOccupied Boolean           @default(false)
-  createdAt  DateTime          @default(now())
+  isOccupied Boolean?          @default(false)
+  createdAt  DateTime?         @default(now())
   updatedAt  DateTime          @updatedAt
   createdBy  String?
   updatedBy  String?
   allocation HostelAllocation?
-  room       HostelRoom        @relation(fields: [roomId], references: [id])
-
-  @@index([roomId])
-  @@index([isOccupied])
+  room       HostelRoom        @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model HostelAllocation {
-  id        String                 @id @default(uuid())
-  studentId String                 @unique
-  bedId     String                 @unique
+  id        String                  @id @default(dbgenerated("gen_random_uuid()"))
+  studentId String                  @unique
+  bedId     String                  @unique
   startDate DateTime
   endDate   DateTime?
-  status    HostelAllocationStatus @default(ACTIVE)
-  createdAt DateTime               @default(now())
-  updatedAt DateTime               @updatedAt
+  status    HostelAllocationStatus? @default(ACTIVE)
+  createdAt DateTime?               @default(now())
+  updatedAt DateTime                @updatedAt
   createdBy String?
   updatedBy String?
-  bed       HostelBed              @relation(fields: [bedId], references: [id])
-  student   Student                @relation(fields: [studentId], references: [id])
-
-  @@index([studentId])
-  @@index([bedId])
-  @@index([status])
-  @@index([startDate, endDate])
+  bed       HostelBed               @relation(fields: [bedId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student   Student                 @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Vehicle {
-  id          String           @id @default(uuid())
+  id          String           @id @default(dbgenerated("gen_random_uuid()"))
   number      String           @unique
   capacity    Int
   driverName  String
   driverPhone String
-  createdAt   DateTime         @default(now())
+  isDeleted   Boolean?         @default(false)
+  createdAt   DateTime?        @default(now())
   updatedAt   DateTime         @updatedAt
   createdBy   String?
   updatedBy   String?
-  isDeleted   Boolean          @default(false)
   routes      TransportRoute[]
-
-  @@index([isDeleted])
 }
 
 model TransportRoute {
-  id                String                @id @default(uuid())
+  id                String                @id @default(dbgenerated("gen_random_uuid()"))
   name              String
   cost              Float
-  city              String
+  city              String?
   busNumber         String?
-  capacity          Int                   @default(0)
-  filled            Int                   @default(0)
+  capacity          Int?                  @default(0)
+  filled            Int?                  @default(0)
   vehicleId         String?
-  createdAt         DateTime              @default(now())
+  isDeleted         Boolean?              @default(false)
+  createdAt         DateTime?             @default(now())
   updatedAt         DateTime              @updatedAt
   createdBy         String?
   updatedBy         String?
-  isDeleted         Boolean               @default(false)
   studentAdmissions StudentAdmission[]
   allocations       TransportAllocation[]
-  vehicle           Vehicle?              @relation(fields: [vehicleId], references: [id])
+  vehicle           Vehicle?              @relation(fields: [vehicleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   stops             TransportStop[]
-
-  @@index([vehicleId])
-  @@index([city])
-  @@index([isDeleted])
 }
 
 model TransportStop {
-  id          String                @id @default(uuid())
+  id          String                @id @default(dbgenerated("gen_random_uuid()"))
   routeId     String
   name        String
   sequence    Int
   pickupTime  DateTime
   dropTime    DateTime
-  createdAt   DateTime              @default(now())
+  isDeleted   Boolean?              @default(false)
+  createdAt   DateTime?             @default(now())
   updatedAt   DateTime              @updatedAt
   createdBy   String?
   updatedBy   String?
-  isDeleted   Boolean               @default(false)
   allocations TransportAllocation[]
-  route       TransportRoute        @relation(fields: [routeId], references: [id])
-
-  @@index([routeId])
-  @@index([isDeleted])
-  @@index([sequence])
+  route       TransportRoute        @relation(fields: [routeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model TransportAllocation {
-  id        String                    @id @default(uuid())
-  studentId String                    @unique
+  id        String                     @id @default(dbgenerated("gen_random_uuid()"))
+  studentId String                     @unique
   routeId   String
   stopId    String
   startDate DateTime
   endDate   DateTime?
-  status    TransportAllocationStatus @default(ACTIVE)
-  createdAt DateTime                  @default(now())
-  updatedAt DateTime                  @updatedAt
+  status    TransportAllocationStatus? @default(ACTIVE)
+  createdAt DateTime?                  @default(now())
+  updatedAt DateTime                   @updatedAt
   createdBy String?
   updatedBy String?
-  route     TransportRoute            @relation(fields: [routeId], references: [id])
-  stop      TransportStop             @relation(fields: [stopId], references: [id])
-  student   Student                   @relation(fields: [studentId], references: [id])
-
-  @@index([studentId])
-  @@index([routeId])
-  @@index([stopId])
-  @@index([status])
-  @@index([startDate, endDate])
+  route     TransportRoute             @relation(fields: [routeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  stop      TransportStop              @relation(fields: [stopId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student   Student                    @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model FeeHead {
-  id          String         @id @default(uuid())
+  id          String         @id @default(dbgenerated("gen_random_uuid()"))
   name        String
   description String?
-  createdAt   DateTime       @default(now())
+  isDeleted   Boolean?       @default(false)
+  createdAt   DateTime?      @default(now())
   updatedAt   DateTime       @updatedAt
   createdBy   String?
   updatedBy   String?
-  isDeleted   Boolean        @default(false)
   structures  FeeStructure[]
-
-  @@index([isDeleted])
 }
 
 model FeeStructure {
-  id             String             @id @default(uuid())
+  id             String             @id @default(dbgenerated("gen_random_uuid()"))
   courseId       String
   feeHeadId      String
   amount         Float
-  currency       String             @default("INR")
+  currency       String?            @default("INR")
   academicYearId String
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
-  createdBy      String?
-  updatedBy      String?
-  isDeleted      Boolean            @default(false)
   quotaType      QuotaType?
   courseType     String?
   dueDate        DateTime?
   yearOfStudy    Int?
   degreeId       String?
-  academicYear   AcademicYear       @relation(fields: [academicYearId], references: [id])
-  course         Course             @relation(fields: [courseId], references: [id])
-  feeHead        FeeHead            @relation(fields: [feeHeadId], references: [id])
+  isDeleted      Boolean?           @default(false)
+  createdAt      DateTime?          @default(now())
+  updatedAt      DateTime           @updatedAt
+  createdBy      String?
+  updatedBy      String?
+  academicYear   AcademicYear       @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course         Course             @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeHead        FeeHead            @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   demands        StudentFeeDemand[]
-
-  @@index([courseId, academicYearId])
-  @@index([quotaType])
-  @@index([yearOfStudy])
 }
 
 model StudentFeeDemand {
-  id             String       @id @default(uuid())
+  id             String       @id @default(dbgenerated("gen_random_uuid()"))
   studentId      String
   feeStructureId String
   amount         Float
   dueDate        DateTime
   status         FeeStatus
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime?    @default(now())
   updatedAt      DateTime     @updatedAt
   createdBy      String?
   updatedBy      String?
   payments       Payment[]
-  feeStructure   FeeStructure @relation(fields: [feeStructureId], references: [id])
-  student        Student      @relation(fields: [studentId], references: [id])
-
-  @@index([studentId, status])
+  feeStructure   FeeStructure @relation(fields: [feeStructureId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Payment {
-  id              String            @id @default(uuid())
+  id              String            @id @default(dbgenerated("gen_random_uuid()"))
   studentId       String
   amount          Float
-  currency        String            @default("INR")
-  status          PaymentStatus     @default(PENDING)
-  mode            PaymentMode       @default(ONLINE)
-  method          PaymentMethod?
+  currency        String?           @default("INR")
+  status          PaymentStatus?    @default(PENDING)
+  mode            PaymentMode?      @default(ONLINE)
+  method_legacy   String?
   providerTxId    String?
   merchantOrderId String?
   signature       String?
@@ -658,129 +558,84 @@ model Payment {
   metadata        Json?
   invoiceUrl      String?
   feeDemandId     String?
-  createdAt       DateTime          @default(now())
+  createdAt       DateTime?         @default(now())
   updatedAt       DateTime          @updatedAt
   createdBy       String?
   updatedBy       String?
-  feeDemand       StudentFeeDemand? @relation(fields: [feeDemandId], references: [id])
-  student         Student           @relation(fields: [studentId], references: [id])
-
-  @@index([studentId, status])
-  @@index([providerTxId])
-  @@index([referenceNumber])
-  @@index([mode])
-  @@index([createdAt])
-}
-
-model AcademicQualification {
-  id               String   @id @default(uuid())
-  studentId        String
-  level            String
-  board            String
-  yearOfPassing    String
-  hallTicketNumber String
-  gpaOrMarks       String
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  createdBy        String?
-  updatedBy        String?
-  student          Student  @relation(fields: [studentId], references: [id])
-
-  @@index([studentId])
+  method          PaymentMethod?
+  feeDemand       StudentFeeDemand? @relation(fields: [feeDemandId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student         Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model CourseChangeLog {
-  id         String   @id @default(uuid())
+  id         String    @id @default(dbgenerated("gen_random_uuid()"))
   studentId  String
   oldCourse  String
   newCourse  String
   approvedBy String
-  date       DateTime @default(now())
+  date       DateTime? @default(now())
   createdBy  String?
   updatedBy  String?
-  student    Student  @relation(fields: [studentId], references: [id])
-
-  @@index([studentId])
+  student    Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model DiscountRequest {
-  id              String         @id @default(uuid())
+  id              String          @id @default(dbgenerated("gen_random_uuid()"))
   studentId       String
   reason          String
   documentUrl     String?
-  status          DiscountStatus @default(REQUESTED)
+  status          DiscountStatus? @default(REQUESTED)
   remarks         String?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  createdBy       String?
-  updatedBy       String?
+  requestedAmount Float?          @default(0)
   approvedAmount  Float?
   approvedAt      DateTime?
   approvedBy      String?
   component       String?
-  requestedAmount Float          @default(0)
-  student         Student        @relation(fields: [studentId], references: [id])
-
-  @@index([studentId, status])
-}
-
-
-model StudentLedger {
-  id             String                @id @default(uuid())
-  studentId      String
-  type           LedgerTransactionType
-  amount         Float
-  description    String
-  date           DateTime              @default(now())
-  referenceId    String?
-  referenceType  String?
-  runningBalance Float?
-  createdAt      DateTime              @default(now())
-  updatedAt      DateTime              @updatedAt
-  createdBy      String?
-  student        Student               @relation(fields: [studentId], references: [id])
+  createdAt       DateTime?       @default(now())
+  updatedAt       DateTime        @updatedAt
+  createdBy       String?
+  updatedBy       String?
+  student         Student         @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model SystemSetting {
   key         String   @id
   value       String
   description String?
-  isLocked    Boolean  @default(false)
+  isLocked    Boolean? @default(false)
   updatedAt   DateTime @updatedAt
   updatedBy   String?
 }
 
 model AuditLog {
-  id        String   @id @default(uuid())
+  id        String    @id @default(dbgenerated("gen_random_uuid()"))
   userId    String?
   action    String
   entity    String
   entityId  String?
-  timestamp DateTime @default(now())
+  timestamp DateTime? @default(now())
   details   Json?
   ipAddress String?
   userAgent String?
-  user      User?    @relation(fields: [userId], references: [id])
+  user      User?     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model CancellationRequest {
-  id           String             @id @default(uuid())
+  id           String              @id @default(dbgenerated("gen_random_uuid()"))
   studentId    String
   reason       String
   refundAmount Float?
-  status       CancellationStatus @default(REQUESTED)
+  status       CancellationStatus? @default(REQUESTED)
   approvedBy   String?
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  createdAt    DateTime?           @default(now())
+  updatedAt    DateTime            @updatedAt
   createdBy    String?
   updatedBy    String?
-  student      Student            @relation(fields: [studentId], references: [id])
-
-  @@index([studentId, status])
+  student      Student             @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model FileUpload {
-  id         String   @id @default(uuid())
+  id         String    @id @default(dbgenerated("gen_random_uuid()"))
   studentId  String?
   uploadedBy String?
   url        String
@@ -789,309 +644,289 @@ model FileUpload {
   mime       String?
   size       Int?
   metadata   Json?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime  @updatedAt
   createdBy  String?
   updatedBy  String?
-  student    Student? @relation(fields: [studentId], references: [id])
-
-  @@index([studentId])
+  student    Student?  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model ExamDate {
-  id                String             @id @default(uuid())
+  id                String             @id @default(dbgenerated("gen_random_uuid()"))
   name              String?
   date              DateTime
   startTime         DateTime?
   endTime           DateTime?
-  createdAt         DateTime           @default(now())
+  createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
   createdBy         String?
   updatedBy         String?
   attendanceRecords AttendanceRecord[]
-
-  @@index([date])
 }
 
 model ExamCenter {
-  id        String     @id @default(uuid())
+  id        String     @id @default(dbgenerated("gen_random_uuid()"))
   name      String
   address   String?
   city      String?
   capacity  Int?
-  createdAt DateTime   @default(now())
+  isDeleted Boolean?   @default(false)
+  createdAt DateTime?  @default(now())
   updatedAt DateTime   @updatedAt
   createdBy String?
   updatedBy String?
-  isDeleted Boolean    @default(false)
   examSlots ExamSlot[]
-
-  @@index([city])
-  @@index([isDeleted])
 }
 
 model ExamSlot {
-  id               String        @id @default(uuid())
+  id               String        @id @default(dbgenerated("gen_random_uuid()"))
   examCenterId     String
   date             DateTime
   startTime        DateTime
   endTime          DateTime
   capacity         Int
-  filled           Int           @default(0)
-  isBookingEnabled Boolean       @default(false)
-  createdAt        DateTime      @default(now())
+  filled           Int?          @default(0)
+  isBookingEnabled Boolean?      @default(false)
+  isDeleted        Boolean?      @default(false)
+  createdAt        DateTime?     @default(now())
   updatedAt        DateTime      @updatedAt
   createdBy        String?
   updatedBy        String?
-  isDeleted        Boolean       @default(false)
-  examCenter       ExamCenter    @relation(fields: [examCenterId], references: [id])
+  examCenter       ExamCenter    @relation(fields: [examCenterId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   studentExams     StudentExam[]
-
-  @@index([examCenterId])
-  @@index([date])
-  @@index([isBookingEnabled])
-  @@index([isDeleted])
-  @@index([date, examCenterId])
 }
 
 model HallTicket {
-  id          String   @id @default(uuid())
+  id          String    @id @default(dbgenerated("gen_random_uuid()"))
   studentId   String
   fileId      String?
   url         String?
   qrHash      String?
-  generatedAt DateTime @default(now())
+  generatedAt DateTime? @default(now())
   createdBy   String?
   updatedBy   String?
-  student     Student  @relation(fields: [studentId], references: [id])
-
-  @@index([studentId])
+  student     Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model InvigilatorCredential {
-  id         String   @id @default(uuid())
+  id         String    @id @default(dbgenerated("gen_random_uuid()"))
   adminId    String
   token      String
   validFrom  DateTime
   validUntil DateTime
-  createdAt  DateTime @default(now())
+  createdAt  DateTime? @default(now())
   createdBy  String?
   updatedBy  String?
-
-  @@index([adminId])
-  @@index([token])
-  @@index([validFrom, validUntil])
 }
 
 model AttendanceRecord {
-  id            String    @id @default(uuid())
+  id            String    @id @default(dbgenerated("gen_random_uuid()"))
   studentId     String
   examDateId    String?
   invigilatorId String?
-  scannedAt     DateTime  @default(now())
-  verified      Boolean   @default(false)
+  scannedAt     DateTime? @default(now())
+  verified      Boolean?  @default(false)
   verifiedAt    DateTime?
+  createdAt     DateTime? @default(now())
   createdBy     String?
   updatedBy     String?
-  examDate      ExamDate? @relation(fields: [examDateId], references: [id])
-  student       Student   @relation(fields: [studentId], references: [id])
-
-  @@index([studentId])
-  @@index([examDateId])
-  @@index([invigilatorId])
-  @@index([scannedAt])
-  @@index([verified])
+  examDate      ExamDate? @relation(fields: [examDateId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student       Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model SeatAllocation {
-  id          String   @id @default(uuid())
+  id          String    @id @default(dbgenerated("gen_random_uuid()"))
   studentId   String
   oldCourse   String?
   newCourse   String?
   allocatedBy String?
-  allocatedAt DateTime @default(now())
+  allocatedAt DateTime? @default(now())
   notes       String?
   createdBy   String?
   updatedBy   String?
-  student     Student  @relation(fields: [studentId], references: [id])
-
-  @@index([studentId])
+  student     Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model CourseChangeRequest {
-  id          String        @id @default(uuid())
+  id          String         @id @default(dbgenerated("gen_random_uuid()"))
   studentId   String
   fromCourse  String
   toCourse    String
   reason      String
-  status      RequestStatus @default(REQUESTED)
+  status      RequestStatus? @default(REQUESTED)
   forwardedTo String?
   actionedBy  String?
   actionedAt  DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  createdAt   DateTime?      @default(now())
+  updatedAt   DateTime       @updatedAt
   createdBy   String?
   updatedBy   String?
-  student     Student       @relation(fields: [studentId], references: [id])
-
-  @@index([studentId, status])
+  student     Student        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model AgentCommission {
-  id        String                @id @default(uuid())
+  id        String                 @id @default(dbgenerated("gen_random_uuid()"))
   agentId   String
   studentId String
   amount    Float
   component String
-  status    AgentCommissionStatus @default(PENDING)
-  createdAt DateTime              @default(now())
+  status    AgentCommissionStatus? @default(PENDING)
+  createdAt DateTime?              @default(now())
   createdBy String?
   updatedBy String?
-  agent     User                  @relation(fields: [agentId], references: [id])
-  student   Student               @relation(fields: [studentId], references: [id])
-
-  @@index([agentId])
-  @@index([studentId, status])
-}
-
-model AdminActivityLog {
-  id           String   @id @default(uuid())
-  adminId      String
-  action       String
-  resourceType String?
-  resourceId   String?
-  details      Json?
-  createdAt    DateTime @default(now())
-  createdBy    String?
-  updatedBy    String?
-  admin        User     @relation(fields: [adminId], references: [id])
-
-  @@index([adminId])
-  @@index([action])
-  @@index([resourceType, resourceId])
-  @@index([createdAt])
+  agent     User                   @relation(fields: [agentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student   Student                @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Notification {
-  id          String   @id @default(uuid())
+  id          String    @id @default(dbgenerated("gen_random_uuid()"))
   recipientId String
   type        String
   title       String
   body        String
   link        String?
-  isRead      Boolean  @default(false)
-  createdAt   DateTime @default(now())
+  isRead      Boolean?  @default(false)
+  createdAt   DateTime? @default(now())
   createdBy   String?
   updatedBy   String?
-  recipient   User     @relation(fields: [recipientId], references: [id])
-
-  @@index([recipientId])
-  @@index([isRead])
-  @@index([type])
-  @@index([createdAt])
-  @@index([recipientId, isRead])
+  recipient   User      @relation(fields: [recipientId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model OfflineUploadBatch {
-  id            String                   @id @default(uuid())
+  id            String                    @id @default(dbgenerated("gen_random_uuid()"))
   agentId       String?
   uploadedBy    String?
   sourceFileUrl String?
-  status        OfflineUploadBatchStatus @default(PENDING)
-  createdAt     DateTime                 @default(now())
-  updatedAt     DateTime                 @updatedAt
+  status        OfflineUploadBatchStatus? @default(PENDING)
+  createdAt     DateTime?                 @default(now())
+  updatedAt     DateTime                  @updatedAt
   createdBy     String?
   updatedBy     String?
-
-  @@index([agentId])
-  @@index([status])
-  @@index([createdAt])
 }
 
 model DocumentRequirement {
-  id           String   @id @default(uuid())
+  id           String    @id @default(dbgenerated("gen_random_uuid()"))
   documentName String
   documentKey  String
-  isRequired   Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  isRequired   Boolean?  @default(true)
+  degreeType   String
+  isDeleted    Boolean?  @default(false)
+  createdAt    DateTime? @default(now())
+  updatedAt    DateTime  @updatedAt
   createdBy    String?
   updatedBy    String?
-  isDeleted    Boolean  @default(false)
-  degreeType   String
 
   @@unique([degreeType, documentKey])
-  @@index([degreeType])
-  @@index([isDeleted])
-}
-
-model Configuration {
-  id          String   @id @default(uuid())
-  key         String   @unique
-  value       String
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  createdBy   String?
-  updatedBy   String?
 }
 
 model ScholarshipRule {
-  id                 String                  @id @default(uuid())
+  id                 String    @id @default(dbgenerated("gen_random_uuid()"))
   name               String
   minPercentile      Float
   discountPercentage Float
   totalSlots         Int
-  filledSlots        Int                     @default(0)
+  filledSlots        Int       @default(0)
   degreeType         String?
-  isActive           Boolean                 @default(true)
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
-  allocations        ScholarshipAllocation[]
+  isActive           Boolean?  @default(true)
+  createdAt          DateTime? @default(now())
+  updatedAt          DateTime  @updatedAt
   eligibleStudents   Student[]
-}
-
-model ScholarshipAllocation {
-  id         String            @id @default(uuid())
-  studentId  String            @unique
-  ruleId     String
-  status     ScholarshipStatus @default(RESERVED)
-  reservedAt DateTime          @default(now())
-  lockedAt   DateTime?
-  expiresAt  DateTime?
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
-  rule       ScholarshipRule   @relation(fields: [ruleId], references: [id])
-  student    Student           @relation(fields: [studentId], references: [id])
-
-  @@index([status])
-  @@index([expiresAt])
+  allocations        ScholarshipAllocation[]
 }
 
 model QualificationRequirement {
-  id                String   @id @default(uuid())
+  id                String    @id @default(dbgenerated("gen_random_uuid()"))
   degreeType        String
-  ruleType          String   @default("SINGLE")
+  ruleType          String?   @default("SINGLE")
   qualificationKeys String[]
-  isRequired        Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  isRequired        Boolean?  @default(true)
+  isDeleted         Boolean?  @default(false)
+  createdAt         DateTime? @default(now())
+  updatedAt         DateTime  @updatedAt
   createdBy         String?
   updatedBy         String?
-  isDeleted         Boolean  @default(false)
-
-  @@index([degreeType])
-  @@index([isDeleted])
 }
 
-enum Role {
-  SUPER_ADMIN
-  ADMIN
-  AGENT
-  STUDENT
-  INVIGILATOR
-  STAFF
-  VERIFICATION_OFFICER
+model Group {
+  id        String      @id @default(dbgenerated("gen_random_uuid()"))
+  name      String      @unique
+  type      String
+  createdAt DateTime?   @default(now())
+  updatedAt DateTime    @updatedAt
+  roles     GroupRole[]
+  users     UserGroup[]
+}
+
+model GroupRole {
+  groupId    String
+  roleId     String
+  assignedAt DateTime? @default(now())
+  group      Group     @relation(fields: [groupId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  role       Role      @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([groupId, roleId])
+}
+
+model Module {
+  id         String       @id @default(dbgenerated("gen_random_uuid()"))
+  name       String
+  code       String       @unique
+  createdAt  DateTime?    @default(now())
+  updatedAt  DateTime     @updatedAt
+  permissions Permission[]
+}
+
+model Permission {
+  id                     String                   @id @default(dbgenerated("gen_random_uuid()"))
+  key                    String                   @unique
+  description            String?
+  moduleId               String
+  createdAt              DateTime?                @default(now())
+  updatedAt              DateTime                 @updatedAt
+  module                 Module                   @relation(fields: [moduleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  roles                  RolePermission[]
+  overrides              UserPermissionOverride[]
+}
+
+model Role {
+  id             String           @id @default(dbgenerated("gen_random_uuid()"))
+  name           String           @unique
+  description    String?
+  createdAt      DateTime?        @default(now())
+  updatedAt      DateTime         @updatedAt
+  groups         GroupRole[]
+  permissions    RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  assignedAt   DateTime?  @default(now())
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([roleId, permissionId])
+}
+
+model UserGroup {
+  userId     String
+  groupId    String
+  assignedAt DateTime? @default(now())
+  group      Group     @relation(fields: [groupId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user       User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([userId, groupId])
+}
+
+model UserPermissionOverride {
+  userId       String
+  permissionId String
+  type         OverrideType
+  createdAt    DateTime?    @default(now())
+  permission   Permission   @relation(fields: [permissionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user         User         @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([userId, permissionId])
 }
 
 enum AdmissionStatus {
@@ -1274,29 +1109,98 @@ enum LedgerTransactionType {
   DEBIT
 }
 
-model EmailLog {
-  id              String      @id @default(uuid())
-  recipientEmail  String
-  subject         String
-  content         String      @db.Text // Store HTML content
-  status          EmailStatus @default(PENDING)
-  invoiceData     Json?       // Store the invoice data used for generation
-  templateType    String      // e.g., 'ENTRANCE_FEE_RECEIPT'
-  messageId       String?     // ZeptoMail message ID
-  errorResponse   Json?       // Store error details if any
-  metadata        Json?       // Any other relevant data like studentId, transactionId
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  retryCount      Int         @default(0)
-
-  @@index([status])
-  @@index([recipientEmail])
-  @@index([createdAt])
-}
-
 enum EmailStatus {
   PENDING
   SENT
   FAILED
 }
 
+enum OverrideType {
+  GRANT
+  REVOKE
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  AGENT
+  STUDENT
+  INVIGILATOR
+  STAFF
+  VERIFICATION_OFFICER
+}
+
+model AcademicQualification {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  studentId String
+  level     String
+  schoolName String?
+  board     String
+  yearOfPassing String
+  percentage Float?
+  gpaOrMarks String?
+  hallTicketNumber String?
+  docUrl    String?
+  createdBy String?
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model EmailLog {
+  id             String      @id @default(dbgenerated("gen_random_uuid()"))
+  recipientEmail String
+  subject        String
+  content        String
+  status         EmailStatus @default(PENDING)
+  errorResponse  Json?
+  invoiceData    Json?
+  messageId      String?
+  metadata       Json?
+  templateType   String?
+  retryCount     Int         @default(0)
+  sentAt         DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
+
+
+model ScholarshipAllocation {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  studentId String   @unique
+  ruleId    String
+  status    ScholarshipStatus @default(RESERVED)
+  expiresAt DateTime?
+  reservedAt DateTime?
+  lockedAt  DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rule      ScholarshipRule @relation(fields: [ruleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model StudentLedger {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  studentId     String
+  type          LedgerTransactionType
+  amount        Float
+  description   String?
+  referenceId   String?
+  referenceType String?
+  date          DateTime @default(now())
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  student       Student  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model Configuration {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  key       String   @unique
+  value     String
+  category  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
