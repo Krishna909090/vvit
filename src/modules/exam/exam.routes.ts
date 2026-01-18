@@ -32,47 +32,47 @@ import {
 const router = Router();
 
 // Admin Routes
-router.post('/centers', authenticate, authorizePermission('exam.center.manage'), validateRequest(createExamCenterSchema), createExamCenter);
+router.post('/centers', authenticate, authorizePermission('exam.create.all'), validateRequest(createExamCenterSchema), createExamCenter);
 
-router.post('/slots', authenticate, authorizePermission('exam.slot.manage'), validateRequest(createExamSlotSchema), createExamSlot);
+router.post('/slots', authenticate, authorizePermission('exam.create.all'), validateRequest(createExamSlotSchema), createExamSlot);
 
-router.put('/slots/:slotId/toggle-booking', authenticate, authorizePermission('exam.slot.manage'), toggleSlotBooking);
+router.put('/slots/:slotId/toggle-booking', authenticate, authorizePermission('exam.update.all'), toggleSlotBooking);
 
 
-router.get('/centers', authenticate, authorizePermission('exam.view.all'), getExamCenters);
+router.get('/centers', authenticate, authorizePermission('exam.read.all'), getExamCenters);
 
-router.put('/centers/:id', authenticate, authorizePermission('exam.center.manage'), updateExamCenter);
+router.put('/centers/:id', authenticate, authorizePermission('exam.update.all'), updateExamCenter);
 
-router.delete('/centers/:id', authenticate, authorizePermission('exam.center.manage'), deleteExamCenter);
+router.delete('/centers/:id', authenticate, authorizePermission('exam.delete.all'), deleteExamCenter);
 
 // Exam Slots Admin CRUD
 
-router.get('/students/status/:status', authenticate, authorizePermission('exam.view.all'), getStudentsByStatus);
+router.get('/students/status/:status', authenticate, authorizePermission('exam.read.all'), getStudentsByStatus);
 
-router.get('/all-slots', authenticate, authorizePermission('exam.view.all'), getExamSlots);
+router.get('/all-slots', authenticate, authorizePermission('exam.read.all'), getExamSlots);
 
-router.get('/centers/:centerId/slots', authenticate, authorizePermission('exam.view.all'), getExamSlotsByCenter);
+router.get('/centers/:centerId/slots', authenticate, authorizePermission('exam.read.all'), getExamSlotsByCenter);
 
-router.get('/slots/:id', authenticate, authorizePermission('exam.view.all'), getExamSlot);
-router.put('/slots/:id', authenticate, authorizePermission('exam.slot.manage'), updateExamSlot);
-router.delete('/slots/:id', authenticate, authorizePermission('exam.slot.manage'), deleteExamSlot);
+router.get('/slots/:id', authenticate, authorizePermission('exam.read.all'), getExamSlot);
+router.put('/slots/:id', authenticate, authorizePermission('exam.update.all'), updateExamSlot);
+router.delete('/slots/:id', authenticate, authorizePermission('exam.delete.all'), deleteExamSlot);
 
 
 // Invigilator / Scanning Routes
-router.post('/scan-qr', authenticate, authorizePermission('exam.attendance.scan'), scanAttendance);
-router.post('/verify-attendance', authenticate, authorizePermission('exam.attendance.scan'), verifyAttendance);
+router.post('/scan-qr', authenticate, authorizePermission('exam.update.all'), scanAttendance);
+router.post('/verify-attendance', authenticate, authorizePermission('exam.update.all'), verifyAttendance);
 
 // Student/Public Routes
-router.get('/slots', authenticate, getAvailableSlots);
-router.post('/book-slot', authenticate, bookExamSlot);
+router.get('/slots', authenticate, authorizePermission(['exam.read.all', 'exam.read.own']), getAvailableSlots);
+router.post('/book-slot', authenticate, authorizePermission(['exam.create.own', 'exam.update.own']), bookExamSlot);
 
 
-router.get('/hall-ticket/:studentId', authenticate, getHallTicketDetails);
+router.get('/hall-ticket/:studentId', authenticate, authorizePermission(['exam.read.own', 'exam.read.all']), getHallTicketDetails);
 
 // Exam Results & Attendance (Admin)
-router.post('/mark-attendance', authenticate, authorizePermission('exam.attendance.scan'), markAttendance);
-router.post('/results', authenticate, authorizePermission('exam.result.update'), updateExamScore);
-router.post('/results/bulk', authenticate, authorizePermission('exam.result.update'), upload.single('file'), uploadBulkResults);
+router.post('/mark-attendance', authenticate, authorizePermission('exam.update.all'), markAttendance);
+router.post('/results', authenticate, authorizePermission('exam.update.all'), updateExamScore);
+router.post('/results/bulk', authenticate, authorizePermission('exam.update.all'), upload.single('file'), uploadBulkResults);
 
 
 export default router;

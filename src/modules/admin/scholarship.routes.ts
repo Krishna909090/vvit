@@ -6,17 +6,18 @@ import * as scholarshipController from './scholarship.controller';
 const router = Router();
 
 // Routes
-router.post('/rules', authenticate, authorizePermission('finance.scholarship.manage'), scholarshipController.createScholarshipRule);
-router.get('/rules', authenticate, authorizePermission('finance.scholarship.manage'), scholarshipController.getScholarshipRules);
-router.put('/rules/:id', authenticate, authorizePermission('finance.scholarship.manage'), scholarshipController.updateScholarshipRule);
-router.delete('/rules/:id', authenticate, authorizePermission('finance.scholarship.manage'), scholarshipController.deleteScholarshipRule);
+// Routes
+router.post('/rules', authenticate, authorizePermission('scholarship.create.all'), scholarshipController.createScholarshipRule);
+router.get('/rules', authenticate, authorizePermission(['scholarship.read.all', 'scholarship.read.own']), scholarshipController.getScholarshipRules);
+router.put('/rules/:id', authenticate, authorizePermission('scholarship.update.all'), scholarshipController.updateScholarshipRule);
+router.delete('/rules/:id', authenticate, authorizePermission('scholarship.delete.all'), scholarshipController.deleteScholarshipRule);
 // 1. Check Eligibility (Read Only)
-router.get('/check-eligibility/:studentId', authenticate, authorizePermission(['student.view.profile', 'finance.scholarship.manage']), scholarshipController.checkEligibility);
+router.get('/check-eligibility/:studentId', authenticate, authorizePermission(['scholarship.read.all', 'scholarship.read.own']), scholarshipController.checkEligibility);
 
 // 2. Verify (Officer)
-router.post('/verify-eligibility', authenticate, authorizePermission('finance.scholarship.manage'), scholarshipController.verifyEligibility);
+router.post('/verify-eligibility', authenticate, authorizePermission('scholarship.update.all'), scholarshipController.verifyEligibility);
 
 // 3. Allocate (Admin)
-router.post('/allocate', authenticate, authorizePermission('finance.scholarship.manage'), scholarshipController.allocateScholarship);
+router.post('/allocate', authenticate, authorizePermission('scholarship.create.all'), scholarshipController.allocateScholarship);
 
 export default router;

@@ -9,21 +9,21 @@ const router = Router();
 router.get(
     '/',
     authenticate,
-    authorizePermission(['admin.read.all', 'student.view.profile', 'student.create']), // Students need to see reqs
+    authorizePermission(['qualification.read.all', 'student.create.own', 'student.create.all']), // Students need to see reqs
     controller.getQualificationRequirements
 );
 
 router.get(
     '/:id',
     authenticate,
-    authorizePermission(['admin.read.all', 'student.view.profile']),
+    authorizePermission(['qualification.read.all', 'student.create.own', 'student.create.all']),
     controller.getQualificationRequirementById
 );
 
 router.post(
     '/',
     authenticate,
-    authorizePermission('admin.update.all'),
+    authorizePermission('qualification.create.all'),
     validateRequest(createQualificationRequirementSchema),
     controller.createQualificationRequirement
 );
@@ -31,7 +31,7 @@ router.post(
 router.put(
     '/:id',
     authenticate,
-    authorizePermission('admin.update.all'),
+    authorizePermission('qualification.update.all'),
     validateRequest(updateQualificationRequirementSchema),
     controller.updateQualificationRequirement
 );
@@ -39,7 +39,7 @@ router.put(
 router.delete(
     '/:id',
     authenticate,
-    authorizePermission('admin.delete.all'),
+    authorizePermission('qualification.delete.all'),
     controller.deleteQualificationRequirement
 );
 

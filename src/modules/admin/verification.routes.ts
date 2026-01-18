@@ -13,7 +13,7 @@ const router = Router();
 // Submit Verification Scores
 router.post('/submit-scores', 
     authenticate, 
-    authorizePermission('verify.document.approve'), 
+    authorizePermission('admission.update.all'), 
     validateRequest(submitVerificationSchema),
     catchAsync(async (req, res) => {
         const { studentId, ...scores } = req.body;
@@ -31,7 +31,7 @@ router.post('/submit-scores',
 // Set Scholarship Eligibility (Reuse existing controller logic)
 router.post('/scholarship-eligibility', 
     authenticate, 
-    authorizePermission('finance.scholarship.manage'), 
+    authorizePermission('scholarship.update.all'), 
     validateRequest(setEligibleScholarshipSchema),
     setScholarshipEligibility
 );

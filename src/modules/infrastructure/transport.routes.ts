@@ -14,24 +14,24 @@ const router = Router();
 
 
 // Transport Route
-router.post('/transport-route', authenticate, authorizePermission('infra.transport.manage'), validateRequest(createTransportRouteSchema), createTransportRoute);
-router.get('/transport-route', authenticate, authorizePermission('infra.view'), getTransportRoutes);
-router.get('/transport-route/:id', authenticate, authorizePermission('infra.view'), getTransportRouteById);
-router.put('/transport-route/:id', authenticate, authorizePermission('infra.transport.manage'), updateTransportRoute);
-router.delete('/transport-route/:id', authenticate, authorizePermission('infra.transport.manage'), deleteTransportRoute);
+router.post('/transport-route', authenticate, authorizePermission('transport.create.all'), validateRequest(createTransportRouteSchema), createTransportRoute);
+router.get('/transport-route', authenticate, authorizePermission(['transport.read.all', 'student.create.own', 'student.create.all']), getTransportRoutes);
+router.get('/transport-route/:id', authenticate, authorizePermission(['transport.read.all', 'student.create.own', 'student.create.all']), getTransportRouteById);
+router.put('/transport-route/:id', authenticate, authorizePermission('transport.update.all'), updateTransportRoute);
+router.delete('/transport-route/:id', authenticate, authorizePermission('transport.delete.all'), deleteTransportRoute);
 
 // Vehicle
-router.post('/vehicle', authenticate, authorizePermission('infra.transport.manage'), validateRequest(createVehicleSchema), createVehicle);
-router.get('/vehicle', authenticate, authorizePermission('infra.view'), getVehicles);
-router.get('/vehicle/:id', authenticate, authorizePermission('infra.view'), getVehicleById);
-router.put('/vehicle/:id', authenticate, authorizePermission('infra.transport.manage'), updateVehicle);
-router.delete('/vehicle/:id', authenticate, authorizePermission('infra.transport.manage'), deleteVehicle);
+router.post('/vehicle', authenticate, authorizePermission('transport.create.all'), validateRequest(createVehicleSchema), createVehicle);
+router.get('/vehicle', authenticate, authorizePermission(['transport.read.all', 'student.create.own', 'student.create.all']), getVehicles);
+router.get('/vehicle/:id', authenticate, authorizePermission(['transport.read.all', 'student.create.own', 'student.create.all']), getVehicleById);
+router.put('/vehicle/:id', authenticate, authorizePermission('transport.update.all'), updateVehicle);
+router.delete('/vehicle/:id', authenticate, authorizePermission('transport.delete.all'), deleteVehicle);
 
 // Transport Stop
-router.post('/transport-stop', authenticate, authorizePermission('infra.transport.manage'), validateRequest(createTransportStopSchema), createTransportStop);
-router.get('/transport-stop', authenticate, authorizePermission('infra.view'), getTransportStops);
-router.get('/transport-stop/:id', authenticate, authorizePermission('infra.view'), getTransportStopById);
-router.put('/transport-stop/:id', authenticate, authorizePermission('infra.transport.manage'), updateTransportStop);
-router.delete('/transport-stop/:id', authenticate, authorizePermission('infra.transport.manage'), deleteTransportStop);
+router.post('/transport-stop', authenticate, authorizePermission('transport.create.all'), validateRequest(createTransportStopSchema), createTransportStop);
+router.get('/transport-stop', authenticate, authorizePermission(['transport.read.all', 'student.create.own', 'student.create.all']), getTransportStops);
+router.get('/transport-stop/:id', authenticate, authorizePermission(['transport.read.all', 'student.create.own', 'student.create.all']), getTransportStopById);
+router.put('/transport-stop/:id', authenticate, authorizePermission('transport.update.all'), updateTransportStop);
+router.delete('/transport-stop/:id', authenticate, authorizePermission('transport.delete.all'), deleteTransportStop);
 
 export default router;

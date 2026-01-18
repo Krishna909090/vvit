@@ -19,21 +19,21 @@ const router = Router();
 router.get(
     '/',
     authenticate,
-    authorizePermission(['admin.read.all', 'student.view.profile', 'student.create']),
+    authorizePermission(['document.read.all', 'student.create.own', 'student.create.all']),
     getDocumentRequirements
 );
 
 router.get(
     '/:id',
     authenticate,
-    authorizePermission(['admin.read.all']),
+    authorizePermission(['document.read.all', 'student.create.own', 'student.create.all']),
     getDocumentRequirementById
 );
 
 router.post(
     '/',
     authenticate,
-    authorizePermission('admin.update.all'),
+    authorizePermission('document.create.all'),
     validateRequest(createDocumentRequirementSchema),
     createDocumentRequirement
 );
@@ -41,7 +41,7 @@ router.post(
 router.put(
     '/:id',
     authenticate,
-    authorizePermission('admin.update.all'),
+    authorizePermission('document.update.all'),
     validateRequest(updateDocumentRequirementSchema),
     updateDocumentRequirement
 );
@@ -49,14 +49,14 @@ router.put(
 router.delete(
     '/:id',
     authenticate,
-    authorizePermission('admin.delete.all'),
+    authorizePermission('document.delete.all'),
     deleteDocumentRequirement
 );
 
 router.get(
     '/students/:studentId',
     authenticate,
-    authorizePermission(['admin.read.all', 'student.view.profile']),
+    authorizePermission(['document.read.all', 'student.create.own', 'student.create.all']),
     getStudentDocumentRequirements
 );
 

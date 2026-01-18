@@ -10,25 +10,25 @@ const router = express.Router();
 
 router.use('/fees', feeRoutes);
 
-router.get('/:paymentId/invoice', authenticate, authorizePermission('finance.fee.view'), getInvoice);
+router.get('/:paymentId/invoice', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getInvoice);
 
 // Callback only
 
-router.post('/initiate-entrance-fee', authenticate, authorizePermission('finance.fee.collect'), payTestFee);
-router.post('/offline-entrance-fee', authenticate, authorizePermission('finance.fee.collect'), payOfflineApplicationFee);
-router.post('/initiate-college-fee', authenticate, authorizePermission('finance.fee.collect'), payCollegeFee);
-router.post('/request-discount', authenticate, authorizePermission('finance.fee.collect'), requestDiscount);
+router.post('/initiate-entrance-fee', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), payTestFee);
+router.post('/offline-entrance-fee', authenticate, authorizePermission(['finance.create.all', 'finance.create.own']), payOfflineApplicationFee);
+router.post('/initiate-college-fee', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), payCollegeFee);
+router.post('/request-discount', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), requestDiscount);
 
 // Discount Approval Workflow (Super Admin Only)
-router.post('/discount/approve/:requestId', authenticate, authorizePermission('admin.update.all'), approveDiscount); // High level override
-router.post('/discount/reject/:requestId', authenticate, authorizePermission('admin.update.all'), rejectDiscount);
+router.post('/discount/approve/:requestId', authenticate, authorizePermission('finance.update.all'), approveDiscount); // High level override
+router.post('/discount/reject/:requestId', authenticate, authorizePermission('finance.update.all'), rejectDiscount);
 
-router.get('/check-status/:txnId', authenticate, authorizePermission('finance.fee.view'), checkPaymentStatus);
+router.get('/check-status/:txnId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), checkPaymentStatus);
 // History Routes
-router.get('/history', authenticate, authorizePermission('finance.fee.view'), getPaymentHistory);
-router.get('/history/:studentId', authenticate, authorizePermission('finance.fee.view'), getPaymentHistory);
-router.get('/summary', authenticate, authorizePermission('finance.fee.view'), getFinancialSummary);
-router.get('/summary/:studentId', authenticate, authorizePermission('finance.fee.view'), getFinancialSummary);
+router.get('/history', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getPaymentHistory);
+router.get('/history/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getPaymentHistory);
+router.get('/summary', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getFinancialSummary);
+router.get('/summary/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getFinancialSummary);
     
 router.post('/callback', async (req, res, next) => {
     try {
