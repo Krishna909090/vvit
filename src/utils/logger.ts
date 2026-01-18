@@ -23,14 +23,14 @@ const logger = winston.createLogger({
             )
         }),
         new DailyRotateFile({
-            filename: '/var/log/erp/application-%DATE%.log',
+            filename: 'logs/erp/application-%DATE%.log',
             datePattern: 'YYYY-MM-DD',
             zippedArchive: true,
             maxSize: '20m',
             maxFiles: '14d'
         }),
         new DailyRotateFile({
-            filename: '/var/log/erp/error-%DATE%.log',
+            filename: 'logs/erp/application-%DATE%.log',
             datePattern: 'YYYY-MM-DD',
             zippedArchive: true,
             maxSize: '20m',

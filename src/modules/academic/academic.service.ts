@@ -11,7 +11,8 @@ export const AcademicService = {
                 OR: [
                     { code: { equals: code, mode: 'insensitive' } },
                     { name: { equals: name, mode: 'insensitive' } }
-                ]
+                ],
+                isDeleted: false
             }
         });
 
@@ -74,7 +75,8 @@ export const AcademicService = {
                 OR: [
                     { code: { equals: code, mode: 'insensitive' } },
                     { name: { equals: name, mode: 'insensitive' } }
-                ]
+                ],
+                isDeleted: false
             }
         });
 
@@ -158,7 +160,8 @@ export const AcademicService = {
                     {
                         code: { equals: code, mode: 'insensitive' }
                     }
-                ]
+                ],
+                isDeleted: false
             }
         });
 
@@ -239,7 +242,8 @@ export const AcademicService = {
            const existingCourse = await prisma.course.findFirst({
                 where: {
                     code: { equals: code, mode: 'insensitive' },
-                    id: { not: id }
+                    id: { not: id },
+                    isDeleted: false
                 }
             });
             if (existingCourse) {
@@ -272,7 +276,7 @@ export const AcademicService = {
             throw new AppError("Course (Specialization Parent) not found", 404);
         }
 
-        const existingSpecialization = await prisma.specialization.findUnique({ where: { code } });
+        const existingSpecialization = await prisma.specialization.findFirst({ where: { code, isDeleted: false } });
         if (existingSpecialization) {
             throw new AppError("Specialization code exists", 409);
         }
@@ -417,7 +421,7 @@ export const AcademicService = {
 
     // Academic Year
     async createAcademicYear(code: string, startDate: string, endDate: string, isActive: boolean, createdBy?: string) {
-        const existingYear = await prisma.academicYear.findUnique({ where: { code } });
+        const existingYear = await prisma.academicYear.findFirst({ where: { code, isDeleted: false } });
         if (existingYear) {
             throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_EXISTS, 409);
         }
@@ -473,7 +477,8 @@ export const AcademicService = {
         const existingBatch = await prisma.batch.findFirst({
             where: {
                 name: { equals: name, mode: 'insensitive' },
-                specializationId
+                specializationId,
+                isDeleted: false
             }
         });
 
@@ -545,7 +550,8 @@ export const AcademicService = {
         const existingSection = await prisma.section.findFirst({
             where: {
                 name: { equals: name, mode: 'insensitive' },
-                batchId
+                batchId,
+                isDeleted: false
             }
         });
 
