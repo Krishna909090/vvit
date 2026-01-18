@@ -9,6 +9,7 @@ import { AppError } from '../../utils/AppError';
 import { sendBsnlOtp, sendZeptoEmail } from '../integration/integration.service';
 import { MESSAGES } from '../../constants/messages';
 import { maskPhone, maskEmail } from '../../utils/mask';
+import { getUserPermissions, getUserModules } from '../rbac/services/rbac.service';
 
 // JWT_SECRET is validated on startup by envValidator - no fallback needed
 const JWT_SECRET = process.env.JWT_SECRET!;
@@ -267,11 +268,17 @@ export const verifyOtp = async (
     )}, email=${maskEmail(user.email)}`
   );
 
+  // Fetch Permissions and Modules
+  const { permissions } = await getUserPermissions(user.id);
+  const modules = await getUserModules(permissions);
+
   return {
     token,
     role: user.role,
     id: user.id,
-    phone:user.phone
+    phone: user.phone,
+    permissions,
+    modules
   };
 };
 
@@ -302,7 +309,13 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
 
   logger.info(`[login] Password login success: userId=${user.id}`);
 
-  return { token, role: user.role, id: user.id };
+  // Fetch Permissions and Modules
+  const { permissions } = await getUserPermissions(user.id);
+  const modules = await getUserModules(permissions);
+
+  logger.info(`[login] Returning data: role=${user.role}, permissionsOfUser=${permissions.length}, modulesOfUser=${modules.length}`);
+
+  return { token, role: user.role, id: user.id, permissions, modules };
 };
 
 export const generateAadhaarOtp = async (idNumber: string) => {
