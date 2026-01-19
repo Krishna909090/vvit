@@ -129,11 +129,16 @@ export const createRole = async (data: { name: string; description?: string }) =
 };
 
 export const getRoles = async () => {
-  return prisma.role.findMany({
+  const roles = await prisma.role.findMany({
     include: {
       permissions: { include: { permission: true } }
     }
   });
+
+  return roles.map(role => ({
+    ...role,
+    permissions: role.permissions.map(p => p.permission)
+  }));
 };
 
 
