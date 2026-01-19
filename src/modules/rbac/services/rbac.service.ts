@@ -283,7 +283,11 @@ export const createModule = async (data: { name: string; code: string }) => {
 };
 
 export const getModules = async () => {
-  return prisma.module.findMany();
+  return prisma.module.findMany({
+    include: {
+      permissions: true
+    }
+  });
 };
 
 export const updateModule = async (moduleId: string, data: { name?: string; code?: string }) => {
