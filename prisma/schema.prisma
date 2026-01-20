@@ -1141,6 +1141,7 @@ model AcademicQualification {
   gpaOrMarks String?
   hallTicketNumber String?
   docUrl    String?
+  verificationStatus String? @default("PENDING")
   createdBy String?
   updatedBy String?
   createdAt DateTime @default(now())
