@@ -10,7 +10,11 @@ import {
     updateStudentPersonalDetails,
     getStudentDetails,
     updateAcademicQualification,
-    deleteAcademicQualification
+    deleteAcademicQualification,
+    updateStudentScholarship,
+    getStudentScholarships,
+    getScholarshipStats,
+    editStudentScholarship
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -21,6 +25,7 @@ import {
     updateAcademicQualificationSchema,
     deleteAcademicQualificationSchema
 } from '../../validators/adminValidators';
+
 import upload from '../../config/multer';
 import {
     addRequirement,
@@ -84,5 +89,11 @@ router.get('/details/:studentId', authenticate, authorizePermission(['student.re
 // Academic Qualifications Management
 router.put('/academic-qualifications/:id', authenticate, authorizePermission(['student.update.all']), validateRequest(updateAcademicQualificationSchema), updateAcademicQualification);
 router.delete('/academic-qualifications/:id', authenticate, authorizePermission(['student.update.all']), validateRequest(deleteAcademicQualificationSchema), deleteAcademicQualification);
+
+// Student Scholarship Management
+router.post('/student-scholarship', authenticate, authorizePermission(['scholarship.update.all']), updateStudentScholarship);
+router.put('/student-scholarship/:id', authenticate, authorizePermission(['scholarship.update.all']), editStudentScholarship);
+router.get('/scholarship-stats', authenticate, authorizePermission(['scholarship.read.all']), getScholarshipStats);
+router.get('/student-scholarship/:studentId', authenticate, authorizePermission(['scholarship.read.all']), getStudentScholarships);
 
 export default router;

@@ -385,3 +385,66 @@ export const validateAcademicQualification = catchAsync(async (req: Request, res
     });
 });
 
+// Update Student Scholarship
+export const updateStudentScholarship = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[updateStudentScholarship] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId } = req.body;
+
+    const result = await AdminStudentService.updateStudentScholarship(studentId, req.body, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Student scholarship updated successfully',
+        data: result
+    });
+});
+
+// Get Student Scholarships
+export const getStudentScholarships = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getStudentScholarships] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId } = req.params;
+
+    const results = await AdminStudentService.getStudentScholarships(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: results
+    });
+});
+
+// Get Scholarship Stats
+export const getScholarshipStats = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getScholarshipStats] by=${req.user?.userId || 'anonymous'}`);
+
+    const stats = await AdminStudentService.getScholarshipStats();
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: stats
+    });
+});
+
+// Edit Student Scholarship (PUT)
+export const editStudentScholarship = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[editStudentScholarship] by=${req.user?.userId || 'anonymous'}`);
+    const { id } = req.params;
+
+    const result = await AdminStudentService.editStudentScholarship(id, req.body, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Student scholarship updated successfully',
+        data: result
+    });
+});
+

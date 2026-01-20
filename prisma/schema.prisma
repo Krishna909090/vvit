@@ -223,6 +223,7 @@ model Student {
   academicQualifications    AcademicQualification[]
   ledgerEntries             StudentLedger[]
   scholarshipAllocation     ScholarshipAllocation?
+  studentScholarship        StudentScholarship[]
 }
 
 model ConvenorAdmission {
@@ -1147,6 +1148,25 @@ model AcademicQualification {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   student   Student  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  studentScholarships StudentScholarship[]
+}
+
+model StudentScholarship {
+  id                    String                @id @default(dbgenerated("gen_random_uuid()"))
+  studentId             String
+  type                  String
+  degreeType            String?
+  score                 Float?
+  remarks               String?
+  scholarshipPercentage Float?
+  qualificationId       String?
+  createdBy             String?
+  updatedBy             String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  student               Student               @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  qualification         AcademicQualification? @relation(fields: [qualificationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model EmailLog {

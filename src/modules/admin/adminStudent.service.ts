@@ -66,7 +66,8 @@ export const AdminStudentService = {
                     pref1Course: { select: { name: true } },
                     pref2Course: { select: { name: true } },
                     pref3Course: { select: { name: true } },
-                    feeDemands: true
+                    feeDemands: true,
+                    studentScholarship: true
                 }
             }),
             prisma.student.count({ where })
@@ -911,23 +912,160 @@ export const AdminStudentService = {
 
         if (!qualification) throw new AppError('Qualification not found', 404);
 
-        // Update verification column via Raw SQL as it's not in Prisma schema yet
-        // Assumes column name is "verificationStatus"
-        try {
-            await prisma.$executeRaw`
-                UPDATE "AcademicQualification" 
-                SET "verificationStatus" = ${status}, "updatedBy" = ${adminId}, "updatedAt" = NOW()
-                WHERE "id" = ${qualificationId}
-            `;
-        } catch (e: any) {
-            logger.error(`Failed to update qualification verification status: ${e.message}`);
-            if (e.message.includes('column "verificationStatus" of relation "AcademicQualification" does not exist')) {
-                 throw new AppError('Database column "verificationStatus" missing. Please run the SQL migration.', 500);
+        // Update verification column via Prisma
+        const updatedQualification = await prisma.academicQualification.update({
+            where: { id: qualificationId },
+            data: {
+                verificationStatus: status,
+                updatedBy: adminId
             }
-            throw new AppError(`Failed to update verification status: ${e.message}`, 500);
-        }
+        });
 
         return { success: true, message: 'Qualification status updated successfully' };
+    },
+    
+    async updateStudentScholarship(studentId: string, data: any, adminId: string | undefined) {
+         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+         const { id, type, degreeType, score, remarks, scholarshipPercentage, qualificationId } = data;
+
+         // Check if qualification exists if provided
+         if (qualificationId) {
+             const qual = await prisma.academicQualification.findUnique({ where: { id: qualificationId } });
+             if (!qual) throw new AppError('Qualification not found', 404);
+         }
+
+         if (id) {
+             return await prisma.studentScholarship.update({
+                 where: { id: id },
+                 data: {
+                     type,
+                     degreeType,
+                     score: score ? Number(score) : undefined,
+                     remarks,
+                     scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
+                     qualificationId,
+                     updatedBy: adminId
+                 }
+             });
+         } else {
+             return await prisma.studentScholarship.create({
+                 data: {
+                     studentId,
+                     type,
+                     degreeType,
+                     score: score ? Number(score) : undefined,
+                     remarks,
+                     scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
+                     qualificationId,
+                     createdBy: adminId,
+                     updatedBy: adminId
+                 }
+             });
+         }
+    },
+
+    async getStudentScholarships(studentId: string) {
+        if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+        return await prisma.studentScholarship.findMany({
+            where: { studentId },
+            include: { qualification: true },
+            orderBy: { createdAt: 'desc' }
+        });
+    },
+
+    async editStudentScholarship(scholarshipId: string, data: any, adminId: string | undefined) {
+        if (!scholarshipId) throw new AppError('Scholarship ID is required', 400);
+
+        const existing = await prisma.studentScholarship.findUnique({ where: { id: scholarshipId } });
+        if (!existing) throw new AppError('Scholarship record not found', 404);
+
+        const { type, degreeType, score, remarks, scholarshipPercentage, qualificationId } = data;
+
+        // Check qualification existence if updating it
+        if (qualificationId) {
+             const qual = await prisma.academicQualification.findUnique({ where: { id: qualificationId } });
+             if (!qual) throw new AppError('Qualification not found', 404);
+        }
+
+        return await prisma.studentScholarship.update({
+            where: { id: scholarshipId },
+            data: {
+                type,
+                degreeType,
+                score: score ? Number(score) : undefined,
+                remarks,
+                scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
+                qualificationId,
+                updatedBy: adminId
+            }
+        });
+    },
+
+    async getScholarshipStats() {
+        // Group by degreeType and scholarshipPercentage
+        const dbStats = await prisma.studentScholarship.groupBy({
+            by: ['degreeType', 'scholarshipPercentage'],
+            _count: {
+                studentId: true
+            }
+        });
+
+        // Define required combinations
+        const manualDefaults = [
+            { degreeType: 'B.Tech', scholarshipPercentage: 50 },
+            { degreeType: 'B.Tech', scholarshipPercentage: 25 },
+            { degreeType: 'B.Tech', scholarshipPercentage: 15 },
+            { degreeType: 'BBA', scholarshipPercentage: 50 },
+            { degreeType: 'BBA', scholarshipPercentage: 30 },
+            { degreeType: 'M.Tech', scholarshipPercentage: 50 },
+            { degreeType: 'M.Tech', scholarshipPercentage: 25 }
+        ];
+
+        // Create a map of existing stats
+        // Key: "DegreeType-Percentage"
+        const statsMap = new Map();
+        dbStats.forEach(item => {
+            const key = `${item.degreeType}-${item.scholarshipPercentage}`;
+            statsMap.set(key, item._count.studentId);
+        });
+
+        const finalStats: { degreeType: string; scholarshipPercentage: number | null; count: number }[] = [];
+
+        // 1. Add required defaults (overwriting with actuals if present)
+        manualDefaults.forEach(def => {
+            const key = `${def.degreeType}-${def.scholarshipPercentage}`;
+            const count = statsMap.get(key) || 0;
+            finalStats.push({
+                degreeType: def.degreeType,
+                scholarshipPercentage: def.scholarshipPercentage,
+                count: count
+            });
+            // Mark as processed so we don't duplicate if we want to show "others"
+            statsMap.delete(key);
+        });
+
+        // 2. Add any other combinations found in DB that were not in manual defaults
+        statsMap.forEach((count, key) => {
+             // We need to parse the key back, or better yet, loop through original dbStats and check if processed.
+             // But map key iteration is string based. 
+             // Let's loop dbStats again simply.
+        });
+        
+        // Simpler approach for step 2:
+        dbStats.forEach(item => {
+             const isDefault = manualDefaults.some(d => d.degreeType === item.degreeType && d.scholarshipPercentage === item.scholarshipPercentage);
+             if (!isDefault) {
+                 finalStats.push({
+                     degreeType: item.degreeType || 'Unknown',
+                     scholarshipPercentage: item.scholarshipPercentage,
+                     count: item._count.studentId
+                 });
+             }
+        });
+
+        return finalStats;
     }
 };
 
