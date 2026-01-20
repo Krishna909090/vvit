@@ -104,8 +104,8 @@ export const deleteRole = async (req: Request, res: Response, next: NextFunction
 export const assignPermissionsToRole = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { roleId } = req.params;
-    const { permissionKeys } = req.body; // Expecting keys (e.g. ['hostel.read'])
-    await rbacService.assignPermissionsToRole(roleId, permissionKeys);
+    const { permissions } = req.body; // Expecting IDs now
+    await rbacService.assignPermissionsToRole(roleId, permissions);
     res.status(200).json({ success: true, message: 'Permissions assigned to role successfully' });
   } catch (error) {
     next(error);

@@ -172,20 +172,7 @@ export const getRoles = async () => {
 
 
 
-export const assignPermissionsToRole = async (roleId: string, permissionKeys: string[]) => {
-  // Translate keys to IDs
-  const permissions = await prisma.permission.findMany({
-    where: { key: { in: permissionKeys } }
-  });
-  
-  if (permissions.length === 0) {
-      // If no permissions found for the keys, maybe throw an error or just return
-      // Typically if we ask to assign 'A', and 'A' doesn't exist, we might want to warn
-      // But for duplicate checking, let's focus on duplicates.
-  }
-
-  const permissionIds = permissions.map(p => p.id);
-
+export const assignPermissionsToRole = async (roleId: string, permissionIds: string[]) => {
   // Check for existing assignments
   const existingAssignments = await prisma.rolePermission.findMany({
     where: {
