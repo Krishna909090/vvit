@@ -369,3 +369,19 @@ export const deleteAcademicQualification = catchAsync(async (req: Request, res: 
     });
 });
 
+// Validate Academic Qualification
+export const validateAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[validateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const result = await AdminStudentService.validateAcademicQualification(id, status, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.message
+    });
+});
+

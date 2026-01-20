@@ -10,6 +10,7 @@ import dashboardRoutes from './dashboard.routes';
 
 import bulkImportRoutes from './bulkImport.routes';
 import scholarshipRoutes from './scholarship.routes';
+import verificationRoutes from './verification.routes';
 
 const router = Router();
 
@@ -23,5 +24,6 @@ router.use('/students', studentRoutes); // Was studentRoutes in admin/index
 router.use('/transport', transportRoutes);
 router.use('/bulk-import', bulkImportRoutes);
 router.use('/scholarship', scholarshipRoutes);
+router.use('/verification', verificationRoutes);
 
 export default router;

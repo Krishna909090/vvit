@@ -900,6 +900,34 @@ export const AdminStudentService = {
         });
 
         return { success: true, message: 'Qualification deleted successfully' };
+    },
+
+    async validateAcademicQualification(qualificationId: string, status: string, adminId: string | undefined) {
+        if (!qualificationId || !status) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
+
+        const qualification = await prisma.academicQualification.findUnique({
+             where: { id: qualificationId }
+        });
+
+        if (!qualification) throw new AppError('Qualification not found', 404);
+
+        // Update verification column via Raw SQL as it's not in Prisma schema yet
+        // Assumes column name is "verificationStatus"
+        try {
+            await prisma.$executeRaw`
+                UPDATE "AcademicQualification" 
+                SET "verificationStatus" = ${status}, "updatedBy" = ${adminId}, "updatedAt" = NOW()
+                WHERE "id" = ${qualificationId}
+            `;
+        } catch (e: any) {
+            logger.error(`Failed to update qualification verification status: ${e.message}`);
+            if (e.message.includes('column "verificationStatus" of relation "AcademicQualification" does not exist')) {
+                 throw new AppError('Database column "verificationStatus" missing. Please run the SQL migration.', 500);
+            }
+            throw new AppError(`Failed to update verification status: ${e.message}`, 500);
+        }
+
+        return { success: true, message: 'Qualification status updated successfully' };
     }
 };
 

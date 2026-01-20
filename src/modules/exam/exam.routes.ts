@@ -59,8 +59,8 @@ router.delete('/slots/:id', authenticate, authorizePermission('exam.delete.all')
 
 
 // Invigilator / Scanning Routes
-router.post('/scan-qr', authenticate, authorizePermission('exam.update.all'), scanAttendance);
-router.post('/verify-attendance', authenticate, authorizePermission('exam.update.all'), verifyAttendance);
+router.post('/scan-qr', authenticate, authorizePermission('exam.attendance.scan'), scanAttendance);
+router.post('/verify-attendance', authenticate, authorizePermission('exam.attendance.scan'), verifyAttendance);
 
 // Student/Public Routes
 router.get('/slots', authenticate, authorizePermission(['exam.read.all', 'exam.read.own']), getAvailableSlots);

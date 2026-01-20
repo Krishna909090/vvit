@@ -8,11 +8,11 @@ import { qrScanRateLimiter } from '../../middlewares/rateLimitMiddleware';
 
 const router = Router();
 
-router.post('/scan', qrScanRateLimiter, authenticate, authorizePermission('exam.attendance.scan'), validateRequest(scanAttendanceSchema), scanAttendance);
+router.post('/scan', qrScanRateLimiter, authenticate, authorizePermission('exam.update.all'), validateRequest(scanAttendanceSchema), scanAttendance);
 
-router.post('/manual-scan', authenticate, authorizePermission('exam.attendance.scan'), manualScan);
+router.post('/manual-scan', authenticate, authorizePermission('exam.update.all'), manualScan);
 
-router.post('/verify', authenticate, authorizePermission('exam.attendance.scan'), verifyAttendance);
+router.post('/verify', authenticate, authorizePermission('exam.update.all'), verifyAttendance);
 
 export default router;
 
