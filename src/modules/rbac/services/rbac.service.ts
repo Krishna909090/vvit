@@ -131,14 +131,42 @@ export const createRole = async (data: { name: string; description?: string }) =
 export const getRoles = async () => {
   const roles = await prisma.role.findMany({
     include: {
-      permissions: { include: { permission: true } }
+      permissions: { 
+        include: { 
+          permission: {
+            include: { module: true }
+          } 
+        } 
+      }
     }
   });
 
-  return roles.map(role => ({
-    ...role,
-    permissions: role.permissions.map(p => p.permission)
-  }));
+  return roles.map(role => {
+    const groupedPermissions: Record<string, any[]> = {};
+
+    role.permissions.forEach(rp => {
+      const perm = rp.permission;
+      const moduleCode = perm.module?.code || 'unknown';
+
+      if (!groupedPermissions[moduleCode]) {
+        groupedPermissions[moduleCode] = [];
+      }
+
+      groupedPermissions[moduleCode].push({
+        id: perm.id,
+        key: perm.key,
+        description: perm.description,
+        moduleId: perm.moduleId,
+        createdAt: perm.createdAt,
+        updatedAt: perm.updatedAt
+      });
+    });
+
+    return {
+      ...role,
+      permissions: groupedPermissions
+    };
+  });
 };
 
 
