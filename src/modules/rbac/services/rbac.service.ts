@@ -15,11 +15,21 @@ export const createGroup = async (data: { name: string; type: string }) => {
 };
 
 export const getGroups = async () => {
-  return prisma.group.findMany({
+  const groups = await prisma.group.findMany({
     include: {
-      _count: { select: { users: true, roles: true } }
+      _count: { select: { users: true, roles: true } },
+      roles: {
+        include: {
+          role: { select: { id: true, name: true, description: true } }
+        }
+      }
     }
   });
+
+  return groups.map(group => ({
+    ...group,
+    roles: group.roles.map(r => r.role)
+  }));
 };
 
 export const updateGroup = async (groupId: string, data: { name?: string; type?: string }) => {
