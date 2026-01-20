@@ -69,7 +69,7 @@ export const assignPermissionsToRoleSchema = z.object({
     roleId: z.string().uuid('Invalid Role ID format'),
   }),
   body: z.object({
-    permissionKeys: z.array(z.string().min(1)).min(1, 'At least one permission key is required'),
+    permissions: z.array(z.string().min(1)).min(1, 'At least one permission key is required'),
   }),
 });
 
