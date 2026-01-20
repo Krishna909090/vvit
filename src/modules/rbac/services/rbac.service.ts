@@ -164,7 +164,8 @@ export const getRoles = async () => {
 
     return {
       ...role,
-      permissions: groupedPermissions
+      permissions: groupedPermissions,
+      totalPermissions: role.permissions.length
     };
   });
 };
