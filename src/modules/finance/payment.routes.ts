@@ -1,6 +1,6 @@
 import express from 'express';
 import { handlePaymentCallback } from './payment.service';
-import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, approveDiscount, rejectDiscount, payOfflineApplicationFee } from './payment.controller';
+import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment } from './payment.controller';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
@@ -17,6 +17,7 @@ router.get('/:paymentId/invoice', authenticate, authorizePermission(['finance.re
 router.post('/initiate-entrance-fee', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), payTestFee);
 router.post('/offline-entrance-fee', authenticate, authorizePermission(['finance.create.all', 'finance.create.own']), payOfflineApplicationFee);
 router.post('/initiate-college-fee', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), payCollegeFee);
+router.post('/admin-initiate', authenticate, authorizePermission(['finance.create.all']), initiateAdminPayment);
 router.post('/request-discount', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), requestDiscount);
 
 // Discount Approval Workflow (Super Admin Only)

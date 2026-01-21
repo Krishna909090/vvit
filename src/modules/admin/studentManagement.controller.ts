@@ -205,6 +205,17 @@ export const downloadStudentDocuments = catchAsync(async (req: Request, res: Res
     });
 });
 
+// Download Application PDF
+export const downloadApplication = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+
+    const pdfBuffer = await AdminStudentService.downloadApplication(studentId);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=application_${studentId}.pdf`);
+    res.send(pdfBuffer);
+});
+
 // Update Roll Number
 export const updateRollNumber = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateRollNumber] by=${req.user?.userId || 'anonymous'}`);

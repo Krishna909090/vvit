@@ -12,6 +12,7 @@ import axios from 'axios';
 import { registerStudent } from '../student/student.service';
 import { FeeService } from '../finance/fee.service';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
+import { generateApplicationPDF } from '../../utils/applicationPdfGenerator';
 
 export const AdminStudentService = {
     async getAllApplications(query: any) {
@@ -649,6 +650,68 @@ export const AdminStudentService = {
         });
     },
 
+    async downloadApplication(studentId: string) {
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: {
+                admissionDetails: {
+                    include: {
+                        allottedCourse: true
+                    }
+                },
+                academicQualifications: true,
+                documents: true,
+                pref1Course: true,
+                eligibleScholarshipRule: true
+            }
+        });
+
+        if (!student) {
+            throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+        }
+
+        // Convert profile photo URL to presigned
+        const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
+
+        // Prepare data for PDF
+        const pdfData = {
+            applicationId: student.applicationId || 'N/A',
+            studentName: student.name,
+            dob: student.dob,
+            gender: student.gender,
+            phone: student.phone,
+            email: student.email,
+            address: student.address,
+            city: student.city,
+            state: student.state,
+            pincode: student.pincode,
+            profilePhotoUrl: profilePhotoUrl,
+            
+            fatherName: student.fatherName,
+            motherName: student.motherName,
+            category: student.category,
+            
+            courseName: student.admissionDetails?.allottedCourse?.name || student.pref1Course?.name || 'Not Listed',
+            quotaType: student.quotaType || undefined,
+            admissionStatus: student.admissionDetails?.status || undefined,
+            
+            qualifications: student.academicQualifications.map(q => ({
+                level: q.level,
+                institution: q.schoolName || q.board,
+                board: q.board,
+                yearOfPassing: q.yearOfPassing,
+                percentage: q.percentage || 0
+            })),
+            
+            documents: student.documents.map(d => ({
+                name: d.documentKey,
+                status: d.status || 'PENDING'
+            }))
+        };
+        
+        return await generateApplicationPDF(pdfData);
+    },
+
     async updateRollNumber(studentId: string, rollNumber: string, sectionId: string, academicYearId: string, userId?: string) {
         const student = await prisma.student.findUnique({
              where: { id: studentId }
@@ -927,7 +990,7 @@ export const AdminStudentService = {
     async updateStudentScholarship(studentId: string, data: any, adminId: string | undefined) {
          if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-         const { id, type, degreeType, score, remarks, scholarshipPercentage, qualificationId } = data;
+         const { id, type, degreeType, score, remarks, scholarshipPercentage, qualificationId, isEligible } = data;
 
          // Check if qualification exists if provided
          if (qualificationId) {
@@ -945,10 +1008,20 @@ export const AdminStudentService = {
                      remarks,
                      scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
                      qualificationId,
+                     isEligible, 
                      updatedBy: adminId
                  }
              });
          } else {
+             // Check if scholarship already exists for this student
+             const existing = await prisma.studentScholarship.findFirst({
+                 where: { studentId }
+             });
+
+             if (existing) {
+                 throw new AppError('Scholarship record already exists for this student', 409);
+             }
+
              return await prisma.studentScholarship.create({
                  data: {
                      studentId,
@@ -958,6 +1031,7 @@ export const AdminStudentService = {
                      remarks,
                      scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
                      qualificationId,
+                     isEligible,
                      createdBy: adminId,
                      updatedBy: adminId
                  }

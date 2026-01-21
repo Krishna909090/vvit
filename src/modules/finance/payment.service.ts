@@ -644,6 +644,58 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
         logger.error(`PhonePe Payment Initiation Error (College Fee): ${error.message}`, error);
         throw new AppError('Failed to initiate payment gateway', 502);
     }
+
+};
+
+export const initiateAdminOnlinePayment = async (studentId: string, amount: number, component: PaymentComponent, adminId: string) => {
+    // 1. Verify Student
+    const student = await prisma.student.findUnique({ where: { id: studentId } });
+    if (!student) throw new AppError('Student not found', 404);
+
+    // 2. Create Transaction ID
+    const transactionId = `ADM_${Date.now()}_${studentId.substring(0, 8)}`;
+
+    // 3. Create Pending Payment Record
+    const payment = await prisma.payment.create({
+        data: {
+            studentId,
+            amount,
+            status: PaymentStatus.PENDING,
+            component,
+            providerTxId: transactionId,
+            method: PaymentMethod.UPI,
+            mode: PaymentMode.ONLINE, // Admin initiated online payment
+            collectedBy: adminId, // Track who initiated it
+            metadata: { initiatedBy: 'ADMIN' }
+        }
+    });
+
+    // 4. Bypass Logic for Dev
+    if (process.env.BYPASS_PAYMENT === 'true') {
+         await prisma.payment.update({
+             where: { id: payment.id }, 
+             data: { status: PaymentStatus.SUCCESS }
+        });
+        await processPaymentSuccess({ ...payment, student }, {});
+        return { redirectUrl: `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}&amount=${amount}`, paymentId: payment.id };
+    }
+
+    // 5. Initiate PhonePe Payment
+    try {
+        const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
+
+        const request = StandardCheckoutPayRequest.builder()
+            .merchantOrderId(transactionId)
+            .amount(amount * 100)
+            .redirectUrl(redirectUrl)
+            .build();
+
+        const response = await client.pay(request);
+        return { redirectUrl: response.redirectUrl, paymentId: payment.id };
+    } catch (error: any) {
+        logger.error(`PhonePe Payment Initiation Error (Admin): ${error.message}`, error);
+        throw new AppError('Failed to initiate payment gateway', 502);
+    }
 };
 
 export const requestDiscount = async (studentId: string, reason: string, amount: number, documentUrl?: string, userId?: string | null) => {

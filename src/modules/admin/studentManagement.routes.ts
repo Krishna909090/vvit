@@ -14,7 +14,8 @@ import {
     updateStudentScholarship,
     getStudentScholarships,
     getScholarshipStats,
-    editStudentScholarship
+    editStudentScholarship,
+    downloadApplication
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -61,6 +62,8 @@ router.post('/update-admission', authenticate, authorizePermission(['student.upd
 router.get('/certificates/:studentId', authenticate, authorizePermission(['document.read.all']), validateRequest(studentIdParamSchema), getStudentCertificates);
 
 router.get('/download-documents/:studentId', authenticate, authorizePermission(['document.read.all']), validateRequest(studentIdParamSchema), downloadStudentDocuments);
+
+router.get('/application-pdf/:studentId', authenticate, authorizePermission(['student.read.all']), validateRequest(studentIdParamSchema), downloadApplication);
 
 router.post('/verify-document/:studentId', authenticate, authorizePermission(['document.update.all']), verifyStudentDocument);
 

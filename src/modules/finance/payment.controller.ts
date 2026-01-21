@@ -255,3 +255,20 @@ export const payOfflineApplicationFee = catchAsync(async (req: Request, res: Res
         data: result
     });
 });
+
+export const initiateAdminPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[initiateAdminPayment] by=${req.user?.userId}`);
+    const { studentId, amount, component } = req.body;
+
+    if (!studentId || !amount || !component) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
+
+    const result = await import('./payment.service').then(s => s.initiateAdminOnlinePayment(studentId, Number(amount), component, req.user!.userId));
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Admin payment initiated",
+        data: result
+    });
+});
