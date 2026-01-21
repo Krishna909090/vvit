@@ -998,45 +998,30 @@ export const AdminStudentService = {
              if (!qual) throw new AppError('Qualification not found', 404);
          }
 
-         if (id) {
-             return await prisma.studentScholarship.update({
-                 where: { id: id },
-                 data: {
-                     type,
-                     degreeType,
-                     score: score ? Number(score) : undefined,
-                     remarks,
-                     scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
-                     qualificationId,
-                     isEligible, 
-                     updatedBy: adminId
-                 }
-             });
-         } else {
-             // Check if scholarship already exists for this student
-             const existing = await prisma.studentScholarship.findFirst({
-                 where: { studentId }
-             });
+         // STRICT CREATE ONLY
+         // Check if scholarship already exists for this student
+         const existing = await prisma.studentScholarship.findFirst({
+             where: { studentId }
+         });
 
-             if (existing) {
-                 throw new AppError('Scholarship record already exists for this student', 409);
-             }
-
-             return await prisma.studentScholarship.create({
-                 data: {
-                     studentId,
-                     type,
-                     degreeType,
-                     score: score ? Number(score) : undefined,
-                     remarks,
-                     scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
-                     qualificationId,
-                     isEligible,
-                     createdBy: adminId,
-                     updatedBy: adminId
-                 }
-             });
+         if (existing) {
+             throw new AppError('Scholarship record already exists for this student. Use PUT endpoint to update.', 409);
          }
+
+         return await prisma.studentScholarship.create({
+             data: {
+                 studentId,
+                 type,
+                 degreeType,
+                 score: score ? Number(score) : undefined,
+                 remarks,
+                 scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
+                 qualificationId,
+                 isEligible,
+                 createdBy: adminId,
+                 updatedBy: adminId
+             }
+         });
     },
 
     async getStudentScholarships(studentId: string) {

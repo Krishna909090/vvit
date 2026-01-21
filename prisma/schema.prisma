@@ -1153,7 +1153,7 @@ model AcademicQualification {
 
 model StudentScholarship {
   id                    String                @id @default(dbgenerated("gen_random_uuid()"))
-  studentId             String
+  studentId             String                @unique
   type                  String
   degreeType            String?
   score                 Float?
