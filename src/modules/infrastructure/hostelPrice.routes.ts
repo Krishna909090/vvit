@@ -10,7 +10,7 @@ router.get('/', controller.getAllPriceCategories);
 router.get('/:id', controller.getPriceCategoryById);
 
 // Admin only routes
-router.use(authorizePermission('infra.hostel.manage'));
+router.use(authorizePermission('hostel.create.all'));
 router.post('/', controller.createPriceCategory);
 router.put('/:id', controller.updatePriceCategory);
 router.delete('/:id', controller.deletePriceCategory);
