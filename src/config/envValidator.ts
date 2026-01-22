@@ -31,6 +31,16 @@ interface EnvConfig {
 
     // Optional flags
     SKIP_DATE_VALIDATION?: string;
+
+    // PhonePe
+    PHONEPE_MERCHANT_ID?: string;
+    PHONEPE_SALT_KEY?: string;
+    PHONEPE_SALT_INDEX?: string;
+    PHONEPE_ENV?: string;
+    PHONEPE_CALLBACK_URL?: string;
+
+    // Frontend
+    FRONTEND_URL?: string;
 }
 
 const requiredEnvVars: (keyof EnvConfig)[] = [
@@ -47,7 +57,14 @@ const recommendedEnvVars: (keyof EnvConfig)[] = [
     'AWS_ACCESS_KEY_ID',
     'AWS_SECRET_ACCESS_KEY',
     'AWS_BUCKET_NAME',
-    'CORS_ORIGIN'
+    'CORS_ORIGIN',
+    // PhonePe & Frontend
+    'PHONEPE_MERCHANT_ID',
+    'PHONEPE_SALT_KEY',
+    'PHONEPE_SALT_INDEX',
+    'PHONEPE_ENV',
+    'PHONEPE_CALLBACK_URL',
+    'FRONTEND_URL'
 ];
 
 /**

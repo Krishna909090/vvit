@@ -15,7 +15,9 @@ import {
     getStudentScholarships,
     getScholarshipStats,
     editStudentScholarship,
-    downloadApplication
+    downloadApplication,
+    finalizeAdmission,
+    verifyPayment
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -24,7 +26,8 @@ import {
     setEligibleScholarshipSchema,
     updateStudentPersonalDetailsSchema,
     updateAcademicQualificationSchema,
-    deleteAcademicQualificationSchema
+    deleteAcademicQualificationSchema,
+    finalizeAdmissionSchema
 } from '../../validators/adminValidators';
 
 import upload from '../../config/multer';
@@ -57,6 +60,12 @@ router.post('/approve-course-change', authenticate, authorizePermission(['studen
 
 // Admission Details
 router.post('/update-admission', authenticate, authorizePermission(['student.update.all']), validateRequest(updateAdmissionDetailsSchema), updateAdmissionDetails);
+
+// Finalize Admission
+router.post('/finalize-admission', authenticate, authorizePermission(['student.update.all']), validateRequest(finalizeAdmissionSchema), finalizeAdmission);
+router.post('/verify-payment', authenticate, authorizePermission(['student.update.all']), verifyPayment);
+
+
 
 // Documents
 router.get('/certificates/:studentId', authenticate, authorizePermission(['document.read.all']), validateRequest(studentIdParamSchema), getStudentCertificates);

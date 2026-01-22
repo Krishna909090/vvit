@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AccommodationType, HostelType } from '@prisma/client';
+import { AccommodationType, HostelType, PaymentMethod } from '@prisma/client';
 import { Role } from '../constants/roles';
 
 export const enableExamSchema = z.object({
@@ -404,9 +404,43 @@ export const updateAcademicQualificationSchema = z.object({
     }),
 });
 
+
 export const deleteAcademicQualificationSchema = z.object({
     params: z.object({
         id: z.string().uuid("Invalid Qualification ID"),
     }),
 });
+
+export const finalizeAdmissionSchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid(),
+        payment: z.object({
+            method: z.nativeEnum(PaymentMethod),
+            amount: z.number().positive(),
+            referenceNumber: z.string().optional(),
+            date: z.string().datetime().or(z.date()).optional(),
+            feeHeadId: z.string().uuid().optional(), 
+        }),
+        scholarship: z.object({
+            percentage: z.number().min(0).max(100),
+            ruleId: z.string().uuid().optional(),
+        }),
+        allocation: z.object({
+            type: z.nativeEnum(AccommodationType),
+            hostelId: z.string().uuid().optional(),
+            transportRouteId: z.string().uuid().optional(),
+            hostelType: z.nativeEnum(HostelType).optional(),
+        }).refine((data) => {
+            if (data.type === AccommodationType.HOSTEL) return !!data.hostelId;
+            if (data.type === AccommodationType.TRANSPORT) return !!data.transportRouteId;
+            return true;
+        }, {
+            message: "Hostel ID or Transport Route ID is required based on allocation type",
+        }),
+        course: z.object({
+            allottedCourseId: z.string().uuid(),
+        }),
+    }),
+});
+
 

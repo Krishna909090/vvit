@@ -498,6 +498,7 @@ model FeeHead {
   createdBy   String?
   updatedBy   String?
   structures  FeeStructure[]
+  ledgers     StudentLedger[]
 }
 
 model FeeStructure {
@@ -545,6 +546,7 @@ model Payment {
   amount          Float
   currency        String?           @default("INR")
   status          PaymentStatus?    @default(PENDING)
+  feeHeadId       String?
   mode            PaymentMode?      @default(ONLINE)
   method_legacy   String?
   providerTxId    String?
@@ -1211,11 +1213,13 @@ model StudentLedger {
   description   String?
   referenceId   String?
   referenceType String?
+  feeHeadId     String?
   date          DateTime @default(now())
   createdBy     String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   student       Student  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeHead       FeeHead? @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Configuration {

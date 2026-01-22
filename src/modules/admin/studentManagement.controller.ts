@@ -459,3 +459,35 @@ export const editStudentScholarship = catchAsync(async (req: Request, res: Respo
     });
 });
 
+// Finalize Admission (One-Shot Payment & Allocation)
+export const finalizeAdmission = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[finalizeAdmission] by=${req.user?.userId || 'anonymous'}`);
+
+    const result = await AdminStudentService.finalizeAdmission(req.body, req.user?.userId!);
+
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: result.message,
+        data: { paymentId: result.paymentId }
+    });
+});
+
+// Verify Online Payment & Finalize
+export const verifyPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[verifyPayment] by=${req.user?.userId || 'anonymous'}`);
+
+    const { paymentId } = req.body;
+    const result = await AdminStudentService.verifyAndCompletePayment(paymentId, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.message
+    });
+});
+
+
+
