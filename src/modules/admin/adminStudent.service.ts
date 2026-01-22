@@ -1489,9 +1489,21 @@ export const AdminStudentService = {
              const client = StandardCheckoutClient.getInstance(PHONEPE_MERCHANT_ID, PHONEPE_SALT_KEY, PHONEPE_SALT_INDEX as any, PHONEPE_ENV);
              const response = await client.getOrderStatus(merchantTransactionId); 
              
-             logger.info(`[verifyAndCompletePayment] PhonePe Response State: ${response.state}`);
+             logger.info(`[verifyAndCompletePayment] PhonePe Full Response: ${JSON.stringify(response)}`);
              
-             if (response.state === 'COMPLETED' || response.state === 'PAYMENT_SUCCESS') {
+             // Extract State safely
+             // SDK might return structure where state is in data, or code is the status.
+             const responseData = (response as any).data || {};
+             const statusState = (response as any).state || responseData.state || responseData.responseCode;
+             const statusCode = (response as any).code || responseData.code;
+
+             logger.info(`[verifyAndCompletePayment] Code: ${statusCode}, State: ${statusState}`);
+             
+             const isSuccess = (statusCode === 'PAYMENT_SUCCESS' && (statusState === 'COMPLETED' || statusState === 'SUCCESS')) || 
+                               (statusState === 'COMPLETED') || 
+                               (statusState === 'PAYMENT_SUCCESS'); // fallback
+
+             if (isSuccess) {
                  // Success
                  // Use existing providerTxId (which is MerchantTxId) or try to extract from response if typed properly
                  // Extract Real PhonePe Transaction ID (Provider Reference ID)
