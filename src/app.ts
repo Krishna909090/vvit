@@ -20,6 +20,7 @@ import academicRoutes from './modules/academic/academic.routes';
 import qualificationRequirementRoutes from './modules/qualification/qualificationRequirement.routes';
 import emailLogRoutes from './modules/system/emailLog.routes';
 import rbacRoutes from './modules/rbac/routes/rbac.routes';
+import invoiceRoutes from './modules/finance/invoice.routes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
 import { generalRateLimiter } from './middlewares/rateLimitMiddleware';
@@ -104,6 +105,7 @@ app.use('/verification', verificationRoutes);
 app.use('/qualification-requirements', qualificationRequirementRoutes);
 app.use('/admin/email-logs', emailLogRoutes);
 app.use('/rbac', rbacRoutes);
+app.use('/admin/finance', invoiceRoutes);
 
 
 

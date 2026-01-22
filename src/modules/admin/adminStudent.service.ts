@@ -14,8 +14,17 @@ import { FeeService } from '../finance/fee.service';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { generateApplicationPDF } from '../../utils/applicationPdfGenerator';
 import { getEnv } from '../../config/envValidator';
+import { sendAdmissionFeeReceipt } from '../../utils/emailService';
 // @ts-ignore
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
+import { InvoiceService } from '../finance/invoice.service';
+
+// --- CONFIGURATION CONSTANTS ---
+const PHONEPE_MERCHANT_ID = process.env.PHONEPE_MERCHANT_ID || '';
+const PHONEPE_SALT_KEY = process.env.PHONEPE_SALT_KEY || '';
+const PHONEPE_SALT_INDEX = parseInt(process.env.PHONEPE_SALT_INDEX || '1', 10);
+const PHONEPE_ENV = process.env.PHONEPE_ENV === 'PROD' ? Env.PRODUCTION : Env.SANDBOX;
+const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://localhost:5173';
 
 export const AdminStudentService = {
     async getAllApplications(query: any) {
@@ -1133,6 +1142,10 @@ export const AdminStudentService = {
 
 
     // INTERNAL HELPER: Executes the actual DB updates (Shared by Offline & Online-Success)
+    /**
+     * Internal Helper: Updates Student Admission Status, Allocates Seat (Hostel/Transport), and applies Scholarship.
+     * Shared by both Online and Offline flows.
+     */
     async executeAdmissionUpdates(studentId: string, payload: any, paymentId: string, adminId: string, tx: Prisma.TransactionClient) {
         logger.info(`[executeAdmissionUpdates] Starting updates for student=${studentId} payment=${paymentId}`);
         const { scholarship, allocation, course } = payload;
@@ -1221,34 +1234,48 @@ export const AdminStudentService = {
         }
     },
 
+    /**
+     * Finalizes the admission process for a student.
+     * 
+     * Handles two flows:
+     * 1. ONLINE: Creates a Pending Payment and returns a Payment Link (PhonePe).
+     * 2. OFFLINE: Creates a Success Payment immediately and finalizes admission (Allocation, Ledger, etc).
+     * 
+     * @param payload - Contains payment details, allocation preferences, and scholarship info.
+     * @param adminId - ID of the admin performing the action.
+     */
     async finalizeAdmission(payload: any, adminId: string) {
         logger.info(`[finalizeAdmission] Request received for student=${payload.studentId} method=${payload.payment.method}`);
         const { studentId, payment, scholarship, allocation, course } = payload;
         
-        // 1. Validation Checks
-        const student = await prisma.student.findUnique({
-            where: { id: studentId },
-            include: { admissionDetails: true }
-        });
+        // 1. Validation Checks (Parallelized for Performance)
+        const [student, validCourse, validFeeHead] = await Promise.all([
+            prisma.student.findUnique({
+                where: { id: studentId },
+                include: { admissionDetails: true }
+            }),
+            prisma.course.findUnique({ where: { id: course.allottedCourseId } }),
+            payment.feeHeadId ? prisma.feeHead.findUnique({ where: { id: payment.feeHeadId } }) : Promise.resolve({ id: 'skip' })
+        ]);
+
         if (!student) {
             logger.warn(`[finalizeAdmission] Student not found: ${studentId}`);
             throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         }
 
-        // Verify Course
-        const validCourse = await prisma.course.findUnique({ where: { id: course.allottedCourseId } });
+        if (student.admissionDetails?.status === AdmissionStatus.ADMISSION_CONFIRMED || student.admissionDetails?.status === AdmissionStatus.ENROLLED) {
+             logger.info(`[finalizeAdmission] Student ${studentId} seat already confirmed (Status: ${student.admissionDetails.status})`);
+             throw new AppError("Student seat is already confirmed. Cannot re-finalize.", 400);
+        }
+
         if (!validCourse) {
             logger.warn(`[finalizeAdmission] Invalid Course ID: ${course.allottedCourseId}`);
             throw new AppError("Invalid Course ID" , 400);
         }
 
-        // Verify Fee Head if provided
-        if (payment.feeHeadId) {
-             const validFeeHead = await prisma.feeHead.findUnique({ where: { id: payment.feeHeadId } });
-             if (!validFeeHead) {
-                 logger.warn(`[finalizeAdmission] Invalid Fee Head ID: ${payment.feeHeadId}`);
-                 throw new AppError("Invalid Fee Head ID", 400);
-             }
+        if (payment.feeHeadId && !validFeeHead) {
+            logger.warn(`[finalizeAdmission] Invalid Fee Head ID: ${payment.feeHeadId}`);
+            throw new AppError("Invalid Fee Head ID", 400);
         }
 
         // 2. Identify Flow
@@ -1258,64 +1285,80 @@ export const AdminStudentService = {
         if (isOnline) {
              // === ONLINE FLOW (Initiate) ===
              try {
-                 // 1. Create Pending Payment with Metadata
-                 logger.debug(`[finalizeAdmission][Online] Creating PENDING payment record`);
-                 
-                 const feeComponent = PaymentComponent.TUITION; 
-
-                 const newPayment = await prisma.payment.create({
-                     data: {
-                         studentId,
-                         amount: payment.amount,
-                         method: payment.method,
-                         mode: PaymentMode.ONLINE,
-                         status: PaymentStatus.PENDING, 
-                         component: feeComponent,
-                         feeHeadId: payment.feeHeadId,
-                         collectedBy: adminId,
-                         metadata: { 
-                            scholarship, 
-                            allocation, 
-                            course,
-                            feeComponent,
-                            targetAction: 'FINALIZE_ADMISSION' 
-                         }
-                     }
-                 });
-
-                 const merchantTransactionId = newPayment.id.replace(/-/g, '');
-                 const frontendUrl = process.env.FRONTEND_URL_ADMISSION || 'http://localhost:5173';
-
-                 // --- BYPASS LOGIC FOR DEV/TESTING ---
-                 if (process.env.BYPASS_PAYMENT === 'true') {
-                     logger.info(`[finalizeAdmission][Online] Bypassing Payment Gateway for transaction ${newPayment.id}`);
-                     
-                     const bypassRedirectUrl = `${frontendUrl}/admin/verify-payment?paymentId=${newPayment.id}`;
-                     return { 
-                         success: true, 
-                         type: 'ONLINE_INITIATED', 
-                         message: "Payment Link Generated (BYPASS)", 
-                         paymentId: newPayment.id,
-                         redirectUrl: bypassRedirectUrl
-                     };
+             
+             // ------------------------------------------------------------------
+             // BLOCK 3: IDEMPOTENCY CHECK
+             // Check if a PENDING payment already exists for this student/fee.
+             // If yes, we reuse it to avoid duplicate records and return the same link.
+             // ------------------------------------------------------------------
+             const existingPending = await prisma.payment.findFirst({
+                 where: {
+                     studentId,
+                     component: PaymentComponent.TUITION,
+                     status: PaymentStatus.PENDING
                  }
-                 
-                 // 2. PhonePe Integration
-                 const merchantId = process.env.PHONEPE_MERCHANT_ID || '';
-                 const saltKey = process.env.PHONEPE_SALT_KEY || '';
-                 const env = process.env.PHONEPE_ENV === 'PROD' ? Env.PRODUCTION : Env.SANDBOX;
-                 const callbackUrl = process.env.PHONEPE_CALLBACK_URL || '';
-                 
-                 // Instantiate StandardCheckoutClient
-                 // Salt Index usually implies '1' or extraction from env if needed. 
-                 const saltIndex = parseInt(process.env.PHONEPE_SALT_INDEX || '1', 10);
+             });
 
-                 const client = StandardCheckoutClient.getInstance(merchantId, saltKey, saltIndex as any, env);
+             let newPayment;
+             let isNew = true;
 
+             if (existingPending) {
+                 logger.info(`[finalizeAdmission] Found existing PENDING payment ${existingPending.id}. Reusing it.`);
+                 newPayment = existingPending;
+                 isNew = false;
+             } else {
+                 try {
+                     // ------------------------------------------------------------------
+                     // BLOCK 4: CREATE PAYMENT RECORD
+                     // No existing payment found. Create a new PENDING record.
+                     // We generate a transaction ID (TXN_...) to track it.
+                     // ------------------------------------------------------------------
+                     logger.info(`[finalizeAdmission][Online] Step 1: Creating PENDING payment record`);
+                     
+                     const feeComponent = PaymentComponent.TUITION; 
+                     const merchantTransactionId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
+
+                     newPayment = await prisma.payment.create({
+                         data: {
+                             studentId,
+                             amount: payment.amount,
+                             method: payment.method,
+                             mode: PaymentMode.ONLINE,
+                             status: PaymentStatus.PENDING, 
+                             component: feeComponent,
+                             providerTxId: merchantTransactionId, // Verify providerTxId
+                             feeHeadId: payment.feeHeadId,
+                             collectedBy: adminId,
+                             metadata: { 
+                                scholarship, 
+                                allocation, 
+                                course,
+                                feeComponent,
+                                targetAction: 'FINALIZE_ADMISSION' 
+                             }
+                         }
+                     });
+                 } catch (e: any) { throw e; }
+             }
+
+             // Use stored providerTxId or regenerate if missing (shouldn't happen for new ones)
+             const merchantTransactionId = newPayment.providerTxId || newPayment.id.replace(/-/g, '');
+
+
+                 // ------------------------------------------------------------------
+                 // BLOCK 5: PAYMENT GATEWAY INTEGRATION
+                 // Initiate the payment request with PhonePe SDK.
+                 // We receive a redirect URL to send to the frontend.
+                 // ------------------------------------------------------------------
+                 // Step 2: PhonePe Integration
+                 logger.info(`[finalizeAdmission][Online] Step 2: Initiating PhonePe Request`);
+
+                 const client = StandardCheckoutClient.getInstance(PHONEPE_MERCHANT_ID, PHONEPE_SALT_KEY, PHONEPE_SALT_INDEX as any, PHONEPE_ENV);
+ 
                  const request = StandardCheckoutPayRequest.builder()
                      .merchantOrderId(merchantTransactionId)
                      .amount(Math.round(payment.amount * 100))
-                     .redirectUrl(`${frontendUrl}/admin/verify-payment?paymentId=${newPayment.id}`)
+                     .redirectUrl(`${FRONTEND_URL_ADMISSION}/admin/seatallotment/paymentstatus?paymentId=${newPayment.id}`)
                      .build();
 
                  const response = await client.pay(request);
@@ -1338,6 +1381,12 @@ export const AdminStudentService = {
 
         } else {
              // === OFFLINE FLOW (Immediate) ===
+             // ------------------------------------------------------------------
+             // BLOCK 6: OFFLINE TRANSACTION
+             // Processing Cash/Cheque/DD payment.
+             // We create a SUCCESS payment record immediately and executing admission logic.
+             // This happens in a single transaction.
+             // ------------------------------------------------------------------
              if (!payment.referenceNumber && payment.method !== PaymentMethod.CASH) {
                  throw new AppError("Reference Number is required for Non-Cash payments", 400);
              }
@@ -1347,6 +1396,10 @@ export const AdminStudentService = {
                  
                  const feeComponent = PaymentComponent.TUITION;
                  
+                 // ------------------------------------------------------------------
+                 // SUB-BLOCK 6.1: RECORD PAYMENT
+                 // Create a payment record with status SUCCESS.
+                 // ------------------------------------------------------------------
                  // 1. Create Successful Payment
                  const newPayment = await tx.payment.create({
                     data: {
@@ -1371,10 +1424,12 @@ export const AdminStudentService = {
                 });
                 logger.debug(`[finalizeAdmission][Offline] Payment record created: ${newPayment.id}`);
 
-                // 2. Execute Updates
+                // Step 2: Execute Updates (Allocation, Scholarship, etc.)
+                logger.info(`[finalizeAdmission][Offline] Step 2: Executing admission updates`);
                 await this.executeAdmissionUpdates(studentId, payload, newPayment.id, adminId, tx);
 
-                // 3. Ledger
+                // Step 3: Update Ledger
+                logger.info(`[finalizeAdmission][Offline] Step 3: Updating Student Ledger`);
                 await tx.studentLedger.create({
                     data: {
                         studentId,
@@ -1383,9 +1438,9 @@ export const AdminStudentService = {
                         description: `Admission Payment (${payment.method}) - ${feeComponent}`,
                         referenceId: newPayment.id,
                         referenceType: 'PAYMENT',
-                        feeHeadId: payment.feeHeadId, // Added feeHeadId
+                        feeHeadId: payment.feeHeadId, 
                         createdBy: adminId
-                    }
+                    } as Prisma.StudentLedgerUncheckedCreateInput
                 });
 
                 logger.info(`[finalizeAdmission][Offline] Transaction committed successfully.`);
@@ -1395,6 +1450,14 @@ export const AdminStudentService = {
     },
 
     // New Method for Callbacks
+    /**
+     * Verifies the status of an Online Payment with PhonePe and completes admission if successful.
+     * 
+     * Steps:
+     * 1. Validates Payment existence.
+     * 2. Calls PhonePe Status API.
+     * 3. If Success -> Calls _completeAdmissionTransaction to finalize.
+     */
     async verifyAndCompletePayment(paymentId: string, adminId: string | undefined) {
         logger.info(`[verifyAndCompletePayment] Verifying paymentId=${paymentId}`);
         // 1. Fetch Payment
@@ -1409,23 +1472,21 @@ export const AdminStudentService = {
             return { success: true, message: "Payment already successfully processed", status: PaymentStatus.SUCCESS };
         }
 
-        // BYPASS CHECK
-        if (process.env.BYPASS_PAYMENT === 'true') {
-             logger.info(`[verifyAndCompletePayment] BYPASS_PAYMENT is true. Simulating success for ${paymentId}`);
-             return await this._completeAdmissionTransaction(payment, adminId);
-        }
+
 
         try {
-             // Real PhonePe Check
-             const merchantId = process.env.PHONEPE_MERCHANT_ID || '';
-             const saltKey = process.env.PHONEPE_SALT_KEY || '';
-             const env = process.env.PHONEPE_ENV === 'PROD' ? Env.PRODUCTION : Env.SANDBOX;
-             const saltIndex = parseInt(process.env.PHONEPE_SALT_INDEX || '1', 10);
-             
-             const client = StandardCheckoutClient.getInstance(merchantId, saltKey, saltIndex as any, env);
+             // ------------------------------------------------------------------
+             // BLOCK 2: GATEWAY VERIFICATION
+             // Call PhonePe Status API to confirm payment status.
+             // We capture the Real/Provider Transaction ID here.
+             // ------------------------------------------------------------------
+             // Step 2: Verify with Payment Gateway
              const merchantTransactionId = payment.id.replace(/-/g, '');
+             logger.debug(`[verifyAndCompletePayment] Step 2: Checking status with PhonePe for TxId=${merchantTransactionId}`);
              
-             logger.debug(`[verifyAndCompletePayment] Checking status with PhonePe for TxId=${merchantTransactionId}`);
+             // Use Singleton Client or re-instantiate if needed (StandardCheckoutClient handles concurrency usually)
+             // Using getInstance with constants
+             const client = StandardCheckoutClient.getInstance(PHONEPE_MERCHANT_ID, PHONEPE_SALT_KEY, PHONEPE_SALT_INDEX as any, PHONEPE_ENV);
              const response = await client.getOrderStatus(merchantTransactionId); 
              
              logger.info(`[verifyAndCompletePayment] PhonePe Response State: ${response.state}`);
@@ -1433,8 +1494,21 @@ export const AdminStudentService = {
              if (response.state === 'COMPLETED' || response.state === 'PAYMENT_SUCCESS') {
                  // Success
                  // Use existing providerTxId (which is MerchantTxId) or try to extract from response if typed properly
-                 // For now, keeping existing ID is safe as it tracks the request.
-                 return await this._completeAdmissionTransaction(payment, adminId);
+                 // Extract Real PhonePe Transaction ID (Provider Reference ID)
+                 // Typical response structure: { success: true, code: 'PAYMENT_SUCCESS', message: '...', data: { transactionId: '...', paymentInstrument: { type: '...', pgTransactionId: '...' } } }
+                 // The SDK 'response' object usually maps to the body data or response object.
+                 // We will check multiple paths safely.
+                 const responseData = (response as any).data || response;
+                 const realProviderTxId = responseData.paymentInstrument?.pgTransactionId || 
+                                          responseData.paymentInstrument?.bankTransactionId ||
+                                          responseData.transactionId || 
+                                          merchantTransactionId;
+
+                 logger.info(`[verifyAndCompletePayment] Captured Real Provider TxID: ${realProviderTxId}`);
+
+                 // Step 3: Finalize Admission (Update Status & Allocate)
+                 logger.info(`[verifyAndCompletePayment] Step 3: Finalizing Admission for payment ${paymentId}`);
+                 return await this._completeAdmissionTransaction(payment, adminId, realProviderTxId);
              } else if (response.state === 'PENDING') {
                  logger.info(`[verifyAndCompletePayment] Payment is still pending.`);
                  return { success: false, message: "Payment is still pending", status: PaymentStatus.PENDING };
@@ -1453,40 +1527,64 @@ export const AdminStudentService = {
         }
     },
 
-    // Refactored Transaction Helper to reuse in Bypass and Real
+    /**
+     * Internal Helper: Executes the final admission steps after a successful payment (Online or Bypass).
+     * 
+     * Steps:
+     * 1. Marks Payment as SUCCESS.
+     * 2. Calls executeAdmissionUpdates (Allocation, Scholarship).
+     * 3. Creates Ledger Entry.
+     */
     async _completeAdmissionTransaction(payment: any, adminId: string | undefined, providerTxId?: string) {
         return await prisma.$transaction(async (tx) => {
-             // Update Payment Status
+             // Update Payment Status (Atomic check)
              const meta = payment.metadata as any;
-             await tx.payment.update({
-                 where: { id: payment.id },
+             const updateResult = await tx.payment.updateMany({
+                 where: { 
+                     id: payment.id,
+                     status: { not: PaymentStatus.SUCCESS } 
+                 },
                  data: { 
                      status: PaymentStatus.SUCCESS,
                      providerTxId: providerTxId || payment.providerTxId
                  }
              });
 
-             if (meta && meta.targetAction === 'FINALIZE_ADMISSION') {
-                 // Call the shared update logic
-                 await this.executeAdmissionUpdates(payment.studentId, meta, payment.id, adminId || 'SYSTEM', tx);
+             if (updateResult.count === 0) {
+                 logger.warn(`[_completeAdmissionTransaction] Payment ${payment.id} already processed. Skipping duplicate updates.`);
+                 return { success: true, message: "Payment already successfully processed", status: PaymentStatus.SUCCESS };
              }
 
-             // Ledger Entry
-             await tx.studentLedger.create({
-                data: {
-                    studentId: payment.studentId,
-                    type: LedgerTransactionType.CREDIT,
-                    amount: payment.amount,
-                    description: `Admission Payment (ONLINE) - ${meta?.feeComponent || 'TUITION'}`,
-                    referenceId: payment.id,
-                    referenceType: 'PAYMENT',
-                    feeHeadId: payment.feeHeadId, 
-                    createdBy: adminId || 'SYSTEM'
-                }
-            });
+             // 2. Parallel Execution: Updates + Ledger
+             const ledgerData = {
+                studentId: payment.studentId,
+                type: LedgerTransactionType.CREDIT,
+                amount: payment.amount,
+                description: `Admission Payment (${payment.method || 'ONLINE'}) - ${meta?.feeComponent || 'TUITION'}`,
+                referenceId: payment.id,
+                referenceType: 'PAYMENT',
+                feeHeadId: payment.feeHeadId, 
+                createdBy: adminId || 'SYSTEM'
+             };
+
+             const promises: Promise<any>[] = [
+                 tx.studentLedger.create({ data: ledgerData as any }) // Type assertion to bypass strict input check if needed
+             ];
+
+             if (meta && meta.targetAction === 'FINALIZE_ADMISSION') {
+                 promises.push(this.executeAdmissionUpdates(payment.studentId, meta, payment.id, adminId || 'SYSTEM', tx));
+             }
+
+             await Promise.all(promises);
 
              logger.info(`[verifyAndCompletePayment] Payment finalized successfully.`);
              return { success: true, message: "Payment Verified and Admission Finalized", status: PaymentStatus.SUCCESS };
          });
-    }
+    },
+
+
+
+
+
+
 };

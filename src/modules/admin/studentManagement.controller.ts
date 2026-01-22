@@ -470,7 +470,7 @@ export const finalizeAdmission = catchAsync(async (req: Request, res: Response, 
         statusCode: 201,
         success: true,
         message: result.message,
-        data: { paymentId: result.paymentId }
+        data: result
     });
 });
 

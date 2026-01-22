@@ -14,4 +14,4 @@ dotenv.config({
 });
 
 // Fallback
-dotenv.config();
+dotenv.config({ override: true });

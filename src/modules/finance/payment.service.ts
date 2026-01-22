@@ -34,6 +34,9 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId }
     });
+    
+    // Step 1: Check Student Existence and Payment Status
+    logger.info(`[initiateApplicationFeePayment] Step 1: Validating student ${studentId}`);
 
     if (!student) {
         throw new AppError('Student not found', 404);
@@ -52,7 +55,8 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
         throw new AppError('Application fee already paid', 400);
     }
 
-    // Create a pending payment record
+    // Step 2: Create a pending payment record
+    logger.info(`[initiateApplicationFeePayment] Step 2: Creating PENDING payment record`);
     const transactionId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
     
     const createdPayment = await prisma.payment.create({
@@ -66,28 +70,11 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
         }
     });
 
-    // BYPASS FOR DEV/TESTING (Only if explicit env var is set)
-    if (process.env.BYPASS_PAYMENT === 'true') {
-        logger.info(`[MOCK PAYMENT] Bypassing Payment Gateway for transaction ${transactionId}`);
-        
-        await prisma.payment.update({
-             where: { id: createdPayment.id }, 
-             data: { status: PaymentStatus.SUCCESS }
-        });
 
-         await prisma.studentAdmission.update({
-            where: { studentId: studentId },
-            data: {
-                status: AdmissionStatus.ENTRANCE_FEE_PAID,
-                feeStatus: FeeStatus.PARTIAL,
-                paidFee: { increment: amount }
-            }
-        });
-
-        return { redirectUrl: `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}`, paymentId: createdPayment.id };
-    }
 
     try {
+        // Step 3: Initiate PhonePe Request
+        logger.info(`[initiateApplicationFeePayment] Step 3: Initiating Payment with PhonePe`);
         const redirectUrl = `${process.env.FRONTEND_URL}/student/payment?txnId=${transactionId}`;
         
         const request = StandardCheckoutPayRequest.builder()
@@ -108,7 +95,8 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
     try {
         const response = await client.getOrderStatus(merchantTransactionId);
         
-        // Fetch payment to return ID and update if needed
+        // Step 1. Fetch payment to return ID and update if needed
+        logger.debug(`[checkPaymentStatus] Step 1: Fetching local payment record for ${merchantTransactionId}`);
         const payment = await prisma.payment.findFirst({ 
              where: { providerTxId: merchantTransactionId },
              include: { student: true }
@@ -138,6 +126,8 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
 const processPaymentSuccess = async (payment: any, metadata: any) => {
     let invoiceUrl = null;
     try {
+        // Step 1: Generate Invoice Number
+        logger.info(`[processPaymentSuccess] Step 1: Generating Invoice for payment ${payment.id}`);
         // Generate Invoice Number: FEE_HEADER/YEAR/APPLICATION_NUMBER/RECEIPT_NUMBER
         // Example: VVIT/2026/VON202600001/001
         

@@ -4,8 +4,9 @@ import { getEntranceExamReceiptTemplate } from './emailTemplates';
 import fs from 'fs';
 import path from 'path';
 import { EmailStatus } from '@prisma/client';
-import { createEmailLog, updateEmailStatus } from '../modules/system/emailLog.service';
+import { createEmailLog, updateEmailStatus, getEmailLogById } from '../modules/system/emailLog.service';
 import { generateInvoicePDF, InvoiceData } from './invoiceGenerator';
+import { uploadFileToS3 } from './s3Utils';
 
 // Types
 interface EmailData {
@@ -244,14 +245,116 @@ export const sendEntranceFeeReceipt = async (
     }
 };
 
-import { getEmailLogById } from '../modules/system/emailLog.service';
+export const sendAdmissionFeeReceipt = async (
+    recipientEmail: string,
+    data: EmailData
+): Promise<{ success: boolean; invoiceUrl?: string }> => {
+    let emailLogId: string | undefined;
+    
+    try {
+        logger.info(`----------------------------------------------------------------`);
+        logger.info(`[EMAIL SERVICE] Prepare to send Admission Fee Receipt to: ${recipientEmail}`);
+        
+        // Use existing template but allow overriding context
+        const htmlContent = getEntranceExamReceiptTemplate(data); 
+        const subject = `Payment Receipt - Admission Fee - ${data.applicationId}`;
+        
+        // Generate Invoice PDF
+        const invoiceData: InvoiceData = {
+            invoiceNumber: data.invoiceNumber,
+            date: data.date,
+            studentName: data.studentName,
+            studentId: data.applicationId,
+            paymentMethod: 'Online/Offline', // We can improve this if passed
+            transactionId: data.transactionId,
+            amount: data.amount,
+            description: `Admission Fee`,
+            items: data.items || [
+                {
+                    description: 'Admission Fee (Tuition)',
+                    amount: data.amount
+                }
+            ],
+            signerName: 'Registrar',
+            signerTitle: 'Registrar, VVIT University',
+            signedDate: new Date(),
+            address: data.address || {
+                line1: 'Nambur',
+                city: 'Guntur',
+                state: 'Andhra Pradesh',
+                pincode: '522508'
+            }
+        };
+
+        // 1. Generate PDF Buffer
+        const pdfBuffer = await generateInvoicePDF(invoiceData);
+        const base64Pdf = pdfBuffer.toString('base64');
+
+        // 2. Upload to S3
+        const s3Key = `invoices/admission/${data.applicationId}_${data.transactionId}.pdf`;
+        const invoiceUrl = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
+        logger.info(`[EMAIL SERVICE] Invoice uploaded to: ${invoiceUrl}`);
+
+        data.invoiceUrl = invoiceUrl; // Update data with real URL
+
+        // 3. Create Log
+        const logEntry = await createEmailLog({
+            recipientEmail,
+            subject,
+            content: htmlContent,
+            templateType: 'ADMISSION_FEE_RECEIPT', // New Type
+            invoiceData: invoiceData,
+            metadata: {
+                studentId: data.applicationId,
+                transactionId: data.transactionId,
+                invoiceUrl: invoiceUrl
+            }
+        });
+        
+        if (logEntry) emailLogId = logEntry.id;
+
+        // 4. Prepare Images
+        const assetsDir = path.join(process.cwd(), 'src/assets');
+        let logoBase64 = '';
+        let bannerBase64 = '';
+        try {
+            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
+        } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
+
+        const attachments = [{ name: `Invoice_${data.applicationId}.pdf`, mime_type: 'application/pdf', content: base64Pdf }];
+        const inlineImages = [];
+        if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });
+        if (bannerBase64) inlineImages.push({ name: 'collegeBuilding.jpg', mime_type: 'image/jpeg', content: bannerBase64, cid: 'banner' });
+
+        // 5. Send Email
+        const result = await sendZeptoEmail(recipientEmail, subject, htmlContent, attachments, inlineImages);
+        
+        // 6. Update Log
+        if (emailLogId) {
+            await updateEmailStatus(
+                emailLogId, 
+                result.success ? EmailStatus.SENT : EmailStatus.FAILED,
+                result.messageId,
+                result.error
+            );
+        }
+        
+        return { success: result.success, invoiceUrl };
+
+    } catch (error: any) {
+        logger.error('[EMAIL SERVICE] Admission Receipt Failed', error);
+        if (emailLogId) await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
+        return { success: false };
+    }
+};
 
 export const retryEmail = async (logId: string) => {
     const log = await getEmailLogById(logId);
     if (!log || log.status === EmailStatus.SENT) return { success: false, message: 'Invalid log or already sent' };
 
-    // For now, only supporting ENTRANCE_FEE_RECEIPT
-    if (log.templateType === 'ENTRANCE_FEE_RECEIPT' && log.invoiceData) {
+    // Support both Entrance and Admission Fee Receipts
+    if ((log.templateType === 'ENTRANCE_FEE_RECEIPT' || log.templateType === 'ADMISSION_FEE_RECEIPT') && log.invoiceData) {
         const invoiceData = log.invoiceData as any; // Cast from Json
         
         // Map InvoiceData back to EmailData
@@ -259,12 +362,14 @@ export const retryEmail = async (logId: string) => {
            studentName: invoiceData.studentName,
            applicationId: invoiceData.studentId,
            invoiceNumber: invoiceData.invoiceNumber,
-           programName: (log.metadata as any)?.programName || 'Entrance Examination 2026', 
+           programName: (log.metadata as any)?.programName || 'Admission/Entrance 2026', 
            transactionId: invoiceData.transactionId,
            amount: invoiceData.amount,
            date: new Date(invoiceData.date),
-           invoiceUrl: `${process.env.INSTITUTION_WEBSITE_URL || 'https://vvit.edu.in'}/invoices/${invoiceData.studentId}`,
-           supportEmail: process.env.SUPPORT_EMAIL || "admissions@vvit.edu.in"
+           invoiceUrl: (log.metadata as any)?.invoiceUrl || `${process.env.INSTITUTION_WEBSITE_URL || 'https://vvit.edu.in'}/invoices/${invoiceData.studentId}`,
+           supportEmail: process.env.SUPPORT_EMAIL || "admissions@vvit.edu.in",
+           address: invoiceData.address,
+           items: invoiceData.items
         };
         
         const htmlContent = getEntranceExamReceiptTemplate(emailData);
