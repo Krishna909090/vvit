@@ -1481,7 +1481,7 @@ export const AdminStudentService = {
              // We capture the Real/Provider Transaction ID here.
              // ------------------------------------------------------------------
              // Step 2: Verify with Payment Gateway
-             const merchantTransactionId = payment.id.replace(/-/g, '');
+             const merchantTransactionId = payment.providerTxId || payment.id.replace(/-/g, '');
              logger.debug(`[verifyAndCompletePayment] Step 2: Checking status with PhonePe for TxId=${merchantTransactionId}`);
              
              // Use Singleton Client or re-instantiate if needed (StandardCheckoutClient handles concurrency usually)
