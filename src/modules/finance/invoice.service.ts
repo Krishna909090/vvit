@@ -68,7 +68,18 @@ export const InvoiceService = {
         const invoiceNumber = `${feeHeader}/${year}/${applicationNumber}/${receiptNumberStr}`;
 
         // Real TX ID
-        const realTransactionId = payment.providerTxId || payment.referenceNumber || payment.id;
+        let realTransactionId = payment.providerTxId || payment.referenceNumber || payment.id;
+        
+        // Check Metadata for Gateway Response ID (PhonePe)
+        // Similar to processPaymentSuccess logic in payment.service.ts
+        const metadata: any = payment.metadata;
+        if (metadata) {
+            if (metadata?.paymentDetails?.[0]?.transactionId) {
+                realTransactionId = metadata.paymentDetails[0].transactionId;
+            } else if (metadata?.data?.paymentDetails?.[0]?.transactionId) {
+                realTransactionId = metadata.data.paymentDetails[0].transactionId;
+            }
+        }
 
         // Prepare Data
         const invoiceData: any = {

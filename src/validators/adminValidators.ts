@@ -156,10 +156,7 @@ export const addAdminSchema = z.object({
     role: z
       .string()
       .optional()
-      .transform((val) => val ? val.toUpperCase() : val)
-      .refine((val) => !val || AllowedRoles.includes(val as any), {
-        message: "Invalid role for admin creation",
-      }),
+      .transform((val) => val ? val.toUpperCase() : val),
     groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
   }),
 });
@@ -440,6 +437,12 @@ export const finalizeAdmissionSchema = z.object({
         course: z.object({
             allottedCourseId: z.string().uuid(),
         }),
+    }),
+});
+
+export const verifyPaymentSchema = z.object({
+    body: z.object({
+        paymentId: z.string().uuid("Invalid Payment ID"),
     }),
 });
 

@@ -17,7 +17,8 @@ import {
     editStudentScholarship,
     downloadApplication,
     finalizeAdmission,
-    verifyPayment
+    verifyPayment,
+    getAdmissionInvoice
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -27,7 +28,8 @@ import {
     updateStudentPersonalDetailsSchema,
     updateAcademicQualificationSchema,
     deleteAcademicQualificationSchema,
-    finalizeAdmissionSchema
+    finalizeAdmissionSchema,
+    verifyPaymentSchema
 } from '../../validators/adminValidators';
 
 import upload from '../../config/multer';
@@ -63,12 +65,15 @@ router.post('/update-admission', authenticate, authorizePermission(['student.upd
 
 // Finalize Admission
 router.post('/finalize-admission', authenticate, authorizePermission(['student.update.all']), validateRequest(finalizeAdmissionSchema), finalizeAdmission);
-router.post('/verify-payment', authenticate, authorizePermission(['student.update.all']), verifyPayment);
+router.post('/verify-payment', authenticate, authorizePermission(['student.update.all']), validateRequest(verifyPaymentSchema), verifyPayment);
 
+// Admission Invoice
+router.get('/admission-invoice/:studentId', authenticate, authorizePermission(['student.read.all']), validateRequest(studentIdParamSchema), getAdmissionInvoice);
 
 
 // Documents
 router.get('/certificates/:studentId', authenticate, authorizePermission(['document.read.all']), validateRequest(studentIdParamSchema), getStudentCertificates);
+
 
 router.get('/download-documents/:studentId', authenticate, authorizePermission(['document.read.all']), validateRequest(studentIdParamSchema), downloadStudentDocuments);
 

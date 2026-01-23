@@ -811,6 +811,8 @@ export const AdminStudentService = {
             }
         });
     },
+
+
     async updateStudentPersonalDetails(studentId: string, data: any, adminId: string | undefined) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
@@ -1282,7 +1284,7 @@ export const AdminStudentService = {
         const isOnline = !([PaymentMethod.CASH, PaymentMethod.CHEQUE, PaymentMethod.DEMAND_DRAFT].includes(payment.method));
         logger.info(`[finalizeAdmission] Flow Type detected: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
 
-        if (isOnline) {
+            if (isOnline) {
              // === ONLINE FLOW (Initiate) ===
              try {
              
@@ -1306,6 +1308,16 @@ export const AdminStudentService = {
                  logger.info(`[finalizeAdmission] Found existing PENDING payment ${existingPending.id}. Reusing it.`);
                  newPayment = existingPending;
                  isNew = false;
+                 
+                 // Reuse existing providerTxId if available and matches TXN format, otherwise generate new one
+                 if (!newPayment.providerTxId || !newPayment.providerTxId.startsWith('TXN_')) {
+                     const newTxnId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
+                     logger.info(`[finalizeAdmission] Existing payment missing valid TXN ID. Updating to ${newTxnId}`);
+                     newPayment = await prisma.payment.update({
+                         where: { id: newPayment.id },
+                         data: { providerTxId: newTxnId }
+                     });
+                 }
              } else {
                  try {
                      // ------------------------------------------------------------------
@@ -1391,7 +1403,7 @@ export const AdminStudentService = {
                  throw new AppError("Reference Number is required for Non-Cash payments", 400);
              }
 
-             return await prisma.$transaction(async (tx) => {
+             const offlineResult = await prisma.$transaction(async (tx) => {
                  logger.info(`[finalizeAdmission][Offline] Starting transaction for student=${studentId}`);
                  
                  const feeComponent = PaymentComponent.TUITION;
@@ -1435,7 +1447,7 @@ export const AdminStudentService = {
                         studentId,
                         type: LedgerTransactionType.CREDIT,
                         amount: payment.amount,
-                        description: `Admission Payment (${payment.method}) - ${feeComponent}`,
+                        description: `Tution Payment (${payment.method}) - ${feeComponent}`,
                         referenceId: newPayment.id,
                         referenceType: 'PAYMENT',
                         feeHeadId: payment.feeHeadId, 
@@ -1446,6 +1458,33 @@ export const AdminStudentService = {
                 logger.info(`[finalizeAdmission][Offline] Transaction committed successfully.`);
                 return { success: true, type: 'OFFLINE_COMPLETED', message: "Admission Finalized Successfully", paymentId: newPayment.id };
              });
+
+             // Auto-generate invoice (Outside TX)
+             try {
+                if (offlineResult.paymentId) {
+                    await InvoiceService.generateInvoiceForPayment(offlineResult.paymentId);
+                }
+             } catch (err) {
+                logger.warn(`[finalizeAdmission] Failed to auto-generate invoice: ${err}`);
+             }
+
+             // Fetch final details for response
+             const finalPayment = await prisma.payment.findUnique({ where: { id: offlineResult.paymentId } });
+             let finalInvoiceUrl = finalPayment?.invoiceUrl;
+             if (finalInvoiceUrl) {
+                 finalInvoiceUrl = await convertToPresignedUrl(finalInvoiceUrl);
+             }
+
+             return { 
+                 ...offlineResult,
+                 data: {
+                    paymentId: finalPayment?.id,
+                    invoiceUrl: finalInvoiceUrl,
+                    amount: finalPayment?.amount,
+                    transactionId: finalPayment?.referenceNumber, // Use reference for offline
+                    payment: finalPayment
+                 }
+             };
         }
     },
 
@@ -1469,7 +1508,26 @@ export const AdminStudentService = {
 
         if (payment.status === PaymentStatus.SUCCESS) {
             logger.info(`[verifyAndCompletePayment] Payment ${paymentId} already processed.`);
-            return { success: true, message: "Payment already successfully processed", status: PaymentStatus.SUCCESS };
+            
+            // Return full details even if already processed
+            let finalInvoiceUrl = payment.invoiceUrl;
+            if (finalInvoiceUrl) {
+                finalInvoiceUrl = await convertToPresignedUrl(finalInvoiceUrl);
+            }
+            
+            return { 
+                success: true, 
+                message: "Payment successfully processed", 
+                status: PaymentStatus.SUCCESS,
+                data: {
+                    paymentId: payment.id,
+                    invoiceUrl: finalInvoiceUrl,
+                    amount: payment.amount,
+                    transactionId: payment.providerTxId,
+                    metadata: payment.metadata,
+                    payment: payment
+                }
+            };
         }
 
 
@@ -1520,7 +1578,7 @@ export const AdminStudentService = {
 
                  // Step 3: Finalize Admission (Update Status & Allocate)
                  logger.info(`[verifyAndCompletePayment] Step 3: Finalizing Admission for payment ${paymentId}`);
-                 return await this._completeAdmissionTransaction(payment, adminId, realProviderTxId);
+                 return await this._completeAdmissionTransaction(payment, adminId, realProviderTxId, response);
              } else if (response.state === 'PENDING') {
                  logger.info(`[verifyAndCompletePayment] Payment is still pending.`);
                  return { success: false, message: "Payment is still pending", status: PaymentStatus.PENDING };
@@ -1547,10 +1605,15 @@ export const AdminStudentService = {
      * 2. Calls executeAdmissionUpdates (Allocation, Scholarship).
      * 3. Creates Ledger Entry.
      */
-    async _completeAdmissionTransaction(payment: any, adminId: string | undefined, providerTxId?: string) {
-        return await prisma.$transaction(async (tx) => {
+    async _completeAdmissionTransaction(payment: any, adminId: string | undefined, providerTxId?: string, gatewayResponse?: any) {
+        const result = await prisma.$transaction(async (tx) => {
              // Update Payment Status (Atomic check)
              const meta = payment.metadata as any;
+             
+             // User Request: Replace metadata with PhonePe response (or keep existing if no response provided)
+             // We do NOT need to merge. The admission logic uses 'meta' variable which tracks the original state.
+             const finalMetadata = gatewayResponse || meta;
+
              const updateResult = await tx.payment.updateMany({
                  where: { 
                      id: payment.id,
@@ -1558,7 +1621,8 @@ export const AdminStudentService = {
                  },
                  data: { 
                      status: PaymentStatus.SUCCESS,
-                     providerTxId: providerTxId || payment.providerTxId
+                     providerTxId: providerTxId || payment.providerTxId,
+                     metadata: finalMetadata
                  }
              });
 
@@ -1568,6 +1632,7 @@ export const AdminStudentService = {
              }
 
              // 2. Parallel Execution: Updates + Ledger
+             logger.debug(`[_completeAdmissionTransaction] Creating Ledger Entry for student=${payment.studentId}`);
              const ledgerData = {
                 studentId: payment.studentId,
                 type: LedgerTransactionType.CREDIT,
@@ -1584,15 +1649,88 @@ export const AdminStudentService = {
              ];
 
              if (meta && meta.targetAction === 'FINALIZE_ADMISSION') {
+                 logger.debug(`[_completeAdmissionTransaction] Triggering associated admission updates (Allocation/Scholarship)`);
                  promises.push(this.executeAdmissionUpdates(payment.studentId, meta, payment.id, adminId || 'SYSTEM', tx));
              }
 
              await Promise.all(promises);
 
-             logger.info(`[verifyAndCompletePayment] Payment finalized successfully.`);
+             logger.info(`[_completeAdmissionTransaction] Payment finalized successfully for PaymentID=${payment.id}. Metadata Updated=${!!gatewayResponse}`);
              return { success: true, message: "Payment Verified and Admission Finalized", status: PaymentStatus.SUCCESS };
          });
+
+         // Auto-generate invoice (Outside TX)
+         try {
+             logger.info(`[_completeAdmissionTransaction] Auto-generating invoice for PaymentID=${payment.id}`);
+             await InvoiceService.generateInvoiceForPayment(payment.id);
+             logger.info(`[_completeAdmissionTransaction] Invoice generated successfully for PaymentID=${payment.id}`);
+         } catch (err) {
+             logger.warn(`[_completeAdmissionTransaction] Failed to auto-generate invoice for PaymentID=${payment.id}: ${err}`);
+         }
+         
+         // Fetch final consolidated data to return to client
+         const finalPayment = await prisma.payment.findUnique({
+             where: { id: payment.id }
+         });
+
+         let finalInvoiceUrl = finalPayment?.invoiceUrl;
+         if (finalInvoiceUrl) {
+             finalInvoiceUrl = await convertToPresignedUrl(finalInvoiceUrl);
+         }
+
+         return { 
+            ...result, 
+            data: {
+                paymentId: finalPayment?.id,
+                invoiceUrl: finalInvoiceUrl,
+                amount: finalPayment?.amount,
+                transactionId: finalPayment?.providerTxId,
+                metadata: finalPayment?.metadata,
+                payment: finalPayment
+            }
+         };
     },
+
+    async getAdmissionInvoice(studentId: string) {
+        if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+        // Find the successful admission payment (Tuition)
+        const payment = await prisma.payment.findFirst({
+            where: {
+                studentId,
+                status: PaymentStatus.SUCCESS,
+                component: PaymentComponent.TUITION
+            },
+            orderBy: { createdAt: 'desc' }, // Get latest if multiple
+            include: { student: true }
+        });
+
+        if (!payment) {
+            throw new AppError("No admission fee payment found for this student.", 404);
+        }
+
+        // Return existing or generate if missing
+        if (payment.invoiceUrl) {
+            // Convert to Presigned URL
+            const finalUrl = await convertToPresignedUrl(payment.invoiceUrl);
+            return { invoiceUrl: finalUrl };
+        } else {
+            // Generate
+            const result = await InvoiceService.generateInvoiceForPayment(payment.id);
+            // Convert to Presigned URL just in case the service returns a raw S3 key (though it returns URL usually, let's be safe)
+            // InvoiceService returns { invoiceUrl } which is usually the key or full URL? 
+            // Looking at InvoiceService.ts, it returns uploadFileToS3 result. 
+            // uploadFileToS3 usually returns the S3 KEY or Location. 
+            // Best to ensure we return a presigned URL if it's private.
+            // But InvoiceService usually returns what uploadFileToS3 returns.
+            return { invoiceUrl: await convertToPresignedUrl(result.invoiceUrl) };
+        }
+    },
+
+    async verifyPayment(paymentId: string) {
+         return this.verifyAndCompletePayment(paymentId, undefined);
+    }
+
 
 
 

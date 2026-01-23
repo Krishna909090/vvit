@@ -485,9 +485,38 @@ export const verifyPayment = catchAsync(async (req: Request, res: Response, next
         res,
         statusCode: 200,
         success: true,
-        message: result.message
+        message: result.message,
+        data: result
     });
 });
+
+// Get Admission Fee Invoice
+export const getAdmissionInvoice = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getAdmissionInvoice] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId } = req.params;
+
+    // Security check: if student, ensure accessing own data
+    if (req.user?.role === Role.STUDENT) {
+        // ... (student ID check logic if standardized, or rely on service if we passed userId)
+        // For now, assuming standard admin/student access pattern.
+        // Assuming studentId param is expected.
+        const userStudent = await StudentService.getStudentByUserId(req.user.userId!);
+        if (userStudent && userStudent.id !== studentId) {
+             throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
+    }
+
+    const result = await AdminStudentService.getAdmissionInvoice(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
 
 
 
