@@ -204,6 +204,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
             pref2: true,
             pref3: true,
             degreeType: true,
+            userId: true,
             applicationId: true // Needed for logger and likely client
         }
     });
