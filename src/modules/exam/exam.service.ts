@@ -553,6 +553,21 @@ export const updateStudentExamScore = async (studentId: string, score: number, c
             }
         });
 
+        // Store in AcademicQualification as requested
+        // Required fields: level, board, yearOfPassing
+        await tx.academicQualification.create({
+            data: {
+                studentId,
+                level: 'VVITAT',
+                gpaOrMarks: score.toString(),
+                board: 'VVIT', // Defaulting as it's required
+                yearOfPassing: new Date().getFullYear().toString(), // Defaulting as it's required
+                percentage: Number(score), // Also storing as float for potential querying
+                createdBy: adminId,
+                updatedBy: adminId
+            }
+        });
+
         if (isQualified) {
             await tx.studentAdmission.update({
                 where: { studentId },

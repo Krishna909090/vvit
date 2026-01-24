@@ -227,10 +227,12 @@ export const addAcademicDetails = catchAsync(async (req: Request, res: Response,
 
 // Get Student Details (Comprehensive)
 // Get Student Details (Logged-in User)
+// Get Student Details (Logged-in User or via Query Param)
 export const getStudentDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getStudentDetails] by=${req.user?.userId || 'anonymous'}`);
 
-    const userId = req.user?.userId;
+    const userId = (req.query.userId as string) || req.user?.userId;
+
     if (!userId) {
         throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
     }
