@@ -61,22 +61,11 @@ export const AdminService = {
         };
     },
 
-    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: RoleType; password?: string; groupIds?: string[] }, currentUserId?: string) {
+    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: any; password?: string; groupIds?: string[] }, currentUserId?: string) {
         const { phone, name, email, role, password, groupIds } = data;
 
         if (!phone) {
             throw new AppError("Phone number is required", 400);
-        }
-
-        // Role is optional now, as permissions come from Groups
-        // if (!role) { throw new AppError("Role is required", 400); }
-
-        // Allow any role EXCEPT Student (Students must use admission flow)
-        if (role === Role.STUDENT) {
-            logger.warn(
-                `[addAdmin] attempt to create STUDENT via admin API: phone=${maskPhone(phone)}, by=${currentUserId}`
-            );
-            throw new AppError("Cannot create Student users via this API. Use Admission flow.", 400);
         }
 
         const normalizedPhone = phone.trim();
@@ -93,46 +82,23 @@ export const AdminService = {
         const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
 
         if (user) {
-            if (user.role !== role) {
-                logger.warn(
-                    `[addAdmin] role conflict for userId=${user.id}. Existing role=${user.role}, requested role=${role}`
-                );
-                throw new AppError(
-                    `User already exists with role ${user.role}. Cannot change role to ${role}.`,
-                    400
-                );
+            // Logic Relaxed: Update role if different, don't throw conflict.
+            if (role && user.role !== role) {
+                logger.info(`[addAdmin] User exists. Updating role from ${user.role} to ${role}`);
             }
-
-            logger.info(
-                `[addAdmin] User found with phone=${maskPhone(normalizedPhone)}, same role=${role}. Updating basic details.`
-            );
 
             user = await prisma.user.update({
                 where: { id: user.id },
                 data: {
                     name: name ?? user.name,
                     email: normalizedEmail ?? user.email,
-                    password: passwordHash ?? user.password, // Update password if provided
+                    password: passwordHash ?? user.password,
+                    role: role ?? user.role, // Update role if provided
                     updatedBy: currentUserId
                 },
             });
         } else {
-            if (role === Role.SUPER_ADMIN) {
-                const existingSuperAdmin = await prisma.user.findFirst({
-                    where: { role: Role.SUPER_ADMIN },
-                });
-
-                if (existingSuperAdmin) {
-                    logger.warn(
-                        `[addAdmin] SUPER_ADMIN already exists: id=${existingSuperAdmin.id}, phone=${maskPhone(existingSuperAdmin.phone)}`
-                    );
-                    throw new AppError(
-                        "A SUPER_ADMIN already exists. Cannot create another SUPER_ADMIN.",
-                        400
-                    );
-                }
-            }
-
+            // Logic Relaxed: Removed Super Admin uniqueness check and Student restrictions.
             logger.info(
                 `[addAdmin] Creating new user with role=${role} and phone=${maskPhone(normalizedPhone)}`
             );
@@ -142,29 +108,35 @@ export const AdminService = {
                     phone: normalizedPhone,
                     name,
                     email: normalizedEmail,
-                    role,
+                    role: role || 'STAFF', // Default if missing, or use payload // Ensure this matches Schema Enum if strict
                     password: passwordHash,
                     createdBy: currentUserId,
                     updatedBy: currentUserId
                 },
             });
+        }
 
-            // Explicit Group Assignment via Payload
-            if (user && groupIds && groupIds.length > 0) {
-                logger.info(`[addAdmin] Assigning user=${user.id} to groups=${groupIds.join(', ')}`);
-                const userGroupsData = groupIds.map(groupId => ({
-                    userId: user!.id,
-                    groupId
-                }));
-                // Use createMany if supported or loop upsert/create
-                // createMany is supported in Cockroach/Postgres recent versions via Prisma
-                // But to be safe and handle errors individually:
-                for (const ug of userGroupsData) {
-                    try {
-                        await prisma.userGroup.create({ data: ug });
-                    } catch (e) {
-                         logger.error(`[addAdmin] Failed to assign group ${ug.groupId} to user ${user!.id}: ${e}`);
-                    }
+        // Explicit Group Assignment via Payload (The Priority)
+        if (user && groupIds && groupIds.length > 0) {
+            logger.info(`[addAdmin] Assigning user=${user.id} to groups=${groupIds.join(', ')}`);
+            const userGroupsData = groupIds.map(groupId => ({
+                userId: user!.id,
+                groupId
+            }));
+            
+            // Assign groups properly
+            for (const ug of userGroupsData) {
+                try {
+                    // Using Upsert or Create based on schema constraints (usually composite userId+groupId)
+                    await prisma.userGroup.upsert({
+                         where: {
+                             userId_groupId: { userId: ug.userId, groupId: ug.groupId }
+                         },
+                         create: ug,
+                         update: {} // No-op if exists
+                    });
+                } catch (e) {
+                     logger.error(`[addAdmin] Failed to assign group ${ug.groupId} to user ${user!.id}: ${e}`);
                 }
             }
         }

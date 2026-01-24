@@ -12,9 +12,10 @@ import axios from 'axios';
 import { registerStudent } from '../student/student.service';
 import { FeeService } from '../finance/fee.service';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
+import { maskAadhaar } from '../../utils/mask';
 import { generateApplicationPDF } from '../../utils/applicationPdfGenerator';
 import { getEnv } from '../../config/envValidator';
-import { sendAdmissionFeeReceipt } from '../../utils/emailService';
+import { sendAdmissionFeeReceipt, sendPaymentReceipt } from '../../utils/emailService';
 // @ts-ignore
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
 import { InvoiceService } from '../finance/invoice.service';
@@ -64,11 +65,9 @@ export const AdminStudentService = {
                 include: {
                     admissionDetails: {
                         include: {
-                            allottedCourse: {
-                                select: {
-                                    name: true
-                                }
-                            }
+                            allottedCourse: true,
+                            hostel: true,
+                            transportRoute: true
                         }
                     },
                     examDetails: true,
@@ -76,29 +75,35 @@ export const AdminStudentService = {
                     academicQualifications: true,
                     eligibleScholarshipRule: true,
                     scholarshipAllocation: { include: { rule: true } },
-                    pref1Course: { select: { name: true } },
-                    pref2Course: { select: { name: true } },
-                    pref3Course: { select: { name: true } },
-                    feeDemands: true,
-                    studentScholarship: true
+                    pref1Course: true,
+                    pref2Course: true,
+                    pref3Course: true,
+                    feeDemands: {
+                        include: {
+                            feeStructure: {
+                                include: {
+                                    feeHead: true
+                                }
+                            },
+                            payments: true
+                        }
+                    },
+                    studentScholarship: true,
+                    payments: true,
+                    ledgerEntries: true,
+                    courseChangeLogs: true,
+                    discountRequests: true,
+                    user: true,
+                    enrollment: true,
+                    hostelAllocation: true,
+                    transportAllocation: true,
+                    convenorDetails: true
                 }
             }),
             prisma.student.count({ where })
         ]);
 
-        // Fetch requirements to check pending docs
-        const requirements = await prisma.documentRequirement.findMany({ where: { isRequired: true } });
-        const reqMap: Record<string, string[]> = {};
-        requirements.forEach((r: any) => {
-            if (!reqMap[r.degreeType]) reqMap[r.degreeType] = [];
-            reqMap[r.degreeType].push(r.documentKey);
-        });
-
         const enhancedStudents = await Promise.all(students.map(async (student: any) => {
-            const uploadedKeys = student.documents.map((d: any) => d.documentKey);
-            const requiredKeys = reqMap[student.degreeType || ''] || [];
-            const pendingDocs = requiredKeys.filter(key => !uploadedKeys.includes(key));
-
             // Convert document URLs to presigned URLs
             const documentsWithPresignedUrls = await Promise.all(student.documents.map(async (doc: any) => ({
                 ...doc,
@@ -110,17 +115,12 @@ export const AdminStudentService = {
 
             return {
                 ...student,
+                aadharNumber: maskAadhaar(student.aadharNumber),
                 profilePhotoUrl,
                 documents: documentsWithPresignedUrls,
-                allottedCourseName: student.admissionDetails?.allottedCourse?.name,
-                pref1CourseName: student.pref1Course?.name,
-                pref2CourseName: student.pref2Course?.name,
-                pref3CourseName: student.pref3Course?.name,
-                documentsUploaded: student.documents.length,
-                pendingDocs,
-                isAllDocsUploaded: pendingDocs.length === 0,
-                s3FolderKey: (student as any).documentFolderPath || `students/${student.id}/documents/`,
-                feeDemands: student.feeDemands || []
+                // Removed flattened fields to match requested JSON structure
+                // allottedCourseName, pref1CourseName etc. are removed
+                // pendingDocs, s3FolderKey etc. are removed
             };
         }));
 
@@ -477,16 +477,21 @@ export const AdminStudentService = {
         }
 
         const admission = student.admissionDetails;
-        let totalFee = 125000;
+        // Initialize adjustment delta
+        let feeAdjustment = 0;
 
         await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-            // Release previous allocation
+            // Release previous allocation and calculate subtraction from Total Fee
             if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelId) {
                 if (accommodationType !== AccommodationType.HOSTEL || hostelId !== admission.hostelId) {
                     await tx.hostel.update({
                         where: { id: admission.hostelId },
                         data: { filled: { decrement: 1 }, updatedBy: adminId }
                     });
+                    
+                    // Subtract old hostel cost
+                    const oldHostel = await tx.hostel.findUnique({ where: { id: admission.hostelId } });
+                    if (oldHostel) feeAdjustment -= (oldHostel.cost || 0);
                 }
             } else if (admission.accommodationType === AccommodationType.TRANSPORT && admission.transportRouteId) {
                 if (accommodationType !== AccommodationType.TRANSPORT || transportRouteId !== admission.transportRouteId) {
@@ -494,10 +499,14 @@ export const AdminStudentService = {
                         where: { id: admission.transportRouteId },
                         data: { filled: { decrement: 1 }, updatedBy: adminId }
                     });
+                    
+                    // Subtract old transport cost
+                    const oldRoute = await tx.transportRoute.findUnique({ where: { id: admission.transportRouteId } });
+                    if (oldRoute) feeAdjustment -= (oldRoute.cost || 0);
                 }
             }
 
-            // Assign new allocation
+            // Assign new allocation and calculate addition to Total Fee
             if (accommodationType === AccommodationType.HOSTEL) {
                 if (!hostelId) throw new AppError(MESSAGES.ERROR.HOSTEL_ID_REQUIRED, 400);
 
@@ -511,12 +520,11 @@ export const AdminStudentService = {
                         where: { id: hostelId },
                         data: { filled: { increment: 1 }, updatedBy: adminId }
                     });
-                    // Fee calculation now depends on Room, not just Hostel. 
-                    // If room is assigned, we should fetch it. For now, assuming 0 if no room specific logic exists here yet.
-                    // totalFee += hostel.cost; // REMOVED
+                    
+                    // Add new hostel cost
+                    feeAdjustment += (hostel.cost || 0);
                 } else {
-                     // const hostel = await tx.hostel.findUnique({ where: { id: hostelId } });
-                     // if (hostel) totalFee += hostel.cost; // REMOVED
+                     // Same hostel, no fee change unless we assume cost changed (unlikely for admission update flow)
                 }
             }
             else if (accommodationType === AccommodationType.TRANSPORT) {
@@ -532,16 +540,23 @@ export const AdminStudentService = {
                         where: { id: transportRouteId },
                         data: { filled: { increment: 1 }, updatedBy: adminId }
                     });
-                    totalFee += route.cost;
+                    
+                    // Add new transport cost
+                    feeAdjustment += (route.cost || 0);
                 } else {
-                    const route = await tx.transportRoute.findUnique({ where: { id: transportRouteId } });
-                    if (route) totalFee += route.cost;
+                    // Same route
                 }
             }
 
             const currentPaid = (admission.paidFee ?? 0) + Number(paidAmount || 0);
+            
+            // Calculate final fee status
+            // Note: We use increment for totalFee, but to check status we need the PREDICTED new total.
+            // Current DB total might be X. New total = X + feeAdjustment.
+            const newTotalFee = (admission.totalFee ?? 0) + feeAdjustment;
+            
             let feeStatus: FeeStatus = FeeStatus.PENDING;
-            if (currentPaid >= totalFee) feeStatus = FeeStatus.FULL;
+            if (currentPaid >= newTotalFee && newTotalFee > 0) feeStatus = FeeStatus.FULL;
             else if (currentPaid > 0) feeStatus = FeeStatus.PARTIAL;
 
             await tx.studentAdmission.update({
@@ -551,7 +566,7 @@ export const AdminStudentService = {
                     hostelType: accommodationType === AccommodationType.HOSTEL ? hostelType : null,
                     hostelId: accommodationType === AccommodationType.HOSTEL ? hostelId : null,
                     transportRouteId: accommodationType === AccommodationType.TRANSPORT ? transportRouteId : null,
-                    totalFee,
+                    totalFee: { increment: feeAdjustment },
                     paidFee: currentPaid,
                     feeStatus,
                 }
@@ -1193,6 +1208,34 @@ export const AdminStudentService = {
                 });
             }
 
+            // ... (previous logic for seat updates)
+
+            // --- Calculate Accommodation Cost Delta ---
+            let accCostDelta = 0;
+            
+            // 1. Subtract Old Cost
+            if (oldAdmission) {
+                 if (oldAdmission.accommodationType === AccommodationType.HOSTEL && oldAdmission.hostelId) {
+                     const h = await tx.hostel.findUnique({ where: { id: oldAdmission.hostelId } });
+                     if (h) accCostDelta -= (h.cost || 0);
+                 } else if (oldAdmission.accommodationType === AccommodationType.TRANSPORT && oldAdmission.transportRouteId) {
+                     const r = await tx.transportRoute.findUnique({ where: { id: oldAdmission.transportRouteId } });
+                     if (r) accCostDelta -= (r.cost || 0);
+                 }
+            }
+
+            // 2. Add New Cost
+            if (allocation.type === AccommodationType.HOSTEL && allocation.hostelId) {
+                 // Already verified existence in flow usually, but safe access
+                 const h = await tx.hostel.findUnique({ where: { id: allocation.hostelId } });
+                 if (h) accCostDelta += (h.cost || 0);
+            } else if (allocation.type === AccommodationType.TRANSPORT && allocation.transportRouteId) {
+                 const r = await tx.transportRoute.findUnique({ where: { id: allocation.transportRouteId } });
+                 if (r) accCostDelta += (r.cost || 0);
+            }
+            
+            logger.debug(`[executeAdmissionUpdates] Total Fee Adjustment: ${accCostDelta}`);
+
             // --- 3. Update Admission Record ---
             logger.debug(`[executeAdmissionUpdates] Updating Student Admission record`);
             await tx.studentAdmission.upsert({
@@ -1204,7 +1247,7 @@ export const AdminStudentService = {
                     hostelId: allocation.type === AccommodationType.HOSTEL ? allocation.hostelId : null,
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
                     transportRouteId: allocation.type === AccommodationType.TRANSPORT ? allocation.transportRouteId : null,
-                    // updatedBy: adminId
+                    totalFee: { increment: accCostDelta }
                 },
                 create: {
                     studentId,
@@ -1214,7 +1257,7 @@ export const AdminStudentService = {
                     hostelId: allocation.type === AccommodationType.HOSTEL ? allocation.hostelId : null,
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
                     transportRouteId: allocation.type === AccommodationType.TRANSPORT ? allocation.transportRouteId : null,
-                    // createdBy: adminId
+                    totalFee: accCostDelta > 0 ? accCostDelta : 0
                 }
             });
 
@@ -1247,7 +1290,9 @@ export const AdminStudentService = {
      * @param adminId - ID of the admin performing the action.
      */
     async finalizeAdmission(payload: any, adminId: string) {
-        logger.info(`[finalizeAdmission] Request received for student=${payload.studentId} method=${payload.payment.method}`);
+        logger.info(`[finalizeAdmission] Request received for student=${payload.studentId} method=${payload?.payment?.method}`);
+        logger.debug(`[finalizeAdmission] Full Payload: ${JSON.stringify(payload)}`);
+        
         const { studentId, payment, scholarship, allocation, course } = payload;
         
         // 1. Validation Checks (Parallelized for Performance)
@@ -1460,26 +1505,65 @@ export const AdminStudentService = {
              });
 
              // Auto-generate invoice (Outside TX)
+             let generatedInvoiceUrl: string | null = null;
              try {
                 if (offlineResult.paymentId) {
-                    await InvoiceService.generateInvoiceForPayment(offlineResult.paymentId);
+                    const invoiceResult = await InvoiceService.generateInvoiceForPayment(offlineResult.paymentId);
+                    generatedInvoiceUrl = invoiceResult.invoiceUrl;
                 }
              } catch (err) {
                 logger.warn(`[finalizeAdmission] Failed to auto-generate invoice: ${err}`);
              }
 
+             // Send Email Notification (Offline)
+             try {
+                 const p = await prisma.payment.findUnique({ 
+                     where: { id: offlineResult.paymentId },
+                     include: { student: true }
+                 });
+
+                 if (p && p.student.email) {
+                    // Re-fetch formatted Invoice URL if needed or use what we got
+                    if (!generatedInvoiceUrl && p.invoiceUrl) {
+                        generatedInvoiceUrl = await convertToPresignedUrl(p.invoiceUrl);
+                    }
+
+                    await sendPaymentReceipt(p.student.email, {
+                        studentName: p.student.name,
+                        invoiceNumber: p.referenceNumber || p.id, 
+                        applicationId: p.student.applicationId || 'N/A',
+                        transactionId: p.referenceNumber || 'OFFLINE',
+                        amount: p.amount,
+                        date: new Date(),
+                        paymentType: 'ADMISSION_FEE', 
+                        customFeeType: 'Admission Fee', 
+                        invoiceUrl: generatedInvoiceUrl || undefined,
+                        address: {
+                            line1: p.student.address,
+                            line2: p.student.address2 || '',
+                            city: p.student.city,
+                            state: p.student.state,
+                            pincode: p.student.pincode
+                        }
+                    });
+                    logger.info(`[finalizeAdmission][Offline] Email receipt sent to ${p.student.email}`);
+                 }
+             } catch(e) {
+                 logger.error(`[finalizeAdmission][Offline] Failed to send email: ${e}`);
+             }
+
              // Fetch final details for response
              const finalPayment = await prisma.payment.findUnique({ where: { id: offlineResult.paymentId } });
-             let finalInvoiceUrl = finalPayment?.invoiceUrl;
-             if (finalInvoiceUrl) {
-                 finalInvoiceUrl = await convertToPresignedUrl(finalInvoiceUrl);
+             let responseInvoiceUrl = finalPayment?.invoiceUrl;
+             if (responseInvoiceUrl) {
+                 responseInvoiceUrl = await convertToPresignedUrl(responseInvoiceUrl);
              }
 
              return { 
                  ...offlineResult,
                  data: {
                     paymentId: finalPayment?.id,
-                    invoiceUrl: finalInvoiceUrl,
+                    invoiceUrl: responseInvoiceUrl,
                     amount: finalPayment?.amount,
                     transactionId: finalPayment?.referenceNumber, // Use reference for offline
                     payment: finalPayment
@@ -1540,14 +1624,14 @@ export const AdminStudentService = {
              // ------------------------------------------------------------------
              // Step 2: Verify with Payment Gateway
              const merchantTransactionId = payment.providerTxId || payment.id.replace(/-/g, '');
-             logger.debug(`[verifyAndCompletePayment] Step 2: Checking status with PhonePe for TxId=${merchantTransactionId}`);
+             logger.info(`[verifyAndCompletePayment] Step 2: Checking status with PhonePe for TxId=${merchantTransactionId}`);
              
              // Use Singleton Client or re-instantiate if needed (StandardCheckoutClient handles concurrency usually)
              // Using getInstance with constants
              const client = StandardCheckoutClient.getInstance(PHONEPE_MERCHANT_ID, PHONEPE_SALT_KEY, PHONEPE_SALT_INDEX as any, PHONEPE_ENV);
              const response = await client.getOrderStatus(merchantTransactionId); 
              
-             logger.info(`[verifyAndCompletePayment] PhonePe Full Response: ${JSON.stringify(response)}`);
+             logger.debug(`[verifyAndCompletePayment] PhonePe Full Response: ${JSON.stringify(response)}`);
              
              // Extract State safely
              // SDK might return structure where state is in data, or code is the status.
@@ -1606,9 +1690,13 @@ export const AdminStudentService = {
      * 3. Creates Ledger Entry.
      */
     async _completeAdmissionTransaction(payment: any, adminId: string | undefined, providerTxId?: string, gatewayResponse?: any) {
+        logger.info(`[_completeAdmissionTransaction] Starting completion for PaymentID=${payment.id}, StudentID=${payment.studentId}`);
+        logger.debug(`[_completeAdmissionTransaction] Params: providerTxId=${providerTxId}, GatewayResponse Present=${!!gatewayResponse}`);
+
         const result = await prisma.$transaction(async (tx) => {
              // Update Payment Status (Atomic check)
              const meta = payment.metadata as any;
+             logger.debug(`[_completeAdmissionTransaction] Original Metadata: ${JSON.stringify(meta)}`);
              
              // User Request: Replace metadata with PhonePe response (or keep existing if no response provided)
              // We do NOT need to merge. The admission logic uses 'meta' variable which tracks the original state.
@@ -1625,11 +1713,12 @@ export const AdminStudentService = {
                      metadata: finalMetadata
                  }
              });
-
+             
              if (updateResult.count === 0) {
                  logger.warn(`[_completeAdmissionTransaction] Payment ${payment.id} already processed. Skipping duplicate updates.`);
                  return { success: true, message: "Payment already successfully processed", status: PaymentStatus.SUCCESS };
              }
+             logger.info(`[_completeAdmissionTransaction] Payment status marked as SUCCESS.`);
 
              // 2. Parallel Execution: Updates + Ledger
              logger.debug(`[_completeAdmissionTransaction] Creating Ledger Entry for student=${payment.studentId}`);
@@ -1649,7 +1738,7 @@ export const AdminStudentService = {
              ];
 
              if (meta && meta.targetAction === 'FINALIZE_ADMISSION') {
-                 logger.debug(`[_completeAdmissionTransaction] Triggering associated admission updates (Allocation/Scholarship)`);
+                 logger.info(`[_completeAdmissionTransaction] Triggering associated admission updates (Allocation/Scholarship)`);
                  promises.push(this.executeAdmissionUpdates(payment.studentId, meta, payment.id, adminId || 'SYSTEM', tx));
              }
 

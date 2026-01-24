@@ -11,13 +11,27 @@ import { verifyAadhar } from '../integration/integration.service';
 import { deleteFileFromS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { MESSAGES } from '../../constants/messages';
 import { formatDate, formatTime, formatDateTime } from '../../utils/dateFormatter';
+import { maskAadhaar } from '../../utils/mask';
 export const registerStudent = async (data: any, agentId: string | null, userId: string | null, currentUserId: string | null) => {
     // Check for duplicate registration
     const dobDate = data.dob ? new Date(data.dob) : undefined;
 
+    // Verify Aadhaar BEFORE masking
+    if (data.aadharNumber) {
+        // If data is already masked (starts with XXXX), skip verification? 
+        // Or assume input is always raw from client.
+        // Proceeding with verification of raw number.
+        const isValidAadhar = await verifyAadhar(data.aadharNumber);
+        if (!isValidAadhar) {
+            throw new AppError(MESSAGES.ERROR.INVALID_AADHAR, 400);
+        }
+        // Mask Aadhaar for storage
+        data.aadharNumber = maskAadhaar(data.aadharNumber);
+    }
+
     const orConditions: any[] = [
-        { email: data.email },
-        { aadharNumber: data.aadharNumber }
+        { email: data.email }
+        // { aadharNumber: data.aadharNumber } // Removed: Cannot check uniqueness on masked values
     ];
 
     if (userId) {
@@ -33,17 +47,9 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
     if (existingStudent) {
         let conflict = 'details';
         if (existingStudent.email === data.email) conflict = 'Email';
-        else if (existingStudent.aadharNumber === data.aadharNumber) conflict = 'Aadhar Number';
         else if (userId && existingStudent.userId === userId) conflict = 'User Account';
         
         throw new AppError(`Student conflict: A student is already registered with this ${conflict}`, 400);
-    }
-
-    if (data.aadharNumber) {
-        const isValidAadhar = await verifyAadhar(data.aadharNumber);
-        if (!isValidAadhar) {
-            throw new AppError(MESSAGES.ERROR.INVALID_AADHAR, 400);
-        }
     }
 
     const isOffline = data.isOffline || data.applicationMode === 'SEAT_BOOKING' || data.applicationMode === 'OFFLINE';
@@ -627,6 +633,7 @@ export const getStudentByUserId = async (userId: string) => {
         pref2CourseName: student.pref2Course?.name,
         pref3CourseName: student.pref3Course?.name,
         profilePhotoUrl,
+        aadharNumber: maskAadhaar(student.aadharNumber),
         documents: documentsWithPresignedUrls,
         examDetails: student.examDetails ? {
             ...student.examDetails,

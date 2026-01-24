@@ -80,7 +80,16 @@ export const createBulkFeeStructure = catchAsync(async (req: Request, res: Respo
 });
 
 export const getFeeStructures = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const feeStructures = await FeeService.getFeeStructures();
+    const { courseId, academicYearId, feeHeadId, search } = req.query;
+    
+    const filters = {
+        courseId: courseId as string,
+        academicYearId: academicYearId as string,
+        feeHeadId: feeHeadId as string,
+        search: search as string
+    };
+
+    const feeStructures = await FeeService.getFeeStructures(filters);
     sendResponse({ res, statusCode: 200, success: true, data: feeStructures });
 });
 

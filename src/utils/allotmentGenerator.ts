@@ -56,7 +56,7 @@ export const generateAllotmentOrderPDF = async (data: AllotmentData): Promise<Bu
             drawHeader(doc, photoBuffer);
             drawStudentTable(doc, data);
             drawAllotmentBody(doc, data);
-            drawFeeTable(doc, data);
+            // drawFeeTable(doc, data); // Removed
             drawInstructions(doc, data);
             drawFooter(doc);
 
@@ -169,46 +169,9 @@ function drawAllotmentBody(doc: PDFKit.PDFDocument, data: AllotmentData) {
     doc.text(`Course: ${data.allottedCourse}`, 50, y + 35);
 }
 
-function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    let y = 350;
-    
-    doc.font('Helvetica-Bold').fontSize(10).fillColor('#000');
-    doc.text('Fee Details:', 40, y);
-    y += 15;
-
-    // Table Header
-    doc.rect(40, y, 300, 20).fill('#eee').stroke();
-    doc.fillColor('#000').text('Description', 50, y + 5);
-    doc.text('Amount (Rs)', 250, y + 5);
-    
-    y += 20;
-
-    // Rows
-    data.feeBreakdown.forEach(fee => {
-        doc.rect(40, y, 300, 20).stroke();
-        doc.font('Helvetica').text(fee.name, 50, y + 5);
-        doc.text(fee.amount.toLocaleString('en-IN'), 250, y + 5);
-        y += 20;
-    });
-
-    // Total Expected
-    doc.rect(40, y, 300, 20).stroke();
-    doc.font('Helvetica-Bold').text('Total Fee', 50, y + 5);
-    doc.text(data.totalFee.toLocaleString('en-IN'), 250, y + 5);
-    y += 20;
-
-    // Total Paid
-    doc.rect(40, y, 300, 20).stroke();
-    doc.fillColor('#008000').text('Total Paid', 50, y + 5); // Green
-    doc.text(data.totalPaid.toLocaleString('en-IN'), 250, y + 5);
-    y += 20;
-
-    // Balance
-    const balance = Math.max(0, data.totalFee - data.totalPaid);
-    doc.rect(40, y, 300, 20).stroke();
-    doc.fillColor('#FF0000').text('Balance Due', 50, y + 5); // Red
-    doc.text(balance.toLocaleString('en-IN'), 250, y + 5);
-}
+// function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
+//     // REMOVED as per request
+// }
 
 function drawInstructions(doc: PDFKit.PDFDocument, data: AllotmentData) {
     let y = 600; // Push down

@@ -89,9 +89,18 @@ export const AcademicService = {
         });
     },
 
-    async getDepartments() {
+    async getDepartments(search?: string) {
+        const where: any = { isDeleted: false };
+        
+        if (search) {
+             where.OR = [
+                { name: { contains: search, mode: 'insensitive' } },
+                { code: { contains: search, mode: 'insensitive' } }
+             ];
+        }
+
         const depts = await prisma.department.findMany({
-            where: { isDeleted: false },
+            where,
             include: {
                 courses: { where: { isDeleted: false } },
                 school: true
@@ -181,7 +190,7 @@ export const AcademicService = {
         });
     },
 
-    async getCourses(departmentId?: string, degree?: string) {
+    async getCourses(departmentId?: string, degree?: string, search?: string) {
         const where: any = { isDeleted: false };
         if (departmentId) {
             where.departmentId = String(departmentId);
@@ -189,6 +198,13 @@ export const AcademicService = {
         if (degree) {
             where.degree = String(degree);
         }
+        if (search) {
+             where.OR = [
+                { name: { contains: search, mode: 'insensitive' } },
+                { code: { contains: search, mode: 'insensitive' } }
+             ];
+        }
+
         const courses = await prisma.course.findMany({
             where,
             include: { department: true, specializations: true }

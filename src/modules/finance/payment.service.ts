@@ -11,7 +11,7 @@ import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../ut
 import { ScholarshipService } from '../admin/scholarship.service';
 import { generateAllotmentOrderPDF } from '../../utils/allotmentGenerator';
 import { StudentDocumentStatus } from '@prisma/client';
-import { sendEntranceFeeReceipt } from '../../utils/emailService';
+import { sendPaymentReceipt } from '../../utils/emailService';
 
 
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
@@ -28,6 +28,28 @@ const client = StandardCheckoutClient.getInstance(MERCHANTABILITY, SALT_KEY, CLI
 
 // Debug PhonePe Config
 logger.info(`[PhonePe Config] MerchantId: ${MERCHANTABILITY}, SaltIndex: ${SALT_INDEX}, SaltKey(Last4): ${SALT_KEY.slice(-4)}`);
+
+// ... (imports remain)
+
+// Reusable PhonePe Initialization
+export const initiatePhonePePayment = async (studentId: string, amount: number, transactionId: string, redirectUrl: string) => {
+    try {
+        const student = await prisma.student.findUnique({ where: { id: studentId } });
+        if (!student) throw new AppError('Student not found for payment', 404);
+
+        const request = StandardCheckoutPayRequest.builder()
+            .merchantOrderId(transactionId)
+            .amount(amount * 100)
+            .redirectUrl(redirectUrl)
+            .build();
+
+        const response = await client.pay(request);
+        return { redirectUrl: response.redirectUrl };
+    } catch (error: any) {
+        logger.error(`PhonePe Initiation Error [${transactionId}]:`, error);
+        throw new AppError('Failed to initiate payment gateway', 502);
+    }
+};
 
 export const initiateApplicationFeePayment = async (studentId: string) => {
     const amount = await getApplicationFeeAmount();
@@ -70,30 +92,19 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
         }
     });
 
-
-
-    try {
-        // Step 3: Initiate PhonePe Request
-        logger.info(`[initiateApplicationFeePayment] Step 3: Initiating Payment with PhonePe`);
-        const redirectUrl = `${process.env.FRONTEND_URL}/student/payment?txnId=${transactionId}`;
-        
-        const request = StandardCheckoutPayRequest.builder()
-            .merchantOrderId(transactionId)
-            .amount(amount * 100)
-            .redirectUrl(redirectUrl)
-            .build();
-
-        const response = await client.pay(request);
-        return { redirectUrl: response.redirectUrl, paymentId: createdPayment.id };
-    } catch (error: any) {
-        logger.error(`PhonePe Payment Initiation Error: ${error.message}`, error);
-        throw new AppError('Failed to initiate payment gateway', 502);
-    }
+    // Step 3: Initiate PhonePe Request (Reusable)
+    logger.info(`[initiateApplicationFeePayment] Step 3: Initiating Payment with PhonePe`);
+    const redirectUrl = `${process.env.FRONTEND_URL}/student/payment?txnId=${transactionId}`;
+    
+    const result = await initiatePhonePePayment(studentId, amount, transactionId, redirectUrl);
+    return { redirectUrl: result.redirectUrl, paymentId: createdPayment.id };
 };
 
 export const checkPaymentStatus = async (merchantTransactionId: string) => {
+    logger.info(`[checkPaymentStatus] Request for MerchantTxId=${merchantTransactionId}`);
     try {
         const response = await client.getOrderStatus(merchantTransactionId);
+        logger.debug(`[checkPaymentStatus] PhonePe Response: ${JSON.stringify(response)}`);
         
         // Step 1. Fetch payment to return ID and update if needed
         logger.debug(`[checkPaymentStatus] Step 1: Fetching local payment record for ${merchantTransactionId}`);
@@ -102,13 +113,21 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
              include: { student: true }
         });
 
+        if (!payment) {
+            logger.warn(`[checkPaymentStatus] Payment record not found locally for ${merchantTransactionId}`);
+        }
+
         if (response.state === 'COMPLETED' || response.state === 'PAYMENT_SUCCESS') {
              if (payment && payment.status !== PaymentStatus.SUCCESS) {
+                 logger.info(`[checkPaymentStatus] Payment successful at Gateway but Pending locally. Processing success...`);
                  await processPaymentSuccess(payment, response);
+             } else {
+                 logger.debug(`[checkPaymentStatus] Payment already valid locally or not found.`);
              }
              return { status: 'SUCCESS', data: response, paymentId: payment?.id };
         } else if (response.state === 'FAILED') {
              if (payment && payment.status === PaymentStatus.PENDING) {
+                  logger.warn(`[checkPaymentStatus] Payment failed at Gateway. Updating local status.`);
                   await prisma.payment.update({
                         where: { id: payment.id },
                         data: { status: PaymentStatus.FAILED, metadata: response as any }
@@ -124,16 +143,16 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
 };
 
 const processPaymentSuccess = async (payment: any, metadata: any) => {
+    logger.info(`[processPaymentSuccess] Starting success processing for PaymentID=${payment.id} Component=${payment.component}`);
     let invoiceUrl = null;
     try {
         // Step 1: Generate Invoice Number
         logger.info(`[processPaymentSuccess] Step 1: Generating Invoice for payment ${payment.id}`);
         // Generate Invoice Number: FEE_HEADER/YEAR/APPLICATION_NUMBER/RECEIPT_NUMBER
-        // Example: VVIT/2026/VON202600001/001
         
-        const feeHeader = 'VVIT'; // Or fetch dynamically if needed
+        const feeHeader = 'VVIT'; 
         const year = new Date().getFullYear();
-        const applicationNumber = payment.student.applicationId; // Assuming applicationId is the VON... number
+        const applicationNumber = payment.student.applicationId; 
 
         // Count existing successful payments for this student to generate serial number
         const paymentCount = await prisma.payment.count({
@@ -147,30 +166,88 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
         const receiptNumber = (paymentCount + 1).toString().padStart(3, '0');
         const invoiceNumber = `${feeHeader}/${year}/${applicationNumber}/${receiptNumber}`;
 
-        // Extract Real Transaction ID from PhonePe Metadata if available
-        let realTransactionId = payment.providerTxId;
-        if (metadata?.paymentDetails?.[0]?.transactionId) {
-            realTransactionId = metadata.paymentDetails[0].transactionId;
-        } else if (metadata?.data?.paymentDetails?.[0]?.transactionId) { // Some responses wrap it in 'data'
-            realTransactionId = metadata.data.paymentDetails[0].transactionId;
-        }
+// ...
+    // Extract Real Transaction ID from PhonePe Metadata if available
+    let realTransactionId = payment.providerTxId;
+    if (metadata?.paymentDetails?.[0]?.transactionId) {
+        realTransactionId = metadata.paymentDetails[0].transactionId;
+    } else if (metadata?.data?.paymentDetails?.[0]?.transactionId) { 
+        realTransactionId = metadata.data.paymentDetails[0].transactionId;
+    }
+    logger.debug(`[processPaymentSuccess] Real Transaction ID: ${realTransactionId}`);
 
-        // Generate Invoice
-        const invoiceData:any = {
-            invoiceNumber: invoiceNumber,
-            date: new Date(),
+    // Determine Payment Type & Description
+    let paymentDescription = 'Payment';
+    let emailPaymentType: any = 'DEFAULT';
+
+    switch (payment.component) {
+        case PaymentComponent.APPLICATION_FEE:
+            paymentDescription = 'Application Fee';
+            emailPaymentType = 'APPLICATION_FEE';
+            break;
+        case PaymentComponent.TUITION:
+            paymentDescription = 'Tuition Fee'; // Or College Fee
+            emailPaymentType = 'TUITION_FEE'; 
+            // Note: If TUITION represents Admission Fee technically in early stage, logic upstream decides
+            // But based on user request "TUITION FEE" is a specific type now
+            break;
+        case PaymentComponent.SCHOLARSHIP_TOKEN:
+             // Admission Fee is usually the token
+            paymentDescription = 'Admission Fee';
+            emailPaymentType = 'ADMISSION_FEE';
+            break;
+        // Add cases if other components exist in Enum, otherwise map broadly
+        default:
+            // Attempt to derive from metadata if strictly needed, or fallback
+            paymentDescription = payment.component ? payment.component.replace(/_/g, ' ') : 'Fee Payment';
+            emailPaymentType = 'DEFAULT';
+    }
+    logger.debug(`[processPaymentSuccess] Fee Type Determined: ${emailPaymentType} (${paymentDescription})`);
+
+    // Generate Invoice
+    const invoiceData:any = {
+        invoiceNumber: invoiceNumber,
+        date: new Date(),
+        studentName: payment.student.name,
+        studentId: payment.student.applicationId, 
+        paymentMethod: payment.method || 'ONLINE',
+        transactionId: realTransactionId,
+        amount: payment.amount,
+        description: paymentDescription,
+        items: [
+            {
+                description: paymentDescription,
+                amount: payment.amount
+            }
+        ],
+        address: {
+            line1: payment.student.address,
+            line2: payment.student.address2 || '',
+            city: payment.student.city,
+            state: payment.student.state,
+            pincode: payment.student.pincode
+        }
+    };
+
+    const invoiceBuffer = await generateInvoicePDF(invoiceData);
+    const s3Key = `student/${payment.student.applicationId}/invoices/${payment.providerTxId}.pdf`;
+    invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
+    logger.info(`Invoice generated and uploaded: ${invoiceUrl}`);
+
+    // Send Email Notification
+    logger.info(`[Payment] Process email check. Component=${payment.component}, Email=${payment.student.email}`);
+    
+    if (payment.student.email) {
+        await sendPaymentReceipt(payment.student.email, {
             studentName: payment.student.name,
-            studentId: payment.student.applicationId, // Label MUST be "Student ID" or "Application ID" as per PDF template expectation, here passing App ID as requested.
-            paymentMethod: payment.method || 'ONLINE',
+            invoiceNumber: invoiceNumber,
+            applicationId: payment.student.applicationId,
             transactionId: realTransactionId,
             amount: payment.amount,
-            description: payment.component === 'APPLICATION_FEE' ? 'Application Fee' : 'Payment',
-            items: [
-                {
-                    description: payment.component === 'APPLICATION_FEE' ? 'Application Fee' : 'Payment',
-                    amount: payment.amount
-                }
-            ],
+            date: new Date(),
+            paymentType: emailPaymentType,
+            customFeeType: emailPaymentType === 'DEFAULT' ? paymentDescription : undefined,
+            invoiceUrl: invoiceUrl,
             address: {
                 line1: payment.student.address,
                 line2: payment.student.address2 || '',
@@ -178,45 +255,19 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
                 state: payment.student.state,
                 pincode: payment.student.pincode
             }
-        };
-
-        const invoiceBuffer = await generateInvoicePDF(invoiceData);
-        const s3Key = `student/${payment.student.applicationId}/invoices/${payment.providerTxId}.pdf`;
-        invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
-        logger.info(`Invoice generated and uploaded: ${invoiceUrl}`);
-
-        // Send Email Notification
-        logger.info(`[Payment] Process email check. Component=${payment.component}, Email=${payment.student.email}`);
-        
-        if (payment.component === PaymentComponent.APPLICATION_FEE && payment.student.email) {
-            logger.info('[Payment] Condition met. Sending Entrance Fee Receipt email...');
-            const emailSent = await sendEntranceFeeReceipt(payment.student.email, {
-                studentName: payment.student.name,
-                invoiceNumber: invoiceNumber,
-                applicationId: payment.student.applicationId,
-                programName: 'Entrance Examination 2026',
-                transactionId: realTransactionId,
-                amount: payment.amount,
-                date: new Date(),
-                invoiceUrl: invoiceUrl,
-                address: {
-                    line1: payment.student.address,
-                    line2: payment.student.address2 || '',
-                    city: payment.student.city,
-                    state: payment.student.state,
-                    pincode: payment.student.pincode
-                }
-            });
-            logger.info(`[Payment] Email send result: ${emailSent}`);
-        } else {
-            logger.info('[Payment] Email skipped. Condition not met.');
-        }
-    } catch (err) {
+        });
+        logger.info(`[Payment] Email notification sent for ${emailPaymentType}`);
+    } else {
+        logger.warn(`[Payment] No email address found for student. Skipping email.`);
+    }
+} catch (err) {
+// ...
         logger.error(`Failed to generate/upload invoice or send email for ${payment.providerTxId}: ${err}`);
-        console.error(err); // Ensure it prints to stdout too
+        console.error(err); 
     }
 
     // Update Payment Status
+    logger.info(`[processPaymentSuccess] Finalizing local payment status update.`);
     await prisma.payment.update({
         where: { id: payment.id },
         data: {
@@ -233,18 +284,18 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             data: {
                 status: AdmissionStatus.ENTRANCE_FEE_PAID,
                 feeStatus: FeeStatus.PARTIAL
-                // REMOVED paidFee increment: Application Fee is separate from College Fee tally
-                // OLD: paidFee: { increment: payment.amount }
             }
         });
         logger.info(`Student ${payment.studentId} admission status updated to ENTRANCE_FEE_PAID`);
     } else if (payment.component === PaymentComponent.TUITION) {
+        // ... (rest of logic continued below) -> this ensures we don't break the rest of the file which was cut off in view
+
          await prisma.studentAdmission.update({
             where: { studentId: payment.studentId },
             data: {
                 status: AdmissionStatus.ADMISSION_CONFIRMED,
-                feeStatus: FeeStatus.PARTIAL,
-                paidFee: { increment: payment.amount }
+                feeStatus: FeeStatus.PARTIAL
+                // paidFee increment removed here to be central handled
             }
         });
 
@@ -256,9 +307,9 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
         await prisma.studentAdmission.update({
             where: { studentId: payment.studentId },
             data: {
-                paidFee: { increment: payment.amount },
                 feeStatus: FeeStatus.PARTIAL,
                 status: AdmissionStatus.ADMISSION_CONFIRMED 
+                // paidFee increment removed here
             }
         });
         logger.info(`Scholarship locked for student ${payment.studentId}`);
@@ -359,6 +410,12 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
     // If payment is for College Fees (Tuition, Hostel, etc.), settle pending demands
     // Priority: Oldest Due Date first
     if (payment.component !== PaymentComponent.APPLICATION_FEE) {
+        // --- 1. Increment Paid Fee Counter (Centralized) ---
+        await prisma.studentAdmission.update({
+             where: { studentId: payment.studentId },
+             data: { paidFee: { increment: payment.amount } }
+        });
+        
         try {
             const pendingDemands = await prisma.studentFeeDemand.findMany({
                 where: {
@@ -1189,7 +1246,7 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
             const pdfBuffer = await generateAllotmentOrderPDF(allotmentData);
             // Force unique key to avoid cache
             const timestamp = Date.now();
-            const s3Key = `student/${student.applicationId}/documents/AllotmentOrder_${timestamp}.pdf`;
+            const s3Key = `student/${student.applicationId}/documents/ProvisionalAllotmentOrder_${timestamp}.pdf`;
             const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
 
             await prisma.studentDocument.upsert({

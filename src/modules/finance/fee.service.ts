@@ -133,9 +133,23 @@ export const FeeService = {
         return createdStructures;
     },
 
-    getFeeStructures: async () => {
+    getFeeStructures: async (filters?: { courseId?: string, academicYearId?: string, feeHeadId?: string, search?: string }) => {
+        const where: any = { isDeleted: false };
+        
+        if (filters?.courseId) where.courseId = filters.courseId;
+        if (filters?.academicYearId) where.academicYearId = filters.academicYearId;
+        if (filters?.feeHeadId) where.feeHeadId = filters.feeHeadId;
+        
+        if (filters?.search) {
+             where.OR = [
+                { course: { name: { contains: filters.search, mode: 'insensitive' } } },
+                { course: { code: { contains: filters.search, mode: 'insensitive' } } },
+                { feeHead: { name: { contains: filters.search, mode: 'insensitive' } } }
+             ];
+        }
+
         return prisma.feeStructure.findMany({
-            where: { isDeleted: false },
+            where,
             include: {
                 course: true,
                 feeHead: true,
@@ -230,19 +244,30 @@ export const FeeService = {
         referenceNumber?: string,
         bankDetails?: { bankName?: string, branchName?: string, instrumentDate?: Date }
     ) => {
+        logger.info(`[recordOfflinePayment] Request: studentId=${studentId}, amount=${amount}, method=${method}, component=${component}, admin=${adminId}`);
+        
         // 1. Verify Student
         const student = await prisma.student.findUnique({ where: { id: studentId } });
-        if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+        if (!student) {
+            logger.error(`[recordOfflinePayment] Student not found: ${studentId}`);
+            throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+        }
 
         // 2. Validate Reference Number
         if (method !== PaymentMethod.CASH && !referenceNumber) {
+            logger.error(`[recordOfflinePayment] Missing Reference Number for Non-Cash payment`);
             throw new AppError("Transaction ID / Reference Number is required for Non-Cash payments", 400);
         }
 
         if (referenceNumber) {
             const existing = await prisma.payment.findFirst({ where: { referenceNumber } });
-            if (existing) throw new AppError("Transaction ID already exists", 400);
+            if (existing) {
+                logger.error(`[recordOfflinePayment] Duplicate Reference Number: ${referenceNumber}`);
+                throw new AppError("Transaction ID already exists", 400);
+            }
         }
+
+        logger.debug(`[recordOfflinePayment] Validation passed. Creating Payment record.`);
 
         // 3. Create Payment Record
         const payment = await prisma.payment.create({
@@ -262,43 +287,53 @@ export const FeeService = {
                 invoiceUrl: "PENDING_GENERATION" // Placeholder or trigger generation
             }
         });
+        logger.info(`[recordOfflinePayment] Payment Created: ${payment.id}`);
 
         // 4. Update Status (Workflow Logic)
-        if (component === PaymentComponent.APPLICATION_FEE) {
-             await prisma.studentAdmission.upsert({
-                 where: { studentId },
-                 create: { studentId, status: AdmissionStatus.ENTRANCE_FEE_PAID },
-                 update: { status: AdmissionStatus.ENTRANCE_FEE_PAID }
-             });
-        } else if (component === PaymentComponent.TUITION) {
-             // Upgrade to ADMISSION_CONFIRMED if Seat Allocated
-             const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
-             if (admission && admission.status === AdmissionStatus.SEAT_ALLOTTED) { 
-                 await prisma.studentAdmission.update({
+        try {
+            if (component === PaymentComponent.APPLICATION_FEE) {
+                 logger.debug(`[recordOfflinePayment] Updating Admission Status: ENTRANCE_FEE_PAID`);
+                 await prisma.studentAdmission.upsert({
                      where: { studentId },
-                     data: { status: AdmissionStatus.ADMISSION_CONFIRMED }
+                     create: { studentId, status: AdmissionStatus.ENTRANCE_FEE_PAID },
+                     update: { status: AdmissionStatus.ENTRANCE_FEE_PAID }
                  });
-             }
-        } else if (component === PaymentComponent.SCHOLARSHIP_TOKEN) {
-             try {
-                const { ScholarshipService } = require('../admin/scholarship.service');
-                await ScholarshipService.lockAllocation(studentId);
-             } catch (err) {
-                logger.warn(`Failed to lock scholarship for student ${studentId}: ${err}`);
-                // Continue payment recording even if scholarship lock fails (though ideally critical)
-             }
+            } else if (component === PaymentComponent.TUITION) {
+                 // Upgrade to ADMISSION_CONFIRMED if Seat Allocated
+                 const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
+                 if (admission && admission.status === AdmissionStatus.SEAT_ALLOTTED) { 
+                     logger.debug(`[recordOfflinePayment] Upgrading Status to ADMISSION_CONFIRMED (Seat Allotted found)`);
+                     await prisma.studentAdmission.update({
+                         where: { studentId },
+                         data: { status: AdmissionStatus.ADMISSION_CONFIRMED }
+                     });
+                 }
+            } else if (component === PaymentComponent.SCHOLARSHIP_TOKEN) {
+                 logger.debug(`[recordOfflinePayment] Processing Scholarship Token - Locking Allocation`);
+                 try {
+                    const { ScholarshipService } = require('../admin/scholarship.service');
+                    await ScholarshipService.lockAllocation(studentId);
+                 } catch (err) {
+                    logger.warn(`Failed to lock scholarship for student ${studentId}: ${err}`);
+                    // Continue payment recording even if scholarship lock fails (though ideally critical)
+                 }
 
-             await prisma.studentAdmission.update({
-                where: { studentId: studentId },
-                data: {
-                    paidFee: { increment: amount },
-                    feeStatus: FeeStatus.PARTIAL,
-                    status: AdmissionStatus.ADMISSION_CONFIRMED 
-                }
-            });
+                 await prisma.studentAdmission.update({
+                    where: { studentId: studentId },
+                    data: {
+                        paidFee: { increment: amount },
+                        feeStatus: FeeStatus.PARTIAL,
+                        status: AdmissionStatus.ADMISSION_CONFIRMED 
+                    }
+                });
+            }
+        } catch (statusErr) {
+            logger.error(`[recordOfflinePayment] Error updating admission workflow status: ${statusErr}`);
+            // Non-critical (?)
         }
         
         // 5. Create Ledger Entry (CREDIT)
+        logger.debug(`[recordOfflinePayment] Creating Ledger Entry`);
         await prisma.studentLedger.create({
             data: {
                 studentId,
@@ -312,11 +347,14 @@ export const FeeService = {
             }
         });
 
+        logger.info(`[recordOfflinePayment] Successfully completed for student ${studentId}`);
         return payment;
     },
 
     // Automated Fee Generation
     generateFeeDemands: async (studentId: string, courseId: string, academicYearId: string, userId: string): Promise<any[]> => {
+        logger.info(`[generateFeeDemands] Request: student=${studentId}, course=${courseId}, year=${academicYearId}`);
+        
         // 1. Get Fee Structures
         const feeStructures = await prisma.feeStructure.findMany({
             where: {
@@ -327,6 +365,7 @@ export const FeeService = {
 
             include: { feeHead: true }
         });
+        logger.debug(`[generateFeeDemands] Found ${feeStructures.length} potential fee structures`);
 
         // Get student quota type and course type to filter
         const student = await prisma.student.findUnique({ 
@@ -334,7 +373,10 @@ export const FeeService = {
             include: { enrollment: true }
         });
         
-        if (!student) throw new AppError("Student not found", 404);
+        if (!student) {
+            logger.error(`[generateFeeDemands] Student not found: ${studentId}`);
+            throw new AppError("Student not found", 404);
+        }
 
         const studentQuota = student.quotaType;
         const studentCourseType = student.courseType;
@@ -346,12 +388,14 @@ export const FeeService = {
         
         // Calculate Year of Study
         const currentYear = student.enrollment?.currentSemester ? Math.ceil(student.enrollment.currentSemester / 2) : 1; // Default to 1 if no enrollment
+        logger.debug(`[generateFeeDemands] Student Context: Quota=${studentQuota}, Type=${studentCourseType}, Year=${currentYear}`);
 
         const applicableFees = feeStructures.filter(fs => 
             (!fs.quotaType || (studentQuota && fs.quotaType === studentQuota)) &&
             (!fs.courseType || (studentCourseType && fs.courseType === studentCourseType)) &&
             (!fs.yearOfStudy || fs.yearOfStudy === currentYear)
         );
+        logger.info(`[generateFeeDemands] Applicable Fees: ${applicableFees.length}`);
 
         if (applicableFees.length === 0) {
             logger.warn(`[generateFeeDemands] No applicable fees found.
@@ -364,14 +408,15 @@ export const FeeService = {
 
         // 2. Create Demands & Ledger Entries
         // Using transaction to ensure ledger matches demands
-        return prisma.$transaction(async (tx) => {
+        const createdDemands = await prisma.$transaction(async (tx) => {
             const results = [];
+            let newDemandsTotal = 0;
+            logger.debug(`[generateFeeDemands] Starting transaction to create demands`);
+
             for (const fee of applicableFees) {
                 // specific key to avoid duplicates
                 const uniqueKey = `${studentId}-${fee.id}`; 
                 
-                // Ideally strictly check duplicates, but for now assuming one-time generation per year
-                // Or verify if demand exists for this fee structure?
                 const existing = await tx.studentFeeDemand.findFirst({
                     where: { studentId, feeStructureId: fee.id }
                 });
@@ -402,14 +447,32 @@ export const FeeService = {
                         }
                     });
                     results.push(demand);
+                    newDemandsTotal += fee.amount;
+                } else {
+                    logger.debug(`[generateFeeDemands] duplicate demand skipped for structure ${fee.id}`);
                 }
             }
+            
+            // Update Student Admission Total Fee
+            if (newDemandsTotal > 0) {
+                 logger.debug(`[generateFeeDemands] Updating Total Fee in Admission table. Increment=${newDemandsTotal}`);
+                 await tx.studentAdmission.upsert({
+                     where: { studentId },
+                     create: { studentId, totalFee: newDemandsTotal },
+                     update: { totalFee: { increment: newDemandsTotal } }
+                 });
+            }
+
             return results;
         });
+
+        logger.info(`[generateFeeDemands] Successfully generated ${createdDemands.length} demands.`);
+        return createdDemands;
     },
 
     // Get Full Ledger/Statement
     getStudentFeeDetails: async (studentId: string) => {
+        logger.info(`[getStudentFeeDetails] Request for student=${studentId}`);
         const demands = await prisma.studentFeeDemand.findMany({
             where: { studentId },
             include: { feeStructure: { include: { feeHead: true } } }
@@ -418,6 +481,8 @@ export const FeeService = {
         const payments = await prisma.payment.findMany({
             where: { studentId, status: 'SUCCESS' }
         });
+        
+        logger.debug(`[getStudentFeeDetails] Found ${demands.length} demands and ${payments.length} successful payments.`);
 
         // Fetch Discounts/Scholarships from Ledger
         const creditLedgers = await prisma.studentLedger.findMany({
@@ -439,7 +504,7 @@ export const FeeService = {
                 include: { rule: true }
             });
 
-            logger.info(`[DEBUG] Allocation check for ${studentId}: Found=${!!allocation}, Status=${allocation?.status}, RuleID=${allocation?.ruleId}`);
+            logger.info(`[getStudentFeeDetails] [Scholarship Allocation] Student=${studentId} Found=${!!allocation} Status=${allocation?.status}`);
             
             if (allocation && (allocation.status === 'LOCKED' || allocation.status === 'RESERVED')) {
                  const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
@@ -453,13 +518,13 @@ export const FeeService = {
                  // Strategy 2: Highest Amount Heuristic (Tuition is usually the largest fee)
                  if (!tuitionDemand && demands.length > 0) {
                      tuitionDemand = demands.reduce((max, d) => d.amount > max.amount ? d : max, demands[0]);
-                     logger.warn(`[Scholarship] Precise Tuition Fee finding failed. Used highest demand: ${tuitionDemand.amount} (${tuitionDemand.feeStructure?.feeHead?.name})`);
+                     logger.debug(`[Scholarship] Precise Tuition Fee finding failed. Used highest demand: ${tuitionDemand.amount}`);
                  }
 
                  // Strategy 3: Admission Record
                  const tuitionFee = tuitionDemand ? tuitionDemand.amount : (admission?.totalFee || 0);
 
-                 logger.info(`[DEBUG] Calculation: Rule=${allocation.rule.discountPercentage}%, BaseTuition=${tuitionFee}, Source=${tuitionDemand ? 'Demands (Highest/Matched)' : 'Admission'}`);
+                 logger.debug(`[Scholarship] Calculation: Rule=${allocation.rule.discountPercentage}%, BaseTuition=${tuitionFee}`);
 
                  scholarshipAmount = (tuitionFee * allocation.rule.discountPercentage) / 100;
             }
@@ -475,6 +540,8 @@ export const FeeService = {
         
         // Net Pending = Demand - (Paid + Discounts)
         const pendingAmount = Math.max(0, totalDemand - totalPaid - totalDiscount);
+        
+        logger.info(`[getStudentFeeDetails] Summary: Demand=${totalDemand}, Paid=${totalPaid}, Discount=${totalDiscount}, Pending=${pendingAmount}`);
 
         // Component Level Breakdown
         const breakdown: any = {

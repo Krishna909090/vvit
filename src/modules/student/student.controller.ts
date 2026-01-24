@@ -18,8 +18,50 @@ export const registerStudent = catchAsync(async (req: Request, res: Response, ne
     logger.debug && logger.debug(`[registerStudent] payload=${JSON.stringify(req.body)}`);
 
     const agentId = req.user?.role === Role.AGENT ? (req.user?.userId || null) : null;
-    const userId = req.user?.role === Role.STUDENT ? (req.user?.userId || null) : null;
+    let userId = req.user?.role === Role.STUDENT ? (req.user?.userId || null) : null;
     const currentUserId = req.user?.userId || null;
+
+    // Counter-Based Registration: If registered by Staff/Admin, map to Student User
+    if (req.user?.role !== Role.STUDENT && req.body.phone) {
+        const studentPhone = req.body.phone;
+        
+        // 1. Check if user exists
+        let studentUser = await prisma.user.findUnique({
+            where: { phone: studentPhone }
+        });
+
+        if (!studentUser) {
+            // 2. Create User if not exists
+            studentUser = await prisma.user.create({
+                data: {
+                    phone: studentPhone,
+                    role: Role.STUDENT
+                }
+            });
+
+            // 3. Assign to Student Group
+            const studentGroup = await prisma.group.findUnique({ where: { name: 'StudentGroup' } });
+            if (studentGroup) {
+                await prisma.userGroup.create({
+                    data: {
+                        userId: studentUser.id,
+                        groupId: studentGroup.id
+                    }
+                });
+            } else {
+                logger.error(`[registerStudent] CRITICAL: StudentGroup not found. User ${studentUser.id} created without group.`);
+            }
+
+            logger.info(`[registerStudent] Created new User for counter-registration: ${studentUser.id}`);
+        } else {
+             if (studentUser.role !== Role.STUDENT) {
+                 logger.warn(`[registerStudent] Existing user found for ${studentPhone} but has role ${studentUser.role}.`);
+             }
+        }
+
+        userId = studentUser.id;
+    }
+
     const student = await registerStudentService(req.body, agentId, userId, currentUserId);
 
     logger.info(`[registerStudent] success applicationId=${student.applicationId}`);
