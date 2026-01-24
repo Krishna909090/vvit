@@ -257,16 +257,17 @@ export const getAvailableSlots = catchAsync(
 
 /**
  * Controller: Book an exam slot for a specific student.
- * Route: POST /students/:studentId/exam/slots
- * Roles: STUDENT (or ADMIN in special flows)
+ * Route: POST /book-slot
+ * Body: { slotId, studentId? }
+ * Roles: STUDENT (or ADMIN)
  */
 export const bookExamSlot = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[bookExamSlot] by=${req.user?.userId || 'anonymous'}`);
-        const { slotId } = req.body;
-        let { studentId } = req.params;
+        const { slotId, studentId: bodyStudentId } = req.body;
+        let studentId = bodyStudentId;
 
-        // If no param, try to find from logged in user (Student Role)
+        // If no studentId provided, try to find from logged in user (Student Role)
         if (!studentId && req.user?.role === Role.STUDENT) {
             const student = await prisma.student.findUnique({
                  where: { userId: req.user.userId }
