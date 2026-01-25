@@ -1,6 +1,6 @@
 import express from 'express';
 import { handlePaymentCallback } from './payment.service';
-import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment } from './payment.controller';
+import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment, payFeeComponent } from './payment.controller';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
@@ -19,6 +19,11 @@ router.post('/offline-entrance-fee', authenticate, authorizePermission(['finance
 router.post('/initiate-college-fee', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), payCollegeFee);
 router.post('/admin-initiate', authenticate, authorizePermission(['finance.create.all']), initiateAdminPayment);
 router.post('/request-discount', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), requestDiscount);
+
+// Unified Payment
+import { payFeeComponentSchema } from '../../validators/paymentValidators';
+import { validateRequest } from '../../middlewares/validationMiddleware';
+router.post('/pay-component', authenticate, authorizePermission(['finance.create.all', 'finance.create.own']), validateRequest(payFeeComponentSchema), payFeeComponent);
 
 // Discount Approval Workflow (Super Admin Only)
 router.post('/discount/approve/:requestId', authenticate, authorizePermission('finance.update.all'), approveDiscount); // High level override

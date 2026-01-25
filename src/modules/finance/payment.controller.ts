@@ -15,7 +15,8 @@ import {
     checkPaymentStatus as checkPaymentStatusService,
     getStudentFinancialHistory,
     initiateTokenPayment,
-    recordOfflineApplicationFeePayment
+    recordOfflineApplicationFeePayment,
+    processUnifiedPayment
 } from './payment.service';
 
 // Phase 1: Pay Test Fee
@@ -270,5 +271,25 @@ export const initiateAdminPayment = catchAsync(async (req: Request, res: Respons
         success: true,
         message: "Admin payment initiated",
         data: result
+    });
+});
+
+export const payFeeComponent = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[payFeeComponent] by=${req.user?.userId || 'anonymous'}`);
+    
+    // Authorization check could be here or in route middleware. 
+    // Assuming route allows appropriate roles.
+    
+    const result = await import('./payment.service').then(s => s.processUnifiedPayment({
+        ...req.body,
+        initiatedBy: req.user?.userId || null
+    }));
+
+    sendResponse({
+        res,
+        statusCode: 200, // or 201
+        success: true,
+        message: result.message || "Payment processed",
+        data: result.data
     });
 });

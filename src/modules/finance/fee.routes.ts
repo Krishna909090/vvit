@@ -7,7 +7,7 @@ import {
     getFeeStatistics,
     createDiscountRequest, reviewDiscountRequest, approveDiscount,
     getApplicationFee, updateApplicationFee,
-    collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands
+    collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands, getPaymentHistory
 } from './fee.controller';
 
 import {
@@ -59,6 +59,10 @@ router.get('/ledger/:studentId', authenticate, authorizePermission(['finance.rea
 router.get('/student-demands/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getStudentFeeDemands);
 
 // Allotment Order
+// Allotment Order
 router.get('/allotment-order/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), downloadAllotmentOrder);
+
+// Detail Payment History
+router.get('/payment-history/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getPaymentHistory);
 
 export default router;

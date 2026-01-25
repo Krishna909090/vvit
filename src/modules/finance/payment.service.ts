@@ -4,7 +4,7 @@ import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
 import { format } from 'date-fns';
-import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod, PaymentMode } from '@prisma/client';
+import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod, PaymentMode, HostelPaymentMode } from '@prisma/client';
 import { getApplicationFeeAmount } from './fee.service';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
@@ -351,10 +351,16 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
                     .flatMap(b => b.rooms)
                     .find(r => r.number === admission.roomNumber);
                 if (room && (room.cost ?? 0) > 0) {
+                    let feeAmount = room.cost ?? 0;
+                    if (admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
+                        feeAmount += 6000;
+                        logger.info(`[Debit Generation] Applied Semwise extra charge (+6000) for student ${payment.studentId}`);
+                    }
+
                     ledgersToCreate.push({
                         studentId: payment.studentId,
                         type: 'DEBIT' as any,
-                        amount: room.cost ?? 0,
+                        amount: feeAmount,
                         description: `Hostel Fee - ${admission.hostel?.name} (Room ${admission.roomNumber})`,
                         referenceId: payment.id,
                         referenceType: 'FEE_GENERATION',
@@ -606,12 +612,41 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
         if (!hostel) throw new AppError('Selected hostel not found', 404);
         
         // Find assigned room cost if available
+        // Find assigned room cost if available
         if (student.admissionDetails.roomNumber) {
             // Flatten rooms to find the matching one (simplified lookup)
             const room = hostel.blocks.flatMap(b => b.rooms).find(r => r.number === student.admissionDetails?.roomNumber);
             if (room) {
                 hostelFee = room.cost ?? 0;
             }
+        } else {
+            // Fallback: Calculate based on Selection (Capacity/Sharing)
+            // Expecting hostelSelection to contain details if room not confirmed
+            if (hostelSelection.hostelType || hostelSelection.roomType) {
+                 const sharing = hostelSelection.hostelType === 'SHARING_4' ? 4 : 
+                                 hostelSelection.hostelType === 'SHARING_8' ? 8 : 4; // Default to 4? Or Error?
+
+                 // Try to fetch Price Category
+                 const priceCategory = await prisma.hostelPriceCategory.findFirst({
+                     where: {
+                         sharing: sharing,
+                         roomType: hostelSelection.roomType // AC / NON_AC
+                     }
+                 });
+
+                 if (priceCategory) {
+                     hostelFee = priceCategory.price;
+                 } else {
+                     // Fallback check against Hostel Model defaults if simplified setup exists
+                     // Or just default to 0 and let admin fix? Better to warn.
+                     logger.warn(`Price category not found for Sharing:${sharing} Type:${hostelSelection.roomType}`);
+                 }
+            }
+        }
+
+        // Add Semwise Logic
+        if (hostelSelection.paymentMode === HostelPaymentMode.SEMWISE || hostelSelection.paymentMode === 'SEMWISE') {
+             hostelFee += 6000;
         }
     }
 
@@ -638,6 +673,9 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
             if (hostelSelection?.hostelId) {
                 updateData.hostelId = hostelSelection.hostelId;
                 updateData.accommodationType = 'HOSTEL';
+                if (hostelSelection.paymentMode) {
+                     updateData.hostelPaymentMode = hostelSelection.paymentMode === 'SEMWISE' ? HostelPaymentMode.SEMWISE : HostelPaymentMode.YEARWISE;
+                }
             }
 
             if (transportSelection?.routeId) {
@@ -961,49 +999,8 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
     }
 };
 
-export const getStudentFinancialHistory = async (studentId: string) => {
-    // 1. Fetch Ledger (The Master Record)
-    const ledger = await prisma.studentLedger.findMany({
-        where: { studentId },
-        orderBy: { date: 'desc' }
-    });
+// [REMOVED] Old getStudentFinancialHistory replaced by enhanced version below
 
-    // 2. Fetch Payments to enrich ledger data
-    const payments = await prisma.payment.findMany({
-        where: { studentId }
-    });
-
-    // 3. Create a Map for fast lookup
-    const paymentMap = new Map(payments.map(p => [p.id, p]));
-
-    // 4. Merge Data and convert invoice URLs to presigned URLs
-    const history = await Promise.all(ledger.map(async (entry) => {
-        let enrichment = {};
-        
-        if (entry.referenceType === 'PAYMENT' && entry.referenceId) {
-            const payment = paymentMap.get(entry.referenceId);
-            if (payment) {
-                // Convert invoice URL to presigned URL
-                const invoiceUrl = await convertToPresignedUrl(payment.invoiceUrl);
-                
-                enrichment = {
-                    category: payment.component, // e.g., APPLICATION_FEE, TUITION
-                    paymentMethod: payment.method,
-                    transactionId: payment.providerTxId,
-                    invoiceUrl,
-                    status: payment.status
-                };
-            }
-        }
-
-        return {
-            ...entry,
-            ...enrichment
-        };
-    }));
-
-    return { history };
-};
 
 export const getStudentFinancialSummary = async (studentId: string) => {
     // 1. Fetch Student Config & Admission Details
@@ -1274,4 +1271,173 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
     } catch (err) {
         logger.error(`Failed to generate allotment order for ${studentId}: ${err}`);
     }
+};
+
+// Step 4. Unified Payment Processor
+export const processUnifiedPayment = async (data: any) => {
+    const { studentId, amount, mode, method, component, feeHeadId, remarks, initiatedBy, referenceNumber } = data;
+
+    // 1. Validate Student
+    const student = await prisma.student.findUnique({ 
+        where: { id: studentId },
+        include: { admissionDetails: true }
+    });
+    if (!student) throw new AppError('Student not found', 404);
+
+    // 2. Validate Fee Head for 'OTHER'
+    if (component === PaymentComponent.OTHER && !feeHeadId) {
+        throw new AppError('Fee Head ID required for Other payments', 400);
+    }
+    
+    // 3. Generate Transaction ID
+    const providerTxId = mode === PaymentMode.OFFLINE 
+        ? (referenceNumber || `CASH_${Date.now()}_${studentId.substring(0, 8)}`)
+        : `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
+
+    // 4. Create Payment Record
+    const payment = await prisma.payment.create({
+        data: {
+            studentId,
+            amount,
+            mode,
+            method: method || (mode === PaymentMode.ONLINE ? PaymentMethod.UPI : PaymentMethod.CASH),
+            status: mode === PaymentMode.OFFLINE ? PaymentStatus.SUCCESS : PaymentStatus.PENDING,
+            component,
+            feeHeadId,
+            providerTxId,
+            collectedBy: initiatedBy,
+            metadata: { remarks, source: 'UNIFIED_API' }
+        }
+    });
+
+    // 5. Handle Offline Success Immediate Processing
+    if (mode === PaymentMode.OFFLINE) {
+        // Reuse Success Logic (Ledger, Invoice, Email)
+        await processPaymentSuccess({ ...payment, student }, { remarks, adminId: initiatedBy });
+        
+        // Return Success Response
+        return { 
+            message: "Payment recorded successfully", 
+            data: { 
+                paymentId: payment.id, 
+                status: 'SUCCESS',
+                transactionId: providerTxId 
+            } 
+        };
+    } else {
+        // 6. Handle Online Initiation
+        try {
+             // Bypass for Dev
+            if (process.env.BYPASS_PAYMENT === 'true') {
+                await prisma.payment.update({
+                    where: { id: payment.id }, 
+                    data: { status: PaymentStatus.SUCCESS }
+                });
+                await processPaymentSuccess({ ...payment, student }, {});
+                return { 
+                    message: "Payment Successful (Bypass)", 
+                    data: { paymentId: payment.id, status: 'SUCCESS' } 
+                };
+            }
+
+            const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${providerTxId}`;
+            const request = StandardCheckoutPayRequest.builder()
+                .merchantOrderId(providerTxId)
+                .amount(Math.round(amount * 100))
+                .redirectUrl(redirectUrl)
+                .build();
+
+            const response = await client.pay(request);
+            return { 
+                message: "Payment Initiated", 
+                data: { 
+                    paymentId: payment.id, 
+                    redirectUrl: response.redirectUrl,
+                    status: 'PENDING'
+                } 
+            };
+        } catch (error: any) {
+            logger.error(`Unified Payment Online Error: ${error.message}`);
+            throw new AppError('Failed to initiate online payment', 502);
+        }
+    }
+};
+
+// Enhanced History
+export const getStudentFinancialHistory = async (studentId: string) => {
+    // 1. Fetch Demands (Debits)
+    const ledgers = await prisma.studentLedger.findMany({
+        where: { studentId },
+        orderBy: { date: 'desc' }
+    });
+    
+    // 2. Fetch Payments (Credits) via Payments Table for detail, but Ledger has Credit entries too.
+    // Let's use Ledger for calculation consistency.
+    
+    let totalDemanded = 0;
+    let totalPaid = 0;
+    
+    const breakdown: any = {
+        HOSTEL: { demanded: 0, paid: 0 },
+        TRANSPORT: { demanded: 0, paid: 0 },
+        TUITION: { demanded: 0, paid: 0 },
+        BOOK_BANK: { demanded: 0, paid: 0 },
+        ADMISSION: { demanded: 0, paid: 0 },
+        SKILL_DEVELOPMENT: { demanded: 0, paid: 0 },
+        OTHER: { demanded: 0, paid: 0 }
+    };
+    
+    ledgers.forEach(l => {
+        if (l.type === 'DEBIT') {
+            totalDemanded += l.amount;
+            // Categorize by Description
+            const desc = (l.description || '').toLowerCase();
+            if (desc.includes('hostel')) breakdown.HOSTEL.demanded += l.amount;
+            else if (desc.includes('transport')) breakdown.TRANSPORT.demanded += l.amount;
+            else if (desc.includes('tuition')) breakdown.TUITION.demanded += l.amount;
+            else if (desc.includes('book bank')) breakdown.BOOK_BANK.demanded += l.amount;
+            else if (desc.includes('admission')) breakdown.ADMISSION.demanded += l.amount;
+            else if (desc.includes('skill')) breakdown.SKILL_DEVELOPMENT.demanded += l.amount;
+            else breakdown.OTHER.demanded += l.amount;
+        } else if (l.type === 'CREDIT') {
+            totalPaid += l.amount;
+        }
+    });
+
+    // Fetch Payments to categorize "Paid"
+    const payments = await prisma.payment.findMany({
+        where: { studentId, status: PaymentStatus.SUCCESS }
+    });
+    
+    payments.forEach(p => {
+         const comp = p.component || 'OTHER';
+         // Map SCHOLARSHIP_TOKEN to ADMISSION (or TUITION, depending on business rule)
+         // User requested "Admission" as a category. Usually Token = Admission Fee.
+         let key: string = comp;
+         
+         if (comp === PaymentComponent.SCHOLARSHIP_TOKEN) {
+             key = 'ADMISSION'; 
+         }
+         
+         // Ensure key exists, else OTHER
+         if (!(key in breakdown)) {
+             key = 'OTHER';
+         }
+         
+         breakdown[key].paid += p.amount;
+    });
+
+    // Summary
+    const summary = {
+        totalDemanded,
+        totalPaid,
+        totalPending: Math.max(0, totalDemanded - totalPaid)
+    };
+    
+    return {
+        summary,
+        breakdown,
+        ledger: ledgers,
+        payments
+    };
 };

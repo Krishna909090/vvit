@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AccommodationType, HostelType, PaymentMethod } from '@prisma/client';
+import { AccommodationType, HostelType, PaymentMethod, HostelPaymentMode } from '@prisma/client';
 import { Role } from '../constants/roles';
 
 export const enableExamSchema = z.object({
@@ -106,6 +106,7 @@ export const updateAdmissionDetailsSchema = z.object({
         hostelType: z.nativeEnum(HostelType).optional().nullable(),
         hostelId: z.string().uuid().optional().nullable(),
         transportRouteId: z.string().optional().nullable(),
+        hostelPaymentMode: z.nativeEnum(HostelPaymentMode).optional().nullable(),
         paidAmount: z.number().min(0).optional(),
     }).refine((data) => {
         if (data.accommodationType === AccommodationType.HOSTEL) {
@@ -427,6 +428,7 @@ export const finalizeAdmissionSchema = z.object({
             hostelId: z.string().uuid().optional(),
             transportRouteId: z.string().uuid().optional(),
             hostelType: z.nativeEnum(HostelType).optional(),
+            hostelPaymentMode: z.nativeEnum(HostelPaymentMode).optional(),
         }).refine((data) => {
             if (data.type === AccommodationType.HOSTEL) return !!data.hostelId;
             if (data.type === AccommodationType.TRANSPORT) return !!data.transportRouteId;

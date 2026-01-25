@@ -288,6 +288,7 @@ model StudentAdmission {
   hostelType        HostelType?
   hostelId          String?
   transportRouteId  String?
+  hostelPaymentMode HostelPaymentMode? @default(YEARWISE)
   roomNumber        String?
   allottedCourseId  String?
   createdAt         DateTime?          @default(now())
@@ -989,6 +990,9 @@ enum PaymentComponent {
   TRANSPORT
   OTHER
   SCHOLARSHIP_TOKEN
+  BOOK_BANK
+  ADMISSION
+  SKILL_DEVELOPMENT
 }
 
 enum AccommodationType {
@@ -1232,3 +1236,8 @@ model Configuration {
 }
 
 
+
+enum HostelPaymentMode {
+  SEMWISE
+  YEARWISE
+}

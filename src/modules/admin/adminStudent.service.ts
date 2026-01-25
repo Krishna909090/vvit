@@ -1,5 +1,5 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, CancellationStatus, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType, PaymentMethod, PaymentStatus, PaymentMode, PaymentComponent, LedgerTransactionType } from '@prisma/client';
+import { AdmissionStatus, CancellationStatus, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType, PaymentMethod, PaymentStatus, PaymentMode, PaymentComponent, LedgerTransactionType, HostelPaymentMode } from '@prisma/client';
 import { Role } from '../../constants/roles';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
@@ -464,7 +464,7 @@ export const AdminStudentService = {
     },
 
     async updateAdmissionDetails(data: any, adminId: string | undefined) {
-        const { studentId, accommodationType, hostelType, hostelId, transportRouteId, paidAmount } = data;
+        const { studentId, accommodationType, hostelType, hostelId, transportRouteId, paidAmount, hostelPaymentMode } = data;
 
         if (!studentId || !accommodationType) throw new AppError(MESSAGES.ERROR.STUDENT_ACCOMMODATION_REQUIRED, 400);
 
@@ -547,6 +547,14 @@ export const AdminStudentService = {
                     // Same route
                 }
             }
+            
+            // Handle Hostel Payment Mode Adjustment
+            if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
+                feeAdjustment -= 6000;
+            }
+            if (accommodationType === AccommodationType.HOSTEL && hostelPaymentMode === HostelPaymentMode.SEMWISE) {
+                feeAdjustment += 6000;
+            }
 
             const currentPaid = (admission.paidFee ?? 0) + Number(paidAmount || 0);
             
@@ -569,6 +577,7 @@ export const AdminStudentService = {
                     totalFee: { increment: feeAdjustment },
                     paidFee: currentPaid,
                     feeStatus,
+                    hostelPaymentMode: accommodationType === AccommodationType.HOSTEL ? hostelPaymentMode : null,
                 }
             });
         });
@@ -1222,6 +1231,11 @@ export const AdminStudentService = {
                      const r = await tx.transportRoute.findUnique({ where: { id: oldAdmission.transportRouteId } });
                      if (r) accCostDelta -= (r.cost || 0);
                  }
+                 
+                 // Subtract semwise extra if applicable
+                 if (oldAdmission.accommodationType === AccommodationType.HOSTEL && oldAdmission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
+                     accCostDelta -= 6000;
+                 }
             }
 
             // 2. Add New Cost
@@ -1229,9 +1243,14 @@ export const AdminStudentService = {
                  // Already verified existence in flow usually, but safe access
                  const h = await tx.hostel.findUnique({ where: { id: allocation.hostelId } });
                  if (h) accCostDelta += (h.cost || 0);
-            } else if (allocation.type === AccommodationType.TRANSPORT && allocation.transportRouteId) {
+             } else if (allocation.type === AccommodationType.TRANSPORT && allocation.transportRouteId) {
                  const r = await tx.transportRoute.findUnique({ where: { id: allocation.transportRouteId } });
                  if (r) accCostDelta += (r.cost || 0);
+            }
+            
+             // Add semwise extra if applicable
+            if (allocation.type === AccommodationType.HOSTEL && allocation.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
+                 accCostDelta += 6000;
             }
             
             logger.debug(`[executeAdmissionUpdates] Total Fee Adjustment: ${accCostDelta}`);
@@ -1246,6 +1265,7 @@ export const AdminStudentService = {
                     accommodationType: allocation.type,
                     hostelId: allocation.type === AccommodationType.HOSTEL ? allocation.hostelId : null,
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
+                    hostelPaymentMode: allocation.type === AccommodationType.HOSTEL ? allocation.hostelPaymentMode : null,
                     transportRouteId: allocation.type === AccommodationType.TRANSPORT ? allocation.transportRouteId : null,
                     totalFee: { increment: accCostDelta }
                 },
@@ -1256,6 +1276,7 @@ export const AdminStudentService = {
                     accommodationType: allocation.type,
                     hostelId: allocation.type === AccommodationType.HOSTEL ? allocation.hostelId : null,
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
+                    hostelPaymentMode: allocation.type === AccommodationType.HOSTEL ? allocation.hostelPaymentMode : null,
                     transportRouteId: allocation.type === AccommodationType.TRANSPORT ? allocation.transportRouteId : null,
                     totalFee: accCostDelta > 0 ? accCostDelta : 0
                 }
@@ -1338,10 +1359,11 @@ export const AdminStudentService = {
              // Check if a PENDING payment already exists for this student/fee.
              // If yes, we reuse it to avoid duplicate records and return the same link.
              // ------------------------------------------------------------------
+             const targetComponent = payment.component || PaymentComponent.TUITION;
              const existingPending = await prisma.payment.findFirst({
                  where: {
                      studentId,
-                     component: PaymentComponent.TUITION,
+                     component: targetComponent,
                      status: PaymentStatus.PENDING
                  }
              });
@@ -1372,7 +1394,7 @@ export const AdminStudentService = {
                      // ------------------------------------------------------------------
                      logger.info(`[finalizeAdmission][Online] Step 1: Creating PENDING payment record`);
                      
-                     const feeComponent = PaymentComponent.TUITION; 
+                     const feeComponent = targetComponent; 
                      const merchantTransactionId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
 
                      newPayment = await prisma.payment.create({
@@ -1451,7 +1473,8 @@ export const AdminStudentService = {
              const offlineResult = await prisma.$transaction(async (tx) => {
                  logger.info(`[finalizeAdmission][Offline] Starting transaction for student=${studentId}`);
                  
-                 const feeComponent = PaymentComponent.TUITION;
+                 // Determine Payment Name based on Component
+                 const feeComponent = payment.component || PaymentComponent.TUITION;
                  
                  // ------------------------------------------------------------------
                  // SUB-BLOCK 6.1: RECORD PAYMENT
@@ -1528,6 +1551,21 @@ export const AdminStudentService = {
                         generatedInvoiceUrl = await convertToPresignedUrl(p.invoiceUrl);
                     }
 
+                    // Derive Payment Name
+                    let paymentTypeName = 'Admission Fee'; // Default fallback
+                    let emailPaymentType = 'ADMISSION_FEE';
+
+                    if (p.component === PaymentComponent.TUITION) {
+                        paymentTypeName = 'Tuition Fee';
+                        emailPaymentType = 'TUITION_FEE';
+                    } else if (p.component === PaymentComponent.APPLICATION_FEE) {
+                        paymentTypeName = 'Application Fee';
+                        emailPaymentType = 'APPLICATION_FEE';
+                    } else if (p.component === PaymentComponent.SCHOLARSHIP_TOKEN) {
+                        paymentTypeName = 'Admission Fee'; // Token usually means Admission Fee
+                         emailPaymentType = 'ADMISSION_FEE';
+                    }
+
                     await sendPaymentReceipt(p.student.email, {
                         studentName: p.student.name,
                         invoiceNumber: p.referenceNumber || p.id, 
@@ -1535,8 +1573,8 @@ export const AdminStudentService = {
                         transactionId: p.referenceNumber || 'OFFLINE',
                         amount: p.amount,
                         date: new Date(),
-                        paymentType: 'ADMISSION_FEE', 
-                        customFeeType: 'Admission Fee', 
+                        paymentType: emailPaymentType as any, 
+                        customFeeType: paymentTypeName, 
                         invoiceUrl: generatedInvoiceUrl || undefined,
                         address: {
                             line1: p.student.address,

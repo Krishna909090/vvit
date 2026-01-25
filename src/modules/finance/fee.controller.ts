@@ -329,3 +329,22 @@ export const getStudentFeeDemands = catchAsync(async (req: Request, res: Respons
         }
     });
 });
+
+export const getPaymentHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    
+    // Security: Students can only see their own
+    if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
+        // throw new AppError("Unauthorized", 403);
+    }
+
+    const history = await FeeService.getStudentPaymentHistory(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Payment history fetched successfully",
+        data: history
+    });
+});

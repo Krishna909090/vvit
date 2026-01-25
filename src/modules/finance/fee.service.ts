@@ -244,115 +244,27 @@ export const FeeService = {
         referenceNumber?: string,
         bankDetails?: { bankName?: string, branchName?: string, instrumentDate?: Date }
     ) => {
-        logger.info(`[recordOfflinePayment] Request: studentId=${studentId}, amount=${amount}, method=${method}, component=${component}, admin=${adminId}`);
+        logger.info(`[recordOfflinePayment] Delegating to processUnifiedPayment: studentId=${studentId}, amount=${amount}`);
+
+        // Lazy Import to avoid Circular Dependency issues if any, or just import at top if safe.
+        // Assuming processUnifiedPayment is in payment.service.ts
+        const { processUnifiedPayment } = require('./payment.service');
         
-        // 1. Verify Student
-        const student = await prisma.student.findUnique({ where: { id: studentId } });
-        if (!student) {
-            logger.error(`[recordOfflinePayment] Student not found: ${studentId}`);
-            throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
-        }
-
-        // 2. Validate Reference Number
-        if (method !== PaymentMethod.CASH && !referenceNumber) {
-            logger.error(`[recordOfflinePayment] Missing Reference Number for Non-Cash payment`);
-            throw new AppError("Transaction ID / Reference Number is required for Non-Cash payments", 400);
-        }
-
-        if (referenceNumber) {
-            const existing = await prisma.payment.findFirst({ where: { referenceNumber } });
-            if (existing) {
-                logger.error(`[recordOfflinePayment] Duplicate Reference Number: ${referenceNumber}`);
-                throw new AppError("Transaction ID already exists", 400);
-            }
-        }
-
-        logger.debug(`[recordOfflinePayment] Validation passed. Creating Payment record.`);
-
-        // 3. Create Payment Record
-        const payment = await prisma.payment.create({
-            data: {
-                studentId,
-                amount,
-                currency: 'INR',
-                status: PaymentStatus.SUCCESS,
-                mode: method === PaymentMethod.CASH ? PaymentMode.OFFLINE : PaymentMode.OFFLINE, // Both are OFFLINE mode
-                method,
-                referenceNumber: referenceNumber || `RCPT-${Date.now()}`, // Auto-gen receipt for Cash if missing
-                collectedBy: adminId,
-                component,
-                bankName: bankDetails?.bankName,
-                branchName: bankDetails?.branchName,
-                instrumentDate: bankDetails?.instrumentDate,
-                invoiceUrl: "PENDING_GENERATION" // Placeholder or trigger generation
-            }
+        return processUnifiedPayment({
+            studentId,
+            amount,
+            mode: PaymentMode.OFFLINE,
+            method,
+            component,
+            initiatedBy: adminId,
+            referenceNumber,
+            bankDetails,
+            remarks: `Offline Payment recorded by Admin`
         });
-        logger.info(`[recordOfflinePayment] Payment Created: ${payment.id}`);
-
-        // 4. Update Status (Workflow Logic)
-        try {
-            if (component === PaymentComponent.APPLICATION_FEE) {
-                 logger.debug(`[recordOfflinePayment] Updating Admission Status: ENTRANCE_FEE_PAID`);
-                 await prisma.studentAdmission.upsert({
-                     where: { studentId },
-                     create: { studentId, status: AdmissionStatus.ENTRANCE_FEE_PAID },
-                     update: { status: AdmissionStatus.ENTRANCE_FEE_PAID }
-                 });
-            } else if (component === PaymentComponent.TUITION) {
-                 // Upgrade to ADMISSION_CONFIRMED if Seat Allocated
-                 const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
-                 if (admission && admission.status === AdmissionStatus.SEAT_ALLOTTED) { 
-                     logger.debug(`[recordOfflinePayment] Upgrading Status to ADMISSION_CONFIRMED (Seat Allotted found)`);
-                     await prisma.studentAdmission.update({
-                         where: { studentId },
-                         data: { status: AdmissionStatus.ADMISSION_CONFIRMED }
-                     });
-                 }
-            } else if (component === PaymentComponent.SCHOLARSHIP_TOKEN) {
-                 logger.debug(`[recordOfflinePayment] Processing Scholarship Token - Locking Allocation`);
-                 try {
-                    const { ScholarshipService } = require('../admin/scholarship.service');
-                    await ScholarshipService.lockAllocation(studentId);
-                 } catch (err) {
-                    logger.warn(`Failed to lock scholarship for student ${studentId}: ${err}`);
-                    // Continue payment recording even if scholarship lock fails (though ideally critical)
-                 }
-
-                 await prisma.studentAdmission.update({
-                    where: { studentId: studentId },
-                    data: {
-                        paidFee: { increment: amount },
-                        feeStatus: FeeStatus.PARTIAL,
-                        status: AdmissionStatus.ADMISSION_CONFIRMED 
-                    }
-                });
-            }
-        } catch (statusErr) {
-            logger.error(`[recordOfflinePayment] Error updating admission workflow status: ${statusErr}`);
-            // Non-critical (?)
-        }
-        
-        // 5. Create Ledger Entry (CREDIT)
-        logger.debug(`[recordOfflinePayment] Creating Ledger Entry`);
-        await prisma.studentLedger.create({
-            data: {
-                studentId,
-                type: 'CREDIT',
-                amount: amount,
-                description: `Payment: ${component} (${method})`,
-                referenceId: payment.id,
-                referenceType: 'PAYMENT',
-                date: new Date(),
-                createdBy: adminId
-            }
-        });
-
-        logger.info(`[recordOfflinePayment] Successfully completed for student ${studentId}`);
-        return payment;
     },
 
     // Automated Fee Generation
-    generateFeeDemands: async (studentId: string, courseId: string, academicYearId: string, userId: string): Promise<any[]> => {
+    generateFeeDemands: async (studentId: string, courseId: string, academicYearId: string, userId: string, deleteExisting: boolean = false): Promise<any[]> => {
         logger.info(`[generateFeeDemands] Request: student=${studentId}, course=${courseId}, year=${academicYearId}`);
         
         // 1. Get Fee Structures
@@ -409,48 +321,104 @@ export const FeeService = {
         // 2. Create Demands & Ledger Entries
         // Using transaction to ensure ledger matches demands
         const createdDemands = await prisma.$transaction(async (tx) => {
+            
+            // Delete Existing if requested
+            if (deleteExisting) {
+                logger.info(`[generateFeeDemands] Cleaning up existing demands for student ${studentId} and course ${courseId}`);
+                
+                // Find old demands to link Ledger updates if necessary?
+                // Or just delete by studentId / course context? 
+                // Since this function is for a specific context (course/year), we should be careful.
+                // However, FeeDemands are linked to FeeStructures. We can find demands linked to THIS course's FeeStructures.
+                
+                const structuresForThisCourse = await tx.feeStructure.findMany({
+                    where: { courseId, academicYearId, isDeleted: false },
+                    select: { id: true }
+                });
+                const structureIds = structuresForThisCourse.map(s => s.id);
+                
+                if (structureIds.length > 0) {
+                     // 1. Find the Demands
+                     const oldDemands = await tx.studentFeeDemand.findMany({
+                         where: { 
+                            studentId, 
+                            feeStructureId: { in: structureIds }
+                         }
+                     });
+                     
+                     const oldDemandIds = oldDemands.map(d => d.id);
+                     
+                     if (oldDemandIds.length > 0) {
+                         // 2. Delete Ledger Debits linked to these demands
+                         await tx.studentLedger.deleteMany({
+                             where: {
+                                 type: 'DEBIT',
+                                 referenceType: 'FEE_DEMAND',
+                                 referenceId: { in: oldDemandIds }
+                             }
+                         });
+                         
+                         // 3. Delete Demands
+                         await tx.studentFeeDemand.deleteMany({
+                             where: { id: { in: oldDemandIds } }
+                         });
+                         
+                         // 4. Also Reset Admission Total Fee? No, we will recalculate it below.
+                         // But we need to subtract the amount?
+                         const amountRemoved = oldDemands.reduce((sum, d) => sum + d.amount, 0);
+                         if (amountRemoved > 0) {
+                             await tx.studentAdmission.update({
+                                 where: { studentId },
+                                 data: { totalFee: { decrement: amountRemoved } }
+                             });
+                         }
+                     }
+                }
+            }
+
+
             const results = [];
             let newDemandsTotal = 0;
             logger.debug(`[generateFeeDemands] Starting transaction to create demands`);
 
             for (const fee of applicableFees) {
-                // specific key to avoid duplicates
-                const uniqueKey = `${studentId}-${fee.id}`; 
-                
+                // Check for existing if NOT deleted above
                 const existing = await tx.studentFeeDemand.findFirst({
                     where: { studentId, feeStructureId: fee.id }
                 });
 
-                if (!existing) {
-                    const demand = await tx.studentFeeDemand.create({
-                        data: {
-                            studentId,
-                            feeStructureId: fee.id,
-                            amount: fee.amount,
-
-                            status: 'PENDING',
-                            dueDate: fee.dueDate || new Date(), // Use structure due date or now
-                            createdBy: userId
-                        }
-                    });
-
-                    // Ledger Debit
-                    await tx.studentLedger.create({
-                        data: {
-                            studentId,
-                            type: 'DEBIT',
-                            amount: fee.amount,
-                            description: `Fee: ${fee.feeHead.name}`,
-                            referenceId: demand.id,
-                            referenceType: 'FEE_DEMAND',
-                            createdBy: userId
-                        }
-                    });
-                    results.push(demand);
-                    newDemandsTotal += fee.amount;
-                } else {
+                if (existing) {
                     logger.debug(`[generateFeeDemands] duplicate demand skipped for structure ${fee.id}`);
+                    continue; // Skip
                 }
+
+                const demand = await tx.studentFeeDemand.create({
+                    data: {
+                        studentId,
+                        feeStructureId: fee.id,
+                        amount: fee.amount,
+
+                        status: 'PENDING',
+                        dueDate: fee.dueDate || new Date(), // Use structure due date or now
+                        createdBy: userId
+                    }
+                });
+
+                // Ledger Debit
+                await tx.studentLedger.create({
+                    data: {
+                        studentId,
+                        type: 'DEBIT',
+                        amount: fee.amount,
+                        description: `Fee: ${fee.feeHead.name}`,
+                        referenceId: demand.id,
+                        referenceType: 'FEE_DEMAND',
+                        feeHeadId: fee.feeHeadId, // Added explicit feeHeadId link
+                        createdBy: userId
+                    }
+                });
+                results.push(demand);
+                newDemandsTotal += fee.amount;
             }
             
             // Update Student Admission Total Fee
@@ -459,7 +427,7 @@ export const FeeService = {
                  await tx.studentAdmission.upsert({
                      where: { studentId },
                      create: { studentId, totalFee: newDemandsTotal },
-                     update: { totalFee: { increment: newDemandsTotal } }
+                     update: { totalFee: { increment: newDemandsTotal } } // If reset, this adds back. Correct.
                  });
             }
 
@@ -593,5 +561,196 @@ export const FeeService = {
             demands,
             payments
         };
+    },
+
+    getStudentPaymentHistory: async (studentId: string) => {
+        // 0. Fetch All Fee Heads for Lookup
+        const allFeeHeads = await prisma.feeHead.findMany({ where: { isDeleted: false } });
+        const feeHeadLookup = new Map<string, string>();
+        allFeeHeads.forEach(fh => feeHeadLookup.set(fh.id, fh.name));
+
+        // 1. Fetch Demands with Headers
+        const demands = await prisma.studentFeeDemand.findMany({
+            where: { studentId },
+            include: { feeStructure: { include: { feeHead: true } } },
+            orderBy: { createdAt: 'asc' }
+        });
+
+        // 2. Fetch Payments (Include FeeDemand Path)
+        const payments = await prisma.payment.findMany({
+            where: { studentId, status: 'SUCCESS' },
+            include: {
+                feeDemand: {
+                    include: {
+                        feeStructure: {
+                            include: {
+                                feeHead: true
+                            }
+                        }
+                    }
+                }
+            },
+            orderBy: { createdAt: 'asc' }
+        });
+
+        // 3. Fetch Discounts (Ledger)
+        const creditLedgers = await prisma.studentLedger.findMany({
+            where: { 
+                studentId, 
+                type: 'CREDIT',
+                referenceType: { in: ['SCHOLARSHIP', 'DISCOUNT'] }
+            }
+        });
+
+        // Grouping Map
+        // Key: FeeHeadId (or Name if not present) -> Object
+        const feeHeadMap = new Map<string, any>();
+
+        // Helper to get or create group
+        const getGroup = (id: string, name: string) => {
+            if (!feeHeadMap.has(id)) {
+                feeHeadMap.set(id, {
+                    feeHeadId: id,
+                    feeHeadName: name,
+                    totalFee: 0,
+                    paidAmount: 0,
+                    discountAmount: 0,
+                    pendingAmount: 0,
+                    history: []
+                });
+            }
+            return feeHeadMap.get(id);
+        };
+
+        // --- Process Demands ---
+        demands.forEach(d => {
+            const head = d.feeStructure?.feeHead;
+            const group = getGroup(head?.id || 'UNKNOWN', head?.name || 'Unknown Fee');
+            
+            group.totalFee += d.amount;
+            group.history.push({
+                type: 'DEMAND',
+                date: d.createdAt,
+                amount: d.amount,
+                id: d.id,
+                description: `Fee generated: ${head?.name}`
+            });
+        });
+
+        // --- Process Payments ---
+        // Priority: 
+        // 1. Linked Fee Order/Demand (payment.feeDemand.feeStructure.feeHead)
+        // 2. Explicit FeeHeadId (payment.feeHeadId)
+        // 3. Component Heuristics
+        
+        const feeHeadHeuristics: Record<string, string[]> = {
+            'TUITION': ['TUITION', 'COLLEGE', 'ACADEMIC', 'ADMISSION', 'SCHOLARSHIP_TOKEN'],
+            'HOSTEL': ['HOSTEL', 'MESS', 'LODGING'],
+            'TRANSPORT': ['TRANSPORT', 'BUS', 'ROUTE'],
+            'APPLICATION': ['APPLICATION', 'REGISTRATION']
+        };
+
+        payments.forEach(p => {
+            let targetFeeHeadId: string | undefined;
+            let targetFeeHeadName: string | undefined;
+
+            // 1. Check Fee Demand Link
+            if (p.feeDemand?.feeStructure?.feeHead) {
+                targetFeeHeadId = p.feeDemand.feeStructure.feeHead.id;
+                targetFeeHeadName = p.feeDemand.feeStructure.feeHead.name;
+            } 
+            // 2. Check Explicit FeeHeadId
+            else if (p.feeHeadId && feeHeadLookup.has(p.feeHeadId)) {
+                targetFeeHeadId = p.feeHeadId;
+                targetFeeHeadName = feeHeadLookup.get(p.feeHeadId);
+            }
+            
+            // 3. Strict Fallback: Do not guess. If not linked, it's Unallocated.
+            
+            if (targetFeeHeadId && targetFeeHeadName) {
+                const group = getGroup(targetFeeHeadId, targetFeeHeadName);
+                group.paidAmount += p.amount;
+                group.history.push({
+                    type: 'PAYMENT',
+                    date: p.createdAt,
+                    amount: p.amount,
+                    id: p.id,
+                    description: `Payment: ${p.method} (${p.providerTxId})`
+                });
+            } else {
+                 // Unmapped / Adhoc
+                const groupName = `Unallocated Payment: ${p.component}`;
+                const groupId = `UNALLOCATED_${p.component}`;
+                const group = getGroup(groupId, groupName);
+                group.paidAmount += p.amount;
+                group.history.push({
+                     type: 'PAYMENT',
+                     date: p.createdAt,
+                     amount: p.amount,
+                     id: p.id,
+                     description: `Payment: ${p.method} (${p.providerTxId})`
+                });
+            }
+        });
+
+        // --- Process Discounts ---
+        creditLedgers.forEach(l => {
+             // ... same logic ...
+             let matched = false;
+             for (const [id, group] of feeHeadMap.entries()) {
+                 const headName = group.feeHeadName.toUpperCase();
+                 const desc = l.description?.toUpperCase() || '';
+                 
+                 if (desc.includes('SCHOLARSHIP') && headName.includes('TUITION')) {
+                     group.discountAmount += l.amount;
+                     group.history.push({
+                         type: 'DISCOUNT',
+                         date: l.date,
+                         amount: l.amount,
+                         id: l.id,
+                         description: l.description
+                     });
+                     matched = true;
+                     break;
+                 }
+                 
+                 if (desc.includes('DISCOUNT') && (headName.includes('TUITION') || headName.includes('COLLEGE'))) {
+                     group.discountAmount += l.amount;
+                     group.history.push({
+                         type: 'DISCOUNT',
+                         date: l.date,
+                         amount: l.amount,
+                         id: l.id,
+                         description: l.description
+                     });
+                     matched = true;
+                     break;
+                 }
+             }
+             
+              if (!matched) {
+                const group = getGroup('GENERAL_DISCOUNTS', 'General Discounts');
+                group.discountAmount += l.amount;
+                group.history.push({
+                     type: 'DISCOUNT',
+                     date: l.date,
+                     amount: l.amount,
+                     id: l.id,
+                     description: l.description || 'Discount'
+                });
+            }
+        });
+
+        // --- Final Calculations ---
+        const result = Array.from(feeHeadMap.values()).map(group => {
+            group.pendingAmount = Math.max(0, group.totalFee - group.paidAmount - group.discountAmount);
+            
+            // Sort history by date
+            group.history.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+            
+            return group;
+        });
+        
+        return result;
     }
 };
