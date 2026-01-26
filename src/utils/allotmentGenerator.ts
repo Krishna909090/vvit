@@ -164,12 +164,8 @@ function drawMainTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
   drawCell(doc, data.state, col4X, startY + rowHeight * 2, paddingY, false);
 
   // Row 4 (Allotted College - Full Span)
-  drawCell(doc, 'Allotted College', col1X, startY + rowHeight * 3, paddingY, true);
-  doc.font('Helvetica').fontSize(fontSizeValue).text(data.allottedCollege, col2X + 5, startY + rowHeight * 3 + paddingY, { width: 380 });
-
-  // Row 5 (Allotted Course - Full Span)
-  drawCell(doc, 'Allotted Course', col1X, startY + rowHeight * 4, paddingY, true);
-  doc.font('Helvetica').fontSize(fontSizeValue).text(data.allottedCourse, col2X + 5, startY + rowHeight * 4 + paddingY, { width: 380 });
+  drawCell(doc, 'Allotted Course', col1X, startY + rowHeight * 3, paddingY, true);
+  doc.font('Helvetica').fontSize(fontSizeValue).text(data.allottedCourse, col2X + 5, startY + rowHeight * 3 + paddingY, { width: 380 });
 
   doc.y = startY + rowHeight * rowCount + 30;
 }

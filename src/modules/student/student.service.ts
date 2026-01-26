@@ -577,7 +577,8 @@ export const getStudentByUserId = async (userId: string) => {
                     updatedAt: true
                 }
             },
-            academicQualifications: true
+            academicQualifications: true,
+            studentScholarship: true
         }
     });
 

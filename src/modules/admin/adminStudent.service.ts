@@ -915,6 +915,7 @@ export const AdminStudentService = {
                 academicQualifications: true,
                 eligibleScholarshipRule: true,
                 scholarshipAllocation: { include: { rule: true } },
+                studentScholarship: true,
                 pref1Course: true,
                 pref2Course: true,
                 pref3Course: true,
