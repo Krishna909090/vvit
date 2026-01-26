@@ -932,9 +932,16 @@ export const getAllotmentOrderUrl = async (studentId: string) => {
     
     // Logic to extract key from full URL:
     let key = doc.url;
-    const parts = doc.url.split('amazonaws.com/');
-    if (parts.length > 1) {
-        key = parts[1];
+    
+    // Check if it's already a clean key or a path
+    if (doc.url.startsWith('student/') || doc.url.startsWith('students/')) {
+        key = doc.url;
+    } else {
+        // Handle https://bucket.s3.region.amazonaws.com/key format
+        const parts = doc.url.split('.amazonaws.com/');
+        if (parts.length > 1) {
+            key = decodeURIComponent(parts[1]);
+        }
     }
 
     return getPresignedUrl(key);
@@ -1181,62 +1188,21 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                  profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl) || undefined;
              }
              
-             // Calculate Fees
-             const feeBreakdown: { name: string; amount: number }[] = [];
-             let totalFee = 0;
-
-             // Tuition (Base Fee)
-             const tuition = student.admissionDetails.totalFee ?? 0;
-             if (tuition > 0) {
-                 feeBreakdown.push({ name: 'Tuition Fee', amount: tuition });
-                 totalFee += tuition;
-             }
-
-             // Transport
-             if (student.admissionDetails.transportRoute) {
-                 const cost = student.admissionDetails.transportRoute.cost;
-                 feeBreakdown.push({ name: 'Transport Fee', amount: cost });
-                 totalFee += cost;
-             }
-
-             // Hostel (Fetch dynamic cost)
-             if (student.admissionDetails.hostelId) {
-                 const hostel = await prisma.hostel.findUnique({ 
-                    where: { id: student.admissionDetails.hostelId },
-                    include: { blocks: { include: { rooms: true } } }
-                 });
-                 let hostelCost = 0;
-                 if (student.admissionDetails.roomNumber) {
-                     const room = hostel?.blocks.flatMap(b => b.rooms).find(r => r.number === student.admissionDetails?.roomNumber);
-                     hostelCost = room?.cost || 0;
-                 }
-                 // If no room assigned yet, we might not know cost. Or fallback to generic?
-                 // For now only add if cost > 0
-                 if (hostelCost > 0) {
-                     feeBreakdown.push({ name: 'Hostel Fee', amount: hostelCost });
-                     totalFee += hostelCost;
-                 }
-             }
-             
-             const totalPaid = student.admissionDetails.paidFee ?? 0;
-
             const allotmentData = {
                 applicationId: student.applicationId ?? '',
                 studentName: student.name,
                 fatherName: student.fatherName,
+                motherName: student.motherName,
                 gender: student.gender,
-                region: 'AU', 
+                state: 'Andhra Pradesh', 
                 allottedCollege: 'VVIT UNIVERSITY (VVIT), GUNTUR',
                 allottedCourse: student.admissionDetails.allottedCourse?.name || 'N/A',
+                // Extra fields kept for potential future use but not currently in interface:
                 allottedCategory: student.convenorDetails?.category || `${student.category}_GEN_AU`,
                 reportingDate: format(reportingDate, 'dd.MM.yyyy'),
                 phase: 'First Phase',
                 feeReimbursement: 'NO',
-                profilePhotoUrl: profilePhotoUrl,
-                
-                feeBreakdown: feeBreakdown,
-                totalFee: totalFee,
-                totalPaid: totalPaid
+                profilePhotoUrl: profilePhotoUrl
             };
 
             const pdfBuffer = await generateAllotmentOrderPDF(allotmentData);
@@ -1563,11 +1529,25 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         totalPending: Math.max(0, totalDemanded - totalPaid)
     };
     
+    // Generate presigned URLs for payments
+    const paymentsWithUrls = await Promise.all(payments.map(async (p) => {
+        let presignedInvoiceUrl = null;
+        if (p.invoiceUrl) {
+           const key = getS3KeyFromUrl(p.invoiceUrl);
+           if (key) {
+               presignedInvoiceUrl = await getPresignedUrl(key);
+           }
+        }
+        return {
+            ...p,
+            invoiceUrl: presignedInvoiceUrl // Override with presigned URL
+        };
+    }));
 
     return {
         summary,
         breakdown,
         ledger: ledgers,
-        payments
+        payments: paymentsWithUrls
     };
 };

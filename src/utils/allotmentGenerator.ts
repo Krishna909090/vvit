@@ -1,203 +1,244 @@
-import PDFDocument from 'pdfkit';
-import path from 'path';
-import axios from 'axios';
-import fs from 'fs';
-import { format } from 'date-fns';
+import PDFDocument from 'pdfkit'
+import path from 'path'
+import axios from 'axios'
+import fs from 'fs'
 
-export interface FeeComponent {
-    name: string;
-    amount: number;
-}
+/* ================= INTERFACES ================= */
 
 export interface AllotmentData {
-    applicationId: string;
-    studentName: string;
-    fatherName: string;
-    gender: string;
-    region: string;
-    allottedCollege: string;
-    allottedCourse: string;
-    allottedCategory: string;
-    reportingDate: string;
-    phase: string;
-    feeReimbursement: string;
-    profilePhotoUrl?: string; 
-    
-    // Fee Details
-    feeBreakdown: FeeComponent[];
-    totalFee: number;
-    totalPaid: number;
+  applicationId: string
+  studentName: string
+  fatherName: string
+  motherName: string
+  gender: string
+  state: string
+  allottedCollege: string
+  allottedCourse: string
+  profilePhotoUrl?: string
 }
+
+/* ================= HELPERS ================= */
 
 async function fetchImage(url: string): Promise<Buffer | null> {
+  try {
+    const res = await axios.get(url, { responseType: 'arraybuffer' })
+    return Buffer.from(res.data)
+  } catch {
+    return null
+  }
+}
+
+/* ================= MAIN ================= */
+
+/* ================= MAIN ================= */
+
+export const generateAllotmentOrderPDF = async (
+  data: AllotmentData
+): Promise<Buffer> => {
+  return new Promise((resolve, reject) => {
     try {
-        const response = await axios.get(url, { responseType: 'arraybuffer' });
-        return Buffer.from(response.data);
-    } catch (e) {
-        return null;
+      const doc = new PDFDocument({ size: 'A4', margin: 40 })
+      const buffers: Buffer[] = []
+
+      doc.on('data', buffers.push.bind(buffers))
+      doc.on('end', () => resolve(Buffer.concat(buffers)))
+      doc.on('error', reject)
+
+      drawHeader(doc)
+      drawTitle(doc)
+      drawMainTable(doc, data)
+      drawBigWatermark(doc)
+      drawUniversityInstructions(doc)
+
+      doc.end()
+    } catch (err) {
+      reject(err)
     }
+  })
 }
 
-export const generateAllotmentOrderPDF = async (data: AllotmentData): Promise<Buffer> => {
-    let photoBuffer: Buffer | null = null;
-    if (data.profilePhotoUrl) {
-        photoBuffer = await fetchImage(data.profilePhotoUrl);
-    }
+/* ================= HEADER ================= */
 
-    return new Promise((resolve, reject) => {
-        try {
-            const doc = new PDFDocument({ size: 'A4', margin: 40 });
-            const buffers: Buffer[] = [];
+/* ================= HEADER ================= */
 
-            doc.on('data', buffers.push.bind(buffers));
-            doc.on('end', () => resolve(Buffer.concat(buffers)));
-            doc.on('error', (err) => reject(err));
+function drawHeader(doc: PDFKit.PDFDocument) {
+  const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
 
-            drawHeader(doc, photoBuffer);
-            drawStudentTable(doc, data);
-            drawAllotmentBody(doc, data);
-            // drawFeeTable(doc, data); // Removed
-            drawInstructions(doc, data);
-            drawFooter(doc);
+  doc.rect(0, 0, doc.page.width, 95).fill('#F4F6F7')
 
-            doc.end();
-        } catch (error) {
-            reject(error);
-        }
-    });
-};
+  if (fs.existsSync(logoPath)) {
+    doc.image(logoPath, 30, 22, { width: 60 })
+  }
 
-function drawHeader(doc: PDFKit.PDFDocument, photoBuffer: Buffer | null) {
-    const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png');
-    const fallbackLogo = path.join(process.cwd(), 'src/assets/logo.png');
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(11)
+    .fillColor('#1B2631')
+    .text(
+      'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
+      100,
+      30,
+      { width: 480 }
+    )
 
-    // University Header - Centered at top
-    doc
-        .font('Helvetica-Bold')
-        .fontSize(11) // Smaller font for long name
-        .fillColor('#C0392B')
-        .text('VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY', 0, 20, { align: 'center', width: doc.page.width });
+  doc
+    .font('Helvetica')
+    .fontSize(10)
+    .fillColor('#34495E')
+    .text(
+      'Uppalapadu Road, Nambur, DT, Pedhakakani Mandal, Guntur, Andhra Pradesh 522508',
+      0,
+      55,
+      { width: doc.page.width, align: 'center' }
+    )
 
-    // Logo Left - Shifted down to Y=50
-    if (fs.existsSync(logoPath)) {
-        doc.image(logoPath, 40, 50, { width: 60 });
-    } else if (fs.existsSync(fallbackLogo)) {
-        doc.image(fallbackLogo, 40, 50, { width: 60 });
-    }
-
-    // Photo Right - Shifted down to Y=50
-    if (photoBuffer) {
-        doc.image(photoBuffer, 480, 50, { width: 70, height: 80 }); 
-        doc.rect(480, 50, 70, 80).stroke(); 
-    } else {
-        doc.rect(480, 50, 70, 80).stroke();
-        doc.fontSize(8).text('PHOTO', 480, 85, { width: 70, align: 'center' });
-    }
-
-    // Center Text (Address) - Shifted down
-    doc.font('Helvetica').fontSize(10).fillColor('#000');
-    doc.text('(Established under Andhra Pradesh Private Universities Act 2016)', 110, 65, { align: 'center', width: 360 });
-    doc.text('Nambur (V), Peda Kakani (Md), Guntur (Dt) - 522508', 110, 80, { align: 'center', width: 360 });
-    doc.text('Guntur District, Andhra Pradesh, India.', 110, 95, { align: 'center', width: 360 });
-
-    doc.moveTo(40, 140).lineTo(555, 140).stroke();
+  doc.y = 115
 }
 
-function drawStudentTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    const startY = 160; 
-    const col1X = 40;
-    const col2X = 140; 
-    const col3X = 300; 
-    const col4X = 400; 
-    const rowHeight = 35; 
-    
-    // Removed Row 1 (Hall Ticket / Rank)
-    // Removed Row 3 (Caste / Fee Reimb) -> Keeping Fee Reimb merged with Gender/Region?
-    // User said remove "caste". 
-    // I'll simplify to 2 Rows.
+/* ================= TITLE ================= */
 
-    doc.lineWidth(0.5).rect(40, startY, 515, rowHeight * 2).stroke();
-    
-    doc.moveTo(40, startY + rowHeight).lineTo(555, startY + rowHeight).stroke();
-    
-    doc.moveTo(140, startY).lineTo(140, startY + rowHeight * 2).stroke(); 
-    doc.moveTo(300, startY).lineTo(300, startY + rowHeight * 2).stroke(); 
-    doc.moveTo(400, startY).lineTo(400, startY + rowHeight * 2).stroke(); 
+function drawTitle(doc: PDFKit.PDFDocument) {
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(16)
+    .fillColor('#2E4053')
+    .text('PROVISIONAL ALLOTMENT ORDER', { align: 'center', underline: true })
 
-    doc.font('Helvetica-Bold').fontSize(9).fillColor('#000');
-    
-    // Row 1: Candidate Name & Father Name
-    drawCell(doc, "Candidate's Name", col1X + 5, startY + 12);
-    doc.font('Helvetica').text(data.studentName.toUpperCase(), col2X + 5, startY + 12, { width: 150 });
-    
-    doc.font('Helvetica-Bold').text("Father's Name", col3X + 5, startY + 12);
-    doc.font('Helvetica').text(data.fatherName.toUpperCase(), col4X + 5, startY + 12, { width: 150 });
-
-    // Row 2: Gender/Region & Allotted Category 
-    // (Replacing Caste/Fee Reimb with simpler fields)
-    const r2Y = startY + rowHeight;
-    doc.font('Helvetica-Bold').text('Gender / Region', col1X + 5, r2Y + 12);
-    doc.font('Helvetica').text(`${data.gender} / ${data.region}`, col2X + 5, r2Y + 12);
-    
-    doc.font('Helvetica-Bold').text('Category', col3X + 5, r2Y + 12);
-    doc.font('Helvetica').text(data.allottedCategory, col4X + 5, r2Y + 12);
+  doc.moveDown(1.0)
 }
 
-function drawCell(doc: PDFKit.PDFDocument, text: string, x: number, y: number) {
-    doc.text(text, x, y);
+/* ================= MAIN TABLE ================= */
+
+function drawMainTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
+  // Title removed as requested
+
+  const startY = doc.y;
+  const col1X = 40;
+  const col2X = 140; // Value 1 start
+  const col3X = 310; // Label 2 start
+  const col4X = 400; // Value 2 start
+  const width = 515;
+  const rowHeight = 35; 
+  const rowCount = 5;
+
+  // Draw Table Border
+  doc.rect(40, startY, width, rowHeight * rowCount).stroke();
+
+  // Horizontal Lines
+  for (let i = 1; i < rowCount; i++) {
+    doc.moveTo(40, startY + rowHeight * i).lineTo(555, startY + rowHeight * i).stroke();
+  }
+
+  // Vertical Dividers
+  
+  // 1. First vertical divider (Separates Label1 from Value1) - Runs through ALL rows
+  doc.moveTo(col2X, startY).lineTo(col2X, startY + rowHeight * rowCount).stroke();
+
+  // 2. Second & Third vertical dividers (For 4-column structure) - Runs only for first 3 rows
+  doc.moveTo(col3X, startY).lineTo(col3X, startY + rowHeight * 3).stroke();
+  doc.moveTo(col4X, startY).lineTo(col4X, startY + rowHeight * 3).stroke();
+
+
+  // Data Contena
+  doc.fillColor('#000000');
+  const fontSizeLabel = 10;
+  const fontSizeValue = 10;
+  const paddingY = 12;
+
+  // Row 1
+  drawCell(doc, 'Candidate Name', col1X, startY, paddingY, true);
+  drawCell(doc, data.studentName, col2X, startY, paddingY, false);
+  drawCell(doc, 'Application ID', col3X, startY, paddingY, true);
+  drawCell(doc, data.applicationId, col4X, startY, paddingY, false);
+
+  // Row 2
+  drawCell(doc, 'Father Name', col1X, startY + rowHeight, paddingY, true);
+  drawCell(doc, data.fatherName, col2X, startY + rowHeight, paddingY, false);
+  drawCell(doc, 'Gender', col3X, startY + rowHeight, paddingY, true);
+  drawCell(doc, data.gender, col4X, startY + rowHeight, paddingY, false);
+
+  // Row 3 (Mother Name | Empty)
+  drawCell(doc, 'Mother Name', col1X, startY + rowHeight * 2, paddingY, true);
+  drawCell(doc, data.motherName, col2X, startY + rowHeight * 2, paddingY, false);
+  drawCell(doc, 'State', col3X, startY + rowHeight * 2, paddingY, true);
+  drawCell(doc, data.state, col4X, startY + rowHeight * 2, paddingY, false);
+
+  // Row 4 (Allotted College - Full Span)
+  drawCell(doc, 'Allotted College', col1X, startY + rowHeight * 3, paddingY, true);
+  doc.font('Helvetica').fontSize(fontSizeValue).text(data.allottedCollege, col2X + 5, startY + rowHeight * 3 + paddingY, { width: 380 });
+
+  // Row 5 (Allotted Course - Full Span)
+  drawCell(doc, 'Allotted Course', col1X, startY + rowHeight * 4, paddingY, true);
+  doc.font('Helvetica').fontSize(fontSizeValue).text(data.allottedCourse, col2X + 5, startY + rowHeight * 4 + paddingY, { width: 380 });
+
+  doc.y = startY + rowHeight * rowCount + 30;
 }
 
-function drawAllotmentBody(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    let y = 250;
-    
-    doc.font('Helvetica-Bold').fontSize(11).fillColor('#000080'); 
-    doc.text(`PROVISIONAL ALLOTMENT ORDER`, 40, y, { align: 'center', width: 515 });
-    
-    y += 25;
-    
-    doc.font('Helvetica').fontSize(9).fillColor('#000000');
-    const text = `This is to inform that the options exercised by the candidate have been processed for allotment of seat in Colleges/Institutions based on rank, local area, gender, category, EWS, Special Reservation Category (CAP/PWD/SCOUTS) etc. The Convenor, APEAPCET-2025 admissions is pleased to allot a seat to the above candidate in`;
-    doc.text(text, 40, y, { align: 'justify', width: 515 }); 
-    
-    y += 45; // specific spacing for long text
-    
-    // Allotted Details Box
-    doc.rect(40, y, 515, 60).stroke();
-    
-    doc.font('Helvetica-Bold').fontSize(10);
-    doc.text(`College: ${data.allottedCollege}`, 50, y + 10);
-    doc.text(`Course: ${data.allottedCourse}`, 50, y + 35);
+function drawCell(doc: PDFKit.PDFDocument, text: string, x: number, y: number, paddingY: number, isBold: boolean) {
+  doc.font(isBold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10).text(text, x + 5, y + paddingY);
 }
 
-// function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
-//     // REMOVED as per request
-// }
+/* ================= TABLE HELPERS ================= */
 
-function drawInstructions(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    let y = 600; // Push down
-    // Ensure we don't overlap if table is long (unlikely)
-    if (doc.y > 580) y = doc.y + 20;
-
-    doc.font('Helvetica-Bold').fontSize(10).fillColor('#000000');
-    doc.text('Instructions to Candidates', 40, y);
-    y += 15;
-    
-    doc.font('Helvetica').fontSize(9);
-    
-    const instructions = [
-        `1. Report to the college with this allotment order.`,
-        `2. Pay the balance fee before the due date.`
-    ];
-
-    instructions.forEach(inst => {
-        doc.text(inst, 40, y, { align: 'justify', width: 515 });
-        y += doc.heightOfString(inst, { width: 515 }) + 8;
-    });
+function drawTableHeader(doc: PDFKit.PDFDocument, title: string) {
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(12)
+    .fillColor('#1F618D')
+    .text(title)
+  
+  doc.moveDown(0.8);
 }
 
-function drawFooter(doc: PDFKit.PDFDocument) {
-    const bottomY = 750;
-    doc.fontSize(8).fillColor('#444');
-    doc.text('Computer Generated Report.', 40, bottomY);
-    doc.text('1/1', 540, bottomY);
+function drawRow(doc: PDFKit.PDFDocument, label: string, value: string) {
+  // Deprecated
+}
+
+/* ================= BIG WATERMARK ================= */
+
+function drawBigWatermark(doc: PDFKit.PDFDocument) {
+  const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
+  if (!fs.existsSync(logoPath)) return
+
+  doc.save()
+  doc.opacity(0.04)
+
+  const size = 350
+  const x = doc.page.width / 2 - size / 2
+  const y = doc.page.height / 2 - size / 2
+
+  doc.image(logoPath, x, y, { width: size })
+  doc.restore()
+}
+
+/* ================= UNIVERSITY INSTRUCTIONS ================= */
+
+function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(12)
+    .fillColor('#2E4053')
+    .text('Instructions', 40, doc.y)
+
+  doc.moveDown(0.8)
+
+  doc.font('Helvetica').fontSize(10).fillColor('#000') // Increased Font Size
+
+  const instructions = [
+    '1. The candidate is required to download this Provisional Allotment Order and report to the allotted college physically for verification.',
+    '2. The candidate must produce all original certificates (SSC, Intermediate/Diploma, Study Certificates, Caste Certificate, etc.) along with two sets of xerox copies at the time of reporting.',
+    '3. Students are required to pay the tuition fee and other applicable college fees within the stipulated deadline mentioned in the academic calendar.',
+    '4. Candidates seeking fee reimbursement (Jagananna Vidya Deevena) must submit the necessary income and caste certificates as per government norms.',
+    '5. Failure to report to the college and complete the admission formalities within the specified dates will lead to the automatic cancellation of the allotted seat.',
+    '6. The admission is provisional and subject to the approval of the University and the State Council of Higher Education (APSCHE).',
+    '7. Any discrepancy found in the documents during verification or at a later stage will result in the cancellation of admission and appropriate legal action.',
+    '8. Students must adhere to the college Code of Conduct and Anti-Ragging regulations. Ragging is a criminal offence and strict disciplinary action will be taken against offenders.',
+    '9. For hostel accommodation and transport facilities, students should contact the administrative office at the time of reporting.',
+    '10. Classes will commence as per the schedule notified on the college website. Regular attendance is mandatory.'
+  ]
+
+  instructions.forEach(text => {
+    doc.text(text, 40, doc.y, { width: 515, align: 'left', lineGap: 4 })
+    doc.moveDown(0.5)
+  })
 }

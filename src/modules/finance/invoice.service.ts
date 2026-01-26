@@ -88,10 +88,10 @@ export const InvoiceService = {
             paymentMethod: payment.method || 'ONLINE',
             transactionId: realTransactionId,
             amount: payment.amount,
-            description: payment.component === PaymentComponent.APPLICATION_FEE ? 'Application Fee' : 'Tution Fee',
+            description: payment.component === PaymentComponent.APPLICATION_FEE ? 'Application Fee' : 'Tuition Fee',
             items: [
                 {
-                    description: payment.component === PaymentComponent.APPLICATION_FEE ? 'Application Fee' : 'Tution Fee',
+                    description: payment.component === PaymentComponent.APPLICATION_FEE ? 'Application Fee' : 'Tuition Fee',
                     amount: payment.amount
                 }
             ],

@@ -553,6 +553,12 @@ export const updateStudentExamScore = async (studentId: string, score: number, c
             }
         });
 
+        // Fetch user application Id to use as hall ticket number
+        const student = await tx.student.findUnique({
+             where: { id: studentId },
+             select: { applicationId: true }
+        });
+
         // Store in AcademicQualification as requested
         // Required fields: level, board, yearOfPassing
         await tx.academicQualification.create({
@@ -562,6 +568,7 @@ export const updateStudentExamScore = async (studentId: string, score: number, c
                 gpaOrMarks: score.toString(),
                 board: 'VVIT', // Defaulting as it's required
                 yearOfPassing: new Date().getFullYear().toString(), // Defaulting as it's required
+                hallTicketNumber: student?.applicationId || 'UNKNOWN', // Using Application ID as Hall Ticket Number
                 percentage: Number(score), // Also storing as float for potential querying
                 createdBy: adminId,
                 updatedBy: adminId

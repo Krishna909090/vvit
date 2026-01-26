@@ -116,9 +116,9 @@ export const sendPaymentReceipt = async (
                     amount: data.amount
                 }
             ],
-            signerName: 'Registrar',
-            signerTitle: 'Registrar, VVIT University',
-            signedDate: new Date(),
+            // signerName: 'Registrar',
+            // signerTitle: 'Registrar, VVIT University',
+            // signedDate: new Date(),
             address: data.address || {
                 line1: 'Nambur',
                 city: 'Guntur',
@@ -170,7 +170,7 @@ export const sendPaymentReceipt = async (
         } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
 
         const attachments = [{ 
-            name: `Invoice_${data.applicationId}.pdf`, 
+            name: `Invoice.pdf`, 
             mime_type: 'application/pdf', 
             content: base64Pdf 
         }];
