@@ -22,9 +22,7 @@ export const InvoiceService = {
             throw new Error(`Payment not found: ${paymentId}`);
         }
 
-        if (payment.status !== PaymentStatus.SUCCESS && process.env.BYPASS_PAYMENT !== 'true') {
-             // In bypass, we might generate invoice even if mock success hasn't persisted yet? 
-             // unique case. But generally invoice is for success.
+        if (payment.status !== PaymentStatus.SUCCESS) {
              logger.warn(`[InvoiceService] Payment ${paymentId} is not SUCCESS (Status: ${payment.status}). Proceeding with caution.`);
         }
 

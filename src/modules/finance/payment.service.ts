@@ -168,13 +168,33 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
 
 // ...
     // Extract Real Transaction ID from PhonePe Metadata if available
+    // Extract Real Transaction ID from PhonePe Metadata if available
     let realTransactionId = payment.providerTxId;
-    if (metadata?.paymentDetails?.[0]?.transactionId) {
-        realTransactionId = metadata.paymentDetails[0].transactionId;
-    } else if (metadata?.data?.paymentDetails?.[0]?.transactionId) { 
-        realTransactionId = metadata.data.paymentDetails[0].transactionId;
+    
+    // Robust check for PhonePe metadata structure
+    if (metadata) {
+        // User requested format like OM... which is usually providerReferenceId
+        if (metadata.providerReferenceId) {
+            realTransactionId = metadata.providerReferenceId;
+        } else if (metadata.data?.providerReferenceId) {
+             realTransactionId = metadata.data.providerReferenceId;
+        } 
+        // Fallback to standard PhonePe transaction Ids
+        else if (metadata.paymentDetails?.[0]?.transactionId) {
+            realTransactionId = metadata.paymentDetails[0].transactionId;
+        } else if (metadata.data?.paymentDetails?.[0]?.transactionId) { 
+            realTransactionId = metadata.data.paymentDetails[0].transactionId;
+        } else if (metadata.transactionId) {
+            realTransactionId = metadata.transactionId;
+        }
     }
     logger.debug(`[processPaymentSuccess] Real Transaction ID: ${realTransactionId}`);
+
+    // Fetch FeeHead for accurate description if available
+    let feeHeadDetails = null;
+    if (payment.feeHeadId) {
+        feeHeadDetails = await prisma.feeHead.findUnique({ where: { id: payment.feeHeadId } });
+    }
 
     // Determine Payment Type & Description
     let paymentDescription = 'Payment';
@@ -186,20 +206,28 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             emailPaymentType = 'APPLICATION_FEE';
             break;
         case PaymentComponent.TUITION:
-            paymentDescription = 'Tuition Fee'; // Or College Fee
+            paymentDescription = 'Tuition Fee'; 
             emailPaymentType = 'TUITION_FEE'; 
-            // Note: If TUITION represents Admission Fee technically in early stage, logic upstream decides
-            // But based on user request "TUITION FEE" is a specific type now
             break;
         case PaymentComponent.SCHOLARSHIP_TOKEN:
-             // Admission Fee is usually the token
             paymentDescription = 'Admission Fee';
             emailPaymentType = 'ADMISSION_FEE';
             break;
-        // Add cases if other components exist in Enum, otherwise map broadly
+        case PaymentComponent.HOSTEL:
+            paymentDescription = 'Hostel Fee';
+            emailPaymentType = 'DEFAULT';
+            break;
+        case PaymentComponent.TRANSPORT:
+            paymentDescription = 'Transport Fee';
+            emailPaymentType = 'DEFAULT';
+            break;
         default:
-            // Attempt to derive from metadata if strictly needed, or fallback
-            paymentDescription = payment.component ? payment.component.replace(/_/g, ' ') : 'Fee Payment';
+            // Use Fee Head Name if available, else formatted component
+            if (feeHeadDetails) {
+                paymentDescription = feeHeadDetails.name + (feeHeadDetails.description ? ` - ${feeHeadDetails.description}` : '');
+            } else {
+                paymentDescription = payment.component ? payment.component.replace(/_/g, ' ') : 'Fee Payment';
+            }
             emailPaymentType = 'DEFAULT';
     }
     logger.debug(`[processPaymentSuccess] Fee Type Determined: ${emailPaymentType} (${paymentDescription})`);
@@ -286,6 +314,7 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
                 feeStatus: FeeStatus.PARTIAL
             }
         });
+        // Duplicate removed
         logger.info(`Student ${payment.studentId} admission status updated to ENTRANCE_FEE_PAID`);
     } else if (payment.component === PaymentComponent.TUITION) {
         // ... (rest of logic continued below) -> this ensures we don't break the rest of the file which was cut off in view
@@ -295,13 +324,9 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
             data: {
                 status: AdmissionStatus.ADMISSION_CONFIRMED,
                 feeStatus: FeeStatus.PARTIAL
-                // paidFee increment removed here to be central handled
             }
         });
-
-
         logger.info(`Student ${payment.studentId} admission status updated to ADMISSION_CONFIRMED`);
-
     } else if (payment.component === PaymentComponent.SCHOLARSHIP_TOKEN) {
         await ScholarshipService.lockAllocation(payment.studentId);
         await prisma.studentAdmission.update({
@@ -477,6 +502,8 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
     } catch (err) {
         logger.error(`Failed to create ledger entry for ${payment.providerTxId}: ${err}`);
     }
+
+    return { invoiceUrl };
 };
 
 export const recordOfflineApplicationFeePayment = async (studentId: string, paymentMethod: PaymentMethod, transactionId?: string, remarks?: string, adminId?: string) => {
@@ -704,15 +731,7 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
     });
 
     // PhonePe Integration for College Fee
-    // BYPASS FOR DEV/TESTING
-    if (process.env.BYPASS_PAYMENT === 'true') {
-         await prisma.payment.update({
-             where: { id: payment.id }, 
-             data: { status: PaymentStatus.SUCCESS }
-        });
-        await processPaymentSuccess({ ...payment, student }, {});
-        return { redirectUrl: `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}&amount=${totalAmount}`, totalAmount, paymentId: payment.id };
-    }
+
 
     try {
         const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
@@ -755,15 +774,7 @@ export const initiateAdminOnlinePayment = async (studentId: string, amount: numb
         }
     });
 
-    // 4. Bypass Logic for Dev
-    if (process.env.BYPASS_PAYMENT === 'true') {
-         await prisma.payment.update({
-             where: { id: payment.id }, 
-             data: { status: PaymentStatus.SUCCESS }
-        });
-        await processPaymentSuccess({ ...payment, student }, {});
-        return { redirectUrl: `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}&amount=${amount}`, paymentId: payment.id };
-    }
+
 
     // 5. Initiate PhonePe Payment
     try {
@@ -969,19 +980,7 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
         }
     });
 
-    // BYPASS
-    if (process.env.NODE_ENV !== 'production' || process.env.BYPASS_PAYMENT === 'true') {
-        logger.info(`[MOCK TOKEN PAY] Bypassing Payment Gateway for transaction ${transactionId}`);
-        await prisma.payment.update({
-             where: { id: createdPayment.id }, 
-             data: { status: PaymentStatus.SUCCESS }
-        });
 
-        // Trigger centralized success logic (updates Admission, Ledger, Allocations, and Waterfall settlement)
-        await processPaymentSuccess({ ...createdPayment, student }, {});
-
-        return `${process.env.FRONTEND_URL}/payment/success?txnId=${transactionId}`;
-    }
 
     try {
         const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
@@ -1284,9 +1283,16 @@ export const processUnifiedPayment = async (data: any) => {
     });
     if (!student) throw new AppError('Student not found', 404);
 
-    // 2. Validate Fee Head for 'OTHER'
+    // 2. Validate Fee Head
     if (component === PaymentComponent.OTHER && !feeHeadId) {
         throw new AppError('Fee Head ID required for Other payments', 400);
+    }
+
+    if (feeHeadId) {
+        const feeHead = await prisma.feeHead.findUnique({ where: { id: feeHeadId } });
+        if (!feeHead) {
+            throw new AppError(`Invalid Fee Head ID: ${feeHeadId}`, 400);
+        }
     }
     
     // 3. Generate Transaction ID
@@ -1313,34 +1319,34 @@ export const processUnifiedPayment = async (data: any) => {
     // 5. Handle Offline Success Immediate Processing
     if (mode === PaymentMode.OFFLINE) {
         // Reuse Success Logic (Ledger, Invoice, Email)
-        await processPaymentSuccess({ ...payment, student }, { remarks, adminId: initiatedBy });
+        const successResult = await processPaymentSuccess({ ...payment, student }, { remarks, adminId: initiatedBy });
         
+        let presignedInvoiceUrl = null;
+        if (successResult?.invoiceUrl) {
+            // Generate presigned URL for the uploaded invoice
+            // The processPaymentSuccess returns the raw S3 URL, we need to extract key and presign
+            const key = getS3KeyFromUrl(successResult.invoiceUrl);
+            if (key) {
+                 presignedInvoiceUrl = await getPresignedUrl(key);
+            }
+        }
+
         // Return Success Response
         return { 
             message: "Payment recorded successfully", 
             data: { 
                 paymentId: payment.id, 
                 status: 'SUCCESS',
-                transactionId: providerTxId 
+                transactionId: providerTxId,
+                invoiceUrl: presignedInvoiceUrl
             } 
         };
     } else {
         // 6. Handle Online Initiation
         try {
-             // Bypass for Dev
-            if (process.env.BYPASS_PAYMENT === 'true') {
-                await prisma.payment.update({
-                    where: { id: payment.id }, 
-                    data: { status: PaymentStatus.SUCCESS }
-                });
-                await processPaymentSuccess({ ...payment, student }, {});
-                return { 
-                    message: "Payment Successful (Bypass)", 
-                    data: { paymentId: payment.id, status: 'SUCCESS' } 
-                };
-            }
+            // Bypass removed: Always initiate real payment
 
-            const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${providerTxId}`;
+            const redirectUrl = `${process.env.FRONTEND_URL}/seatallotment/paymentstatus/?paymentId=${payment.id}`;
             const request = StandardCheckoutPayRequest.builder()
                 .merchantOrderId(providerTxId)
                 .amount(Math.round(amount * 100))
@@ -1365,15 +1371,51 @@ export const processUnifiedPayment = async (data: any) => {
 
 // Enhanced History
 export const getStudentFinancialHistory = async (studentId: string) => {
-    // 1. Fetch Demands (Debits)
+    // 1. Fetch Demands (Debits from Ledger)
     const ledgers = await prisma.studentLedger.findMany({
         where: { studentId },
         orderBy: { date: 'desc' }
     });
     
-    // 2. Fetch Payments (Credits) via Payments Table for detail, but Ledger has Credit entries too.
-    // Let's use Ledger for calculation consistency.
-    
+    // 2. Fetch Payments (Credits) via Payments Table
+    const payments = await prisma.payment.findMany({
+        where: { studentId, status: PaymentStatus.SUCCESS },
+        include: {
+            feeDemand: {
+                include: { feeStructure: { include: { feeHead: true } } }
+            }
+        }
+    });
+
+    // 3. Fetch Student Admission Details for Accurate Demand Calculation
+    const student = await prisma.student.findUnique({
+        where: { id: studentId },
+        include: {
+            admissionDetails: {
+                include: {
+                    hostel: { include: { blocks: { include: { rooms: true } } } },
+                    transportRoute: true
+                }
+            }
+        }
+    });
+
+    // 4. Fetch Student Fee Demands (For Book Bank, Skill, etc.)
+    const feeDemands = await prisma.studentFeeDemand.findMany({
+        where: { studentId },
+        include: { 
+            feeStructure: {
+                include: { feeHead: true }
+            }
+        }
+    });
+
+    // 5. Fetch ALL Fee Heads (Restored)
+    const allFeeHeads = await prisma.feeHead.findMany();
+
+    // 6. Fetch Hostel Price Categories for Fallback Calculation
+    const hostelPrices = await prisma.hostelPriceCategory.findMany();
+
     let totalDemanded = 0;
     let totalPaid = 0;
     
@@ -1387,36 +1429,108 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         OTHER: { demanded: 0, paid: 0 }
     };
     
-    ledgers.forEach(l => {
-        if (l.type === 'DEBIT') {
-            totalDemanded += l.amount;
-            // Categorize by Description
-            const desc = (l.description || '').toLowerCase();
-            if (desc.includes('hostel')) breakdown.HOSTEL.demanded += l.amount;
-            else if (desc.includes('transport')) breakdown.TRANSPORT.demanded += l.amount;
-            else if (desc.includes('tuition')) breakdown.TUITION.demanded += l.amount;
-            else if (desc.includes('book bank')) breakdown.BOOK_BANK.demanded += l.amount;
-            else if (desc.includes('admission')) breakdown.ADMISSION.demanded += l.amount;
-            else if (desc.includes('skill')) breakdown.SKILL_DEVELOPMENT.demanded += l.amount;
-            else breakdown.OTHER.demanded += l.amount;
-        } else if (l.type === 'CREDIT') {
-            totalPaid += l.amount;
+    // Helper to map Fee Head Name to Category
+    const getCategoryFromHeadName = (name: string): string => {
+        const headName = (name || '').toUpperCase();
+        if (headName.includes('HOSTEL')) return 'HOSTEL';
+        if (headName.includes('TRANSPORT') || headName.includes('BUS')) return 'TRANSPORT';
+        if (headName.includes('TUITION') || headName.includes('SEMESTER') || headName.includes('COLLEGE')) return 'TUITION';
+        if (headName.includes('BOOK') || headName.includes('LIBRARY')) return 'BOOK_BANK';
+        if (headName.includes('SKILL') || headName.includes('TRAINING')) return 'SKILL_DEVELOPMENT';
+        if (headName.includes('ADMISSION') || headName.includes('ENTRANCE')) return 'ADMISSION';
+        return 'OTHER';
+    };
+
+    // Fee Head ID -> Category Map (Centralized Source of Truth)
+    const feeHeadCategoryMap = new Map<string, string>();
+    allFeeHeads.forEach(h => {
+        feeHeadCategoryMap.set(h.id, getCategoryFromHeadName(h.name));
+    });
+
+    // --- DEMAND CALCULATION (From Admission & Fee Tables) ---
+    
+    // 4a. Process Fee Demands First (Base Layer)
+    feeDemands.forEach(demand => {
+        const headId = demand.feeStructure.feeHeadId;
+        // Lookup category from valid map, fallback to calculating if missing (edge case)
+        let category = feeHeadCategoryMap.get(headId);
+        
+        if (!category) {
+             category = getCategoryFromHeadName(demand.feeStructure.feeHead.name);
+             feeHeadCategoryMap.set(headId, category); // Cache it
+        }
+
+        if (category in breakdown) {
+            breakdown[category].demanded += demand.amount;
+        } else {
+             breakdown.OTHER.demanded += demand.amount;
         }
     });
 
-    // Fetch Payments to categorize "Paid"
-    const payments = await prisma.payment.findMany({
-        where: { studentId, status: PaymentStatus.SUCCESS }
-    });
-    
+    // 4b. Override/Refine with Admission Details (The "Truth" for Allocations)
+    if (student && student.admissionDetails) {
+        const admission = student.admissionDetails;
+
+        // 1. Tuition Demand Override (Admission Total Fee is usually the contracted amount)
+        if ((admission.totalFee ?? 0) > 0) {
+            breakdown.TUITION.demanded = admission.totalFee ?? 0;
+        }
+
+        // 2. Hostel Demand Override
+        if (admission.hostelId || admission.hostelType) {
+             let hostelCost = 0;
+             
+             // Priority 1: Specific Room Cost
+             if (admission.roomNumber && admission.hostel) {
+                 const room = admission.hostel.blocks.flatMap(b => b.rooms).find(r => r.number === admission.roomNumber);
+                 if (room) hostelCost = room.cost ?? 0;
+             } 
+             
+             // Priority 2: Hostel Type (Fallback if no room assigned or room cost 0)
+             if (hostelCost === 0 && admission.hostelType) {
+                 // Parse "SHARING_4" -> 4
+                 const sharingMatch = admission.hostelType.match(/SHARING_(\d+)/);
+                 if (sharingMatch) {
+                     const sharingCount = parseInt(sharingMatch[1]);
+                     const priceCategory = hostelPrices.find(p => p.sharing === sharingCount);
+                     if (priceCategory) {
+                         hostelCost = priceCategory.price;
+                     }
+                 }
+             }
+
+             if (admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
+                 hostelCost += 6000;
+             }
+             
+             breakdown.HOSTEL.demanded = hostelCost;
+        }
+
+        // 3. Transport Demand Override
+        if (admission.transportRouteId && admission.transportRoute) {
+            breakdown.TRANSPORT.demanded = admission.transportRoute.cost;
+        }
+    }
+
+    // --- PAID CALCULATION (From Payments) ---
     payments.forEach(p => {
-         const comp = p.component || 'OTHER';
-         // Map SCHOLARSHIP_TOKEN to ADMISSION (or TUITION, depending on business rule)
-         // User requested "Admission" as a category. Usually Token = Admission Fee.
-         let key: string = comp;
-         
-         if (comp === PaymentComponent.SCHOLARSHIP_TOKEN) {
-             key = 'ADMISSION'; 
+         let key = 'OTHER';
+
+         // Strategy 1: Link via Fee Demand
+         if (p.feeDemand && p.feeDemand.feeStructure && p.feeDemand.feeStructure.feeHead) {
+             key = getCategoryFromHeadName(p.feeDemand.feeStructure.feeHead.name);
+         }
+         // Strategy 2: Link via Fee Head ID (Direct)
+         else if (p.feeHeadId && feeHeadCategoryMap.has(p.feeHeadId)) {
+             key = feeHeadCategoryMap.get(p.feeHeadId) || 'OTHER';
+         }
+         // Strategy 3: Direct Component Fallback
+         else {
+             const comp = p.component || 'OTHER';
+             key = comp;
+             if (comp === PaymentComponent.SCHOLARSHIP_TOKEN) {
+                 key = 'ADMISSION'; 
+             }
          }
          
          // Ensure key exists, else OTHER
@@ -1427,6 +1541,21 @@ export const getStudentFinancialHistory = async (studentId: string) => {
          breakdown[key].paid += p.amount;
     });
 
+    // --- LEDGER OVERRIDES / SUPPLEMENTS ---
+    // We rely on FeeDemands + Admission Details now. 
+    
+    // Calculate Totals based on the new Breakdown
+    totalDemanded = 
+        breakdown.HOSTEL.demanded + 
+        breakdown.TRANSPORT.demanded + 
+        breakdown.TUITION.demanded + 
+        breakdown.BOOK_BANK.demanded + 
+        breakdown.ADMISSION.demanded +
+        breakdown.SKILL_DEVELOPMENT.demanded + 
+        breakdown.OTHER.demanded;
+
+    totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+
     // Summary
     const summary = {
         totalDemanded,
@@ -1434,6 +1563,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         totalPending: Math.max(0, totalDemanded - totalPaid)
     };
     
+
     return {
         summary,
         breakdown,

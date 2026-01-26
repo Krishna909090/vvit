@@ -62,7 +62,7 @@ const sendZeptoEmail = async (toEmail: string, subject: string, htmlContent: str
                 'Content-Type': 'application/json',
                 'Authorization': ZEPTO_API_KEY
             },
-            timeout: 10000 
+            timeout: 30000 
         });
 
         const messageId = response.data?.data?.[0]?.messageId;
@@ -96,8 +96,11 @@ export const sendPaymentReceipt = async (
         let subject = `Payment Receipt - ${data.applicationId}`;
         if (data.paymentType === 'APPLICATION_FEE') subject = `Application Confirmed - ${data.applicationId}`;
         else if (data.paymentType === 'ADMISSION_FEE') subject = `Admission Fee Receipt - ${data.applicationId}`;
+        else if (data.customFeeType) subject = `${data.customFeeType} Receipt - ${data.applicationId}`;
         
         // 2. Prepare Invoice Data
+        const feeDescription = data.customFeeType || (data.paymentType === 'APPLICATION_FEE' ? 'Application Fee' : 'Payment');
+        
         const invoiceData: InvoiceData = {
             invoiceNumber: data.invoiceNumber,
             date: data.date,
@@ -106,10 +109,10 @@ export const sendPaymentReceipt = async (
             paymentMethod: 'Online',
             transactionId: data.transactionId,
             amount: data.amount,
-            description: data.paymentType === 'APPLICATION_FEE' ? 'Application Fee' : 'Payment',
+            description: feeDescription,
             items: data.items || [
                 {
-                    description: data.paymentType === 'APPLICATION_FEE' ? 'Application Fee' : 'Payment',
+                    description: feeDescription,
                     amount: data.amount
                 }
             ],
