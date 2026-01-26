@@ -15,8 +15,8 @@ export const InvoiceService = {
         
         const payment = await prisma.payment.findUnique({
             where: { id: paymentId },
-            include: { student: true }
-        });
+            include: { student: true, feeHead: true }
+        }) as any;
 
         if (!payment) {
             throw new Error(`Payment not found: ${paymentId}`);
@@ -43,13 +43,6 @@ export const InvoiceService = {
                 // For now, simpler count is fine as requested.
             }
         });
-        
-        // If this is the Nth payment, use N. If it's included in count, maybe just count.
-        // If we just became Success, count includes us.
-        // Let's assume count is inclusive.
-        // Check if invoiceNumber already exists on payment?
-        // If we want stable numbers, we should store invoiceNumber in DB. 
-        // For now, generating on fly.
         
         let receiptNo = 1;
         // Optimization: Checking how many payments exist BEFORE this one to get stable number
@@ -78,6 +71,36 @@ export const InvoiceService = {
                 realTransactionId = metadata.data.paymentDetails[0].transactionId;
             }
         }
+        // Determine Description
+        let description = 'Fee Payment';
+        const component = payment.component || '';
+        
+        // Detailed check based on component and fee head
+        if (component === PaymentComponent.APPLICATION_FEE) {
+            description = 'Application Fee';
+        } else if (component === PaymentComponent.SCHOLARSHIP_TOKEN) {
+            description = 'Admission Fee';
+        } else if (component === PaymentComponent.TUITION) {
+            description = 'Tuition Fee';
+        } else if (component === PaymentComponent.HOSTEL) {
+            description = 'Hostel Fee';
+        } else if (component === PaymentComponent.TRANSPORT) {
+            description = 'Transport Fee';
+        } else {
+            // Component is OTHER or unmapped
+            if (payment.feeHead) {
+                description = payment.feeHead.name;
+            } else {
+                // Fallback checks on component name if it somehow contains keywords
+                if (component.includes('HOSTEL')) {
+                    description = 'Hostel Fee';
+                } else if (component.includes('TRANSPORT')) {
+                    description = 'Transport Fee';
+                } else {
+                    description = 'Other Fee';
+                }
+            }
+        }
 
         // Prepare Data
         const invoiceData: any = {
@@ -88,10 +111,10 @@ export const InvoiceService = {
             paymentMethod: payment.method || 'ONLINE',
             transactionId: realTransactionId,
             amount: payment.amount,
-            description: payment.component === PaymentComponent.APPLICATION_FEE ? 'Application Fee' : 'Tuition Fee',
+            description: description,
             items: [
                 {
-                    description: payment.component === PaymentComponent.APPLICATION_FEE ? 'Application Fee' : 'Tuition Fee',
+                    description: description,
                     amount: payment.amount
                 }
             ],

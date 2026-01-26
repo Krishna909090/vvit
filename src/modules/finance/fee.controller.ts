@@ -286,8 +286,12 @@ export const getStudentLedger = catchAsync(async (req: Request, res: Response, n
 
 export const downloadAllotmentOrder = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
+    const { courseChange } = req.query;
     
-    const url = await getAllotmentOrderUrl(studentId);
+    // Regenerate if courseChange is explicitly 'true'
+    const regenerate = courseChange === 'true';
+
+    const url = await getAllotmentOrderUrl(studentId, regenerate);
 
     sendResponse({
         res,

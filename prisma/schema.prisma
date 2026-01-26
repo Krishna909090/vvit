@@ -500,6 +500,7 @@ model FeeHead {
   updatedBy   String?
   structures  FeeStructure[]
   ledgers     StudentLedger[]
+  payments    Payment[]
 }
 
 model FeeStructure {
@@ -568,6 +569,7 @@ model Payment {
   updatedBy       String?
   method          PaymentMethod?
   feeDemand       StudentFeeDemand? @relation(fields: [feeDemandId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeHead         FeeHead?          @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student         Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 

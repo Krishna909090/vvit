@@ -909,11 +909,10 @@ const getS3KeyFromUrl = (url: string): string | null => {
     return null;
 };
 
-export const getAllotmentOrderUrl = async (studentId: string) => {
-    // Dynamically generate (or update) the allotment order on demand
-    await generateAndSaveAllotmentOrder(studentId);
-
-    const doc = await prisma.studentDocument.findUnique({
+export const getAllotmentOrderUrl = async (studentId: string, regenerate: boolean = false) => {
+    
+    // Check if document exists first
+    let doc = await prisma.studentDocument.findUnique({
         where: {
             studentId_documentKey: {
                 studentId,
@@ -921,6 +920,21 @@ export const getAllotmentOrderUrl = async (studentId: string) => {
             }
         }
     });
+
+    // Generate if missing or requested to regenerate
+    if (!doc || regenerate) {
+        await generateAndSaveAllotmentOrder(studentId);
+        
+        // Fetch fresh copy
+        doc = await prisma.studentDocument.findUnique({
+            where: {
+                studentId_documentKey: {
+                    studentId,
+                    documentKey: 'ALLOTMENT_ORDER'
+                }
+            }
+        });
+    }
 
     if (!doc) {
         throw new AppError('Allotment Order not found', 404);
@@ -1208,7 +1222,7 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
             const pdfBuffer = await generateAllotmentOrderPDF(allotmentData);
             // Force unique key to avoid cache
             const timestamp = Date.now();
-            const s3Key = `student/${student.applicationId}/documents/ProvisionalAllotmentOrder_${timestamp}.pdf`;
+            const s3Key = `student/${student.phone}/documents/ProvisionalAllotmentOrder_${timestamp}.pdf`;
             const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
 
             await prisma.studentDocument.upsert({
@@ -1312,7 +1326,7 @@ export const processUnifiedPayment = async (data: any) => {
         try {
             // Bypass removed: Always initiate real payment
 
-            const redirectUrl = `${process.env.FRONTEND_URL}/seatallotment/paymentstatus/?paymentId=${payment.id}`;
+            const redirectUrl = `${process.env.FRONTEND_URL}/seatallotment/${studentId}/paymentstatus/?paymentId=${payment.id}`;
             const request = StandardCheckoutPayRequest.builder()
                 .merchantOrderId(providerTxId)
                 .amount(Math.round(amount * 100))
