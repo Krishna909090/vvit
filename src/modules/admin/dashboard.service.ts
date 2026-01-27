@@ -202,18 +202,18 @@ export const DashboardService = {
         // 2. Seat Allocated WITH Scholarship (Eligible)
         else if (type === 'allocated_with_scholarship') {
             where = {
-                admissionDetails: { isNot: null, allottedCourseId: { isNot: null } },
+                admissionDetails: { allottedCourseId: { not: null } },
                 studentScholarship: { isEligible: 'YES' }
             };
         } 
         // 3. Seat Allocated WITHOUT Scholarship (Not Eligible)
         else if (type === 'allocated_no_scholarship') {
             where = {
-                admissionDetails: { isNot: null, allottedCourseId: { isNot: null } },
+                admissionDetails: { allottedCourseId: { not: null } },
                 // Use AND to ensure they have a scholarship record but it says NO
                 // OR if they have NO scholarship record at all (implies not eligible yet or processed)
                 OR: [
-                    { studentScholarship: { is: null } },
+                    { studentScholarship: null },
                     { studentScholarship: { isEligible: 'NO' } }
                 ]
             };
@@ -230,6 +230,7 @@ export const DashboardService = {
                 take: limit,
                 select: {
                     id: true,
+                    userId: true,
                     name: true,
                     applicationId: true,
                     email: true,
@@ -237,7 +238,10 @@ export const DashboardService = {
                     degreeType: true,
                     admissionDetails: {
                         select: {
+                            studentId: true,
                             status: true,
+                            totalFee: true,
+                            paidFee: true,
                             allottedCourse: { select: { name: true } }
                         }
                     },
