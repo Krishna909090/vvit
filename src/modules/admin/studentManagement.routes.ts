@@ -9,6 +9,7 @@ import {
     setScholarshipEligibility,
     updateStudentPersonalDetails,
     getStudentDetails,
+    getStudentDetailsByApplicationId,
     updateAcademicQualification,
     deleteAcademicQualification,
     updateStudentScholarship,
@@ -102,6 +103,9 @@ router.post('/update-personal-details', authenticate, authorizePermission(['stud
 
 // Get Complete Student Details
 router.get('/details/:studentId', authenticate, authorizePermission(['student.read.all']), validateRequest(studentIdParamSchema), getStudentDetails);
+
+// Get Complete Student Details by Application ID
+router.get('/detailsByAppId/:applicationId', authenticate, authorizePermission(['student.read.all']), getStudentDetailsByApplicationId);
 
 // Academic Qualifications Management
 router.put('/academic-qualifications/:id', authenticate, authorizePermission(['student.update.all']), validateRequest(updateAcademicQualificationSchema), updateAcademicQualification);

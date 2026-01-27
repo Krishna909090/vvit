@@ -306,6 +306,21 @@ export const getStudentDetails = catchAsync(async (req: Request, res: Response, 
     });
 });
 
+// Get Student Details By Application ID
+export const getStudentDetailsByApplicationId = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { applicationId } = req.params;
+
+    const data = await AdminStudentService.getStudentDetailsByApplicationId(applicationId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data
+    });
+});
+
 // Update Academic Qualification
 export const updateAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);

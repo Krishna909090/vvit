@@ -971,6 +971,80 @@ export const AdminStudentService = {
         };
     },
 
+    async getStudentDetailsByApplicationId(applicationId: string) {
+        if (!applicationId) throw new AppError('Application ID is required', 400);
+
+        const student = await prisma.student.findUnique({
+            where: { applicationId },
+            include: {
+                admissionDetails: {
+                    include: {
+                        allottedCourse: true,
+                        hostel: true,
+                        transportRoute: true
+                    }
+                },
+                examDetails: true,
+                documents: true,
+                academicQualifications: true,
+                eligibleScholarshipRule: true,
+                scholarshipAllocation: { include: { rule: true } },
+                studentScholarship: true,
+                pref1Course: true,
+                pref2Course: true,
+                pref3Course: true,
+                feeDemands: {
+                    include: {
+                        feeStructure: {
+                            include: { feeHead: true }
+                        },
+                        payments: true
+                    }
+                },
+                payments: true,
+                courseChangeLogs: true,
+                discountRequests: true,
+                ledgerEntries: true,
+                enrollment: {
+                     include: {
+                         academicYear: true,
+                         section: { include: { batch: true } }
+                     }
+                },
+                hostelAllocation: { include: { bed: { include: { room: { include: { block: { include: { hostel: true } } } } } } } },
+                transportAllocation: { include: { route: true, stop: true } },
+                convenorDetails: true,
+                user: { select: { id: true, email: true, phone: true, role: true, isDeleted: true } }
+            }
+        });
+
+        if (!student) {
+            throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+        }
+
+        // Convert key documents to presigned
+        const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
+        const documentsWithPresignedUrls = await Promise.all(student.documents.map(async (doc: any) => ({
+            ...doc,
+            url: await convertToPresignedUrl(doc.url)
+        })));
+
+        let hallTicketUrl = null;
+        if (student.examDetails?.hallTicketUrl) {
+            hallTicketUrl = await convertToPresignedUrl(student.examDetails.hallTicketUrl);
+        }
+
+        return {
+            ...student,
+            profilePhotoUrl,
+            documents: documentsWithPresignedUrls,
+            examDetails: {
+                ...student.examDetails,
+                hallTicketUrl
+            }
+        };
+    },
+
     async updateAcademicQualification(id: string, data: any, adminId: string | undefined) {
         if (!id) throw new AppError('Qualification ID is required', 400);
 
