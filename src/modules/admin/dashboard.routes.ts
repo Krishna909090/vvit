@@ -10,5 +10,6 @@ router.use(authenticate, authorizePermission('admin.read.all'));
 router.get('/stats', DashboardController.getGlobalStats);
 router.get('/trends', DashboardController.getRegistrationTrends);
 router.get('/recent-students', DashboardController.getRecentStudents);
+router.get('/seat-allocation-stats', DashboardController.getSeatAllocationStats);
 
 export default router;

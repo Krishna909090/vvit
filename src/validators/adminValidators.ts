@@ -418,6 +418,7 @@ export const finalizeAdmissionSchema = z.object({
             referenceNumber: z.string().optional(),
             date: z.string().datetime().or(z.date()).optional(),
             feeHeadId: z.string().uuid().optional(), 
+            feeStructureId: z.string().uuid().optional(),
         }),
         scholarship: z.object({
             percentage: z.number().min(0).max(100),

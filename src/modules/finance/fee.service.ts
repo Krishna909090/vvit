@@ -377,6 +377,16 @@ export const FeeService = {
             }
 
 
+            // Fetch Scholarship Percentage from StudentScholarship table
+            const studentScholarship = await tx.studentScholarship.findFirst({
+                 where: { studentId }
+            });
+            
+            // Use percentage from the table, default to 0
+            const discountPct = studentScholarship?.scholarshipPercentage || 0;
+            
+            logger.info(`[generateFeeDemands] Scholarship Check: Found Record=${!!studentScholarship}, Pct=${discountPct}%`);
+
             const results = [];
             let newDemandsTotal = 0;
             logger.debug(`[generateFeeDemands] Starting transaction to create demands`);
@@ -392,19 +402,38 @@ export const FeeService = {
                     continue; // Skip
                 }
 
+                // Check if this fee is Tuition/College Fee for Scholarship
+                const feeName = fee.feeHead.name.toLowerCase();
+                const isTuition = ['tuition', 'college', 'academic'].some(key => feeName.includes(key));
+                
+                let scholarshipAmt = 0;
+                if (isTuition && discountPct > 0) {
+                    scholarshipAmt = (fee.amount * discountPct) / 100;
+                }
+                
+                const netAmount = fee.amount - scholarshipAmt; // Fine is 0 initially
+
                 const demand = await tx.studentFeeDemand.create({
                     data: {
                         studentId,
                         feeStructureId: fee.id,
-                        amount: fee.amount,
+                        feeHeadId: fee.feeHeadId,
+                        academicYearId: fee.academicYearId,
+                        amount: fee.amount, // Base
+                        
+                        // New Fields
+                        discountAmount: scholarshipAmt, // Initial discount (scholarship)
+                        scholarshipAmount: scholarshipAmt,
+                        netAmount: netAmount,
 
                         status: 'PENDING',
-                        dueDate: fee.dueDate || new Date(), // Use structure due date or now
-                        createdBy: userId
-                    }
+                        dueDate: fee.dueDate || new Date(), 
+                        createdBy: userId,
+                        remarks: scholarshipAmt > 0 ? `Scholarship Applied: ${discountPct}%` : undefined
+                    } as any
                 });
 
-                // Ledger Debit
+                // Ledger Debit (Full Demand)
                 await tx.studentLedger.create({
                     data: {
                         studentId,
@@ -413,21 +442,38 @@ export const FeeService = {
                         description: `Fee: ${fee.feeHead.name}`,
                         referenceId: demand.id,
                         referenceType: 'FEE_DEMAND',
-                        feeHeadId: fee.feeHeadId, // Added explicit feeHeadId link
+                        feeHeadId: fee.feeHeadId, 
                         createdBy: userId
                     }
                 });
+                
+                // Ledger Credit (Scholarship Discount)
+                if (scholarshipAmt > 0) {
+                     await tx.studentLedger.create({
+                        data: {
+                            studentId,
+                            type: 'CREDIT',
+                            amount: scholarshipAmt,
+                            description: `Scholarship: ${studentScholarship?.type || 'Applicable'} (${discountPct}%)`,
+                            referenceId: demand.id,
+                            referenceType: 'SCHOLARSHIP',
+                            feeHeadId: fee.feeHeadId,
+                            createdBy: userId
+                        }
+                    });
+                }
+
                 results.push(demand);
                 newDemandsTotal += fee.amount;
             }
             
-            // Update Student Admission Total Fee
+            // Update Student Admission Total Fee (Base Amount usually)
             if (newDemandsTotal > 0) {
                  logger.debug(`[generateFeeDemands] Updating Total Fee in Admission table. Increment=${newDemandsTotal}`);
                  await tx.studentAdmission.upsert({
                      where: { studentId },
                      create: { studentId, totalFee: newDemandsTotal },
-                     update: { totalFee: { increment: newDemandsTotal } } // If reset, this adds back. Correct.
+                     update: { totalFee: { increment: newDemandsTotal } }
                  });
             }
 
@@ -441,9 +487,12 @@ export const FeeService = {
     // Get Full Ledger/Statement
     getStudentFeeDetails: async (studentId: string) => {
         logger.info(`[getStudentFeeDetails] Request for student=${studentId}`);
-        const demands = await prisma.studentFeeDemand.findMany({
+        const demands: any[] = await prisma.studentFeeDemand.findMany({
             where: { studentId },
-            include: { feeStructure: { include: { feeHead: true } } }
+            include: { 
+                feeStructure: { include: { feeHead: true } },
+                feeHead: true // Include direct feeHead relation
+            } as any
         });
 
         const payments = await prisma.payment.findMany({
@@ -478,10 +527,11 @@ export const FeeService = {
                  const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
                  
                  // Get actual tuition fee from demands, fallback to admission total fee, then fallback to default
-                 // Strategy 1: Precise Name Match
-                 let tuitionDemand = demands.find(d => 
-                    ['tuition', 'college', 'academic'].some(key => d.feeStructure?.feeHead?.name?.toLowerCase().includes(key))
-                 );
+                 // Strategy 1: Precise Name Match (Check both structure and direct head)
+                 let tuitionDemand = demands.find(d => {
+                    const name = d.feeStructure?.feeHead?.name || d.feeHead?.name || '';
+                    return ['tuition', 'college', 'academic'].some(key => name.toLowerCase().includes(key));
+                 });
 
                  // Strategy 2: Highest Amount Heuristic (Tuition is usually the largest fee)
                  if (!tuitionDemand && demands.length > 0) {
@@ -521,7 +571,9 @@ export const FeeService = {
 
         // Map Demands (Approximate via Fee Head Name)
         demands.forEach(d => {
-            const name = d.feeStructure?.feeHead?.name?.toUpperCase() || '';
+            // Priority: FeeStructure.FeeHead -> FeeHead (Direct) -> Unknown
+            const name = (d.feeStructure?.feeHead?.name || d.feeHead?.name || '').toUpperCase();
+            
             let key = 'OTHER';
             if (name.includes('TUITION') || name.includes('COLLEGE')) key = 'TUITION';
             else if (name.includes('HOSTEL')) key = 'HOSTEL';
@@ -570,9 +622,12 @@ export const FeeService = {
         allFeeHeads.forEach(fh => feeHeadLookup.set(fh.id, fh.name));
 
         // 1. Fetch Demands with Headers
-        const demands = await prisma.studentFeeDemand.findMany({
+        const demands: any[] = await prisma.studentFeeDemand.findMany({
             where: { studentId },
-            include: { feeStructure: { include: { feeHead: true } } },
+            include: { 
+                feeStructure: { include: { feeHead: true } },
+                feeHead: true // Include direct feeHead relation
+            } as any,
             orderBy: { createdAt: 'asc' }
         });
 
@@ -624,7 +679,8 @@ export const FeeService = {
 
         // --- Process Demands ---
         demands.forEach(d => {
-            const head = d.feeStructure?.feeHead;
+            // Determine Head: Structure Head > Direct Head
+            const head = d.feeStructure?.feeHead || d.feeHead;
             const group = getGroup(head?.id || 'UNKNOWN', head?.name || 'Unknown Fee');
             
             group.totalFee += d.amount;
@@ -633,7 +689,7 @@ export const FeeService = {
                 date: d.createdAt,
                 amount: d.amount,
                 id: d.id,
-                description: `Fee generated: ${head?.name}`
+                description: d.remarks || `Fee generated: ${head?.name}`
             });
         });
 
@@ -752,5 +808,116 @@ export const FeeService = {
         });
         
         return result;
-    }
+    },
+
+    // Student Discount / Fine (Direct Column Update)
+    addStudentDiscount: async (studentId: string, feeHeadId: string | undefined, feeStructureId: string | undefined, type: 'DISCOUNT' | 'FINE', amount: number, reason: string, userId: string) => {
+        
+        // 0. Resolve Fee Head if Structure ID is provided
+        let targetFeeHeadId = feeHeadId;
+        
+        if (feeStructureId && !targetFeeHeadId) {
+             const structure = await prisma.feeStructure.findUnique({
+                 where: { id: feeStructureId }
+             });
+             if (structure) {
+                 targetFeeHeadId = structure.feeHeadId;
+             }
+        }
+        
+        if (!targetFeeHeadId) {
+            throw new AppError("Either feeHeadId or feeStructureId must be provided", 400);
+        }
+
+        // 1. Find Target Demand
+        // We look for the latest demand for this Fee Head to attach the Fine/Discount to.
+        const targetDemand = await prisma.studentFeeDemand.findFirst({
+            where: {
+                studentId,
+                OR: [
+                    { feeHeadId: targetFeeHeadId },
+                    { feeStructure: { feeHeadId: targetFeeHeadId } }
+                ],
+                isDeleted: false
+            } as any, 
+            orderBy: { createdAt: 'desc' },
+            include: { feeStructure: true }
+        });
+
+        // 2. Validation (For Discounts)
+        if (type === 'DISCOUNT') {
+             if (!targetDemand) {
+                 throw new AppError('Cannot apply discount. No existing fee demand found for this category.', 404);
+             }
+             
+             // Check against Net Payable
+             // Net = Amount + ExistingFine - ExistingDiscount
+             const currentNet = targetDemand.amount + ((targetDemand as any).fineAmount || 0) - ((targetDemand as any).discountAmount || 0);
+             if (amount > currentNet) {
+                 throw new AppError(`Discount amount (${amount}) exceeds net payable amount (${currentNet}).`, 400);
+             }
+        }
+
+        return prisma.$transaction(async (tx: any) => {
+            let demandId: string;
+            
+            // 3. Update Demand or Create Ad-Hoc
+            if (targetDemand) {
+                const updateData: any = {};
+                if (type === 'FINE') updateData.fineAmount = { increment: amount };
+                else updateData.discountAmount = { increment: amount }; // Increment the discount deduction
+                
+                updateData.remarks = reason; // Overwrite or Append? Overwrite usually.
+                
+                await tx.studentFeeDemand.update({
+                    where: { id: targetDemand.id },
+                    data: updateData
+                });
+                demandId = targetDemand.id;
+            } else {
+                // Case: Ad-Hoc Fine where no previous demand exists
+                if (type === 'FINE') {
+                    const newDemand = await tx.studentFeeDemand.create({
+                        data: {
+                            studentId,
+                            feeHeadId,
+                            amount: 0, 
+                            fineAmount: amount,
+                            status: 'PENDING',
+                            dueDate: new Date(),
+                            remarks: `Ad-Hoc Fine: ${reason}`,
+                            createdBy: userId
+                        } as any
+                    });
+                    demandId = newDemand.id;
+                } else {
+                    // Should be caught by validation above, but safe fallback
+                    throw new AppError('Cannot apply discount without base demand.', 400);
+                }
+            }
+
+            // 4. Add to Ledger (Audit Trail)
+            // FINE = DEBIT (+Amount)
+            // DISCOUNT = CREDIT (Waiver)
+            // Note: Unlike before where Discount was Neg Debit, now it is explicit Credit to offset balance.
+            
+            await tx.studentLedger.create({
+                data: {
+                    studentId,
+                    type: type === 'FINE' ? 'DEBIT' : 'CREDIT',
+                    amount: amount,
+                    description: `${type}: ${reason}`,
+                    referenceId: demandId,
+                    referenceType: type === 'FINE' ? 'FINE' : 'DISCOUNT',
+                    feeHeadId,
+                    createdBy: userId,
+                    date: new Date()
+                }
+            });
+
+            return { message: 'Success', demandId };
+        });
+    },
 };
+
+

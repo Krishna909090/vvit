@@ -184,5 +184,78 @@ export const DashboardService = {
                 createdAt: 'desc'
             }
         });
+    },
+
+    async getSeatAllocationStats(type: string, page: number = 1, limit: number = 10) {
+        const skip = (page - 1) * limit;
+        let where: any = {};
+
+        // 1. Seat Not allocated
+        if (type === 'not_allocated') {
+            where = {
+                OR: [
+                    { admissionDetails: null },
+                    { admissionDetails: { allottedCourseId: null } }
+                ]
+            };
+        } 
+        // 2. Seat Allocated WITH Scholarship (Eligible)
+        else if (type === 'allocated_with_scholarship') {
+            where = {
+                admissionDetails: { isNot: null, allottedCourseId: { isNot: null } },
+                studentScholarship: { isEligible: 'YES' }
+            };
+        } 
+        // 3. Seat Allocated WITHOUT Scholarship (Not Eligible)
+        else if (type === 'allocated_no_scholarship') {
+            where = {
+                admissionDetails: { isNot: null, allottedCourseId: { isNot: null } },
+                // Use AND to ensure they have a scholarship record but it says NO
+                // OR if they have NO scholarship record at all (implies not eligible yet or processed)
+                OR: [
+                    { studentScholarship: { is: null } },
+                    { studentScholarship: { isEligible: 'NO' } }
+                ]
+            };
+        } else {
+            // Default: All students
+             where = {};
+        }
+
+        const [total, students] = await Promise.all([
+            prisma.student.count({ where }),
+            prisma.student.findMany({
+                where,
+                skip,
+                take: limit,
+                select: {
+                    id: true,
+                    name: true,
+                    applicationId: true,
+                    email: true,
+                    phone: true,
+                    degreeType: true,
+                    admissionDetails: {
+                        select: {
+                            status: true,
+                            allottedCourse: { select: { name: true } }
+                        }
+                    },
+                    studentScholarship: {
+                        select: {
+                            scholarshipPercentage: true
+                        }
+                    }
+                },
+                orderBy: { createdAt: 'desc' }
+            })
+        ]);
+
+        return {
+            total,
+            page,
+            totalPages: Math.ceil(total / limit),
+            data: students
+        };
     }
 };

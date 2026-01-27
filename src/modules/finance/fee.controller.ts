@@ -352,3 +352,26 @@ export const getPaymentHistory = catchAsync(async (req: Request, res: Response, 
         data: history
     });
 });
+
+export const addStudentDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[addStudentDiscount] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId, feeHeadId, feeStructureId, type, amount, reason } = req.body;
+
+    if (!studentId || (!feeHeadId && !feeStructureId) || !type || !amount) {
+        throw new AppError("Student ID, and either Fee Head ID or Fee Structure ID, Type, and Amount are required", 400);
+    }
+
+    if (!['DISCOUNT', 'FINE'].includes(type)) {
+        throw new AppError("Type must be DISCOUNT or FINE", 400);
+    }
+
+    const result = await FeeService.addStudentDiscount(studentId, feeHeadId, feeStructureId, type, amount, reason, req.user!.userId);
+
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: `${type} added successfully`,
+        data: result
+    });
+});

@@ -1161,17 +1161,30 @@ export const AdminStudentService = {
              if (!qual) throw new AppError('Qualification not found', 404);
         }
 
-        return await prisma.studentScholarship.update({
-            where: { id: scholarshipId },
-            data: {
-                type,
-                degreeType,
-                score: score ? Number(score) : undefined,
-                remarks,
-                scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
-                qualificationId,
-                updatedBy: adminId
-            }
+        return await prisma.$transaction(async (tx) => {
+            // 1. Update the Scholarship Record
+            const updatedScholarship = await tx.studentScholarship.update({
+                where: { id: scholarshipId },
+                data: {
+                    type,
+                    degreeType,
+                    score: score ? Number(score) : undefined,
+                    remarks,
+                    scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
+                    qualificationId,
+                    updatedBy: adminId
+                }
+            });
+
+            // 2. Propagate Changes to Demands & Ledger (Using Helper)
+            const newPct = updatedScholarship.scholarshipPercentage || 0;
+            const studentId = updatedScholarship.studentId;
+
+            logger.info(`[editStudentScholarship] Propagating update to ${newPct}% for student ${studentId}`);
+
+            await this.propagateScholarshipUpdate(studentId, newPct, adminId, tx);
+
+            return updatedScholarship;
         });
     },
 
@@ -1242,16 +1255,94 @@ export const AdminStudentService = {
     },
 
 
-    // INTERNAL HELPER: Executes the actual DB updates (Shared by Offline & Online-Success)
-    /**
-     * Internal Helper: Updates Student Admission Status, Allocates Seat (Hostel/Transport), and applies Scholarship.
-     * Shared by both Online and Offline flows.
-     */
+
+
+
+
+    // --- HELPER: Propagate Scholarship Changes ---
+    propagateScholarshipUpdate: async (studentId: string, newPct: number, adminId: string | undefined, tx: Prisma.TransactionClient) => {
+        logger.info(`[propagateScholarshipUpdate] Updating demands to ${newPct}% for student ${studentId}`);
+
+        // Fetch demands with their linked Fee Heads (Direct or via Structure)
+        const demands = await tx.studentFeeDemand.findMany({
+            where: { studentId },
+            include: { 
+                feeHead: true, 
+                feeStructure: { include: { feeHead: true } } 
+            }
+        });
+
+        // Filter for Tuition/College fees by checking the resolved Fee Head name
+        const tuitionDemands = demands.filter(d => {
+            const head = d.feeHead || d.feeStructure?.feeHead;
+            if (!head) return false;
+            
+            const name = head.name.toLowerCase();
+            return ['tuition', 'college', 'academic'].some(key => name.includes(key));
+        });
+
+        for (const demand of tuitionDemands) {
+            const baseAmount = demand.amount; 
+            const newDiscount = (baseAmount * newPct) / 100;
+            const newNet = baseAmount - newDiscount;
+
+            logger.info(`[propagateScholarshipUpdate] Updating Demand ${demand.id}: Base=${baseAmount}, NewDiscount=${newDiscount}`);
+
+            // A. Update Demand
+            await tx.studentFeeDemand.update({
+                where: { id: demand.id },
+                data: {
+                    scholarshipAmount: newDiscount,
+                    discountAmount: newDiscount,
+                    netAmount: newNet,
+                    remarks: `Scholarship applied: ${newPct}%`
+                }
+            });
+
+            // B. Update/Create Ledger
+            const ledger = await tx.studentLedger.findFirst({
+                where: {
+                    referenceId: demand.id,
+                    referenceType: 'SCHOLARSHIP',
+                    type: 'CREDIT'
+                }
+            });
+
+            if (ledger) {
+                if (newDiscount > 0) {
+                    await tx.studentLedger.update({
+                        where: { id: ledger.id },
+                        data: {
+                            amount: newDiscount,
+                            description: `Scholarship (${newPct}%)`,
+                            createdBy: adminId
+                        }
+                    });
+                } else {
+                    await tx.studentLedger.delete({ where: { id: ledger.id } });
+                }
+            } else if (newDiscount > 0) {
+                await tx.studentLedger.create({
+                    data: {
+                        studentId,
+                        type: 'CREDIT', // Cast if needed
+                        amount: newDiscount,
+                        description: `Scholarship (${newPct}%)`,
+                        referenceId: demand.id,
+                        referenceType: 'SCHOLARSHIP',
+                        feeHeadId: demand.feeHeadId,
+                        createdBy: adminId
+                    } as any
+                });
+            }
+        }
+    },
+
     async executeAdmissionUpdates(studentId: string, payload: any, paymentId: string, adminId: string, tx: Prisma.TransactionClient) {
-        logger.info(`[executeAdmissionUpdates] Starting updates for student=${studentId} payment=${paymentId}`);
-        const { scholarship, allocation, course } = payload;
-        
         try {
+            const { allocation, scholarship, course } = payload;
+            logger.info(`[executeAdmissionUpdates] Allocation: ${allocation.type}, Scholarship: ${scholarship.percentage}%`);
+
             // --- 1. Accommodation Handling ---
             logger.debug(`[executeAdmissionUpdates] Processing Accommodation: ${allocation?.type}`);
             const student = await tx.student.findUnique({ where: { id: studentId }, include: { admissionDetails: true } });
@@ -1292,8 +1383,6 @@ export const AdminStudentService = {
                 });
             }
 
-            // ... (previous logic for seat updates)
-
             // --- Calculate Accommodation Cost Delta ---
             let accCostDelta = 0;
             
@@ -1321,7 +1410,7 @@ export const AdminStudentService = {
              } else if (allocation.type === AccommodationType.TRANSPORT && allocation.transportRouteId) {
                  const r = await tx.transportRoute.findUnique({ where: { id: allocation.transportRouteId } });
                  if (r) accCostDelta += (r.cost || 0);
-            }
+             }
             
              // Add semwise extra if applicable
             if (allocation.type === AccommodationType.HOSTEL && allocation.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
@@ -1356,22 +1445,33 @@ export const AdminStudentService = {
                     totalFee: accCostDelta > 0 ? accCostDelta : 0
                 }
             });
-
-            // --- 4. Scholarship Update ---
-            logger.debug(`[executeAdmissionUpdates] Updating Scholarship: ${scholarship.percentage}%`);
-            await tx.studentScholarship.update({
-                where: { studentId },
-                data: {
-                    scholarshipPercentage: scholarship.percentage,
-                    updatedBy: adminId,
-                    isEligible: 'YES'
-                }
-            });
+            
+             // --- 4. Scholarship Update ---
+            const currentScholarship = await tx.studentScholarship.findUnique({ where: { studentId } });
+            
+            // Only update if percentage changed or didn't exist
+            if (!currentScholarship || currentScholarship.scholarshipPercentage !== scholarship.percentage) {
+                 logger.debug(`[executeAdmissionUpdates] Updating Scholarship: ${scholarship.percentage}% (Old: ${currentScholarship?.scholarshipPercentage}%)`);
+                 
+                 await tx.studentScholarship.update({
+                    where: { studentId },
+                    data: {
+                        scholarshipPercentage: scholarship.percentage,
+                        updatedBy: adminId,
+                        isEligible: 'YES'
+                    }
+                });
+                
+                // Propagate
+                await this.propagateScholarshipUpdate(studentId, scholarship.percentage, adminId, tx);
+            } else {
+                logger.info(`[executeAdmissionUpdates] Scholarship percentage unchanged (${scholarship.percentage}%). Skipping update.`);
+            }
 
             logger.info(`[executeAdmissionUpdates] Successfully completed all updates for student=${studentId}`);
         } catch (error) {
             logger.error(`[executeAdmissionUpdates] Failed to execute updates: ${error}`);
-            throw error; // Re-throw to rollback transaction
+            throw error; 
         }
     },
 
@@ -1419,6 +1519,44 @@ export const AdminStudentService = {
         if (payment.feeHeadId && !validFeeHead) {
             logger.warn(`[finalizeAdmission] Invalid Fee Head ID: ${payment.feeHeadId}`);
             throw new AppError("Invalid Fee Head ID", 400);
+        }
+
+        // Validate Allocation IDs
+        if (allocation.type === AccommodationType.HOSTEL && allocation.hostelId) {
+            const h = await prisma.hostel.findUnique({ where: { id: allocation.hostelId } });
+            if (!h) {
+                 logger.warn(`[finalizeAdmission] Invalid Hostel ID: ${allocation.hostelId}`);
+                 throw new AppError("Invalid Hostel ID", 400);
+            }
+        }
+        if (allocation.type === AccommodationType.TRANSPORT && allocation.transportRouteId) {
+            const r = await prisma.transportRoute.findUnique({ where: { id: allocation.transportRouteId } });
+            if (!r) {
+                 logger.warn(`[finalizeAdmission] Invalid Transport Route ID: ${allocation.transportRouteId}`);
+                 throw new AppError("Invalid Transport Route ID", 400);
+            }
+        }
+
+        // Validate Fee Structure ID if provided and resolve Demand
+        let feeDemandId = null;
+        if (payment.feeStructureId) {
+            const validStructure = await prisma.feeStructure.findUnique({ where: { id: payment.feeStructureId } });
+            if (!validStructure) {
+                 logger.warn(`[finalizeAdmission] Invalid Fee Structure ID: ${payment.feeStructureId}`);
+                 throw new AppError("Invalid Fee Structure ID", 400);
+            }
+
+            // Try to find matching Demand to link
+            const demand = await prisma.studentFeeDemand.findFirst({
+                where: {
+                    studentId,
+                    feeStructureId: payment.feeStructureId
+                }
+            });
+            if (demand) {
+                feeDemandId = demand.id;
+                logger.info(`[finalizeAdmission] Linking payment to existing Demand: ${demand.id}`);
+            }
         }
 
         // 2. Identify Flow
@@ -1482,12 +1620,14 @@ export const AdminStudentService = {
                              component: feeComponent,
                              providerTxId: merchantTransactionId, // Verify providerTxId
                              feeHeadId: payment.feeHeadId,
+                             feeDemandId: feeDemandId || undefined,
                              collectedBy: adminId,
                              metadata: { 
                                 scholarship, 
                                 allocation, 
                                 course,
                                 feeComponent,
+                                feeStructureId: payment.feeStructureId,
                                 targetAction: 'FINALIZE_ADMISSION' 
                              }
                          }
@@ -1512,7 +1652,7 @@ export const AdminStudentService = {
                  const request = StandardCheckoutPayRequest.builder()
                      .merchantOrderId(merchantTransactionId)
                      .amount(Math.round(payment.amount * 100))
-                     .redirectUrl(`${FRONTEND_URL_ADMISSION}/admin/seatallotment/paymentstatus?paymentId=${newPayment.id}`)
+                     .redirectUrl(`${FRONTEND_URL_ADMISSION}/admin/seatallotment/details?studentId=${studentId}&paymentId=${newPayment.id}`)
                      .build();
 
                  const response = await client.pay(request);
@@ -1565,6 +1705,7 @@ export const AdminStudentService = {
                         status: PaymentStatus.SUCCESS,
                         component: feeComponent,
                         feeHeadId: payment.feeHeadId,
+                        feeDemandId: feeDemandId || undefined,
                         referenceNumber: payment.referenceNumber || `REF-${Date.now()}`,
                         instrumentDate: payment.date ? new Date(payment.date) : new Date(),
                         collectedBy: adminId,
@@ -1573,6 +1714,7 @@ export const AdminStudentService = {
                             allocation, 
                             course,
                             feeComponent,
+                            feeStructureId: payment.feeStructureId,
                             notes: 'Offline Immediate Finalization' 
                          }
                     }
@@ -1597,6 +1739,27 @@ export const AdminStudentService = {
                         createdBy: adminId
                     } as Prisma.StudentLedgerUncheckedCreateInput
                 });
+
+                // Step 4: Increment Paid Fee 
+                logger.info(`[finalizeAdmission][Offline] Step 4: Incrementing Paid Fee`);
+                await tx.studentAdmission.update({
+                    where: { studentId },
+                    data: { paidFee: { increment: payment.amount } }
+                });
+
+                // Step 5: Settle Fee Demand (Strict Link)
+                if (feeDemandId) {
+                    logger.info(`[finalizeAdmission][Offline] Step 5: Settling Demand ${feeDemandId}`);
+                    // Fetch demand to check amount (need to read from TX or use cached info? Safe to read)
+                    const demand = await tx.studentFeeDemand.findUnique({ where: { id: feeDemandId } });
+                    if (demand) {
+                        const newStatus = payment.amount >= (demand.netAmount || demand.amount) ? 'FULL' : 'PARTIAL'; // Use netAmount if exists
+                         await tx.studentFeeDemand.update({
+                            where: { id: feeDemandId },
+                            data: { status: newStatus as any }
+                        });
+                    }
+                }
 
                 logger.info(`[finalizeAdmission][Offline] Transaction committed successfully.`);
                 return { success: true, type: 'OFFLINE_COMPLETED', message: "Admission Finalized Successfully", paymentId: newPayment.id };

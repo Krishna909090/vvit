@@ -8,25 +8,25 @@ datasource db {
 }
 
 model User {
-  id                     String                   @id @default(dbgenerated("gen_random_uuid()"))
-  name                   String?
-  email                  String?                  @unique
-  phone                  String?                  @unique
-  role                   String?
-  createdAt              DateTime?                @default(now())
-  updatedAt              DateTime                 @updatedAt
-  createdBy              String?
-  updatedBy              String?
-  isDeleted              Boolean?                 @default(false)
-  password               String?
-  agentCommissions       AgentCommission[]
-  auditLogs              AuditLog[]
-  notifications          Notification[]
-  agentStudents          Student[]                @relation("AgentStudents")
-  studentProfile         Student?                 @relation("StudentUser")
-  userGroups             UserGroup[]
-  otps                   UserOtp[]
-  permissionOverrides    UserPermissionOverride[]
+  id                  String                   @id @default(dbgenerated("gen_random_uuid()"))
+  name                String?
+  email               String?                  @unique
+  phone               String?                  @unique
+  role                String?
+  createdAt           DateTime?                @default(now())
+  updatedAt           DateTime                 @updatedAt
+  createdBy           String?
+  updatedBy           String?
+  isDeleted           Boolean?                 @default(false)
+  password            String?
+  agentCommissions    AgentCommission[]
+  auditLogs           AuditLog[]
+  notifications       Notification[]
+  agentStudents       Student[]                @relation("AgentStudents")
+  studentProfile      Student?                 @relation("StudentUser")
+  userGroups          UserGroup[]
+  otps                UserOtp[]
+  permissionOverrides UserPermissionOverride[]
 }
 
 model UserOtp {
@@ -47,8 +47,8 @@ model UserOtp {
 
 model School {
   id          String       @id @default(dbgenerated("gen_random_uuid()"))
-  name        String       @unique
-  code        String       @unique
+  name        String
+  code        String
   createdAt   DateTime?    @default(now())
   updatedAt   DateTime     @updatedAt
   createdBy   String?
@@ -59,8 +59,8 @@ model School {
 
 model Department {
   id        String    @id @default(dbgenerated("gen_random_uuid()"))
-  name      String    @unique
-  code      String    @unique
+  name      String
+  code      String
   schoolId  String?
   createdAt DateTime? @default(now())
   updatedAt DateTime  @updatedAt
@@ -73,7 +73,7 @@ model Department {
 
 model Course {
   id               String             @id @default(dbgenerated("gen_random_uuid()"))
-  code             String?            @unique
+  code             String?
   name             String
   departmentId     String
   createdAt        DateTime?          @default(now())
@@ -123,19 +123,20 @@ model Section {
 }
 
 model AcademicYear {
-  id            String              @id @default(dbgenerated("gen_random_uuid()"))
-  code          String              @unique
-  startDate     DateTime
-  endDate       DateTime
-  isActive      Boolean?            @default(true)
-  isLocked      Boolean?            @default(false)
-  createdAt     DateTime?           @default(now())
-  updatedAt     DateTime            @updatedAt
-  createdBy     String?
-  updatedBy     String?
-  isDeleted     Boolean?            @default(false)
-  feeStructures FeeStructure[]
-  enrollments   StudentEnrollment[]
+  id                String              @id @default(dbgenerated("gen_random_uuid()"))
+  code              String
+  startDate         DateTime
+  endDate           DateTime
+  isActive          Boolean?            @default(true)
+  isLocked          Boolean?            @default(false)
+  createdAt         DateTime?           @default(now())
+  updatedAt         DateTime            @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  isDeleted         Boolean?            @default(false)
+  feeStructures     FeeStructure[]
+  enrollments       StudentEnrollment[]
+  studentFeeDemands StudentFeeDemand[]
 }
 
 model StudentEnrollment {
@@ -156,15 +157,15 @@ model StudentEnrollment {
 }
 
 model Student {
-  id                        String                @id @default(dbgenerated("gen_random_uuid()"))
-  applicationId             String?               @unique
+  id                        String                  @id @default(dbgenerated("gen_random_uuid()"))
+  applicationId             String?                 @unique
   name                      String
   fatherName                String
   motherName                String
   gender                    String
   dob                       DateTime
   phone                     String
-  email                     String?               @unique
+  email                     String?                 @unique
   aadharNumber              String
   category                  String
   country                   String
@@ -175,27 +176,28 @@ model Student {
   pincode                   String
   profilePhotoUrl           String?
   documentFolderPath        String?
-  source                    AdmissionSource?      @default(WEBSITE)
-  quotaType                 QuotaType?            @default(MANAGEMENT)
-  applicationMode           ApplicationMode?      @default(ONLINE)
-  isOffline                 Boolean?              @default(false)
-  isKycVerified             Boolean?              @default(false)
+  source                    AdmissionSource?        @default(WEBSITE)
+  quotaType                 QuotaType?              @default(MANAGEMENT)
+  applicationMode           ApplicationMode?        @default(ONLINE)
+  isOffline                 Boolean?                @default(false)
+  isKycVerified             Boolean?                @default(false)
   pref1                     String?
   pref2                     String?
   pref3                     String?
-  userId                    String?               @unique
+  userId                    String?                 @unique
   agentId                   String?
   eligibleScholarshipRuleId String?
   degreeType                String?
   courseType                String?
   scholarshipRemarks        String?
-  scholarshipVerified       Boolean?              @default(false)
+  scholarshipVerified       Boolean?                @default(false)
   scholarshipVerifiedAt     DateTime?
   scholarshipVerifiedBy     String?
-  createdAt                 DateTime?             @default(now())
-  updatedAt                 DateTime              @updatedAt
+  createdAt                 DateTime?               @default(now())
+  updatedAt                 DateTime                @updatedAt
   createdBy                 String?
   updatedBy                 String?
+  academicQualifications    AcademicQualification[]
   agentCommissions          AgentCommission[]
   attendanceRecords         AttendanceRecord[]
   cancellationRequests      CancellationRequest[]
@@ -207,23 +209,22 @@ model Student {
   hallTickets               HallTicket[]
   hostelAllocation          HostelAllocation?
   payments                  Payment[]
+  scholarshipAllocation     ScholarshipAllocation?
   seatAllocations           SeatAllocation[]
-  agent                     User?                 @relation("AgentStudents", fields: [agentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  eligibleScholarshipRule   ScholarshipRule?      @relation(fields: [eligibleScholarshipRuleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  pref1Course               Course?               @relation("Pref1", fields: [pref1], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  pref2Course               Course?               @relation("Pref2", fields: [pref2], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  pref3Course               Course?               @relation("Pref3", fields: [pref3], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  user                      User?                 @relation("StudentUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  agent                     User?                   @relation("AgentStudents", fields: [agentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  eligibleScholarshipRule   ScholarshipRule?        @relation(fields: [eligibleScholarshipRuleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  pref1Course               Course?                 @relation("Pref1", fields: [pref1], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  pref2Course               Course?                 @relation("Pref2", fields: [pref2], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  pref3Course               Course?                 @relation("Pref3", fields: [pref3], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user                      User?                   @relation("StudentUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   admissionDetails          StudentAdmission?
   documents                 StudentDocument[]
   enrollment                StudentEnrollment?
   examDetails               StudentExam?
   feeDemands                StudentFeeDemand[]
-  transportAllocation       TransportAllocation?
-  academicQualifications    AcademicQualification[]
   ledgerEntries             StudentLedger[]
-  scholarshipAllocation     ScholarshipAllocation?
-  studentScholarship        StudentScholarship[]
+  studentScholarship        StudentScholarship?
+  transportAllocation       TransportAllocation?
 }
 
 model ConvenorAdmission {
@@ -288,11 +289,11 @@ model StudentAdmission {
   hostelType        HostelType?
   hostelId          String?
   transportRouteId  String?
-  hostelPaymentMode HostelPaymentMode? @default(YEARWISE)
   roomNumber        String?
   allottedCourseId  String?
   createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
+  hostelPaymentMode HostelPaymentMode? @default(YEARWISE)
   allottedCourse    Course?            @relation("AllottedCourse", fields: [allottedCourseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   hostel            Hostel?            @relation(fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student           Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -318,7 +319,7 @@ model StudentDocument {
 
 model Specialization {
   id          String    @id @default(dbgenerated("gen_random_uuid()"))
-  code        String?   @unique
+  code        String?
   name        String
   courseId    String
   totalSeats  Int
@@ -390,6 +391,7 @@ model HostelPriceCategory {
   updatedAt DateTime       @updatedAt
   createdBy String?
   updatedBy String?
+  metadata  Json?
 
   @@unique([sharing, roomType])
 }
@@ -490,17 +492,17 @@ model TransportAllocation {
 }
 
 model FeeHead {
-  id          String         @id @default(dbgenerated("gen_random_uuid()"))
-  name        String
-  description String?
-  isDeleted   Boolean?       @default(false)
-  createdAt   DateTime?      @default(now())
-  updatedAt   DateTime       @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  structures  FeeStructure[]
-  ledgers     StudentLedger[]
-  payments    Payment[]
+  id                String             @id @default(dbgenerated("gen_random_uuid()"))
+  name              String
+  description       String?
+  isDeleted         Boolean?           @default(false)
+  createdAt         DateTime?          @default(now())
+  updatedAt         DateTime           @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  structures        FeeStructure[]
+  payments          Payment[]
+  studentFeeDemands StudentFeeDemand[]
 }
 
 model FeeStructure {
@@ -527,19 +529,29 @@ model FeeStructure {
 }
 
 model StudentFeeDemand {
-  id             String       @id @default(dbgenerated("gen_random_uuid()"))
-  studentId      String
-  feeStructureId String
-  amount         Float
-  dueDate        DateTime
-  status         FeeStatus
-  createdAt      DateTime?    @default(now())
-  updatedAt      DateTime     @updatedAt
-  createdBy      String?
-  updatedBy      String?
+  id                String    @id @default(dbgenerated("gen_random_uuid()"))
+  studentId         String
+  feeStructureId    String?
+  amount            Float
+  dueDate           DateTime
+  status            FeeStatus
+  createdAt         DateTime? @default(now())
+  updatedAt         DateTime  @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  discountAmount    Float     @default(0)
+  scholarshipAmount Float     @default(0)
+  netAmount         Float? // Stores Final Payable (Amount + Fine - Discount - Scholarship)
+
+  fineAmount     Float         @default(0)
+  remarks        String?
   payments       Payment[]
-  feeStructure   FeeStructure @relation(fields: [feeStructureId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  student        Student      @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeStructure   FeeStructure? @relation(fields: [feeStructureId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student        Student       @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeHeadId      String?
+  feeHead        FeeHead?      @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYearId String?
+  academicYear   AcademicYear? @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Payment {
@@ -548,7 +560,6 @@ model Payment {
   amount          Float
   currency        String?           @default("INR")
   status          PaymentStatus?    @default(PENDING)
-  feeHeadId       String?
   mode            PaymentMode?      @default(ONLINE)
   method_legacy   String?
   providerTxId    String?
@@ -568,8 +579,9 @@ model Payment {
   createdBy       String?
   updatedBy       String?
   method          PaymentMethod?
-  feeDemand       StudentFeeDemand? @relation(fields: [feeDemandId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeHeadId       String?
   feeHead         FeeHead?          @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeDemand       StudentFeeDemand? @relation(fields: [feeDemandId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student         Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
@@ -794,7 +806,6 @@ model Notification {
   isRead      Boolean?  @default(false)
   createdAt   DateTime? @default(now())
   createdBy   String?
-  updatedBy   String?
   recipient   User      @relation(fields: [recipientId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
@@ -826,18 +837,18 @@ model DocumentRequirement {
 }
 
 model ScholarshipRule {
-  id                 String    @id @default(dbgenerated("gen_random_uuid()"))
+  id                 String                  @id @default(dbgenerated("gen_random_uuid()"))
   name               String
   minPercentile      Float
   discountPercentage Float
   totalSlots         Int
-  filledSlots        Int       @default(0)
+  filledSlots        Int                     @default(0)
   degreeType         String?
-  isActive           Boolean?  @default(true)
-  createdAt          DateTime? @default(now())
-  updatedAt          DateTime  @updatedAt
-  eligibleStudents   Student[]
+  isActive           Boolean?                @default(true)
+  createdAt          DateTime?               @default(now())
+  updatedAt          DateTime                @updatedAt
   allocations        ScholarshipAllocation[]
+  eligibleStudents   Student[]
 }
 
 model QualificationRequirement {
@@ -874,34 +885,34 @@ model GroupRole {
 }
 
 model Module {
-  id         String       @id @default(dbgenerated("gen_random_uuid()"))
-  name       String
-  code       String       @unique
-  createdAt  DateTime?    @default(now())
-  updatedAt  DateTime     @updatedAt
+  id          String       @id @default(dbgenerated("gen_random_uuid()"))
+  name        String
+  code        String       @unique
+  createdAt   DateTime?    @default(now())
+  updatedAt   DateTime     @updatedAt
   permissions Permission[]
 }
 
 model Permission {
-  id                     String                   @id @default(dbgenerated("gen_random_uuid()"))
-  key                    String                   @unique
-  description            String?
-  moduleId               String
-  createdAt              DateTime?                @default(now())
-  updatedAt              DateTime                 @updatedAt
-  module                 Module                   @relation(fields: [moduleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  roles                  RolePermission[]
-  overrides              UserPermissionOverride[]
+  id          String                   @id @default(dbgenerated("gen_random_uuid()"))
+  key         String                   @unique
+  description String?
+  moduleId    String
+  createdAt   DateTime?                @default(now())
+  updatedAt   DateTime                 @updatedAt
+  module      Module                   @relation(fields: [moduleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  roles       RolePermission[]
+  overrides   UserPermissionOverride[]
 }
 
 model Role {
-  id             String           @id @default(dbgenerated("gen_random_uuid()"))
-  name           String           @unique
-  description    String?
-  createdAt      DateTime?        @default(now())
-  updatedAt      DateTime         @updatedAt
-  groups         GroupRole[]
-  permissions    RolePermission[]
+  id          String           @id @default(dbgenerated("gen_random_uuid()"))
+  name        String           @unique
+  description String?
+  createdAt   DateTime?        @default(now())
+  updatedAt   DateTime         @updatedAt
+  groups      GroupRole[]
+  permissions RolePermission[]
 }
 
 model RolePermission {
@@ -933,6 +944,100 @@ model UserPermissionOverride {
   user         User         @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@id([userId, permissionId])
+}
+
+model AcademicQualification {
+  id                  String               @id @default(dbgenerated("gen_random_uuid()"))
+  studentId           String
+  level               String
+  board               String
+  yearOfPassing       String
+  percentage          Float?
+  docUrl              String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  createdBy           String?
+  gpaOrMarks          String?
+  hallTicketNumber    String?
+  schoolName          String?
+  updatedBy           String?
+  verificationStatus  String?              @default("PENDING")
+  student             Student              @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  studentScholarships StudentScholarship[]
+}
+
+model StudentScholarship {
+  id                    String                 @id @default(dbgenerated("gen_random_uuid()"))
+  studentId             String                 @unique
+  student               Student                @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  type                  String
+  score                 Float?
+  remarks               String?
+  scholarshipPercentage Float?
+  qualificationId       String?
+  createdBy             String?
+  updatedBy             String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  degreeType            String?
+  isEligible            String?
+  qualification         AcademicQualification? @relation(fields: [qualificationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model EmailLog {
+  id             String      @id @default(dbgenerated("gen_random_uuid()"))
+  subject        String
+  status         EmailStatus @default(PENDING)
+  messageId      String?
+  sentAt         DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  content        String
+  errorResponse  Json?
+  invoiceData    Json?
+  metadata       Json?
+  recipientEmail String
+  retryCount     Int         @default(0)
+  templateType   String?
+}
+
+model ScholarshipAllocation {
+  id         String            @id @default(dbgenerated("gen_random_uuid()"))
+  studentId  String            @unique
+  ruleId     String
+  status     ScholarshipStatus @default(RESERVED)
+  expiresAt  DateTime?
+  reservedAt DateTime?
+  lockedAt   DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  rule       ScholarshipRule   @relation(fields: [ruleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student    Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model StudentLedger {
+  id            String                @id @default(dbgenerated("gen_random_uuid()"))
+  studentId     String
+  type          LedgerTransactionType
+  amount        Float
+  description   String?
+  referenceId   String?
+  referenceType String?
+  date          DateTime              @default(now())
+  createdBy     String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  feeHeadId     String?
+  student       Student               @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model Configuration {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  key       String   @unique
+  value     String
+  category  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 enum AdmissionStatus {
@@ -1138,106 +1243,6 @@ enum UserRole {
   STAFF
   VERIFICATION_OFFICER
 }
-
-model AcademicQualification {
-  id        String   @id @default(dbgenerated("gen_random_uuid()"))
-  studentId String
-  level     String
-  schoolName String?
-  board     String
-  yearOfPassing String
-  percentage Float?
-  gpaOrMarks String?
-  hallTicketNumber String?
-  docUrl    String?
-  verificationStatus String? @default("PENDING")
-  createdBy String?
-  updatedBy String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  student   Student  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  studentScholarships StudentScholarship[]
-}
-
-model StudentScholarship {
-  id                    String                @id @default(dbgenerated("gen_random_uuid()"))
-  studentId             String                @unique
-  type                  String
-  degreeType            String?
-  score                 Float?
-  remarks               String?
-  scholarshipPercentage Float?
-  qualificationId       String?
-  isEligible            String?
-  createdBy             String?
-  updatedBy             String?
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
-
-  student               Student               @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  qualification         AcademicQualification? @relation(fields: [qualificationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-}
-
-model EmailLog {
-  id             String      @id @default(dbgenerated("gen_random_uuid()"))
-  recipientEmail String
-  subject        String
-  content        String
-  status         EmailStatus @default(PENDING)
-  errorResponse  Json?
-  invoiceData    Json?
-  messageId      String?
-  metadata       Json?
-  templateType   String?
-  retryCount     Int         @default(0)
-  sentAt         DateTime?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-}
-
-
-
-model ScholarshipAllocation {
-  id        String   @id @default(dbgenerated("gen_random_uuid()"))
-  studentId String   @unique
-  ruleId    String
-  status    ScholarshipStatus @default(RESERVED)
-  expiresAt DateTime?
-  reservedAt DateTime?
-  lockedAt  DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  student   Student  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  rule      ScholarshipRule @relation(fields: [ruleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-}
-
-model StudentLedger {
-  id            String   @id @default(dbgenerated("gen_random_uuid()"))
-  studentId     String
-  type          LedgerTransactionType
-  amount        Float
-  description   String?
-  referenceId   String?
-  referenceType String?
-  feeHeadId     String?
-  date          DateTime @default(now())
-  createdBy     String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  student       Student  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  feeHead       FeeHead? @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-}
-
-model Configuration {
-  id        String   @id @default(dbgenerated("gen_random_uuid()"))
-  key       String   @unique
-  value     String
-  category  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-
 
 enum HostelPaymentMode {
   SEMWISE

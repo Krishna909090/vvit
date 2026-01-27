@@ -16,26 +16,51 @@ import { sendPaymentReceipt } from '../../utils/emailService';
 
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
 
-const MERCHANTABILITY = (process.env.PHONEPE_MERCHANT_ID || '').trim();
-const SALT_KEY = (process.env.PHONEPE_SALT_KEY || '').trim();
-const SALT_INDEX = (process.env.PHONEPE_SALT_INDEX || '1').trim();
+const MERCHANT_ID_ADMISSION = (process.env.PHONEPE_MERCHANT_ID || '').trim();
+const SALT_KEY_ADMISSION = (process.env.PHONEPE_SALT_KEY || '').trim();
+const SALT_INDEX_ADMISSION = (process.env.PHONEPE_SALT_INDEX || '1').trim();
+
+const MERCHANT_ID_HOSTEL = (process.env.HOSTEL_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID || '').trim();
+const SALT_KEY_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY || '').trim();
+const SALT_INDEX_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX || '1').trim();
+
 const CLIENT_VERSION = 1;
 const ENV = process.env.NODE_ENV === 'production' ? Env.PRODUCTION : Env.SANDBOX;
-const CALLBACK_URL = (process.env.PHONEPE_CALLBACK_URL || '').trim();
 
-// Initialize SDK Client
-const client = StandardCheckoutClient.getInstance(MERCHANTABILITY, SALT_KEY, CLIENT_VERSION, ENV);
+const PHONEPE_CREDENTIALS = {
+    ADMISSION: {
+        MERCHANT_ID: MERCHANT_ID_ADMISSION,
+        SALT_KEY: SALT_KEY_ADMISSION,
+        SALT_INDEX: SALT_INDEX_ADMISSION
+    },
+    HOSTEL: {
+        MERCHANT_ID: MERCHANT_ID_HOSTEL,
+        SALT_KEY: SALT_KEY_HOSTEL,
+        SALT_INDEX: SALT_INDEX_HOSTEL
+    }
+};
+
+const getPhonePeClient = (type: 'ADMISSION' | 'HOSTEL' = 'ADMISSION') => {
+    const creds = PHONEPE_CREDENTIALS[type];
+    return StandardCheckoutClient.getInstance(creds.MERCHANT_ID, creds.SALT_KEY, CLIENT_VERSION, ENV);
+};
 
 // Debug PhonePe Config
-logger.info(`[PhonePe Config] MerchantId: ${MERCHANTABILITY}, SaltIndex: ${SALT_INDEX}, SaltKey(Last4): ${SALT_KEY.slice(-4)}`);
+logger.info(`[PhonePe Config] Admission Merchant: ${MERCHANT_ID_ADMISSION}, Hostel Merchant: ${MERCHANT_ID_HOSTEL}`);
+
+// Debug PhonePe Config
+// Debug PhonePe Config
+// logger.info('[PhonePe Config] Initialized');
 
 // ... (imports remain)
 
 // Reusable PhonePe Initialization
-export const initiatePhonePePayment = async (studentId: string, amount: number, transactionId: string, redirectUrl: string) => {
+export const initiatePhonePePayment = async (studentId: string, amount: number, transactionId: string, redirectUrl: string, feeType: 'ADMISSION' | 'HOSTEL' = 'ADMISSION') => {
     try {
         const student = await prisma.student.findUnique({ where: { id: studentId } });
         if (!student) throw new AppError('Student not found for payment', 404);
+
+        const client = getPhonePeClient(feeType);
 
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(transactionId)
@@ -96,22 +121,51 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     logger.info(`[initiateApplicationFeePayment] Step 3: Initiating Payment with PhonePe`);
     const redirectUrl = `${process.env.FRONTEND_URL}/student/payment?txnId=${transactionId}`;
     
-    const result = await initiatePhonePePayment(studentId, amount, transactionId, redirectUrl);
+    // Explicitly use 'ADMISSION' credentials for Application Fee
+    const result = await initiatePhonePePayment(studentId, amount, transactionId, redirectUrl, 'ADMISSION');
     return { redirectUrl: result.redirectUrl, paymentId: createdPayment.id };
 };
 
 export const checkPaymentStatus = async (merchantTransactionId: string) => {
     logger.info(`[checkPaymentStatus] Request for MerchantTxId=${merchantTransactionId}`);
     try {
-        const response = await client.getOrderStatus(merchantTransactionId);
-        logger.debug(`[checkPaymentStatus] PhonePe Response: ${JSON.stringify(response)}`);
+        // We need to know which client to check status with. Iterate/Check both or use merchantId if known.
+        // Actually, for getOrderStatus, we need the Merchant ID. 
+        // We can try Admission first, then Hostel if not found? Or assume Admission for now?
+        // Better: We stored providerTxId in Payment table.
         
-        // Step 1. Fetch payment to return ID and update if needed
-        logger.debug(`[checkPaymentStatus] Step 1: Fetching local payment record for ${merchantTransactionId}`);
-        const payment = await prisma.payment.findFirst({ 
+        let payment = await prisma.payment.findFirst({ 
              where: { providerTxId: merchantTransactionId },
              include: { student: true }
         });
+
+        // Heuristic to determine which Client to use
+        let clientToCheck = getPhonePeClient('ADMISSION'); 
+        
+        // If we found the payment locally, we might guess the type based on component, 
+        // OR we just try both.
+        // If payment is HOSTEL component, use HOSTEL client.
+        if (payment && payment.component === PaymentComponent.HOSTEL) {
+             clientToCheck = getPhonePeClient('HOSTEL');
+        } 
+        // Special logic for College Fee needing Hostel Credentials?
+        // If we are not sure, we might need a more robust way.
+        
+        // Let's try with the determined client
+        let response;
+        try {
+             response = await clientToCheck.getOrderStatus(merchantTransactionId);
+        } catch (e) {
+             // If first try fails, maybe try the other one?
+             logger.warn(`[checkPaymentStatus] Failed with first client, trying HOSTEL client...`);
+             clientToCheck = getPhonePeClient('HOSTEL'); // Try fallthrough
+             response = await clientToCheck.getOrderStatus(merchantTransactionId);
+        }
+
+        logger.debug(`[checkPaymentStatus] PhonePe Response: ${JSON.stringify(response)}`);
+        
+        // Step 1. Fetch payment to return ID and update if needed (Fetch again or use above)
+        // ... (existing logic)
 
         if (!payment) {
             logger.warn(`[checkPaymentStatus] Payment record not found locally for ${merchantTransactionId}`);
@@ -305,6 +359,25 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
         }
     });
 
+    // --- CHECK FOR ADMISSION FINALIZATION HOOK ---
+    // This hook ensures that seat allocation, scholarship, and status updates happen 
+    // for Online payments initiated via the finalize-admission API.
+    if (payment.metadata?.targetAction === 'FINALIZE_ADMISSION') {
+        logger.info(`[processPaymentSuccess] Triggering Final Admission Updates for ${payment.studentId}`);
+        try {
+            // Dynamic import to avoid circular dependency issues
+            const { AdminStudentService } = require('../admin/adminStudent.service');
+            await prisma.$transaction(async (tx) => {
+                 await AdminStudentService.executeAdmissionUpdates(payment.studentId, payment.metadata, payment.id, 'SYSTEM', tx);
+            });
+            logger.info(`[processPaymentSuccess] Final Admission Updates Completed.`);
+        } catch (admissionError) {
+            logger.error(`[processPaymentSuccess] Failed to execute admission updates: ${admissionError}`);
+            // We do not throw here to avoid rolling back the Payment Success status, 
+            // but this requires manual intervention.
+        }
+    }
+
     // Update Admission Status
     if (payment.component === PaymentComponent.APPLICATION_FEE) {
          await prisma.studentAdmission.update({
@@ -437,10 +510,9 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
         }
     }
 
-    // --- NEW: WATERFALL FEE SETTLEMENT LOGIC ---
-    // If payment is for College Fees (Tuition, Hostel, etc.), settle pending demands
-    // Priority: Oldest Due Date first
+    // --- NEW: WATERFALL OR STRICT FEE SETTLEMENT LOGIC ---
     if (payment.component !== PaymentComponent.APPLICATION_FEE) {
+        
         // --- 1. Increment Paid Fee Counter (Centralized) ---
         await prisma.studentAdmission.update({
              where: { studentId: payment.studentId },
@@ -448,36 +520,55 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
         });
         
         try {
-            const pendingDemands = await prisma.studentFeeDemand.findMany({
-                where: {
-                    studentId: payment.studentId,
-                    status: FeeStatus.PENDING
-                },
-                orderBy: { dueDate: 'asc' }, // Settle oldest dues first
-                include: { feeStructure: true }
-            });
+            // STRICT SETTLEMENT: If payment linked to specific Demand
+            if (payment.feeDemandId) {
+                const demand = await prisma.studentFeeDemand.findUnique({
+                    where: { id: payment.feeDemandId }
+                });
 
-            let remainingPayment = payment.amount;
-
-            for (const demand of pendingDemands) {
-                if (remainingPayment <= 0) break;
-
-                // Check if we can fully settle this demand
-                if (remainingPayment >= demand.amount) {
+                if (demand) {
+                    const newStatus = payment.amount >= demand.amount ? 'FULL' : 'PARTIAL';
+                    
                     await prisma.studentFeeDemand.update({
                         where: { id: demand.id },
-                        data: { status: FeeStatus.FULL }
+                        data: { status: newStatus as any }
                     });
-                    remainingPayment -= demand.amount;
-                    logger.info(`Fee Demand ${demand.id} marked as FULL. Remaining: ${remainingPayment}`);
-                } else {
-                    // Partial payment case
-                    await prisma.studentFeeDemand.update({
-                        where: { id: demand.id },
-                        data: { status: FeeStatus.PARTIAL }
-                    });
-                    logger.info(`Fee Demand ${demand.id} marked as PARTIAL. Remaining payment ${remainingPayment} < Demand ${demand.amount}`);
-                    break; 
+                     logger.info(`[Strict Settlement] Demand ${demand.id} updated to ${newStatus}`);
+                }
+            } 
+            // WATERFALL SETTLEMENT (Fallback)
+            else {
+                const pendingDemands = await prisma.studentFeeDemand.findMany({
+                    where: {
+                        studentId: payment.studentId,
+                        status: FeeStatus.PENDING
+                    },
+                    orderBy: { dueDate: 'asc' }, // Settle oldest dues first
+                    include: { feeStructure: true }
+                });
+
+                let remainingPayment = payment.amount;
+
+                for (const demand of pendingDemands) {
+                    if (remainingPayment <= 0) break;
+
+                    // Check if we can fully settle this demand
+                    if (remainingPayment >= demand.amount) {
+                        await prisma.studentFeeDemand.update({
+                            where: { id: demand.id },
+                            data: { status: FeeStatus.FULL }
+                        });
+                        remainingPayment -= demand.amount;
+                        logger.info(`Fee Demand ${demand.id} marked as FULL. Remaining: ${remainingPayment}`);
+                    } else {
+                        // Partial payment case
+                        await prisma.studentFeeDemand.update({
+                            where: { id: demand.id },
+                            data: { status: FeeStatus.PARTIAL }
+                        });
+                        logger.info(`Fee Demand ${demand.id} marked as PARTIAL. Remaining payment ${remainingPayment} < Demand ${demand.amount}`);
+                        break; 
+                    }
                 }
             }
         } catch (err) {
@@ -495,8 +586,9 @@ const processPaymentSuccess = async (payment: any, metadata: any) => {
                 description: `Payment Received via ${payment.method || 'ONLINE'} (${payment.component})`,
                 referenceId: payment.id,
                 referenceType: 'PAYMENT',
+                feeHeadId: payment.feeHeadId || undefined, // Store Link
                 date: new Date()
-            }
+            } as any // Use valid input type
         });
         logger.info(`Ledger entry created for payment ${payment.providerTxId}`);
     } catch (err) {
@@ -549,18 +641,30 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
 };
 
 export const handlePaymentCallback = async (base64Payload: string, xVerify: string) => {
-    // Verify checksum
-    const stringToSign = base64Payload + SALT_KEY;
-    const sha256 = crypto.createHash('sha256').update(stringToSign).digest('hex');
-    const expectedChecksum = sha256 + "###" + SALT_INDEX;
+    // 1. Decode Payload first to identify Merchant
+    const decodedBuffer = Buffer.from(base64Payload, 'base64');
+    const decodedString = decodedBuffer.toString('utf-8');
+    const decodedPayload = JSON.parse(decodedString);
+    const { merchantTransactionId, code, merchantId } = decodedPayload;
 
-    if (expectedChecksum !== xVerify) {
-        logger.error("Invalid checksum in payment callback");
-        throw new AppError("Invalid checksum", 400);
+    // 2. Select Credentials
+    let saltKey = PHONEPE_CREDENTIALS.ADMISSION.SALT_KEY;
+    let saltIndex = PHONEPE_CREDENTIALS.ADMISSION.SALT_INDEX;
+
+    if (merchantId === PHONEPE_CREDENTIALS.HOSTEL.MERCHANT_ID) {
+        saltKey = PHONEPE_CREDENTIALS.HOSTEL.SALT_KEY;
+        saltIndex = PHONEPE_CREDENTIALS.HOSTEL.SALT_INDEX;
     }
 
-    const decodedPayload = JSON.parse(Buffer.from(base64Payload, 'base64').toString('utf-8'));
-    const { merchantTransactionId, code } = decodedPayload;
+    // 3. Verify Checksum
+    const stringToSign = base64Payload + saltKey;
+    const sha256 = crypto.createHash('sha256').update(stringToSign).digest('hex');
+    const expectedChecksum = sha256 + "###" + saltIndex;
+
+    if (expectedChecksum !== xVerify) {
+        logger.error(`Invalid checksum in payment callback. Recv: ${xVerify}, Calc: ${expectedChecksum}, Merch: ${merchantId}`);
+        throw new AppError("Invalid checksum", 400);
+    }
 
     const payment: any = await prisma.payment.findFirst({
         where: { providerTxId: merchantTransactionId },
@@ -719,6 +823,8 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
     });
 
     // 5. Create Payment Record (Pending)
+    const { feeHeadId, feeDemandId } = paymentDetails || {};
+
     const payment = await prisma.payment.create({
         data: {
             studentId,
@@ -726,15 +832,26 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
             status: PaymentStatus.PENDING,
             component: PaymentComponent.TUITION,
             providerTxId: transactionId,
-            method: paymentDetails?.paymentMode === 'PHONEPE' ? PaymentMethod.UPI : PaymentMethod.CASH
-        }
+            method: paymentDetails?.paymentMode === 'PHONEPE' ? PaymentMethod.UPI : PaymentMethod.CASH,
+            feeHeadId: feeHeadId || undefined,
+            feeDemandId: feeDemandId || undefined
+        } as any
     });
 
     // PhonePe Integration for College Fee
-
-
     try {
         const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
+
+        // Determine Credentials Type
+        // If it's pure Hostel fee, use HOSTEL. 
+        // If Tuition is involved, likely use ADMISSION/DEFAULT.
+        // Logic: If College Fee (Tuition) is 0 AND Hostel Fee > 0, use HOSTEL.
+        let feeType: 'ADMISSION' | 'HOSTEL' = 'ADMISSION';
+        if (collegeFee === 0 && transportFee === 0 && hostelFee > 0) {
+            feeType = 'HOSTEL';
+        }
+
+        const client = getPhonePeClient(feeType);
 
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(transactionId)
@@ -751,7 +868,7 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
 
 };
 
-export const initiateAdminOnlinePayment = async (studentId: string, amount: number, component: PaymentComponent, adminId: string) => {
+export const initiateAdminOnlinePayment = async (studentId: string, amount: number, component: PaymentComponent, adminId: string, feeHeadId?: string, feeDemandId?: string) => {
     // 1. Verify Student
     const student = await prisma.student.findUnique({ where: { id: studentId } });
     if (!student) throw new AppError('Student not found', 404);
@@ -770,8 +887,10 @@ export const initiateAdminOnlinePayment = async (studentId: string, amount: numb
             method: PaymentMethod.UPI,
             mode: PaymentMode.ONLINE, // Admin initiated online payment
             collectedBy: adminId, // Track who initiated it
-            metadata: { initiatedBy: 'ADMIN' }
-        }
+            metadata: { initiatedBy: 'ADMIN' },
+            feeHeadId,
+            feeDemandId
+        } as any
     });
 
 
@@ -779,6 +898,14 @@ export const initiateAdminOnlinePayment = async (studentId: string, amount: numb
     // 5. Initiate PhonePe Payment
     try {
         const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
+
+        // Admin initiated - decide based on component
+        let feeType: 'ADMISSION' | 'HOSTEL' = 'ADMISSION';
+        if (component === PaymentComponent.HOSTEL) {
+            feeType = 'HOSTEL';
+        }
+
+        const client = getPhonePeClient(feeType);
 
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(transactionId)
@@ -1006,6 +1133,9 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
     try {
         const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
         
+        // Token Payment = Admission
+        const client = getPhonePeClient('ADMISSION');
+
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(transactionId)
             .amount(TOKEN_AMOUNT * 100)
@@ -1326,7 +1456,16 @@ export const processUnifiedPayment = async (data: any) => {
         try {
             // Bypass removed: Always initiate real payment
 
-            const redirectUrl = `${process.env.FRONTEND_URL}/seatallotment/${studentId}/paymentstatus/?paymentId=${payment.id}`;
+            const redirectUrl = `${process.env.FRONTEND_URL}/admin/fees/offlinepayments?paymentId=${payment.id}`;
+            
+            // Unified API: Determine type
+            let feeType: 'ADMISSION' | 'HOSTEL' = 'ADMISSION';
+            if (component === PaymentComponent.HOSTEL) {
+                feeType = 'HOSTEL';
+            }
+
+            const client = getPhonePeClient(feeType);
+
             const request = StandardCheckoutPayRequest.builder()
                 .merchantOrderId(providerTxId)
                 .amount(Math.round(amount * 100))
@@ -1431,17 +1570,23 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     
     // 4a. Process Fee Demands First (Base Layer)
     feeDemands.forEach(demand => {
-        const headId = demand.feeStructure.feeHeadId;
-        // Lookup category from valid map, fallback to calculating if missing (edge case)
-        let category = feeHeadCategoryMap.get(headId);
+        const headId = demand.feeStructure?.feeHeadId;
+        let category: string | undefined;
+
+        if (headId) {
+            category = feeHeadCategoryMap.get(headId);
+        }
         
         if (!category) {
-             category = getCategoryFromHeadName(demand.feeStructure.feeHead.name);
-             feeHeadCategoryMap.set(headId, category); // Cache it
+             const headName = demand.feeStructure?.feeHead?.name || '';
+             category = getCategoryFromHeadName(headName);
+             if (headId) feeHeadCategoryMap.set(headId, category); // Cache it
         }
 
-        if (category in breakdown) {
-            breakdown[category].demanded += demand.amount;
+        const catKey = category || 'OTHER';
+
+        if (catKey in breakdown) {
+            breakdown[catKey].demanded += demand.amount;
         } else {
              breakdown.OTHER.demanded += demand.amount;
         }

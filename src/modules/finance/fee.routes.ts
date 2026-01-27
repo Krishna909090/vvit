@@ -7,7 +7,8 @@ import {
     getFeeStatistics,
     createDiscountRequest, reviewDiscountRequest, approveDiscount,
     getApplicationFee, updateApplicationFee,
-    collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands, getPaymentHistory
+    collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands, getPaymentHistory,
+    addStudentDiscount
 } from './fee.controller';
 
 import {
@@ -61,6 +62,9 @@ router.get('/student-demands/:studentId', authenticate, authorizePermission(['fi
 // Allotment Order
 // Allotment Order
 router.get('/allotment-order/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), downloadAllotmentOrder);
+
+// Student Discounts / Fines (Direct)
+router.post('/student-discount', authenticate, authorizePermission('finance.create.all'), addStudentDiscount);
 
 // Detail Payment History
 router.get('/payment-history/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getPaymentHistory);
