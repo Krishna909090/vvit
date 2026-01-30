@@ -1456,7 +1456,7 @@ export const processUnifiedPayment = async (data: any) => {
         try {
             // Bypass removed: Always initiate real payment
 
-            const redirectUrl = `${process.env.FRONTEND_URL}/admin/fees/offlinepayments?appId=${student.applicationId}&paymentId=${payment.id}`;
+            const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}/admin/fees/offlinepayments?appId=${student.applicationId}&paymentId=${payment.id}`;
             
             // Unified API: Determine type
             let feeType: 'ADMISSION' | 'HOSTEL' = 'ADMISSION';
