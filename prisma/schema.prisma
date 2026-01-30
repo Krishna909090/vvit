@@ -344,6 +344,8 @@ model Hostel {
   roomNumber        String?
   isDeleted         Boolean?           @default(false)
   cost              Float?             @default(0)
+  accommodationCost Float?             @default(0)
+  messCost          Float?             @default(0)
   createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
   createdBy         String?
@@ -373,6 +375,8 @@ model HostelRoom {
   capacity  Int
   type      String
   cost      Float?      @default(0)
+  accommodationCost Float?      @default(0)
+  messCost          Float?      @default(0)
   createdAt DateTime?   @default(now())
   updatedAt DateTime    @updatedAt
   createdBy String?
@@ -387,6 +391,8 @@ model HostelPriceCategory {
   sharing   Int
   roomType  HostelRoomType
   price     Float
+  accommodationPrice Float?    @default(0)
+  messPrice          Float?    @default(0)
   createdAt DateTime?      @default(now())
   updatedAt DateTime       @updatedAt
   createdBy String?
@@ -1094,6 +1100,8 @@ enum PaymentComponent {
   APPLICATION_FEE
   TUITION
   HOSTEL
+  HOSTEL_ACCOMMODATION
+  HOSTEL_MESS
   TRANSPORT
   OTHER
   SCHOLARSHIP_TOKEN
