@@ -1464,7 +1464,8 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
 
 // Step 4. Unified Payment Processor
 export const processUnifiedPayment = async (data: any) => {
-    const { studentId, amount, mode, method, component, feeHeadId, remarks, initiatedBy, referenceNumber, redirectUrl: customRedirectPath } = data;
+    const { studentId, amount, mode, method, component, feeHeadId, remarks, initiatedBy, referenceNumber, redirectUrl } = data;
+   
 
     // 1. Validate Student
     const student = await prisma.student.findUnique({ 
@@ -1528,11 +1529,11 @@ export const processUnifiedPayment = async (data: any) => {
         try {
             // Bypass removed: Always initiate real payment
 
-            const path = customRedirectPath || '/admin/fees/offlinepayments';
-            const queryParams = customRedirectPath 
+            const path = redirectUrl ?? '/admin/fees/offlinepayments';
+            const queryParams = path 
                 ? `studentId=${student.id}&paymentId=${payment.id}`
                 : `appId=${student.applicationId}&paymentId=${payment.id}`;
-            const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}${path}?${queryParams}`;
+            const finalRedirectUrl = `${process.env.FRONTEND_URL_ADMISSION}${path}?${queryParams}`;
             
             // Unified API: Determine type
             let feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION';
@@ -1547,7 +1548,7 @@ export const processUnifiedPayment = async (data: any) => {
             const request = StandardCheckoutPayRequest.builder()
                 .merchantOrderId(providerTxId)
                 .amount(Math.round(amount * 100))
-                .redirectUrl(redirectUrl)
+                .redirectUrl(finalRedirectUrl )
                 .build();
 
             const response = await client.pay(request);
