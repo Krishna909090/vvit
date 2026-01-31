@@ -1680,10 +1680,10 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     if (student && student.admissionDetails) {
         const admission = student.admissionDetails;
 
-        // 1. Tuition Demand Override (Admission Total Fee is usually the contracted amount)
-        if ((admission.totalFee ?? 0) > 0) {
-            breakdown.TUITION.demanded = admission.totalFee ?? 0;
-        }
+        // 1. Tuition Demand Override REMOVED to respect Fee Demands
+        // if ((admission.totalFee ?? 0) > 0) {
+        //    breakdown.TUITION.demanded = admission.totalFee ?? 0;
+        // }
 
         // 2. Hostel Demand Override
         if (admission.hostelId || admission.hostelType) {
@@ -1789,9 +1789,14 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
 
     // Summary
+    const totalDiscount = ledgers
+        .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT')
+        .reduce((sum, l) => sum + l.amount, 0);
+
     const summary = {
-        totalDemanded,
+        totalDemanded, // This is technically "Net Demanded" after discounts because of lines 1740
         totalPaid,
+        totalDiscount, 
         totalPending: Math.max(0, totalDemanded - totalPaid)
     };
     
