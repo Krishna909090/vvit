@@ -1464,7 +1464,7 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
 
 // Step 4. Unified Payment Processor
 export const processUnifiedPayment = async (data: any) => {
-    const { studentId, amount, mode, method, component, feeHeadId, remarks, initiatedBy, referenceNumber } = data;
+    const { studentId, amount, mode, method, component, feeHeadId, remarks, initiatedBy, referenceNumber, redirectUrl: customRedirectPath } = data;
 
     // 1. Validate Student
     const student = await prisma.student.findUnique({ 
@@ -1528,7 +1528,8 @@ export const processUnifiedPayment = async (data: any) => {
         try {
             // Bypass removed: Always initiate real payment
 
-            const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}/admin/fees/offlinepayments?appId=${student.applicationId}&paymentId=${payment.id}`;
+            const path = customRedirectPath || '/admin/fees/offlinepayments';
+            const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}${path}?appId=${student.applicationId}&paymentId=${payment.id}`;
             
             // Unified API: Determine type
             let feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION';
