@@ -1529,7 +1529,10 @@ export const processUnifiedPayment = async (data: any) => {
             // Bypass removed: Always initiate real payment
 
             const path = customRedirectPath || '/admin/fees/offlinepayments';
-            const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}${path}?appId=${student.applicationId}&paymentId=${payment.id}`;
+            const queryParams = customRedirectPath 
+                ? `studentId=${student.id}&paymentId=${payment.id}`
+                : `appId=${student.applicationId}&paymentId=${payment.id}`;
+            const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}${path}?${queryParams}`;
             
             // Unified API: Determine type
             let feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION';
