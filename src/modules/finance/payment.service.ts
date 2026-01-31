@@ -1721,6 +1721,30 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         }
     }
 
+    // --- LEDGER ADJUSTMENTS (Fines, Discounts, Scholarships) ---
+    // Iterate through ledger to apply modifiers to the breakdown
+    ledgers.forEach(entry => {
+        let category = getCategoryFromHeadName(entry.description || '');
+        if (!(category in breakdown)) category = 'OTHER';
+        
+        // Fines: We assume they are already captured in StudentFeeDemand or Admission Details.
+        // Adding them from Ledger DEBITs here risks double counting.
+        // User confirmed StudentFeeDemand has details.
+        
+        // Discounts & Scholarships (Credit)
+        // These serve to reduce the Net Payable against the Gross Demand.
+        if (entry.type === 'CREDIT') {
+             // Exclude Payments (already tracked in totalPaid)
+             if (entry.referenceType !== 'PAYMENT') {
+                  // Reduce the demand
+                  breakdown[category].demanded -= entry.amount;
+                  
+                  // Ensure demand doesn't go below zero
+                  if (breakdown[category].demanded < 0) breakdown[category].demanded = 0;
+             }
+        }
+    });
+
     // --- PAID CALCULATION (From Payments) ---
     payments.forEach(p => {
          let key = 'OTHER';
@@ -1750,8 +1774,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
          breakdown[key].paid += p.amount;
     });
 
-    // --- LEDGER OVERRIDES / SUPPLEMENTS ---
-    // We rely on FeeDemands + Admission Details now. 
+    // --- FINAL TOTALS ---
     
     // Calculate Totals based on the new Breakdown
     totalDemanded = 

@@ -13,6 +13,7 @@ import { encrypt, decrypt } from '../../utils/encryption';
 import { formatDate, formatTime, formatDateTime } from '../../utils/dateFormatter';
 import { generateHallTicketPDF } from '../../utils/pdfGenerator';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
+import { sendHallTicketEmail } from '../../utils/emailService';
 
 /* -------------------------------------------------------------------------- */
 /*                               HELPER FUNCTIONS                             */
@@ -923,6 +924,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         const rawS3Url = await uploadFileToS3(pdfBuffer, key, 'application/pdf');
 
         // Update the Hall Ticket record with the URL
+        // Update the Hall Ticket record with the URL
         if (rawS3Url) {
             await prisma.hallTicket.update({
                 where: { id: result.hallTicketId },
@@ -937,8 +939,31 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
                 hallTicketUrl = rawS3Url; // Fallback
             }
         }
+        
+        // Send Hall Ticket Email
+        if (student.email) {
+            try {
+                await sendHallTicketEmail(
+                     student.email,
+                     {
+                         studentName: student.name,
+                         applicationId: student.applicationId || '',
+                         examDate: formatDate(result.slot.date) || '',
+                         startTime: formatTime(result.slot.startTime) || '',
+                         examCenterName: result.slot.examCenter.name || '',
+                         examCenterAddress: result.slot.examCenter.address || 'Refer Hall Ticket for Address',
+                     },
+                     pdfBuffer
+                 );
+                 logger.info(`[bookExamSlot] Hall Ticket email sent to ${student.email}`);
+            } catch (emailErr) {
+                logger.error(`[bookExamSlot] Failed to send Hall Ticket email: ${emailErr}`);
+                // Non-blocking
+            }
+        }
 
     } catch (e) {
+// ... existing code ...
         logger.error(`[bookExamSlot] Failed to generate/upload PDF for student ${studentId}. Slot is booked but ticket missing URL. Error: ${e}`);
         // We do NOT throw here, so the booking remains valid. 
         // The user can later "download hall ticket" which should handle generation on the fly if missing.

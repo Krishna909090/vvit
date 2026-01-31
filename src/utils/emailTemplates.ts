@@ -200,3 +200,114 @@ export const getPaymentReceiptTemplate = (data: PaymentEmailData) => {
 </html>
 `;
 };
+
+export interface HallTicketEmailData {
+    studentName: string;
+    applicationId: string;
+    examDate: string;
+    startTime: string;
+    examCenterName: string;
+    examCenterAddress: string;
+    supportEmail?: string;
+}
+
+export const getHallTicketTemplate = (data: HallTicketEmailData) => {
+    const {
+        studentName,
+        applicationId,
+        examDate,
+        startTime,
+        examCenterName,
+        examCenterAddress,
+        supportEmail = "admissions@vvit.edu.in"
+    } = data;
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Hall Ticket Generated</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #FCFCFD; font-family: Arial, Helvetica, sans-serif; color: #6E6C78; }
+    .container { max-width: 600px; margin: 0 auto; background-color: #FCFCFD; }
+    .banner-table { width: 100%; border-collapse: collapse; border-radius: 12px 12px 0 0; overflow: hidden; }
+    .banner-bg { background-size: cover; background-position: center center; background-repeat: no-repeat; height: 220px; }
+    .logo-cell { text-align: right; vertical-align: top; padding: 20px; }
+    .content { padding: 32px 40px 10px 40px; font-size: 14px; line-height: 1.75; color: #6E6C78; }
+    .content p { margin: 0 0 14px 0; }
+    .content strong { color: #131010; }
+    .summary { margin: 10px 0 16px 18px; padding: 0; }
+    .summary li { margin-bottom: 6px; padding-left: 4px; color: #6E6C78; }
+    .signature { margin-top: 18px; }
+    .divider { border-top: 1px solid #DEDFE3; margin: 20px 0 10px; }
+    .cta { display: inline-block; margin-top: 12px; padding: 10px 18px; background-color: #E5776B; color: #FCFCFD !important; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 700; }
+    .watermark { text-align: center; font-size: 96px; font-weight: 800; color: #FFCC99; letter-spacing: 10px; margin: 8px 0 30px; line-height: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <table class="banner-table" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td class="banner-bg" background="cid:banner" style="background-image: url('cid:banner');">
+          <!--[if gte mso 9]>
+          <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:600px;height:220px;">
+            <v:fill type="tile" src="cid:banner" color="#333333" />
+            <v:textbox inset="0,0,0,0">
+          <![endif]-->
+          <div style="height: 220px;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" height="100%">
+              <tr>
+                <td class="logo-cell">
+                  <img src="cid:logo" alt="VVIT Logo" width="80" style="width:80px; height:auto;" />
+                </td>
+              </tr>
+            </table>
+          </div>
+          <!--[if gte mso 9]>
+            </v:textbox>
+          </v:rect>
+          <![endif]-->
+        </td>
+      </tr>
+    </table>
+
+    <div class="content">
+      <p><strong>Dear ${studentName},</strong></p>
+      
+      <p><strong>Hall Ticket Generated Successfully</strong></p>
+
+      <p>Your Hall Ticket for the upcoming Entrance Examination at <strong>Vasireddy Venkatadri International Technological University</strong> has been generated.</p>
+
+      <p>Please find the Hall Ticket attached to this email. You are required to carry a printed copy of this Hall Ticket along with a valid Government ID proof to the exam center.</p>
+
+      <ul class="summary">
+        <li><strong>Application ID:</strong> ${applicationId}</li>
+        <li><strong>Exam Date:</strong> ${examDate}</li>
+        <li><strong>Reporting Time:</strong> ${startTime}</li>
+        <li><strong>Exam Center:</strong> ${examCenterName}</li>
+        <li><strong>Location:</strong> ${examCenterAddress}</li>
+      </ul>
+
+      <p><strong>Important Instructions:</strong></p>
+      <ul class="summary">
+        <li>Please reach the exam center 30 minutes before the reporting time.</li>
+        <li>Electronic gadgets are strictly prohibited inside the examination hall.</li>
+        <li>Latecomers will not be allowed to enter.</li>
+      </ul>
+
+      <p>For any queries, please contact us at <strong>${supportEmail}</strong>.</p>
+
+      <div class="signature">
+        <p>Best regards,<br><strong>Examination Cell, VVITU</strong></p>
+      </div>
+
+      <div class="divider"></div>
+       <div class="watermark">VVITU</div>
+    </div>
+  </div>
+</body>
+</html>
+`;
+};

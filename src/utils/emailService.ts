@@ -1,12 +1,88 @@
 import axios from 'axios';
 import logger from './logger';
-import { getPaymentReceiptTemplate, PaymentEmailData, PaymentEmailType } from './emailTemplates';
+import { getPaymentReceiptTemplate, PaymentEmailData, PaymentEmailType, HallTicketEmailData, getHallTicketTemplate } from './emailTemplates';
 import fs from 'fs';
 import path from 'path';
 import { EmailStatus } from '@prisma/client';
 import { createEmailLog, updateEmailStatus, getEmailLogById } from '../modules/system/emailLog.service';
 import { generateInvoicePDF, InvoiceData } from './invoiceGenerator';
 import { uploadFileToS3 } from './s3Utils';
+
+// ... (existing helper function and interface code)
+
+/**
+ * Send Hall Ticket Email
+ */
+export const sendHallTicketEmail = async (
+    recipientEmail: string,
+    data: HallTicketEmailData,
+    pdfBuffer: Buffer
+): Promise<{ success: boolean }> => {
+    let emailLogId: string | undefined;
+
+    try {
+        logger.info(`[EMAIL SERVICE] Sending Hall Ticket to: ${recipientEmail}`);
+
+        const htmlContent = getHallTicketTemplate(data);
+        const subject = `Hall Ticket - ${data.applicationId} - VVITU Entrance Exam`;
+
+        // Create Log Entry
+        const logEntry = await createEmailLog({
+            recipientEmail,
+            subject,
+            content: htmlContent,
+            templateType: 'HALL_TICKET',
+            metadata: {
+                studentId: data.applicationId,
+                examDate: data.examDate,
+                center: data.examCenterName
+            }
+        });
+        if (logEntry) emailLogId = logEntry.id;
+
+        // Prepare Images
+        const assetsDir = path.join(process.cwd(), 'src/assets');
+        let logoBase64 = '';
+        let bannerBase64 = '';
+
+        try {
+            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
+        } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
+
+        const base64Pdf = pdfBuffer.toString('base64');
+        const attachments = [{
+            name: `HallTicket_${data.applicationId}.pdf`,
+            mime_type: 'application/pdf',
+            content: base64Pdf
+        }];
+
+        const inlineImages = [];
+        if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });
+        if (bannerBase64) inlineImages.push({ name: 'collegeBuilding.jpg', mime_type: 'image/jpeg', content: bannerBase64, cid: 'banner' });
+
+        const result = await sendZeptoEmail(recipientEmail, subject, htmlContent, attachments, inlineImages);
+
+        if (emailLogId) {
+            await updateEmailStatus(
+                emailLogId,
+                result.success ? EmailStatus.SENT : EmailStatus.FAILED,
+                result.messageId,
+                result.error
+            );
+        }
+
+        return { success: result.success };
+    } catch (error: any) {
+        logger.error('[EMAIL SERVICE] Send Hall Ticket Failed', error);
+
+        if (emailLogId) {
+            await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
+        }
+        return { success: false };
+    }
+};
+
 
 // Old Type wrapper for compatibility if needed, but we will use PaymentEmailData generally
 interface EmailData extends PaymentEmailData {
