@@ -1623,13 +1623,13 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     let totalPaid = 0;
     
     const breakdown: any = {
-        HOSTEL: { demanded: 0, paid: 0 },
-        TRANSPORT: { demanded: 0, paid: 0 },
-        TUITION: { demanded: 0, paid: 0 },
-        BOOK_BANK: { demanded: 0, paid: 0 },
-        ADMISSION: { demanded: 0, paid: 0 },
-        SKILL_DEVELOPMENT: { demanded: 0, paid: 0 },
-        OTHER: { demanded: 0, paid: 0 }
+        HOSTEL: { demanded: 0, paid: 0, fine: 0, discount: 0 },
+        TRANSPORT: { demanded: 0, paid: 0, fine: 0, discount: 0 },
+        TUITION: { demanded: 0, paid: 0, fine: 0, discount: 0 },
+        BOOK_BANK: { demanded: 0, paid: 0, fine: 0, discount: 0 },
+        ADMISSION: { demanded: 0, paid: 0, fine: 0, discount: 0 },
+        SKILL_DEVELOPMENT: { demanded: 0, paid: 0, fine: 0, discount: 0 },
+        OTHER: { demanded: 0, paid: 0, fine: 0, discount: 0 }
     };
     
     // Helper to map Fee Head Name to Category
@@ -1671,8 +1671,10 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
         if (catKey in breakdown) {
             breakdown[catKey].demanded += demand.amount;
+            if (demand.fineAmount) breakdown[catKey].fine += demand.fineAmount;
         } else {
              breakdown.OTHER.demanded += demand.amount;
+             if (demand.fineAmount) breakdown.OTHER.fine += demand.fineAmount;
         }
     });
 
@@ -1736,6 +1738,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         if (entry.type === 'CREDIT') {
              // Exclude Payments (already tracked in totalPaid)
              if (entry.referenceType !== 'PAYMENT') {
+                  // Track Discount
+                  breakdown[category].discount += entry.amount;
+
                   // Reduce the demand
                   breakdown[category].demanded -= entry.amount;
                   
