@@ -1530,7 +1530,7 @@ export const processUnifiedPayment = async (data: any) => {
             // Bypass removed: Always initiate real payment
 
             const path = redirectUrl ?? '/admin/fees/offlinepayments';
-            const queryParams = path 
+            const queryParams = redirectUrl 
                 ? `studentId=${student.id}&paymentId=${payment.id}`
                 : `appId=${student.applicationId}&paymentId=${payment.id}`;
             const finalRedirectUrl = `${process.env.FRONTEND_URL_ADMISSION}${path}?${queryParams}`;
@@ -1548,7 +1548,7 @@ export const processUnifiedPayment = async (data: any) => {
             const request = StandardCheckoutPayRequest.builder()
                 .merchantOrderId(providerTxId)
                 .amount(Math.round(amount * 100))
-                .redirectUrl(finalRedirectUrl )
+                .redirectUrl(finalRedirectUrl)
                 .build();
 
             const response = await client.pay(request);
