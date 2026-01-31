@@ -1535,6 +1535,8 @@ export const processUnifiedPayment = async (data: any) => {
                 : `appId=${student.applicationId}&paymentId=${payment.id}`;
             const finalRedirectUrl = `${process.env.FRONTEND_URL_ADMISSION}${path}?${queryParams}`;
             
+            logger.info(`[processUnifiedPayment] Redirect Debug: inputRedirectUrl=${redirectUrl}, path=${path}, queryParams=${queryParams}, finalUrl=${finalRedirectUrl}`);
+            
             // Unified API: Determine type
             let feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION';
             if (component === PaymentComponent.HOSTEL || component === PaymentComponent.HOSTEL_ACCOMMODATION) {
