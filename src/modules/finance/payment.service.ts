@@ -1573,24 +1573,10 @@ export const processUnifiedPayment = async (data: any) => {
 };
 
 // Enhanced History
+// Enhanced History
 export const getStudentFinancialHistory = async (studentId: string) => {
-    // 1. Fetch Demands (Debits from Ledger)
-    const ledgers = await prisma.studentLedger.findMany({
-        where: { studentId },
-        orderBy: { date: 'desc' }
-    });
-    
-    // 2. Fetch Payments (Credits) via Payments Table
-    const payments = await prisma.payment.findMany({
-        where: { studentId, status: PaymentStatus.SUCCESS },
-        include: {
-            feeDemand: {
-                include: { feeStructure: { include: { feeHead: true } } }
-            }
-        }
-    });
-
-    // 3. Fetch Student Admission Details for Accurate Demand Calculation
+    // 1. Parallel Data Fetching
+    // 1. Fetch Student Details First (Required for context)
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         include: {
@@ -1603,36 +1589,37 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         }
     });
 
-    // 4. Fetch Student Fee Demands (For Book Bank, Skill, etc.)
-    const feeDemands = await prisma.studentFeeDemand.findMany({
-        where: { studentId },
-        include: { 
-            feeStructure: {
-                include: { feeHead: true }
+    // 2. Fetch Configuration Data (Parallel is fine for these small tables)
+    const [allFeeHeads, hostelPrices] = await Promise.all([
+        prisma.feeHead.findMany(),
+        prisma.hostelPriceCategory.findMany()
+    ]);
+
+    // 3. Fetch Financial Records (Parallel)
+    const [ledgers, payments, feeDemands] = await Promise.all([
+        prisma.studentLedger.findMany({ where: { studentId }, orderBy: { date: 'desc' } }),
+        prisma.payment.findMany({ 
+            where: { studentId, status: PaymentStatus.SUCCESS },
+            include: {
+                feeDemand: {
+                    include: { feeStructure: { include: { feeHead: true } } }
+                }
             }
-        }
+        }),
+        prisma.studentFeeDemand.findMany({
+            where: { studentId },
+            include: { feeStructure: { include: { feeHead: true } } }
+        })
+    ]);
+
+    // 2. Initialize Breakdown
+    const categories = ['HOSTEL', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'SKILL_DEVELOPMENT', 'OTHER'];
+    const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number }> = {};
+    categories.forEach(cat => {
+        breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0 };
     });
 
-    // 5. Fetch ALL Fee Heads (Restored)
-    const allFeeHeads = await prisma.feeHead.findMany();
-
-    // 6. Fetch Hostel Price Categories for Fallback Calculation
-    const hostelPrices = await prisma.hostelPriceCategory.findMany();
-
-    let totalDemanded = 0;
-    let totalPaid = 0;
-    
-    const breakdown: any = {
-        HOSTEL: { demanded: 0, paid: 0, fine: 0, discount: 0 },
-        TRANSPORT: { demanded: 0, paid: 0, fine: 0, discount: 0 },
-        TUITION: { demanded: 0, paid: 0, fine: 0, discount: 0 },
-        BOOK_BANK: { demanded: 0, paid: 0, fine: 0, discount: 0 },
-        ADMISSION: { demanded: 0, paid: 0, fine: 0, discount: 0 },
-        SKILL_DEVELOPMENT: { demanded: 0, paid: 0, fine: 0, discount: 0 },
-        OTHER: { demanded: 0, paid: 0, fine: 0, discount: 0 }
-    };
-    
-    // Helper to map Fee Head Name to Category
+    // 3. Helper: Map Fee Head Name to Category
     const getCategoryFromHeadName = (name: string): string => {
         const headName = (name || '').toUpperCase();
         if (headName.includes('HOSTEL')) return 'HOSTEL';
@@ -1644,69 +1631,47 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         return 'OTHER';
     };
 
-    // Fee Head ID -> Category Map (Centralized Source of Truth)
+    // Fee Head ID -> Category Map
     const feeHeadCategoryMap = new Map<string, string>();
-    allFeeHeads.forEach(h => {
-        feeHeadCategoryMap.set(h.id, getCategoryFromHeadName(h.name));
-    });
+    allFeeHeads.forEach(h => feeHeadCategoryMap.set(h.id, getCategoryFromHeadName(h.name)));
 
-    // --- DEMAND CALCULATION (From Admission & Fee Tables) ---
-    
-    // 4a. Process Fee Demands First (Base Layer)
+    // 4. DEMAND CALCULATION (From Fee Tables)
     feeDemands.forEach(demand => {
         const headId = demand.feeStructure?.feeHeadId;
         let category: string | undefined;
 
-        if (headId) {
-            category = feeHeadCategoryMap.get(headId);
-        }
-        
+        if (headId) category = feeHeadCategoryMap.get(headId);
         if (!category) {
              const headName = demand.feeStructure?.feeHead?.name || '';
              category = getCategoryFromHeadName(headName);
-             if (headId) feeHeadCategoryMap.set(headId, category); // Cache it
+             if (headId) feeHeadCategoryMap.set(headId, category);
         }
 
         const catKey = category || 'OTHER';
-
-        if (catKey in breakdown) {
-            breakdown[catKey].demanded += demand.amount;
-            if (demand.fineAmount) breakdown[catKey].fine += demand.fineAmount;
-        } else {
-             breakdown.OTHER.demanded += demand.amount;
-             if (demand.fineAmount) breakdown.OTHER.fine += demand.fineAmount;
-        }
+        const target = breakdown[catKey] || breakdown['OTHER'];
+        
+        target.demanded += demand.amount;
+        if (demand.fineAmount) target.fine += demand.fineAmount;
     });
 
-    // 4b. Override/Refine with Admission Details (The "Truth" for Allocations)
+    // 5. Override/Refine with Admission Details
     if (student && student.admissionDetails) {
         const admission = student.admissionDetails;
 
-        // 1. Tuition Demand Override REMOVED to respect Fee Demands
-        // if ((admission.totalFee ?? 0) > 0) {
-        //    breakdown.TUITION.demanded = admission.totalFee ?? 0;
-        // }
-
-        // 2. Hostel Demand Override
+        // Hostel Cost
         if (admission.hostelId || admission.hostelType) {
              let hostelCost = 0;
-             
              // Priority 1: Specific Room Cost
              if (admission.roomNumber && admission.hostel) {
                  const room = admission.hostel.blocks.flatMap(b => b.rooms).find(r => r.number === admission.roomNumber);
                  if (room) hostelCost = room.cost ?? 0;
-             } 
-             
-             // Priority 2: Hostel Type (Fallback if no room assigned or room cost 0)
+             }
+             // Priority 2: Hostel Type
              if (hostelCost === 0 && admission.hostelType) {
-                 // Parse "SHARING_4" -> 4
                  const sharingMatch = admission.hostelType.match(/SHARING_(\d+)/);
                  if (sharingMatch) {
-                     const sharingCount = parseInt(sharingMatch[1]);
-                     const priceCategory = hostelPrices.find(p => p.sharing === sharingCount);
-                     if (priceCategory) {
-                         hostelCost = priceCategory.price;
-                     }
+                     const priceCategory = hostelPrices.find(p => p.sharing === parseInt(sharingMatch[1]));
+                     if (priceCategory) hostelCost = priceCategory.price;
                  }
              }
 
@@ -1714,92 +1679,63 @@ export const getStudentFinancialHistory = async (studentId: string) => {
                  hostelCost += 6000;
              }
              
+             // If calculated cost is different/better, we might overrides. 
+             // Logic kept same: We override demanded here.
              breakdown.HOSTEL.demanded = hostelCost;
         }
 
-        // 3. Transport Demand Override
+        // Transport Demand Override
         if (admission.transportRouteId && admission.transportRoute) {
             breakdown.TRANSPORT.demanded = admission.transportRoute.cost;
         }
     }
 
-    // --- LEDGER ADJUSTMENTS (Fines, Discounts, Scholarships) ---
-    // Iterate through ledger to apply modifiers to the breakdown
+    // 6. LEDGER ADJUSTMENTS (Discounts, Scholarships)
     ledgers.forEach(entry => {
-        let category = getCategoryFromHeadName(entry.description || '');
-        if (!(category in breakdown)) category = 'OTHER';
-        
-        // Fines: We assume they are already captured in StudentFeeDemand or Admission Details.
-        // Adding them from Ledger DEBITs here risks double counting.
-        // User confirmed StudentFeeDemand has details.
-        
-        // Discounts & Scholarships (Credit)
-        // These serve to reduce the Net Payable against the Gross Demand.
-        if (entry.type === 'CREDIT') {
-             // Exclude Payments (already tracked in totalPaid)
-             if (entry.referenceType !== 'PAYMENT') {
-                  // Track Discount
-                  breakdown[category].discount += entry.amount;
+        let category = 'OTHER';
+        if (entry.feeHeadId && feeHeadCategoryMap.has(entry.feeHeadId)) {
+            category = feeHeadCategoryMap.get(entry.feeHeadId) || 'OTHER';
+        } else {
+             category = getCategoryFromHeadName(entry.description || '');
+        }
 
-                  // Reduce the demand
-                  breakdown[category].demanded -= entry.amount;
-                  
-                  // Ensure demand doesn't go below zero
-                  if (breakdown[category].demanded < 0) breakdown[category].demanded = 0;
-             }
+        const target = breakdown[category] || breakdown['OTHER'];
+
+        // Fines (Skipped as per existing logic logic if in Deamnd)
+        
+        // Credits (Discounts/Scholarships)
+        if (entry.type === 'CREDIT' && entry.referenceType !== 'PAYMENT') {
+            target.discount += entry.amount;
+            target.demanded -= entry.amount;
+            if (target.demanded < 0) target.demanded = 0;
         }
     });
 
-    // --- PAID CALCULATION (From Payments) ---
+    // 7. PAID CALCULATION
     payments.forEach(p => {
          let key = 'OTHER';
-
-         // Strategy 1: Link via Fee Demand
-         if (p.feeDemand && p.feeDemand.feeStructure && p.feeDemand.feeStructure.feeHead) {
+         if (p.feeDemand?.feeStructure?.feeHead) {
              key = getCategoryFromHeadName(p.feeDemand.feeStructure.feeHead.name);
-         }
-         // Strategy 2: Link via Fee Head ID (Direct)
-         else if (p.feeHeadId && feeHeadCategoryMap.has(p.feeHeadId)) {
+         } else if (p.feeHeadId && feeHeadCategoryMap.has(p.feeHeadId)) {
              key = feeHeadCategoryMap.get(p.feeHeadId) || 'OTHER';
-         }
-         // Strategy 3: Direct Component Fallback
-         else {
+         } else {
              const comp = p.component || 'OTHER';
-             key = comp;
-             if (comp === PaymentComponent.SCHOLARSHIP_TOKEN) {
-                 key = 'ADMISSION'; 
-             }
+             key = comp === PaymentComponent.SCHOLARSHIP_TOKEN ? 'ADMISSION' : comp;
          }
          
-         // Ensure key exists, else OTHER
-         if (!(key in breakdown)) {
-             key = 'OTHER';
-         }
-         
-         breakdown[key].paid += p.amount;
+         const target = breakdown[key] || breakdown['OTHER'];
+         target.paid += p.amount;
     });
 
-    // --- FINAL TOTALS ---
-    
-    // Calculate Totals based on the new Breakdown
-    totalDemanded = 
-        breakdown.HOSTEL.demanded + 
-        breakdown.TRANSPORT.demanded + 
-        breakdown.TUITION.demanded + 
-        breakdown.BOOK_BANK.demanded + 
-        breakdown.ADMISSION.demanded +
-        breakdown.SKILL_DEVELOPMENT.demanded + 
-        breakdown.OTHER.demanded;
-
-    totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-
-    // Summary
+    // 8. FINAL SUMMARY
+    const totalDemanded = Object.values(breakdown).reduce((sum, cat) => sum + cat.demanded, 0);
+    const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
     const totalDiscount = ledgers
         .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT')
         .reduce((sum, l) => sum + l.amount, 0);
 
     const summary = {
-        totalDemanded, // This is technically "Net Demanded" after discounts because of lines 1740
+        totalDemanded,
         totalPaid,
         totalDiscount, 
         totalPending: Math.max(0, totalDemanded - totalPaid)
