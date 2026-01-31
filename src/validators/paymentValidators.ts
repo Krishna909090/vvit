@@ -11,6 +11,8 @@ export const payFeeComponentSchema = z.object({
         feeHeadId: z.string().uuid().optional(),
         remarks: z.string().optional(),
         referenceNumber: z.string().optional(), 
+        redirectUrl: z.string().optional(),
+        customRedirectPath: z.string().optional(),
     }).refine((data) => {
         if (data.mode === PaymentMode.OFFLINE) {
             return !!data.method && !!data.referenceNumber;
