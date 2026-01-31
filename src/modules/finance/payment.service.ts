@@ -222,13 +222,16 @@ export const initiateMultiComponentPayment = async (
         // We should prep the array with student data attached to at least one or all.
         const paymentsWithStudent = createdPayments.map(p => ({ ...p, student }));
         
-        await processPaymentSuccess(paymentsWithStudent, { remarks, mode: 'OFFLINE_ENTRY', collectedBy: userId });
+        const successResult = await processPaymentSuccess(paymentsWithStudent, { remarks, mode: 'OFFLINE_ENTRY', collectedBy: userId });
+
+        const presignedInvoiceUrl = successResult?.invoiceUrl ? await convertToPresignedUrl(successResult.invoiceUrl) : null;
 
         return { 
             success: true, 
             message: "Cash payment recorded successfully", 
             paymentIds, 
-            transactionId 
+            transactionId,
+            invoiceUrl: presignedInvoiceUrl
         };
     } else {
         // UPI / ONLINE -> Initiate PhonePe
@@ -706,6 +709,11 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
 
     // Fetch the updated payment to return invoiceUrl and status
     const updatedPayment = await prisma.payment.findUnique({ where: { id: payment.id } });
+    
+    if (updatedPayment?.invoiceUrl) {
+        updatedPayment.invoiceUrl = await convertToPresignedUrl(updatedPayment.invoiceUrl) as string;
+    }
+    
     return updatedPayment;
 };
 
@@ -1100,13 +1108,11 @@ export const getInvoiceUrl = async (paymentId: string) => {
         throw new AppError('Invoice not generated yet', 404);
     }
 
-    // Extract Key from URL
-    const key = getS3KeyFromUrl(payment.invoiceUrl);
-    if (!key) {
+    const presignedUrl = await convertToPresignedUrl(payment.invoiceUrl);
+    if (!presignedUrl) {
          throw new AppError('Invalid invoice URL format', 500);
     }
     
-    const presignedUrl = await getPresignedUrl(key);
     return presignedUrl;
 };
 
@@ -1157,20 +1163,7 @@ export const getAllotmentOrderUrl = async (studentId: string, regenerate: boolea
     // s3Utils.getPresignedUrl takes Key. 
     
     // Logic to extract key from full URL:
-    let key = doc.url;
-    
-    // Check if it's already a clean key or a path
-    if (doc.url.startsWith('student/') || doc.url.startsWith('students/')) {
-        key = doc.url;
-    } else {
-        // Handle https://bucket.s3.region.amazonaws.com/key format
-        const parts = doc.url.split('.amazonaws.com/');
-        if (parts.length > 1) {
-            key = decodeURIComponent(parts[1]);
-        }
-    }
-
-    return getPresignedUrl(key);
+    return await convertToPresignedUrl(doc.url) || doc.url;
 };
 
 export const initiateTokenPayment = async (studentId: string, data: any = {}) => {
@@ -1518,15 +1511,7 @@ export const processUnifiedPayment = async (data: any) => {
         // Reuse Success Logic (Ledger, Invoice, Email)
         const successResult = await processPaymentSuccess({ ...payment, student }, { remarks, adminId: initiatedBy });
         
-        let presignedInvoiceUrl = null;
-        if (successResult?.invoiceUrl) {
-            // Generate presigned URL for the uploaded invoice
-            // The processPaymentSuccess returns the raw S3 URL, we need to extract key and presign
-            const key = getS3KeyFromUrl(successResult.invoiceUrl);
-            if (key) {
-                 presignedInvoiceUrl = await getPresignedUrl(key);
-            }
-        }
+        const presignedInvoiceUrl = await convertToPresignedUrl(successResult?.invoiceUrl);
 
         // Return Success Response
         return { 
@@ -1782,16 +1767,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     
     // Generate presigned URLs for payments
     const paymentsWithUrls = await Promise.all(payments.map(async (p) => {
-        let presignedInvoiceUrl = null;
-        if (p.invoiceUrl) {
-           const key = getS3KeyFromUrl(p.invoiceUrl);
-           if (key) {
-               presignedInvoiceUrl = await getPresignedUrl(key);
-           }
-        }
         return {
             ...p,
-            invoiceUrl: presignedInvoiceUrl // Override with presigned URL
+            invoiceUrl: await convertToPresignedUrl(p.invoiceUrl)
         };
     }));
 
