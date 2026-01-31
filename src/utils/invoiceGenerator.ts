@@ -219,6 +219,16 @@ function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData) {
   })
 
   drawLine(doc, y + 4)
+  y += 8
+
+  // TOTAL Row
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#000')
+  doc.text('TOTAL', 90, y)
+  doc.text(
+    data.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
+    460,
+    y
+  )
 }
 
 /* ================= FOOTER ================= */

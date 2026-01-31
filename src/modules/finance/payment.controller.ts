@@ -1,4 +1,3 @@
-
 import { Request, Response, NextFunction } from 'express';
 import { catchAsync } from '../../utils/catchAsync';
 import { AppError } from '../../utils/AppError';
@@ -16,8 +15,31 @@ import {
     getStudentFinancialHistory,
     initiateTokenPayment,
     recordOfflineApplicationFeePayment,
-    processUnifiedPayment
+    processUnifiedPayment,
+    initiateMultiComponentPayment
 } from './payment.service';
+
+export const payMultiComponentFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[payMultiComponentFee] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId, components, paymentMethod, remarks, referenceNumber } = req.body;
+    
+    if (!studentId || !components || !Array.isArray(components) || components.length === 0) {
+        throw new AppError("Student ID and components array are required", 400);
+    }
+    
+    // Authorization: User ID should match student's User ID unless Admin (handled by RBAC usually but check logic)
+    const currentUserId = req.user?.userId || undefined;
+
+    const result = await initiateMultiComponentPayment(studentId, components, currentUserId, paymentMethod, remarks, referenceNumber);
+    
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.success ? "Payment successfully recorded" : "Multi-component payment initiated",
+        data: result
+    });
+});
 
 // Phase 1: Pay Test Fee
 export const payTestFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
