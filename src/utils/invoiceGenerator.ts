@@ -46,11 +46,22 @@ export const generateInvoicePDF = async (
       doc.on('end', () => resolve(Buffer.concat(buffers)))
       doc.on('error', reject)
 
-      drawHeader(doc)
-      drawInfoGrid(doc, data)
-      drawSubjectBar(doc, data)
-      drawItemsTable(doc, data)
-      drawFooter(doc)
+      // Top Half - Student Copy
+      drawInvoiceInstance(doc, data, 0, 'STUDENT COPY')
+
+      // Cut Line (Dashed)
+      const midY = 421;
+      doc
+         .strokeColor('#ccc')
+         .dash(5, { space: 5 })
+         .moveTo(0, midY)
+         .lineTo(595, midY)
+         .stroke();
+      
+      doc.undash(); // Reset dash
+      
+      // Bottom Half - Office Copy
+      drawInvoiceInstance(doc, data, 421, 'OFFICE COPY')
 
       doc.end()
     } catch (err) {
@@ -59,9 +70,31 @@ export const generateInvoicePDF = async (
   })
 }
 
+/* ================= DRAWING LOGIC ================= */
+
+function drawInvoiceInstance(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number, copyLabel: string) {
+    drawHeader(doc, offsetY)
+    drawWatermark(doc, copyLabel, offsetY)
+    drawInfoGrid(doc, data, offsetY)
+    drawSubjectBar(doc, data, offsetY)
+    drawItemsTable(doc, data, offsetY)
+    drawFooter(doc, offsetY)
+}
+
+function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) {
+    doc.save()
+    doc.font('Helvetica-Bold')
+       .fontSize(10)
+       .fillColor('#e74c3c')
+       .text(label, 500, offsetY + 25, {
+           align: 'right'
+       })
+    doc.restore()
+}
+
 /* ================= HEADER ================= */
 
-function drawHeader(doc: PDFKit.PDFDocument) {
+function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
   const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
 
   // University name
@@ -72,19 +105,19 @@ function drawHeader(doc: PDFKit.PDFDocument) {
     .text(
       'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
       0,
-      20,
+      topY + 20,
       { align: 'center', width: doc.page.width }
     )
 
   // Logo (left)
   if (fs.existsSync(logoPath)) {
-    doc.image(logoPath, 30, 45, { width: 60 })
+    doc.image(logoPath, 30, topY + 45, { width: 60 })
   } else {
     doc
       .font('Helvetica-Bold')
       .fontSize(14)
       .fillColor('#C0392B')
-      .text('VVIT', 30, 55)
+      .text('VVIT', 30, topY + 55)
   }
 
   // Address (right – unchanged content)
@@ -95,15 +128,15 @@ function drawHeader(doc: PDFKit.PDFDocument) {
     .text(
       'VVIT University, Uppalapadu Road,\nNambur, DT, Pedhakakani Mandal,\nGuntur, Andhra Pradesh – 522508',
       350,
-      48,
+      topY + 48,
       { align: 'right' }
     )
 }
 
 /* ================= INFO GRID ================= */
 
-function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData) {
-  const top = 95
+function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
+  const top = offsetY + 95
 
   doc
     .roundedRect(30, top, 535, 85, 6)
@@ -144,8 +177,8 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData) {
 
 /* ================= SUBJECT BAR ================= */
 
-function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData) {
-  const y = 195
+function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
+  const y = offsetY + 195
   const barX = 30
   const barWidth = 535
   const padding = 15
@@ -185,8 +218,8 @@ function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData) {
 
 /* ================= ITEMS TABLE ================= */
 
-function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData) {
-  let y = 240
+function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
+  let y = offsetY + 240
 
   drawLine(doc, y)
   y += 6
@@ -233,7 +266,7 @@ function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData) {
 
 /* ================= FOOTER ================= */
 
-function drawFooter(doc: PDFKit.PDFDocument) {
+function drawFooter(doc: PDFKit.PDFDocument, offsetY: number) {
   doc
     .font('Helvetica')
     .fontSize(8)
@@ -241,7 +274,7 @@ function drawFooter(doc: PDFKit.PDFDocument) {
     .text(
       'This is a system generated invoice and does not require a physical signature',
       0,
-      380,
+      offsetY + 380,
       { align: 'center', width: doc.page.width }
     )
 }
