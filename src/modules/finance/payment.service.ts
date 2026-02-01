@@ -371,18 +371,27 @@ const processPaymentSuccess = async (paymentOrPayments: any | any[], metadata: a
         const invoiceItems = [];
         
         for (const p of payments) {
-             let description = p.component.replace(/_/g, ' ');
-             // Fetch FeeHead if exists
+             let description = '';
+             
+             // 1. Try Fee Head Name FIRST
              if (p.feeHeadId) {
                  const fh = await prisma.feeHead.findUnique({ where: { id: p.feeHeadId }});
                  if (fh) description = fh.name;
              }
              
-             // Customize description based on component
-             switch(p.component) {
-                 case PaymentComponent.APPLICATION_FEE: description = 'Application Fee'; break;
-                 case PaymentComponent.TUITION: description = 'Tuition Fee'; break;
-                 // Add others as needed
+             // 2. If still empty, map from Component
+             if (!description) {
+                 switch(p.component) {
+                     case PaymentComponent.APPLICATION_FEE: description = 'Application Fee'; break;
+                     case PaymentComponent.TUITION: description = 'Tuition Fee'; break;
+                     case PaymentComponent.HOSTEL: description = 'Hostel Fee'; break;
+                     case PaymentComponent.HOSTEL_ACCOMMODATION: description = 'Hostel Accommodation Fee'; break;
+                     case PaymentComponent.HOSTEL_MESS: description = 'Mess Fee'; break;
+                     case PaymentComponent.TRANSPORT: description = 'Transport Fee'; break;
+                     case PaymentComponent.SCHOLARSHIP_TOKEN: description = 'Admission Fee'; break;
+                     case PaymentComponent.OTHER: description = 'Other Fee'; break;
+                     default: description = p.component.replace(/_/g, ' ');
+                 }
              }
 
              invoiceItems.push({
