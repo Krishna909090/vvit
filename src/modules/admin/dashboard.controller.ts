@@ -49,5 +49,15 @@ export const DashboardController = {
             success: true,
             data: stats
         });
+    }),
+
+    getCourseStats: catchAsync(async (req: Request, res: Response) => {
+        const stats = await DashboardService.getCourseSeatStats();
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: stats
+        });
     })
 };

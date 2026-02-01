@@ -261,5 +261,42 @@ export const DashboardService = {
             totalPages: Math.ceil(total / limit),
             data: students
         };
+    },
+
+    /**
+     * Get Course Statistics (Seats Filled vs Total)
+     */
+    async getCourseSeatStats() {
+        // Fetch courses with their allotted student count
+        // We use the relation 'allottedStudents' in Course model
+        const courses = await prisma.course.findMany({
+            where: { isDeleted: false },
+            select: {
+                id: true,
+                code: true,
+                name: true,
+                totalSeats: true,
+                filledSeats: true, // This field exists but might not be auto-synced, good to double check via relation count if needed
+                _count: {
+                    select: { allottedStudents: true }
+                }
+            },
+            orderBy: { name: 'asc' }
+        });
+
+        // Map to simpler format and ensure 'filled' is accurate based on actual count if preferred, 
+        // or strictly follow existing logic. Ideally, we trust the DB count of relations.
+        return courses.map(c => {
+            const actualFilled = c._count.allottedStudents;
+            const total = c.totalSeats || 0;
+            return {
+                id: c.id,
+                code: c.code,
+                name: c.name,
+                totalSeats: total,
+                filledSeats: actualFilled,
+                remainingSeats: Math.max(0, total - actualFilled)
+            };
+        });
     }
 };
