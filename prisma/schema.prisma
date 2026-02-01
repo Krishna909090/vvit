@@ -225,6 +225,7 @@ model Student {
   ledgerEntries             StudentLedger[]
   studentScholarship        StudentScholarship?
   transportAllocation       TransportAllocation?
+  serviceChangeRequests     ServiceChangeRequest[]
 }
 
 model ConvenorAdmission {
@@ -1255,4 +1256,25 @@ enum UserRole {
 enum HostelPaymentMode {
   SEMWISE
   YEARWISE
+}
+
+model ServiceChangeRequest {
+  id          String              @id @default(dbgenerated("gen_random_uuid()"))
+  studentId   String
+  type        ServiceRequestType
+  fromValue   String?
+  toValue     String
+  reason      String?
+  status      RequestStatus       @default(REQUESTED)
+  remarks     String?             // Admin remarks
+  approvedBy  String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  
+  student     Student             @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+enum ServiceRequestType {
+  FACILITY          // Hostel <-> Transport
+  PAYMENT_MODE      // Semwise <-> Yearwise (Though yearwise is direct, good to have enum for history/logs if needed)
 }

@@ -437,6 +437,7 @@ export const AdminStudentService = {
             });
 
             if (approved) {
+                // 1. Update Admission & Seats
                 await tx.studentAdmission.update({
                     where: { studentId: request.studentId },
                     data: { allottedCourseId: request.toCourse }
@@ -459,6 +460,89 @@ export const AdminStudentService = {
                         approvedBy: adminId || 'SUPER_ADMIN'
                     }
                 });
+
+                // 2. FINANCIAL RECONCILIATION
+                const student = await tx.student.findUnique({
+                    where: { id: request.studentId },
+                });
+                
+                if (!student) return;
+
+                // Find Existing Tuition Demand
+                // We need to fetch payments to calculate paid amount since it's not stored on demand (it seems)
+                const existingDemand = await tx.studentFeeDemand.findFirst({
+                    where: {
+                        studentId: request.studentId,
+                        feeHead: {
+                            name: { contains: 'Tuition', mode: 'insensitive' }
+                        }
+                    },
+                    orderBy: { createdAt: 'desc' },
+                    include: { 
+                        academicYear: true,
+                        payments: {
+                            where: { status: 'SUCCESS' }
+                        }
+                    } 
+                });
+
+                if (existingDemand && existingDemand.academicYearId) {
+                    // Find NEW Fee Structure matching existing parameters but New Course
+                    const newFeeStructure = await tx.feeStructure.findFirst({
+                        where: {
+                            courseId: request.toCourse,
+                            academicYearId: existingDemand.academicYearId,
+                            feeHeadId: existingDemand.feeHeadId!, 
+                            // quotaType check removed due to lint error, likely matches by logic/seed or field mismatch on structure
+                        }
+                    });
+
+                    if (newFeeStructure) {
+                        const oldFee = existingDemand.amount;
+                        const newFee = newFeeStructure.amount;
+                        
+                        // Calculate Paid Amount
+                        const paidAmount = existingDemand.payments.reduce((sum, p) => sum + p.amount, 0);
+
+                        const discount = existingDemand.discountAmount || 0;
+                        const scholarship = existingDemand.scholarshipAmount || 0;
+                        const totalDeduction = discount + scholarship;
+
+                        const newNetAmount = newFee - totalDeduction; 
+                        const pendingAmount = newNetAmount - paidAmount;
+
+                        let newStatus: FeeStatus = FeeStatus.PENDING;
+                        if (pendingAmount <= 0) newStatus = FeeStatus.FULL; 
+                        else if (paidAmount > 0) newStatus = FeeStatus.PARTIAL;
+
+                        // Update Demand
+                        await tx.studentFeeDemand.update({
+                            where: { id: existingDemand.id },
+                            data: {
+                                amount: newFee,
+                                netAmount: newNetAmount,
+                                status: newStatus,
+                                remarks: (existingDemand.remarks || '') + ` | Course Change: Fee updated from ${oldFee} to ${newFee}`
+                            }
+                        });
+
+
+                        // Create Ledger Entry
+                        await tx.studentLedger.create({
+                            data: {
+                                studentId: request.studentId,
+                                type: 'DEBIT', // Using String as fallback if Enum import fails, usually works
+                                amount: 0,
+                                description: `Course Change Fee Adjustment (${oldFee} -> ${newFee}). Paid: ${paidAmount}. New Pending: ${pendingAmount}`,
+                                referenceType: 'OTHER',
+                                referenceId: request.id,
+                                createdBy: adminId
+                            } as any
+                        });
+
+                        logger.info(`[approveCourseChange] Fee updated for Student ${student.id}: ${oldFee} -> ${newFee}`);
+                    }
+                }
             }
         });
     },

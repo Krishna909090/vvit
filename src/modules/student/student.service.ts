@@ -762,3 +762,86 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
 
     return { message: 'Personal details updated successfully' };
 };
+
+export const changeServicePreferences = async (studentId: string, data: any, currentUserId: string | null) => {
+    const { type, value, reason } = data;
+
+    // 1. Verify Student
+    const student = await prisma.student.findUnique({
+        where: { id: studentId },
+        include: { admissionDetails: true }
+    });
+
+    if (!student) {
+        throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+    }
+    
+    // Ownership check (unless admin, but assuming this is student facing primarily)
+    if (currentUserId && student.userId !== currentUserId) {
+         // Add role check if needed, strictly student for now based on flow
+         // If admin calls this service, pass null or handle upstream. 
+         // For now, strict ownership:
+         throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+    }
+
+    if (type === 'PAYMENT_MODE') {
+        // Direct Update
+        if (!['SEMWISE', 'YEARWISE'].includes(value)) {
+            throw new AppError('Invalid payment mode. Must be SEMWISE or YEARWISE', 400);
+        }
+
+        await prisma.studentAdmission.update({
+            where: { studentId },
+            data: {
+                hostelPaymentMode: value,
+                updatedAt: new Date()
+            }
+        });
+
+        return { success: true, message: 'Payment mode updated successfully', status: 'UPDATED' };
+
+    } else if (type === 'FACILITY') {
+        // Request Based
+        // Check pending requests
+        const pendingRequest = await prisma.serviceChangeRequest.findFirst({
+            where: {
+                studentId,
+                type: 'FACILITY', // Using the enum mapped string
+                status: 'REQUESTED'
+            }
+        });
+
+        if (pendingRequest) {
+            throw new AppError('A facility change request is already pending', 409);
+        }
+
+        // Validate target value
+        const targetValue = value === 'HOSTEL' ? 'HOSTEL' : (value === 'TRANSPORT' ? 'TRANSPORT' : null);
+        if (!targetValue) {
+             throw new AppError('Invalid facility type. Must be HOSTEL or TRANSPORT', 400);
+        }
+        
+        // Check current value
+        const currentVal = student.admissionDetails?.accommodationType || 'NONE';
+        
+        if (currentVal === targetValue) {
+            throw new AppError(`You are already allocated to ${targetValue}`, 400);
+        }
+
+        await prisma.serviceChangeRequest.create({
+            data: {
+                studentId,
+                type: 'FACILITY',
+                fromValue: currentVal,
+                toValue: targetValue,
+                reason,
+                status: 'REQUESTED'
+            }
+        });
+
+        return { success: true, message: 'Facility change request submitted successfully', status: 'REQUESTED' };
+
+    } else {
+        throw new AppError('Invalid request type', 400);
+    }
+};

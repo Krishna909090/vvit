@@ -95,6 +95,7 @@ interface EmailData extends PaymentEmailData {
         state: string;
         pincode: string;
     };
+    additionalAttachments?: any[];
 }
 
 // Environment variables
@@ -249,7 +250,7 @@ export const sendPaymentReceipt = async (
             name: `Invoice.pdf`, 
             mime_type: 'application/pdf', 
             content: base64Pdf 
-        }];
+        }, ...(data.additionalAttachments || [])];
 
         const inlineImages = [];
         if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });

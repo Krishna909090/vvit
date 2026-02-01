@@ -6,7 +6,9 @@ import {
     getStudentDetails,
     addAcademicDetails,
     selectExam,
-    updatePersonalDetails
+    updatePersonalDetails,
+    getApplicationSummary,
+    requestServiceChange
 } from './student.controller';
 import {
     payTestFee,
@@ -71,5 +73,9 @@ router.delete('/:studentId/document', authenticate, authorizePermission(['docume
 router.get('/details', authenticate, authorizePermission(['student.read.own', 'student.read.all']), getStudentDetails);
 
 router.post('/:studentId/personal-details', authenticate, authorizePermission(['student.update.own', 'student.update.all']), validateRequest(updatePersonalDetailsSchema), updatePersonalDetails);
+
+router.get('/:studentId/application-summary', authenticate, authorizePermission(['student.read.own', 'student.read.all']), validateRequest(studentIdParamSchema), getApplicationSummary);
+
+router.post('/:studentId/service-preferences', authenticate, authorizePermission(['student.update.own', 'student.update.all']), validateRequest(studentIdParamSchema), requestServiceChange);
 
 export default router;

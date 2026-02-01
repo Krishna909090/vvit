@@ -177,7 +177,62 @@ export const InvoiceService = {
         // Send Email
         // Detect Template & Type
         if (payment.component === PaymentComponent.APPLICATION_FEE) {
-            await sendEntranceFeeReceipt(payment.student.email || '', invoiceData);
+            // Fetch detailed student data for Application Summary
+            const fullStudentRef = await prisma.student.findUnique({
+                where: { id: payment.studentId },
+                include: {
+                    academicQualifications: true,
+                    pref1Course: true,
+                    pref2Course: true,
+                    pref3Course: true
+                }
+            });
+
+            const additionalAttachments = [];
+            
+            if (fullStudentRef) {
+                const { generateApplicationSummaryPDF } = await import('../../utils/applicationSummaryGenerator');
+                const summaryData = {
+                    applicationId: fullStudentRef.applicationId || '',
+                    studentName: fullStudentRef.name,
+                    fatherName: fullStudentRef.fatherName,
+                    motherName: fullStudentRef.motherName,
+                    dob: fullStudentRef.dob,
+                    gender: fullStudentRef.gender,
+                    phone: fullStudentRef.phone,
+                    email: fullStudentRef.email || '',
+                    address: `${fullStudentRef.address}, ${fullStudentRef.city}, ${fullStudentRef.state} - ${fullStudentRef.pincode}`,
+                    degreeType: fullStudentRef.degreeType || '',
+                    courseType: fullStudentRef.courseType || '',
+                    pref1: fullStudentRef.pref1Course?.name,
+                    pref2: fullStudentRef.pref2Course?.name,
+                    pref3: fullStudentRef.pref3Course?.name,
+                    profilePhotoUrl: fullStudentRef.profilePhotoUrl || undefined,
+                    qualifications: fullStudentRef.academicQualifications.map(q => ({
+                        level: q.level || '',
+                        institution: (q as any).institution || '', // Cast to any if strictly checking but likely 'institution'
+                        board: q.board || '',
+                        yearOfPassing: q.yearOfPassing?.toString() || '',
+                        percentage: q.percentage?.toString() || ''
+                    }))
+                };
+                
+                try {
+                    const summaryPdfBuffer = await generateApplicationSummaryPDF(summaryData as any);
+                    additionalAttachments.push({
+                        name: `Application_Summary_${fullStudentRef.applicationId}.pdf`,
+                        mime_type: 'application/pdf',
+                        content: summaryPdfBuffer.toString('base64')
+                    });
+                } catch (err) {
+                    logger.error('[InvoiceService] Failed to generate Application Summary PDF', err);
+                }
+            }
+
+            await sendEntranceFeeReceipt(payment.student.email || '', {
+                ...invoiceData,
+                additionalAttachments
+            });
         } else {
             // Determine specific payment type for email template
             let pType: any = 'DEFAULT';
