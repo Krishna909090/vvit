@@ -1248,13 +1248,16 @@ export const getStudentFinancialSummary = async (studentId: string) => {
         throw new AppError('Student admission details not found', 404);
     }
 
-    // 2. Fetch All Successful Payments
-    const payments = await prisma.payment.findMany({
-        where: {
-            studentId,
-            status: PaymentStatus.SUCCESS
-        }
-    });
+    // 2. Fetch All Successful Payments & Hostel Prices
+    const [payments, hostelPrices] = await Promise.all([
+        prisma.payment.findMany({
+            where: {
+                studentId,
+                status: PaymentStatus.SUCCESS
+            }
+        }),
+        prisma.hostelPriceCategory.findMany()
+    ]);
 
     // 3. Initialize Summary Structure
     const summary = {
@@ -1278,6 +1281,8 @@ export const getStudentFinancialSummary = async (studentId: string) => {
     let hostelFee = 0;
     let transportFee = 0;
 
+    logger.info(`[FinancialSummary] Student: ${studentId}, HostelType: ${student.admissionDetails.hostelType}, Mode: ${student.admissionDetails.hostelPaymentMode}`);
+
     // Hostel Cost
     if (student.admissionDetails.hostelId && student.admissionDetails.roomNumber) {
          // Try to find the specific room cost
@@ -1285,6 +1290,27 @@ export const getStudentFinancialSummary = async (studentId: string) => {
             .flatMap(b => b.rooms)
             .find(r => r.number === student.admissionDetails?.roomNumber);
          hostelFee = room ? ((room.accommodationCost ?? room.cost ?? 0) + (room.messCost ?? 0)) : 0;
+         logger.info(`[FinancialSummary] Room Found: ${room?.number}, Cost: ${hostelFee}`);
+    } else if (student.admissionDetails.hostelType) {
+         // Check based on Sharing Type (SHARING_4, SHARING_8)
+         const sharingMatch = student.admissionDetails.hostelType.match(/SHARING_(\d+)/);
+         if (sharingMatch) {
+             const sharingCount = parseInt(sharingMatch[1]);
+             const priceCategory = hostelPrices.find(p => p.sharing === sharingCount);
+             logger.info(`[FinancialSummary] Sharing: ${sharingCount}, PriceCategory: ${JSON.stringify(priceCategory)}`);
+             if (priceCategory) {
+                 hostelFee = (priceCategory.accommodationPrice ?? 0) + (priceCategory.messPrice ?? 0);
+             }
+         }
+    }
+
+    if (student.admissionDetails.hostelPaymentMode === HostelPaymentMode.SEMWISE && hostelFee > 0) {
+        let semFee = 0;
+        if (student.admissionDetails.hostelType?.includes('SHARING_4')) semFee = 6000;
+        else if (student.admissionDetails.hostelType?.includes('SHARING_8')) semFee = 5000;
+        
+        hostelFee += semFee;
+        logger.info(`[FinancialSummary] SemWise Mode. Added ${semFee}. Total Hostel: ${hostelFee}`);
     }
 
     // Transport Cost
@@ -1466,6 +1492,31 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
 export const processUnifiedPayment = async (data: any) => {
     const { studentId, amount, mode, method, component, feeHeadId, remarks, initiatedBy, referenceNumber, redirectUrl } = data;
    
+    // 0. Strict Input Validation
+    if (!studentId) throw new AppError('Student ID is required', 400);
+    if (!amount || typeof amount !== 'number' || amount <= 0) throw new AppError('Amount must be a positive number', 400);
+    
+    if (!Object.values(PaymentMode).includes(mode)) {
+        throw new AppError(`Invalid Payment Mode. Allowed: ${Object.values(PaymentMode).join(', ')}`, 400);
+    }
+    if (!Object.values(PaymentComponent).includes(component)) {
+        throw new AppError(`Invalid Payment Component. Allowed: ${Object.values(PaymentComponent).join(', ')}`, 400);
+    }
+
+    if (mode === PaymentMode.OFFLINE && !referenceNumber) {
+        throw new AppError('Reference Number is required for OFFLINE payments', 400);
+    }
+
+    // Check for Duplicate Reference Number (OFFLINE ONLY)
+    if (mode === PaymentMode.OFFLINE && referenceNumber) {
+        const existingRef = await prisma.payment.findFirst({
+            where: { referenceNumber: referenceNumber }
+        });
+        if (existingRef) {
+            throw new AppError(`Payment with Reference Number '${referenceNumber}' already exists`, 409);
+        }
+    }
+   
 
     // 1. Validate Student
     const student = await prisma.student.findUnique({ 
@@ -1612,8 +1663,10 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         })
     ]);
 
+    logger.info(`[FinancialHistory] Data Fetched. Ledgers: ${ledgers.length}, Payments: ${payments.length}, Demands: ${feeDemands.length}`);
+
     // 2. Initialize Breakdown
-    const categories = ['HOSTEL', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'SKILL_DEVELOPMENT', 'OTHER'];
+    const categories = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'SKILL_DEVELOPMENT', 'OTHER'];
     const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number }> = {};
     categories.forEach(cat => {
         breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0 };
@@ -1622,7 +1675,8 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     // 3. Helper: Map Fee Head Name to Category
     const getCategoryFromHeadName = (name: string): string => {
         const headName = (name || '').toUpperCase();
-        if (headName.includes('HOSTEL')) return 'HOSTEL';
+        if (headName.includes('MESS')) return 'HOSTEL_MESS';
+        if (headName.includes('HOSTEL') || headName.includes('ACCOMMODATION') || headName.includes('ROOM')) return 'HOSTEL_ACCOMMODATION';
         if (headName.includes('TRANSPORT') || headName.includes('BUS')) return 'TRANSPORT';
         if (headName.includes('TUITION') || headName.includes('SEMESTER') || headName.includes('COLLEGE')) return 'TUITION';
         if (headName.includes('BOOK') || headName.includes('LIBRARY')) return 'BOOK_BANK';
@@ -1648,7 +1702,14 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         }
 
         const catKey = category || 'OTHER';
-        const target = breakdown[catKey] || breakdown['OTHER'];
+        // Make sure catKey exists in breakdown (handle potential old 'HOSTEL' mapping)
+        let targetKey = catKey;
+        if (!breakdown[targetKey]) {
+            if (targetKey === 'HOSTEL') targetKey = 'HOSTEL_ACCOMMODATION';
+            else targetKey = 'OTHER';
+        }
+
+        const target = breakdown[targetKey];
         
         target.demanded += demand.amount;
         if (demand.fineAmount) target.fine += demand.fineAmount;
@@ -1660,28 +1721,45 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
         // Hostel Cost
         if (admission.hostelId || admission.hostelType) {
-             let hostelCost = 0;
+             let accCost = 0;
+             let messCost = 0;
+
              // Priority 1: Specific Room Cost
              if (admission.roomNumber && admission.hostel) {
                  const room = admission.hostel.blocks.flatMap(b => b.rooms).find(r => r.number === admission.roomNumber);
-                 if (room) hostelCost = room.cost ?? 0;
+                 if (room) {
+                     accCost = room.accommodationCost ?? room.cost ?? 0;
+                     messCost = room.messCost ?? 0;
+                 }
              }
              // Priority 2: Hostel Type
-             if (hostelCost === 0 && admission.hostelType) {
+             if (accCost === 0 && messCost === 0 && admission.hostelType) {
                  const sharingMatch = admission.hostelType.match(/SHARING_(\d+)/);
                  if (sharingMatch) {
-                     const priceCategory = hostelPrices.find(p => p.sharing === parseInt(sharingMatch[1]));
-                     if (priceCategory) hostelCost = priceCategory.price;
+                     const sharingCount = parseInt(sharingMatch[1]);
+                     const priceCategory = hostelPrices.find(p => p.sharing === sharingCount);
+                     logger.info(`[FinancialHistory] HostelType: ${admission.hostelType}, PriceCat: ${JSON.stringify(priceCategory)}`);
+                     
+                     if (priceCategory) {
+                         accCost = priceCategory.accommodationPrice ?? 0;
+                         messCost = priceCategory.messPrice ?? 0;
+                     }
                  }
              }
 
              if (admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                 hostelCost += 6000;
+                 let semFee = 0;
+                 if (admission.hostelType?.includes('SHARING_4')) semFee = 6000;
+                 else if (admission.hostelType?.includes('SHARING_8')) semFee = 5000;
+                 
+                 accCost += semFee;
+                 logger.info(`[FinancialHistory] SemWise added ${semFee} to AccCost. New AccCost: ${accCost}`);
              }
              
-             // If calculated cost is different/better, we might overrides. 
-             // Logic kept same: We override demanded here.
-             breakdown.HOSTEL.demanded = hostelCost;
+             // Override Demanded
+             breakdown.HOSTEL_ACCOMMODATION.demanded = accCost;
+             breakdown.HOSTEL_MESS.demanded = messCost;
+             logger.info(`[FinancialHistory] Final Demands Set - Acc: ${accCost}, Mess: ${messCost}`);
         }
 
         // Transport Demand Override
@@ -1699,15 +1777,20 @@ export const getStudentFinancialHistory = async (studentId: string) => {
              category = getCategoryFromHeadName(entry.description || '');
         }
 
-        const target = breakdown[category] || breakdown['OTHER'];
+        let key = category;
+        if (!breakdown[key]) {
+             if (key === 'HOSTEL') key = 'HOSTEL_ACCOMMODATION';
+             else key = 'OTHER';
+        }
+
+        const target = breakdown[key];
 
         // Fines (Skipped as per existing logic logic if in Deamnd)
         
         // Credits (Discounts/Scholarships)
         if (entry.type === 'CREDIT' && entry.referenceType !== 'PAYMENT') {
             target.discount += entry.amount;
-            target.demanded -= entry.amount;
-            if (target.demanded < 0) target.demanded = 0;
+            // Discount no longer deducted from demanded here. Handled in UI/Net Calcs.
         }
     });
 
@@ -1720,7 +1803,17 @@ export const getStudentFinancialHistory = async (studentId: string) => {
              key = feeHeadCategoryMap.get(p.feeHeadId) || 'OTHER';
          } else {
              const comp = p.component || 'OTHER';
-             key = comp === PaymentComponent.SCHOLARSHIP_TOKEN ? 'ADMISSION' : comp;
+             if (comp === PaymentComponent.SCHOLARSHIP_TOKEN) key = 'ADMISSION';
+             else if (comp === PaymentComponent.HOSTEL_ACCOMMODATION) key = 'HOSTEL_ACCOMMODATION';
+             else if (comp === PaymentComponent.HOSTEL_MESS) key = 'HOSTEL_MESS';
+             else if (comp === PaymentComponent.HOSTEL) key = 'HOSTEL_ACCOMMODATION'; // Fallback
+             else key = comp as string;
+         }
+         
+         if (!breakdown[key]) {
+             if (key.includes('HOSTEL')) key = 'HOSTEL_ACCOMMODATION';
+             else if (key.includes('MESS')) key = 'HOSTEL_MESS';
+             else key = 'OTHER';
          }
          
          const target = breakdown[key] || breakdown['OTHER'];
@@ -1738,7 +1831,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         totalDemanded,
         totalPaid,
         totalDiscount, 
-        totalPending: Math.max(0, totalDemanded - totalPaid)
+        totalPending: Math.max(0, totalDemanded - totalPaid - totalDiscount)
     };
     
     // Generate presigned URLs for payments
@@ -1748,6 +1841,20 @@ export const getStudentFinancialHistory = async (studentId: string) => {
             invoiceUrl: await convertToPresignedUrl(p.invoiceUrl)
         };
     }));
+
+    // Log formatted table for debugging
+    const tableData = Object.keys(breakdown).map(key => ({
+        Category: key,
+        Demanded: breakdown[key].demanded,
+        Paid: breakdown[key].paid,
+        Discount: breakdown[key].discount,
+        Fine: breakdown[key].fine, 
+        Pending: Math.max(0, breakdown[key].demanded - breakdown[key].paid - breakdown[key].discount)
+    }));
+    
+    console.log(`\n=== Financial History Table [Student: ${studentId}] ===`);
+    console.table(tableData);
+    console.log('======================================================\n');
 
     return {
         summary,

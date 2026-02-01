@@ -228,6 +228,18 @@ export const getPaymentHistory = catchAsync(async (req: Request, res: Response, 
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
+    // SECURITY: Authorization Check
+    // If user is STUDENT, ensure they are requesting their own data
+    if (req.user?.role === 'STUDENT') {
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user.userId);
+        if (!s || s.id !== studentId) {
+            logger.warn(`[Security] Student ${req.user.userId} attempted to access history of ${studentId}`);
+            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
+    }
+    // If user is AGENT, ensure student belongs to them (Optional/Future scope, currently strictly blocking cross-access)
+
     const history = await getStudentFinancialHistory(studentId);
 
     sendResponse({
@@ -299,8 +311,29 @@ export const initiateAdminPayment = catchAsync(async (req: Request, res: Respons
 export const payFeeComponent = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[payFeeComponent] by=${req.user?.userId || 'anonymous'}`);
     
-    // Authorization check could be here or in route middleware. 
-    // Assuming route allows appropriate roles.
+    const { studentId, amount, component, mode } = req.body;
+
+    // 1. Basic Validation
+    if (!studentId || !amount || !component) {
+        throw new AppError("Student ID, Amount, and Component are required", 400);
+    }
+
+    // 2. Security: Authorization & Mode Restrictions
+    if (req.user?.role === 'STUDENT') {
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user.userId);
+        
+        // Ensure paying for self
+        if (!s || s.id !== studentId) {
+            logger.warn(`[Security] Student ${req.user.userId} attempted to pay for ${studentId}`);
+            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
+
+        // Students cannot initiate OFFLINE payments directly via API (usually Admin recorded)
+        if (mode === 'OFFLINE') {
+             throw new AppError("Students cannot record OFFLINE payments. Please contact admin.", 403);
+        }
+    }
     
     const result = await import('./payment.service').then(s => s.processUnifiedPayment({
         ...req.body,
@@ -309,7 +342,7 @@ export const payFeeComponent = catchAsync(async (req: Request, res: Response, ne
 
     sendResponse({
         res,
-        statusCode: 200, // or 201
+        statusCode: 200, 
         success: true,
         message: result.message || "Payment processed",
         data: result.data
