@@ -102,22 +102,48 @@ export const InvoiceService = {
             }
         }
 
-        // Prepare Data
-        const invoiceData: any = {
-            invoiceNumber: invoiceNumber,
-            date: payment.createdAt || new Date(),
-            studentName: payment.student.name,
-            studentId: payment.student.applicationId || payment.studentId,
-            paymentMethod: payment.method || 'ONLINE',
-            transactionId: realTransactionId,
-            amount: payment.amount,
-            description: description,
-            items: [
-                {
-                    description: description,
-                    amount: payment.amount
-                }
-            ],
+            // items array construction
+            let invoiceItems: { description: string, amount: number }[] = [];
+            
+            if (component === 'MULTI_COMPONENT' && metadata && metadata.components && Array.isArray(metadata.components)) {
+                 invoiceItems = metadata.components.map((c: any) => {
+                     let label = c.component;
+                     // Map to readable names
+                     if (label === PaymentComponent.TUITION) label = 'Tuition Fee';
+                     else if (label === PaymentComponent.TRANSPORT) label = 'Transport Fee';
+                     else if (label === PaymentComponent.HOSTEL) label = 'Hostel Fee'; 
+                     else if (label === PaymentComponent.HOSTEL_ACCOMMODATION) label = 'Hostel Accommodation Fee';
+                     else if (label === PaymentComponent.HOSTEL_MESS) label = 'Mess Fee';
+                     else if (label === PaymentComponent.APPLICATION_FEE) label = 'Application Fee';
+                     else if (label === PaymentComponent.OTHER) label = 'Other Fee';
+                     
+                     return {
+                         description: label,
+                         amount: c.amount
+                     };
+                 });
+                 // Override main description if it's generic
+                 description = 'Multiple Fee Payment';
+            } else {
+                 invoiceItems = [
+                    {
+                        description: description,
+                        amount: payment.amount
+                    }
+                ];
+            }
+
+            // Prepare Data
+            const invoiceData: any = {
+                invoiceNumber: invoiceNumber,
+                date: payment.createdAt || new Date(),
+                studentName: payment.student.name,
+                studentId: payment.student.applicationId || payment.studentId,
+                paymentMethod: payment.method || 'ONLINE',
+                transactionId: realTransactionId,
+                amount: payment.amount,
+                description: description,
+                items: invoiceItems,
             address: {
                 line1: (payment.student as any).addressLine1 || (payment.student as any).address || '',
                 line2: (payment.student as any).addressLine2 || (payment.student as any).address2 || '',
@@ -148,11 +174,32 @@ export const InvoiceService = {
 
         // Send Email
         // Detect Template
+        // Send Email
+        // Detect Template & Type
         if (payment.component === PaymentComponent.APPLICATION_FEE) {
             await sendEntranceFeeReceipt(payment.student.email || '', invoiceData);
         } else {
-            // Admission Fee
-            await sendAdmissionFeeReceipt(payment.student.email || '', invoiceData);
+            // Determine specific payment type for email template
+            let pType: any = 'DEFAULT';
+            if (payment.component === PaymentComponent.SCHOLARSHIP_TOKEN) pType = 'ADMISSION_FEE';
+            else if (payment.component === PaymentComponent.TUITION) pType = 'TUITION_FEE';
+            else if (payment.component === PaymentComponent.HOSTEL || payment.component === PaymentComponent.HOSTEL_ACCOMMODATION || payment.component === PaymentComponent.HOSTEL_MESS) pType = 'HOSTEL_FEE';
+            else if (payment.component === PaymentComponent.TRANSPORT) pType = 'TRANSPORT_FEE';
+            else if (payment.component === PaymentComponent.BOOK_BANK) pType = 'BOOK_BANK_FEE';
+            else if (payment.component === 'MULTI_COMPONENT' || payment.component === 'OTHER') {
+                 // Try to be smart about 'Other' if description is clear, otherwise Default
+                 if (description.includes('Hostel')) pType = 'HOSTEL_FEE';
+                 else if (description.includes('Transport')) pType = 'TRANSPORT_FEE';
+                 else pType = 'DEFAULT';
+            }
+
+            // Use the generic sender with the specific type
+            const { sendPaymentReceipt } = await import('../../utils/emailService');
+            await sendPaymentReceipt(payment.student.email || '', {
+                ...invoiceData,
+                paymentType: pType,
+                customFeeType: pType === 'DEFAULT' ? description : undefined
+            });
         }
         
         return { success: true, invoiceUrl, invoiceNumber };
