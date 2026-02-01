@@ -45,10 +45,6 @@ export const generateInvoicePDF = async (
       doc.on('data', buffers.push.bind(buffers))
       doc.on('end', () => resolve(Buffer.concat(buffers)))
       doc.on('error', reject)
-
-      // Top Half - Student Copy
-      drawInvoiceInstance(doc, data, 0, 'STUDENT COPY')
-
       // Cut Line (Dashed)
       const midY = 421;
       doc
@@ -59,9 +55,6 @@ export const generateInvoicePDF = async (
          .stroke();
       
       doc.undash(); // Reset dash
-      
-      // Bottom Half - Office Copy
-      drawInvoiceInstance(doc, data, 421, 'OFFICE COPY')
 
       doc.end()
     } catch (err) {
