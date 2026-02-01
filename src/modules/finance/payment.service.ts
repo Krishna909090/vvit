@@ -235,7 +235,7 @@ export const initiateMultiComponentPayment = async (
         };
     } else {
         // UPI / ONLINE -> Initiate PhonePe
-        const redirectUrl = `${process.env.FRONTEND_URL}/student/payment?txnId=${transactionId}`;
+        const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}/admin/fees/offlinepayments?appId=${student.applicationId}&paymentId=${paymentIds.join(',')}`;
         const result = await initiatePhonePePayment(studentId, totalAmount, transactionId, redirectUrl, 'ADMISSION');
         return { redirectUrl: result.redirectUrl, paymentIds };
     }
