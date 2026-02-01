@@ -743,23 +743,24 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
         throw new AppError("Invalid checksum", 400);
     }
 
-    const payment: any = await prisma.payment.findFirst({
+    const payments = await prisma.payment.findMany({
         where: { providerTxId: merchantTransactionId },
         include: { student: true }
     });
 
-    if (!payment) {
+    if (payments.length === 0) {
         logger.error(`Payment not found for transaction: ${merchantTransactionId}`);
         return;
     }
 
     if (code === 'PAYMENT_SUCCESS') {
-        if (payment.status !== PaymentStatus.SUCCESS) {
-            await processPaymentSuccess(payment, decodedPayload);
+        const needsUpdate = payments.some(p => p.status !== PaymentStatus.SUCCESS);
+        if (needsUpdate) {
+            await processPaymentSuccess(payments, decodedPayload);
         }
     } else {
-         await prisma.payment.update({
-            where: { id: payment.id },
+         await prisma.payment.updateMany({
+            where: { providerTxId: merchantTransactionId },
             data: {
                 status: PaymentStatus.FAILED,
                 metadata: decodedPayload
