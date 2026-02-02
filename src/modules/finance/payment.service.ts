@@ -20,13 +20,15 @@ const MERCHANT_ID_ADMISSION = (process.env.PHONEPE_MERCHANT_ID || '').trim();
 const SALT_KEY_ADMISSION = (process.env.PHONEPE_SALT_KEY || '').trim();
 const SALT_INDEX_ADMISSION = (process.env.PHONEPE_SALT_INDEX || '1').trim();
 
-const MERCHANT_ID_HOSTEL = (process.env.HOSTEL_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID || '').trim();
-const SALT_KEY_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY || '').trim();
-const SALT_INDEX_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX || '1').trim();
+const MERCHANT_ID_HOSTEL = (process.env.HOSTEL_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID_HOSTEL || process.env.PHONEPE_MERCHANT_ID || '').trim();
+const SALT_KEY_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY_HOSTEL || process.env.PHONEPE_SALT_KEY || '').trim();
+const SALT_INDEX_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX_HOSTEL || process.env.PHONEPE_SALT_INDEX || '1').trim();
 
-const MERCHANT_ID_MESS = (process.env.MESS_PHONEPE_MERCHANT_ID || process.env.HOSTEL_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID || '').trim();
-const SALT_KEY_MESS = (process.env.MESS_PHONEPE_SALT_KEY || process.env.HOSTEL_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY || '').trim();
-const SALT_INDEX_MESS = (process.env.MESS_PHONEPE_SALT_INDEX || process.env.HOSTEL_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX || '1').trim();
+const MERCHANT_ID_MESS = (process.env.MESS_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID_MESS || process.env.HOSTEL_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID || '').trim();
+const SALT_KEY_MESS = (process.env.MESS_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY_MESS || process.env.HOSTEL_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY || '').trim();
+const SALT_INDEX_MESS = (process.env.MESS_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX_MESS || process.env.HOSTEL_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX || '1').trim();
+
+
 
 const CLIENT_VERSION = 1;
 const ENV = process.env.NODE_ENV === 'production' ? Env.PRODUCTION : Env.SANDBOX;
@@ -49,13 +51,13 @@ const PHONEPE_CREDENTIALS = {
     }
 };
 
-const getPhonePeClient = (type: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION') => {
+export const getPhonePeClient = (type: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION') => {
     const creds = PHONEPE_CREDENTIALS[type] || PHONEPE_CREDENTIALS.ADMISSION;
-    return StandardCheckoutClient.getInstance(creds.MERCHANT_ID, creds.SALT_KEY, CLIENT_VERSION, ENV);
+    return StandardCheckoutClient.getInstance(creds.MERCHANT_ID, creds.SALT_KEY, creds.SALT_INDEX as any, ENV);
 };
 
 // Debug PhonePe Config
-logger.info(`[PhonePe Config] Admission Merchant: ${MERCHANT_ID_ADMISSION}, Hostel Merchant: ${MERCHANT_ID_HOSTEL}`);
+logger.info(`[PhonePe Config] Admission Merchant: ${MERCHANT_ID_ADMISSION}, Hostel Merchant: ${MERCHANT_ID_HOSTEL}, Mess Merchant: ${MERCHANT_ID_MESS}`);
 
 // Debug PhonePe Config
 // Debug PhonePe Config
@@ -64,6 +66,54 @@ logger.info(`[PhonePe Config] Admission Merchant: ${MERCHANT_ID_ADMISSION}, Host
 // ... (imports remain)
 
 // Reusable PhonePe Initialization
+const resolveComponent = async (componentName: string, feeHeadId?: string): Promise<{ component: PaymentComponent, feeHeadId?: string }> => {
+    const normalize = (s: string) => s.toUpperCase().replace(/ /g, '_');
+    const input = normalize(componentName);
+
+    // 1. Map Display Names/Aliases to Enums
+    const nameMap: Record<string, PaymentComponent> = {
+        'APPLICATION FEE': PaymentComponent.APPLICATION_FEE,
+        'TUITION FEE': PaymentComponent.TUITION,
+        'HOSTEL FEE': PaymentComponent.HOSTEL,
+        'HOSTEL ACCOMMODATION FEE': PaymentComponent.HOSTEL_ACCOMMODATION,
+        'MESS FEE': PaymentComponent.HOSTEL_MESS,
+        'TRANSPORT FEE': PaymentComponent.TRANSPORT,
+        // 'ADMISSION FEE' removed to allow direct Enum 'ADMISSION' usage if preferred, or map to ADMISSION
+        // 'ADMISSION': PaymentComponent.SCHOLARSHIP_TOKEN, // Removed alias to distinguish from Token
+        'TOKEN FEE': PaymentComponent.SCHOLARSHIP_TOKEN,
+        'BOOK BANK FEE': PaymentComponent.BOOK_BANK,
+        'SKILL DEVELOPMENT FEE': PaymentComponent.SKILL_DEVELOPMENT, 
+        'OTHER FEE': PaymentComponent.OTHER
+    };
+
+    // Try underscore format (TUITION_FEE) or space format (TUITION FEE)
+    const mapped = nameMap[input] || nameMap[input.replace(/_/g, ' ')];
+    if (mapped) return { component: mapped, feeHeadId };
+
+    // 2. Direct Enum Match (Case Insensitive)
+    const validComponents = Object.values(PaymentComponent) as string[];
+    if (validComponents.includes(input)) {
+        return { component: input as PaymentComponent, feeHeadId };
+    }
+
+    // 3. Try to find FeeHead by Name
+    try {
+        const feeHead = await prisma.feeHead.findFirst({
+            where: { name: { equals: componentName, mode: 'insensitive' } }
+        });
+
+        if (feeHead) {
+             // If found, treat as OTHER with resolved ID
+            return { component: PaymentComponent.OTHER, feeHeadId: feeHead.id };
+        }
+    } catch (e) {
+        logger.warn(`FeeHead lookup failed for ${componentName}: ${e}`);
+    }
+
+    throw new AppError(`Invalid Payment Component or Fee Head Name: ${componentName}`, 400);
+};
+
+
 export const initiatePhonePePayment = async (studentId: string, amount: number, transactionId: string, redirectUrl: string, feeType: 'ADMISSION' | 'HOSTEL' = 'ADMISSION') => {
     try {
         const student = await prisma.student.findUnique({ where: { id: studentId } });
@@ -138,13 +188,24 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
 
 export const initiateMultiComponentPayment = async (
     studentId: string, 
-    components: { component: PaymentComponent, amount: number, feeHeadId?: string }[], 
+    rawComponents: { component: string | PaymentComponent, amount: number, feeHeadId?: string }[], 
     userId?: string, 
     paymentMethod: PaymentMethod = PaymentMethod.UPI, 
     remarks?: string,
-    referenceNumber?: string
+    referenceNumber?: string,
+    mode?: string
 ) => {
-    logger.info(`[initiateMultiComponentPayment] Student=${studentId}, Components=${JSON.stringify(components)}, Method=${paymentMethod}`);
+    logger.info(`[initiateMultiComponentPayment] Student=${studentId}, Components=${JSON.stringify(rawComponents)}, Method=${paymentMethod}, Mode=${mode}, Ref=${referenceNumber}`);
+
+    // Resolve Names to IDs
+    const components: { component: PaymentComponent, amount: number, feeHeadId?: string }[] = [];
+    for (const c of rawComponents) {
+        logger.debug(`[initiateMultiComponentPayment] Resolving component: ${c.component}`);
+        const r = await resolveComponent(c.component as string, c.feeHeadId);
+        components.push({ ...c, ...r });
+    }
+    logger.info(`[initiateMultiComponentPayment] Resolved ${components.length} components: ${components.map(c => c.component).join(', ')}`);
+
 
     // 1. Validate: No Hostel/Mess allowed
     const restrictedComponents: PaymentComponent[] = [
@@ -158,10 +219,18 @@ export const initiateMultiComponentPayment = async (
         throw new AppError("Hostel and Mess fees cannot be bundled in multi-component payment. Please pay them separately.", 400);
     }
 
-    // 2. Validate Fee Heads
+    // 2. Validate Fee Heads - Mandate Fee Head ID (Exempting specific types)
+    const exemptComponents: PaymentComponent[] = [
+        PaymentComponent.TRANSPORT,
+        PaymentComponent.OTHER,
+        PaymentComponent.HOSTEL_ACCOMMODATION,
+        PaymentComponent.HOSTEL_MESS,
+        PaymentComponent.HOSTEL
+    ];
+
     for (const item of components) {
-        if (item.component === PaymentComponent.OTHER && !item.feeHeadId) {
-            throw new AppError('Fee Head ID required for Other payments', 400);
+        if (!item.feeHeadId && !exemptComponents.includes(item.component)) {
+            throw new AppError(`Fee Head ID is mandatory for ${item.component}`, 400);
         }
         if (item.feeHeadId) {
             const feeHead = await prisma.feeHead.findUnique({ where: { id: item.feeHeadId } });
@@ -172,17 +241,29 @@ export const initiateMultiComponentPayment = async (
     }
 
     const student = await prisma.student.findUnique({ where: { id: studentId } });
-    if (!student) throw new AppError('Student not found', 404);
+    if (!student) {
+        logger.error(`[initiateMultiComponentPayment] Student not found: ${studentId}`);
+        throw new AppError('Student not found', 404);
+    }
+    logger.info(`[initiateMultiComponentPayment] Student found: ${student.name} (${student.applicationId})`);
 
     const totalAmount = components.reduce((sum, c) => sum + c.amount, 0);
+    logger.info(`[initiateMultiComponentPayment] Total amount calculated: ₹${totalAmount}`);
     if (totalAmount <= 0) throw new AppError('Total amount must be greater than zero', 400);
 
-    const transactionId = paymentMethod === PaymentMethod.CASH 
-        ? (referenceNumber || `CASH_${Date.now()}_${studentId.substring(0, 8)}`)
-        : `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
+    const isOffline = [PaymentMethod.CASH, PaymentMethod.CHEQUE, PaymentMethod.DEMAND_DRAFT].includes(paymentMethod as any);
+    logger.info(`[initiateMultiComponentPayment] Payment mode determined: ${isOffline ? 'OFFLINE' : 'ONLINE'}`);
 
-    const paymentStatus = paymentMethod === PaymentMethod.CASH ? PaymentStatus.SUCCESS : PaymentStatus.PENDING;
-    const paymentMode = paymentMethod === PaymentMethod.CASH ? PaymentMode.OFFLINE : PaymentMode.ONLINE;
+
+    const transactionId = isOffline 
+        ? (referenceNumber || `OFFLINE_${Date.now()}_${studentId.substring(0, 8)}`)
+        : `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
+    logger.info(`[initiateMultiComponentPayment] Transaction ID generated: ${transactionId}`);
+
+    const paymentStatus = isOffline ? PaymentStatus.SUCCESS : PaymentStatus.PENDING;
+    const paymentMode = isOffline ? PaymentMode.OFFLINE : PaymentMode.ONLINE;
+    logger.info(`[initiateMultiComponentPayment] Payment will be created with status=${paymentStatus}, mode=${paymentMode}`);
+
 
     // 3. Create Payment Records
     // We create multiple records sharing the same providerTxId
@@ -201,8 +282,9 @@ export const initiateMultiComponentPayment = async (
                     method: paymentMethod,
                     mode: paymentMode,
                     createdBy: userId,
-                    metadata: remarks ? { remarks } : undefined,
-                    feeHeadId: item.feeHeadId || undefined
+                    collectedBy: paymentMethod === PaymentMethod.CASH ? userId : undefined,
+                    metadata: remarks ? { remarks, mode: 'OFFLINE_ENTRY' } : undefined,
+                    feeHeadId: item.feeHeadId
                 }
             });
             paymentIds.push(payment.id);
@@ -211,7 +293,7 @@ export const initiateMultiComponentPayment = async (
     });
 
     // 4. Handle Payment Flow
-    if (paymentMethod === PaymentMethod.CASH) {
+    if (isOffline) {
         // Immediate Success Processing
         // We pass the list of payments (with student object attached if needed, but processPaymentSuccess usually refetches or we pass it)
         // Let's attach student to first payment for processPaymentSuccess normalization
@@ -222,13 +304,13 @@ export const initiateMultiComponentPayment = async (
         // We should prep the array with student data attached to at least one or all.
         const paymentsWithStudent = createdPayments.map(p => ({ ...p, student }));
         
-        const successResult = await processPaymentSuccess(paymentsWithStudent, { remarks, mode: 'OFFLINE_ENTRY', collectedBy: userId });
+        const successResult = await processMultiPaymentSuccess(paymentsWithStudent, { remarks, mode: 'OFFLINE_ENTRY', collectedBy: userId });
 
         const presignedInvoiceUrl = successResult?.invoiceUrl ? await convertToPresignedUrl(successResult.invoiceUrl) : null;
 
         return { 
             success: true, 
-            message: "Cash payment recorded successfully", 
+            message: "Payment recorded successfully", 
             paymentIds, 
             transactionId,
             invoiceUrl: presignedInvoiceUrl
@@ -288,7 +370,7 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
                  logger.info(`[checkPaymentStatus] Payment successful at Gateway but Pending locally. Processing success...`);
                  
                  // Process Success for the whole group
-                 await processPaymentSuccess(payments, response);
+                 await processMultiPaymentSuccess(payments, response);
              } else {
                  logger.debug(`[checkPaymentStatus] Payment already valid locally.`);
              }
@@ -312,7 +394,333 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
     }
 };
 
-const processPaymentSuccess = async (paymentOrPayments: any | any[], metadata: any) => {
+// --- 4. Success Handling (Split Flows) ---
+
+const processSinglePaymentSuccess = async (payment: any, metadata: any) => {
+    logger.info(`[processSinglePaymentSuccess] Processing Single Payment ${payment.id}`);
+    
+    // 1. Generate Invoice (Single)
+    const invoiceResult = await _generateAndUploadInvoice([payment], metadata);
+
+    // 2. Update Status
+    await prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: PaymentStatus.SUCCESS, metadata, invoiceUrl: invoiceResult.invoiceUrl }
+    });
+
+    // 3. Process Logic
+    await _processComponentLogic(payment);
+    if (payment.component !== PaymentComponent.APPLICATION_FEE) {
+        await _settleFeeDemands(payment);
+    }
+    await _createPaymentLedger(payment);
+
+    // 4. Notifications
+    await _sendPaymentNotification(payment.student, [payment], invoiceResult);
+
+    // 5. Triggers
+    await _handleTriggers([payment]);
+
+    return { invoiceUrl: invoiceResult.invoiceUrl };
+};
+
+const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
+    if (!payments || payments.length === 0) return;
+    logger.info(`[processMultiPaymentSuccess] Processing ${payments.length} payments. Ref=${payments[0].providerTxId}`);
+
+    // 1. Generate Invoice (Combined)
+    const invoiceResult = await _generateAndUploadInvoice(payments, metadata);
+
+    // 2. Update Status
+    await _updatePaymentsStatus(payments, invoiceResult.invoiceUrl, metadata);
+
+    // 3. Process Logic (Iterate)
+    for (const payment of payments) {
+        await _processComponentLogic(payment);
+        if (payment.component !== PaymentComponent.APPLICATION_FEE) {
+            await _settleFeeDemands(payment);
+        }
+        await _createPaymentLedger(payment);
+    }
+
+    // 4. Notifications (Consolidated)
+    const student = payments[0].student || (await prisma.student.findUnique({ where: { id: payments[0].studentId } }));
+    await _sendPaymentNotification(student, payments, invoiceResult);
+
+    // 5. Triggers
+    await _handleTriggers(payments);
+
+    return { invoiceUrl: invoiceResult.invoiceUrl };
+};
+
+// --- Helpers ---
+
+const _generateAndUploadInvoice = async (payments: any[], metadata: any) => {
+    const primaryPayment = payments[0];
+    const student = primaryPayment.student;
+    
+    // Generate Invoice Number
+    const feeHeader = 'VVIT'; 
+    const year = new Date().getFullYear();
+    const applicationNumber = student.applicationId; 
+    const paymentCount = await prisma.payment.count({
+        where: { studentId: student.id, status: PaymentStatus.SUCCESS }
+    });
+    const receiptNumber = (paymentCount + 1).toString().padStart(3, '0');
+    const invoiceNumber = `${feeHeader}/${year}/${applicationNumber}/${receiptNumber}`;
+
+    // Determine Transaction ID
+    let realTransactionId = primaryPayment.providerTxId;
+    if (metadata) {
+        if (metadata.providerReferenceId) realTransactionId = metadata.providerReferenceId;
+        else if (metadata.data?.providerReferenceId) realTransactionId = metadata.data.providerReferenceId;
+        else if (metadata.paymentDetails?.[0]?.transactionId) realTransactionId = metadata.paymentDetails[0].transactionId;
+        else if (metadata.data?.paymentDetails?.[0]?.transactionId) realTransactionId = metadata.data.paymentDetails[0].transactionId;
+        else if (metadata.transactionId) realTransactionId = metadata.transactionId;
+    }
+
+    // Generate Items
+    const totalAmount = payments.reduce((sum: number, p: any) => sum + p.amount, 0);
+    const invoiceItems = [];
+    
+    for (const p of payments) {
+         let description = '';
+         // 1. Priority: Fee Head Name (Strictly as per requirement)
+         if ((p as any).feeHead) description = (p as any).feeHead.name;
+         else if (p.feeHeadId) {
+             const fh = await prisma.feeHead.findUnique({ where: { id: p.feeHeadId }});
+             if (fh) description = fh.name;
+         }
+         
+         if (!description) {
+             switch(p.component) {
+                 case PaymentComponent.APPLICATION_FEE: description = 'Application Fee'; break;
+                 case PaymentComponent.TUITION: description = 'Tuition Fee'; break;
+                 case PaymentComponent.HOSTEL: description = 'Hostel Fee'; break;
+                 case PaymentComponent.HOSTEL_ACCOMMODATION: description = 'Hostel Accommodation Fee'; break;
+                 case PaymentComponent.HOSTEL_MESS: description = 'Mess Fee'; break;
+                 case PaymentComponent.TRANSPORT: description = 'Transport Fee'; break;
+                 case PaymentComponent.SCHOLARSHIP_TOKEN: description = 'Admission Fee (Token)'; break;
+                 case PaymentComponent.ADMISSION: description = 'Admission Fee'; break;
+                 case PaymentComponent.BOOK_BANK: description = 'Book Bank Fee'; break;
+                 case PaymentComponent.OTHER: description = 'Other Fee'; break;
+                 default: description = p.component.replace(/_/g, ' ');
+             }
+         }
+         invoiceItems.push({ description, amount: p.amount });
+    }
+
+    // Generate PDF
+    const invoiceData = {
+        invoiceNumber,
+        date: new Date(),
+        studentName: student.name,
+        studentId: student.applicationId, 
+        paymentMethod: primaryPayment.method || 'ONLINE',
+        transactionId: realTransactionId,
+        amount: totalAmount,
+        description: `Payment for ${invoiceItems.length} components`,
+        items: invoiceItems,
+        address: {
+            line1: student.address,
+            line2: student.address2 || '',
+            city: student.city,
+            state: student.state,
+            pincode: student.pincode
+        }
+    };
+
+    try {
+        const invoiceBuffer = await generateInvoicePDF(invoiceData);
+        const s3Key = `student/${student.applicationId}/invoices/${primaryPayment.providerTxId}.pdf`;
+        const invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
+        logger.info(`Invoice generated: ${invoiceUrl}`);
+        return { invoiceUrl, invoiceNumber, realTransactionId, invoiceItems, invoiceData };
+    } catch (err) {
+        logger.error(`Invoice Generation Failed: ${err}`);
+        return { invoiceUrl: null, invoiceNumber, realTransactionId, invoiceItems, invoiceData };
+    }
+};
+
+const _updatePaymentsStatus = async (payments: any[], invoiceUrl: string | null, metadata: any) => {
+    for (const p of payments) {
+        await prisma.payment.update({
+            where: { id: p.id },
+            data: { status: PaymentStatus.SUCCESS, metadata, invoiceUrl }
+        });
+    }
+};
+
+const _processComponentLogic = async (payment: any) => {
+    const { studentId, component } = payment;
+    
+    const currentStatus = await prisma.studentAdmission.findUnique({
+        where: { studentId },
+        select: { status: true }
+    });
+
+    if (component === PaymentComponent.APPLICATION_FEE) {
+         if (currentStatus?.status !== AdmissionStatus.ADMISSION_CONFIRMED && currentStatus?.status !== AdmissionStatus.ENROLLED) {
+            await prisma.studentAdmission.update({
+                where: { studentId },
+                data: { status: AdmissionStatus.ENTRANCE_FEE_PAID, feeStatus: FeeStatus.PARTIAL }
+            });
+         }
+    } else if (component === PaymentComponent.TUITION || component === PaymentComponent.ADMISSION || component === PaymentComponent.SCHOLARSHIP_TOKEN) {
+        
+        // Token/Tuition Logic: Lock Allocation & Generate Ledger Debits (Only on First Payment/Confirmation)
+        if ((component === PaymentComponent.SCHOLARSHIP_TOKEN || component === PaymentComponent.TUITION) && currentStatus?.status !== AdmissionStatus.ADMISSION_CONFIRMED && currentStatus?.status !== AdmissionStatus.ENROLLED) {
+             await ScholarshipService.lockAllocation(studentId);
+             const detailedStudent = await prisma.student.findUnique({ where: { id: studentId }, include: { admissionDetails: { include: { hostel: true, transportRoute: true } }, scholarshipAllocation: { include: { rule: true } } }});
+             if (detailedStudent?.admissionDetails) {
+                 const ledgers: any[] = [];
+                 const admission = detailedStudent.admissionDetails;
+                 const tuitionFee = (admission.totalFee ?? 0) > 0 ? (admission.totalFee ?? 0) : 25000;
+                 ledgers.push({ studentId, type: 'DEBIT', amount: tuitionFee, description: 'Tuition Fee (Annual)', referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() });
+                 if (admission.transportRouteId && admission.transportRoute) { ledgers.push({ studentId, type: 'DEBIT', amount: admission.transportRoute.cost, description: `Transport Fee - ${admission.transportRoute.name}`, referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() }); }
+                 if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) { const rule = detailedStudent.scholarshipAllocation.rule; const discount = (tuitionFee * rule.discountPercentage) / 100; if (discount > 0) { ledgers.push({ studentId, type: 'CREDIT', amount: discount, description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`, referenceId: detailedStudent.scholarshipAllocation.id, referenceType: 'SCHOLARSHIP', date: new Date() }); } }
+                 if (ledgers.length > 0) await prisma.studentLedger.createMany({ data: ledgers });
+             }
+        }
+
+        // Status Update - Removed as per requirement (Finalize Admission API handles status change)
+        /* 
+        if (currentStatus?.status !== AdmissionStatus.ADMISSION_CONFIRMED && currentStatus?.status !== AdmissionStatus.ENROLLED) {
+             await prisma.studentAdmission.update({
+                where: { studentId },
+                data: { status: AdmissionStatus.ADMISSION_CONFIRMED, feeStatus: FeeStatus.PARTIAL }
+            });
+        }
+        */
+        await prisma.studentAdmission.update({
+            where: { studentId },
+            data: { feeStatus: FeeStatus.PARTIAL }
+        });
+    }
+};
+
+
+const _settleFeeDemands = async (payment: any) => {
+    await prisma.studentAdmission.update({
+         where: { studentId: payment.studentId },
+         data: { paidFee: { increment: payment.amount } }
+    });
+
+    try {
+        let targetDemandId = payment.feeDemandId;
+
+        // Resolve via FeeHead if missing
+        if (!targetDemandId && payment.feeHeadId) {
+             const matchingDemand = await prisma.studentFeeDemand.findFirst({
+                 where: {
+                     studentId: payment.studentId,
+                     status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] },
+                     OR: [
+                          { feeHeadId: payment.feeHeadId },
+                          { feeStructure: { feeHeadId: payment.feeHeadId } }
+                     ]
+                 },
+                 orderBy: { dueDate: 'asc' }
+             });
+             if (matchingDemand) targetDemandId = matchingDemand.id;
+        }
+
+        // Strict Settlement
+        if (targetDemandId) {
+            const demand = await prisma.studentFeeDemand.findUnique({ where: { id: targetDemandId } });
+            if (demand) {
+                const newStatus = payment.amount >= demand.amount ? 'FULL' : 'PARTIAL';
+                await prisma.studentFeeDemand.update({
+                    where: { id: demand.id },
+                    data: { status: newStatus as any }
+                });
+                await prisma.payment.update({ where: { id: payment.id }, data: { feeDemandId: targetDemandId } });
+            }
+        } 
+        // Waterfall Settlement
+        else {
+            const pendingDemands = await prisma.studentFeeDemand.findMany({
+                where: { studentId: payment.studentId, status: FeeStatus.PENDING },
+                orderBy: { dueDate: 'asc' }
+            });
+
+            let remaining = payment.amount;
+            for (const demand of pendingDemands) {
+                if (remaining <= 0) break;
+                if (remaining >= demand.amount) {
+                    await prisma.studentFeeDemand.update({ where: { id: demand.id }, data: { status: FeeStatus.FULL } });
+                    remaining -= demand.amount;
+                } else {
+                    await prisma.studentFeeDemand.update({ where: { id: demand.id }, data: { status: FeeStatus.PARTIAL } });
+                    break; 
+                }
+            }
+        }
+    } catch (err) {
+        logger.error(`Fee Settlement Error: ${err}`);
+    }
+};
+
+const _createPaymentLedger = async (payment: any) => {
+    try {
+        await prisma.studentLedger.create({
+            data: {
+                studentId: payment.studentId,
+                type: 'CREDIT', 
+                amount: payment.amount,
+                description: `Payment Received via ${payment.method || 'ONLINE'} (${payment.component})`,
+                referenceId: payment.id,
+                referenceType: 'PAYMENT',
+                feeHeadId: payment.feeHeadId || undefined, 
+                createdBy: payment.createdBy || payment.collectedBy || 'SYSTEM', // Strict tracking
+                date: new Date()
+            } as any 
+        });
+    } catch (err) {
+        logger.error(`Ledger Creation Failed for ${payment.id}: ${err}`);
+    }
+};
+
+const _sendPaymentNotification = async (student: any, payments: any[], invoiceResult: any) => {
+    if (!student.email || !invoiceResult.invoiceUrl) return;
+
+    let emailType = 'DEFAULT';
+    if (payments.length === 1 && payments[0].component === PaymentComponent.APPLICATION_FEE) {
+         emailType = 'APPLICATION_FEE';
+    }
+
+    const { invoiceNumber, realTransactionId, invoiceData, invoiceItems } = invoiceResult;
+    
+    await sendPaymentReceipt(student.email, {
+        studentName: student.name,
+        invoiceNumber,
+        applicationId: student.applicationId,
+        transactionId: realTransactionId,
+        amount: invoiceData.amount,
+        date: new Date(),
+        paymentType: emailType as any,
+        customFeeType: `Fee Payment (${invoiceItems.map((i: any) => i.description).join(', ')})`,
+        invoiceUrl: invoiceResult.invoiceUrl,
+        address: invoiceData.address
+    });
+};
+
+const _handleTriggers = async (payments: any[]) => {
+    const finalizeTrigger = payments.find(p => p.metadata?.targetAction === 'FINALIZE_ADMISSION');
+    if (finalizeTrigger) {
+         try {
+            const { AdminStudentService } = require('../admin/adminStudent.service');
+            await prisma.$transaction(async (tx) => {
+                 await AdminStudentService.executeAdmissionUpdates(finalizeTrigger.studentId, finalizeTrigger.metadata, finalizeTrigger.id, 'SYSTEM', tx);
+            });
+        } catch (err) {
+            logger.error(`Admission Finalization Error: ${err}`);
+        }
+    }
+};
+
+// Legacy - to be deleted
+export const _unused_processPaymentSuccess = async (paymentOrPayments: any | any[], metadata: any) => {
     // Normalize to array
     const payments = Array.isArray(paymentOrPayments) ? paymentOrPayments : [paymentOrPayments];
     if (payments.length === 0) return;
@@ -373,7 +781,7 @@ const processPaymentSuccess = async (paymentOrPayments: any | any[], metadata: a
         for (const p of payments) {
              let description = '';
              
-             // 1. Try Fee Head Name FIRST
+             // 1. Try Fee Head Name FIRST (Strict Priority)
              if (p.feeHeadId) {
                  const fh = await prisma.feeHead.findUnique({ where: { id: p.feeHeadId }});
                  if (fh) description = fh.name;
@@ -389,6 +797,7 @@ const processPaymentSuccess = async (paymentOrPayments: any | any[], metadata: a
                      case PaymentComponent.HOSTEL_MESS: description = 'Mess Fee'; break;
                      case PaymentComponent.TRANSPORT: description = 'Transport Fee'; break;
                      case PaymentComponent.SCHOLARSHIP_TOKEN: description = 'Admission Fee'; break;
+                     case PaymentComponent.BOOK_BANK: description = 'Book Bank Fee'; break;
                      case PaymentComponent.OTHER: description = 'Other Fee'; break;
                      default: description = p.component.replace(/_/g, ' ');
                  }
@@ -594,18 +1003,57 @@ const processPaymentSuccess = async (paymentOrPayments: any | any[], metadata: a
             });
             
             try {
-                // STRICT SETTLEMENT
-                if (payment.feeDemandId) {
-                    const demand = await prisma.studentFeeDemand.findUnique({ where: { id: payment.feeDemandId } });
+                let targetDemandId = payment.feeDemandId;
+
+                // 2. Resolution: If no explicit Demand ID, try to find one via Fee Head
+                if (!targetDemandId && payment.feeHeadId) {
+                      // Find oldest pending demand for this Fee Head
+                      const matchingDemand = await prisma.studentFeeDemand.findFirst({
+                          where: {
+                              studentId: payment.studentId,
+                              status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] },
+                              OR: [
+                                  { feeHeadId: payment.feeHeadId },
+                                  { feeStructure: { feeHeadId: payment.feeHeadId } }
+                              ]
+                          },
+                          orderBy: { dueDate: 'asc' }
+                      });
+                      if (matchingDemand) targetDemandId = matchingDemand.id;
+                      logger.info(`[processPaymentSuccess] FeeHead Match: ${payment.feeHeadId} -> Demand: ${targetDemandId || 'None'}`);
+                }
+
+                // 3. STRICT SETTLEMENT (Updated)
+                if (targetDemandId) {
+                    const demand = await prisma.studentFeeDemand.findUnique({ where: { id: targetDemandId } });
                     if (demand) {
-                        const newStatus = payment.amount >= demand.amount ? 'FULL' : 'PARTIAL';
+                        const newStatus = payment.amount >= demand.amount ? 'FULL' : 'PARTIAL'; // Naive check, ideally use netAmount or similar
+                        // Note: The logic below was naive in original code too (payment.amount >= demand.amount).
+                        // Better to rely on demand status update based on paid vs total.
+                        // For now keeping it consistent but safer.
+                        
                         await prisma.studentFeeDemand.update({
                             where: { id: demand.id },
-                            data: { status: newStatus as any }
+                            data: { 
+                                status: newStatus as any,
+                                // We should probably update paidAmount if schema has it? Schema doesn't show paidAmount on Demand clearly in view_file.
+                                // Checked Schema: StudentFeeDemand has amount, netAmount, etc. NO paidAmount column in viewing?
+                                // Let's check Schema view again... 
+                                // Schema (lines 538-562) shows: amount, discountAmount, scholarshipAmount, netAmount, fineAmount. 
+                                // NO 'paidAmount'.
+                                // So we can't easily track partial payments on a demand unless we sum related payments.
+                                // The original code just toggled status. I will stick to that.
+                            }
+                        });
+                        
+                        // Link Payment to Demand for Record
+                         await prisma.payment.update({
+                            where: { id: payment.id },
+                            data: { feeDemandId: targetDemandId }
                         });
                     }
                 } 
-                // WATERFALL SETTLEMENT
+                // 4. WATERFALL SETTLEMENT
                 else {
                     const pendingDemands = await prisma.studentFeeDemand.findMany({
                         where: {
@@ -624,6 +1072,8 @@ const processPaymentSuccess = async (paymentOrPayments: any | any[], metadata: a
                                 where: { id: demand.id },
                                 data: { status: FeeStatus.FULL }
                             });
+                            // Link Payment? Can't link 1 payment to multiple demands easily in 1 field.
+                            // We skip linking here or pick the last one.
                             remainingPayment -= demand.amount;
                         } else {
                             await prisma.studentFeeDemand.update({
@@ -650,6 +1100,7 @@ const processPaymentSuccess = async (paymentOrPayments: any | any[], metadata: a
                     referenceId: payment.id,
                     referenceType: 'PAYMENT',
                     feeHeadId: payment.feeHeadId || undefined, 
+                    createdBy: payment.createdBy || payment.collectedBy || 'SYSTEM', // Strict tracking
                     date: new Date()
                 } as any 
             });
@@ -714,7 +1165,7 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
     });
 
     // Reuse the success processing logic (Invoice, Admission Status, Ledger, etc.)
-    await processPaymentSuccess({ ...payment, student }, { remarks, adminId });
+    await processSinglePaymentSuccess({ ...payment, student }, { remarks, adminId });
 
     // Fetch the updated payment to return invoiceUrl and status
     const updatedPayment = await prisma.payment.findUnique({ where: { id: payment.id } });
@@ -765,7 +1216,7 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
     if (code === 'PAYMENT_SUCCESS') {
         const needsUpdate = payments.some(p => p.status !== PaymentStatus.SUCCESS);
         if (needsUpdate) {
-            await processPaymentSuccess(payments, decodedPayload);
+            await processMultiPaymentSuccess(payments, decodedPayload);
         }
     } else {
          await prisma.payment.updateMany({
@@ -1098,7 +1549,7 @@ export const getInvoiceUrl = async (paymentId: string) => {
         // Self-healing: If payment is success but invoice is missing, try to generate it again
         if (payment.status === PaymentStatus.SUCCESS) {
             logger.warn(`Payment ${paymentId} is SUCCESS but missing invoiceUrl. Attempting to regenerate...`);
-            await processPaymentSuccess(payment, payment.metadata);
+            await processSinglePaymentSuccess(payment, payment.metadata);
             
             // Refetch to get the updated URL
             const updatedPayment = await prisma.payment.findUnique({ where: { id: paymentId } });
@@ -1500,8 +1951,15 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
 
 // Step 4. Unified Payment Processor
 export const processUnifiedPayment = async (data: any) => {
-    const { studentId, amount, mode, method, component, feeHeadId, remarks, initiatedBy, referenceNumber, redirectUrl } = data;
+    const { studentId, amount, mode, method, component: rawComponent, feeHeadId: rawFeeHeadId, remarks, initiatedBy, referenceNumber, redirectUrl } = data;
+    logger.info(`[processUnifiedPayment] START - StudentId=${studentId}, Amount=${amount}, Mode=${mode}, Method=${method}, Component=${rawComponent}, InitiatedBy=${initiatedBy}`);
    
+    // Resolve Component
+    logger.debug(`[processUnifiedPayment] Resolving component: ${rawComponent}`);
+    const { component, feeHeadId } = await resolveComponent(rawComponent, rawFeeHeadId);
+    logger.info(`[processUnifiedPayment] Component resolved to: ${component}, FeeHeadId=${feeHeadId || 'N/A'}`);
+
+
     // 0. Strict Input Validation
     if (!studentId) throw new AppError('Student ID is required', 400);
     if (!amount || typeof amount !== 'number' || amount <= 0) throw new AppError('Amount must be a positive number', 400);
@@ -1509,9 +1967,7 @@ export const processUnifiedPayment = async (data: any) => {
     if (!Object.values(PaymentMode).includes(mode)) {
         throw new AppError(`Invalid Payment Mode. Allowed: ${Object.values(PaymentMode).join(', ')}`, 400);
     }
-    if (!Object.values(PaymentComponent).includes(component)) {
-        throw new AppError(`Invalid Payment Component. Allowed: ${Object.values(PaymentComponent).join(', ')}`, 400);
-    }
+
 
     if (mode === PaymentMode.OFFLINE && !referenceNumber) {
         throw new AppError('Reference Number is required for OFFLINE payments', 400);
@@ -1529,17 +1985,31 @@ export const processUnifiedPayment = async (data: any) => {
    
 
     // 1. Validate Student
+    logger.debug(`[processUnifiedPayment] Looking up student: ${studentId}`);
     const student = await prisma.student.findUnique({ 
         where: { id: studentId },
         include: { admissionDetails: true }
     });
-    if (!student) throw new AppError('Student not found', 404);
-
-    // 2. Validate Fee Head
-    if (component === PaymentComponent.OTHER && !feeHeadId) {
-        throw new AppError('Fee Head ID required for Other payments', 400);
+    if (!student) {
+        logger.error(`[processUnifiedPayment] Student not found: ${studentId}`);
+        throw new AppError('Student not found', 404);
     }
+    logger.info(`[processUnifiedPayment] Student found: ${student.name} (${student.applicationId})`);
 
+
+    // 2. Validate Fee Head - Mandatory (Exempting specific types)
+    const exemptFromFeeHead: PaymentComponent[] = [
+        PaymentComponent.HOSTEL,
+        PaymentComponent.HOSTEL_ACCOMMODATION,
+        PaymentComponent.HOSTEL_MESS,
+        PaymentComponent.TRANSPORT,
+        PaymentComponent.OTHER
+    ];
+
+    if (!feeHeadId && !exemptFromFeeHead.includes(component)) {
+        throw new AppError(`Fee Head ID is mandatory for ${component}`, 400);
+    }
+    
     if (feeHeadId) {
         const feeHead = await prisma.feeHead.findUnique({ where: { id: feeHeadId } });
         if (!feeHead) {
@@ -1551,8 +2021,11 @@ export const processUnifiedPayment = async (data: any) => {
     const providerTxId = mode === PaymentMode.OFFLINE 
         ? (referenceNumber || `CASH_${Date.now()}_${studentId.substring(0, 8)}`)
         : `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
+    logger.info(`[processUnifiedPayment] Transaction ID generated: ${providerTxId}`);
 
     // 4. Create Payment Record
+    logger.info(`[processUnifiedPayment] Creating payment record with status=${mode === PaymentMode.OFFLINE ? 'SUCCESS' : 'PENDING'}`);
+
     const payment = await prisma.payment.create({
         data: {
             studentId,
@@ -1564,16 +2037,22 @@ export const processUnifiedPayment = async (data: any) => {
             feeHeadId,
             providerTxId,
             collectedBy: initiatedBy,
+            createdBy: initiatedBy, // Strict data
             metadata: { remarks, source: 'UNIFIED_API' }
         }
     });
 
+    logger.info(`[processUnifiedPayment] Payment record created: ID=${payment.id}, Status=${payment.status}`);
+
     // 5. Handle Offline Success Immediate Processing
     if (mode === PaymentMode.OFFLINE) {
+        logger.info(`[processUnifiedPayment] Processing OFFLINE payment immediately`);
         // Reuse Success Logic (Ledger, Invoice, Email)
-        const successResult = await processPaymentSuccess({ ...payment, student }, { remarks, adminId: initiatedBy });
+        const successResult = await processSinglePaymentSuccess({ ...payment, student }, { remarks, adminId: initiatedBy });
         
         const presignedInvoiceUrl = await convertToPresignedUrl(successResult?.invoiceUrl);
+        logger.info(`[processUnifiedPayment] OFFLINE payment processed successfully. InvoiceUrl=${presignedInvoiceUrl ? 'Generated' : 'N/A'}`);
+
 
         // Return Success Response
         return { 
@@ -1605,8 +2084,11 @@ export const processUnifiedPayment = async (data: any) => {
             } else if (component === PaymentComponent.HOSTEL_MESS) {
                 feeType = 'MESS';
             }
+            logger.info(`[processUnifiedPayment] PhonePe client type selected: ${feeType} for component: ${component}`);
 
             const client = getPhonePeClient(feeType);
+            logger.debug(`[processUnifiedPayment] Building PhonePe payment request: Amount=₹${amount}, RedirectUrl=${finalRedirectUrl}`);
+
 
             const request = StandardCheckoutPayRequest.builder()
                 .merchantOrderId(providerTxId)
@@ -1677,9 +2159,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 2. Initialize Breakdown
     const categories = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'SKILL_DEVELOPMENT', 'OTHER'];
-    const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number }> = {};
+    const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number, feeHeadId: string }> = {};
     categories.forEach(cat => {
-        breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0 };
+        breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0, feeHeadId: '' };
     });
 
     // 3. Helper: Map Fee Head Name to Category
@@ -1723,6 +2205,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         
         target.demanded += demand.amount;
         if (demand.fineAmount) target.fine += demand.fineAmount;
+        if (headId && !target.feeHeadId) target.feeHeadId = headId;
     });
 
     // 5. Override/Refine with Admission Details
@@ -1828,6 +2311,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
          
          const target = breakdown[key] || breakdown['OTHER'];
          target.paid += p.amount;
+         if (p.feeHeadId && !target.feeHeadId) target.feeHeadId = p.feeHeadId;
     });
 
     // 8. FINAL SUMMARY

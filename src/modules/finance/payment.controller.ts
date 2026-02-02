@@ -20,17 +20,23 @@ import {
 } from './payment.service';
 
 export const payMultiComponentFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[payMultiComponentFee] by=${req.user?.userId || 'anonymous'}`);
-    const { studentId, components, paymentMethod, remarks, referenceNumber } = req.body;
+    const currentUserId = req.user?.userId || 'anonymous';
+    logger.info(`[payMultiComponentFee] START - by=${currentUserId}`);
+    const { studentId, components, paymentMethod, remarks, referenceNumber, mode } = req.body;
+    logger.debug(`[payMultiComponentFee] Request body: ${JSON.stringify({ studentId, componentsCount: components?.length, paymentMethod, mode, hasReferenceNumber: !!referenceNumber })}`);
     
     if (!studentId || !components || !Array.isArray(components) || components.length === 0) {
+        logger.error(`[payMultiComponentFee] Validation failed - Missing required fields`);
         throw new AppError("Student ID and components array are required", 400);
     }
+    logger.info(`[payMultiComponentFee] Processing ${components.length} components for student: ${studentId}`);
     
     // Authorization: User ID should match student's User ID unless Admin (handled by RBAC usually but check logic)
-    const currentUserId = req.user?.userId || undefined;
+    const currentUserIdForAuth = req.user?.userId || undefined;
 
-    const result = await initiateMultiComponentPayment(studentId, components, currentUserId, paymentMethod, remarks, referenceNumber);
+    const result = await initiateMultiComponentPayment(studentId, components, currentUserIdForAuth, paymentMethod, remarks, referenceNumber, mode);
+    logger.info(`[payMultiComponentFee] SUCCESS - Result: ${JSON.stringify({ success: result.success, paymentIds: result.paymentIds?.length, transactionId: result.transactionId })}`);
+
     
     sendResponse({
         res,
@@ -309,31 +315,42 @@ export const initiateAdminPayment = catchAsync(async (req: Request, res: Respons
 });
 
 export const payFeeComponent = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[payFeeComponent] by=${req.user?.userId || 'anonymous'}`);
+    const currentUserId = req.user?.userId || 'anonymous';
+    const currentUserRole = req.user?.role || 'UNKNOWN';
+    logger.info(`[payFeeComponent] START - by=${currentUserId}, role=${currentUserRole}`);
     
     const { studentId, amount, component, mode } = req.body;
+    logger.debug(`[payFeeComponent] Request: StudentId=${studentId}, Amount=${amount}, Component=${component}, Mode=${mode}`);
 
     // 1. Basic Validation
     if (!studentId || !amount || !component) {
+        logger.error(`[payFeeComponent] Validation failed - Missing required fields`);
         throw new AppError("Student ID, Amount, and Component are required", 400);
     }
+    logger.info(`[payFeeComponent] Validated - Processing ₹${amount} for ${component}`);
 
     // 2. Security: Authorization & Mode Restrictions
     if (req.user?.role === 'STUDENT') {
+        logger.debug(`[payFeeComponent] Student role detected - Verifying authorization`);
         const { getStudentByUserId } = await import('../student/student.service');
         const s = await getStudentByUserId(req.user.userId);
         
         // Ensure paying for self
         if (!s || s.id !== studentId) {
-            logger.warn(`[Security] Student ${req.user.userId} attempted to pay for ${studentId}`);
+            logger.warn(`[payFeeComponent] SECURITY ALERT - Student ${req.user.userId} attempted to pay for ${studentId}`);
             throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
         }
+        logger.info(`[payFeeComponent] Authorization verified - Student paying for self`);
 
         // Students cannot initiate OFFLINE payments directly via API (usually Admin recorded)
         if (mode === 'OFFLINE') {
+             logger.warn(`[payFeeComponent] SECURITY ALERT - Student attempted OFFLINE payment`);
              throw new AppError("Students cannot record OFFLINE payments. Please contact admin.", 403);
         }
     }
+    
+    logger.info(`[payFeeComponent] Calling processUnifiedPayment service`);
+
     
     const result = await import('./payment.service').then(s => s.processUnifiedPayment({
         ...req.body,

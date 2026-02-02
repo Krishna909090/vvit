@@ -500,7 +500,7 @@ export const verifyPayment = catchAsync(async (req: Request, res: Response, next
         res,
         statusCode: 200,
         success: true,
-        message: result.message,
+        message: result?.message,
         data: result
     });
 });

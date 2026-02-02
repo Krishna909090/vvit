@@ -19,6 +19,7 @@ import { sendAdmissionFeeReceipt, sendPaymentReceipt } from '../../utils/emailSe
 // @ts-ignore
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
 import { InvoiceService } from '../finance/invoice.service';
+import { getPhonePeClient } from '../finance/payment.service';
 
 // --- CONFIGURATION CONSTANTS ---
 const PHONEPE_MERCHANT_ID = process.env.PHONEPE_MERCHANT_ID || '';
@@ -1600,6 +1601,20 @@ export const AdminStudentService = {
             throw new AppError("Invalid Course ID" , 400);
         }
 
+        // Check Mandatory Fee Head ID (Exempting specific types)
+        const exemptComponents = [
+            'HOSTEL_ACCOMMODATION',
+            'HOSTEL_MESS',
+            'TRANSPORT',
+            'OTHER',
+            'HOSTEL'
+        ];
+
+        if (!payment.feeHeadId && !exemptComponents.includes(payment.component || '')) {
+            logger.warn(`[finalizeAdmission] Fee Head ID missing for student ${studentId} (Component: ${payment.component})`);
+            throw new AppError("Fee Head ID is mandatory for admission finalization", 400);
+        }
+
         if (payment.feeHeadId && !validFeeHead) {
             logger.warn(`[finalizeAdmission] Invalid Fee Head ID: ${payment.feeHeadId}`);
             throw new AppError("Invalid Fee Head ID", 400);
@@ -1706,6 +1721,7 @@ export const AdminStudentService = {
                              feeHeadId: payment.feeHeadId,
                              feeDemandId: feeDemandId || undefined,
                              collectedBy: adminId,
+                             createdBy: adminId, // Strict data
                              metadata: { 
                                 scholarship, 
                                 allocation, 
@@ -1793,6 +1809,7 @@ export const AdminStudentService = {
                         referenceNumber: payment.referenceNumber || `REF-${Date.now()}`,
                         instrumentDate: payment.date ? new Date(payment.date) : new Date(),
                         collectedBy: adminId,
+                        createdBy: adminId, // Strict data
                         metadata: { 
                             scholarship, 
                             allocation, 
@@ -1946,95 +1963,77 @@ export const AdminStudentService = {
         // 1. Fetch Payment
         const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
         if (!payment) {
-            logger.error(`[verifyAndCompletePayment] Payment not found: ${paymentId}`);
             throw new AppError("Payment not found", 404);
         }
+        
+        // Find Siblings (Bundled Payments)
+        let relatedPayments = [payment];
+        if (payment.providerTxId && payment.providerTxId.startsWith('TXN_')) {
+             const siblings = await prisma.payment.findMany({
+                 where: { 
+                     providerTxId: payment.providerTxId,
+                     id: { not: payment.id } 
+                 }
+             });
+             relatedPayments = [payment, ...siblings];
+             logger.info(`[verifyAndCompletePayment] Found ${siblings.length} sibling payments for bundle.`);
+        }
 
-        if (payment.status === PaymentStatus.SUCCESS) {
-            logger.info(`[verifyAndCompletePayment] Payment ${paymentId} already processed.`);
-            
-            // Return full details even if already processed
-            let finalInvoiceUrl = payment.invoiceUrl;
-            if (finalInvoiceUrl) {
-                finalInvoiceUrl = await convertToPresignedUrl(finalInvoiceUrl);
-            }
-            
-            return { 
+        const isSuccess = payment.status === PaymentStatus.SUCCESS;
+        if (isSuccess) {
+            // Already processed logic...
+             logger.info(`[verifyAndCompletePayment] Payment ${paymentId} already processed.`);
+             return { 
                 success: true, 
                 message: "Payment successfully processed", 
                 status: PaymentStatus.SUCCESS,
                 data: {
                     paymentId: payment.id,
-                    invoiceUrl: finalInvoiceUrl,
+                    invoiceUrl: await convertToPresignedUrl(payment.invoiceUrl),
                     amount: payment.amount,
-                    transactionId: payment.providerTxId,
-                    metadata: payment.metadata,
-                    payment: payment
+                    transactionId: payment.providerTxId
                 }
-            };
+             };
         }
 
-
-
         try {
-             // ------------------------------------------------------------------
-             // BLOCK 2: GATEWAY VERIFICATION
-             // Call PhonePe Status API to confirm payment status.
-             // We capture the Real/Provider Transaction ID here.
-             // ------------------------------------------------------------------
-             // Step 2: Verify with Payment Gateway
+             // Verify Gateway using PRIMARY ID
              const merchantTransactionId = payment.providerTxId || payment.id.replace(/-/g, '');
-             logger.info(`[verifyAndCompletePayment] Step 2: Checking status with PhonePe for TxId=${merchantTransactionId}`);
              
-             // Use Singleton Client or re-instantiate if needed (StandardCheckoutClient handles concurrency usually)
-             // Using getInstance with constants
-             const client = StandardCheckoutClient.getInstance(PHONEPE_MERCHANT_ID, PHONEPE_SALT_KEY, PHONEPE_SALT_INDEX as any, PHONEPE_ENV);
+             // USE SHARED CLIENT
+             let feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION';
+             if (payment.component === PaymentComponent.HOSTEL || payment.component === PaymentComponent.HOSTEL_ACCOMMODATION) feeType = 'HOSTEL';
+             if (payment.component === PaymentComponent.HOSTEL_MESS) feeType = 'MESS';
+
+             const client = getPhonePeClient(feeType);
+             logger.info(`[verifyAndCompletePayment] Verifying with Client Type: ${feeType}`);
+             
              const response = await client.getOrderStatus(merchantTransactionId); 
              
-             logger.debug(`[verifyAndCompletePayment] PhonePe Full Response: ${JSON.stringify(response)}`);
-             
-             // Extract State safely
-             // SDK might return structure where state is in data, or code is the status.
              const responseData = (response as any).data || {};
              const statusState = (response as any).state || responseData.state || responseData.responseCode;
              const statusCode = (response as any).code || responseData.code;
 
-             logger.info(`[verifyAndCompletePayment] Code: ${statusCode}, State: ${statusState}`);
-             
-             const isSuccess = (statusCode === 'PAYMENT_SUCCESS' && (statusState === 'COMPLETED' || statusState === 'SUCCESS')) || 
-                               (statusState === 'COMPLETED') || 
-                               (statusState === 'PAYMENT_SUCCESS'); // fallback
+             logger.info(`[verifyAndCompletePayment] PhonePe Response: Code=${statusCode}, State=${statusState}`);
+             logger.debug(`[verifyAndCompletePayment] Full Response: ${JSON.stringify(response)}`);
 
-             if (isSuccess) {
-                 // Success
-                 // Use existing providerTxId (which is MerchantTxId) or try to extract from response if typed properly
-                 // Extract Real PhonePe Transaction ID (Provider Reference ID)
-                 // Typical response structure: { success: true, code: 'PAYMENT_SUCCESS', message: '...', data: { transactionId: '...', paymentInstrument: { type: '...', pgTransactionId: '...' } } }
-                 // The SDK 'response' object usually maps to the body data or response object.
-                 // We will check multiple paths safely.
+             const isGatewaySuccess =
+                (statusCode === 'PAYMENT_SUCCESS' && (statusState === 'COMPLETED' || statusState === 'SUCCESS')) ||
+                (!statusCode && (statusState === 'COMPLETED' || statusState === 'SUCCESS'));
+
+             if (isGatewaySuccess) {
                  const responseData = (response as any).data || response;
-                 const realProviderTxId = responseData.paymentInstrument?.pgTransactionId || 
-                                          responseData.paymentInstrument?.bankTransactionId ||
-                                          responseData.transactionId || 
-                                          merchantTransactionId;
-
-                 logger.info(`[verifyAndCompletePayment] Captured Real Provider TxID: ${realProviderTxId}`);
-
-                 // Step 3: Finalize Admission (Update Status & Allocate)
-                 logger.info(`[verifyAndCompletePayment] Step 3: Finalizing Admission for payment ${paymentId}`);
-                 return await this._completeAdmissionTransaction(payment, adminId, realProviderTxId, response);
-             } else if (response.state === 'PENDING') {
-                 logger.info(`[verifyAndCompletePayment] Payment is still pending.`);
+                 const realProviderTxId = responseData.paymentInstrument?.pgTransactionId || merchantTransactionId;
+                 return await this._completeAdmissionTransaction(relatedPayments, adminId, realProviderTxId, response);
+             } else if (statusState === 'PENDING' || response.state === 'PENDING') {
                  return { success: false, message: "Payment is still pending", status: PaymentStatus.PENDING };
              } else {
-                 logger.warn(`[verifyAndCompletePayment] Payment failed with state: ${response.state}`);
-                 await prisma.payment.update({
-                         where: { id: paymentId },
-                         data: { status: PaymentStatus.FAILED }
+                 await prisma.payment.updateMany({
+                     where: { id: { in: relatedPayments.map(p => p.id) } },
+                     data: { status: PaymentStatus.FAILED }
                   });
                   return { success: false, message: "Payment Failed", status: PaymentStatus.FAILED };
              }
-
         } catch (error) {
             logger.error(`[verifyAndCompletePayment] Error verifying payment: ${error}`);
             throw new AppError("Payment Verification Failed", 500);
@@ -2049,94 +2048,76 @@ export const AdminStudentService = {
      * 2. Calls executeAdmissionUpdates (Allocation, Scholarship).
      * 3. Creates Ledger Entry.
      */
-    async _completeAdmissionTransaction(payment: any, adminId: string | undefined, providerTxId?: string, gatewayResponse?: any) {
-        logger.info(`[_completeAdmissionTransaction] Starting completion for PaymentID=${payment.id}, StudentID=${payment.studentId}`);
-        logger.debug(`[_completeAdmissionTransaction] Params: providerTxId=${providerTxId}, GatewayResponse Present=${!!gatewayResponse}`);
+    async _completeAdmissionTransaction(payments: any[], adminId: string | undefined, providerTxId?: string, gatewayResponse?: any) {
+        if (!payments || payments.length === 0) return;
+        const primaryPayment = payments[0];
+        logger.info(`[_completeAdmissionTransaction] Completing ${payments.length} payments. Primary=${primaryPayment.id}`);
 
         const result = await prisma.$transaction(async (tx) => {
-             // Update Payment Status (Atomic check)
-             const meta = payment.metadata as any;
-             logger.debug(`[_completeAdmissionTransaction] Original Metadata: ${JSON.stringify(meta)}`);
-             
-             // User Request: Replace metadata with PhonePe response (or keep existing if no response provided)
-             // We do NOT need to merge. The admission logic uses 'meta' variable which tracks the original state.
-             const finalMetadata = gatewayResponse || meta;
+             // Filter out already processed
+             const pendingPayments = payments.filter(p => p.status !== PaymentStatus.SUCCESS);
+             if (pendingPayments.length === 0) return { success: true, status: PaymentStatus.SUCCESS };
 
-             const updateResult = await tx.payment.updateMany({
-                 where: { 
-                     id: payment.id,
-                     status: { not: PaymentStatus.SUCCESS } 
-                 },
+             const paymentIds = pendingPayments.map(p => p.id);
+             
+             // Update All to SUCCESS
+             await tx.payment.updateMany({
+                 where: { id: { in: paymentIds } },
                  data: { 
                      status: PaymentStatus.SUCCESS,
-                     providerTxId: providerTxId || payment.providerTxId,
-                     metadata: finalMetadata
+                     providerTxId: providerTxId || primaryPayment.providerTxId,
+                     metadata: gatewayResponse || undefined // Update with gateway response if available
                  }
              });
+
+             const promises: Promise<any>[] = [];
+
+             // Logic for Each Payment
+             for (const payment of pendingPayments) {
+                  const meta = payment.metadata as any;
+                  // Ledger
+                  promises.push(tx.studentLedger.create({
+                      data: {
+                        studentId: payment.studentId,
+                        type: LedgerTransactionType.CREDIT,
+                        amount: payment.amount,
+                        description: `Admission Payment (${payment.method || 'ONLINE'}) - ${payment.component || 'FEE'}`,
+                        referenceId: payment.id,
+                        referenceType: 'PAYMENT',
+                        feeHeadId: payment.feeHeadId, 
+                        createdBy: adminId || 'SYSTEM'
+                      } as any
+                  }));
+
+                  // Updates (Admission, etc)
+                  if (meta && meta.targetAction === 'FINALIZE_ADMISSION') {
+                       promises.push(this.executeAdmissionUpdates(payment.studentId, meta, payment.id, adminId || 'SYSTEM', tx));
+                  }
+             }
              
-             if (updateResult.count === 0) {
-                 logger.warn(`[_completeAdmissionTransaction] Payment ${payment.id} already processed. Skipping duplicate updates.`);
-                 return { success: true, message: "Payment already successfully processed", status: PaymentStatus.SUCCESS };
-             }
-             logger.info(`[_completeAdmissionTransaction] Payment status marked as SUCCESS.`);
-
-             // 2. Parallel Execution: Updates + Ledger
-             logger.debug(`[_completeAdmissionTransaction] Creating Ledger Entry for student=${payment.studentId}`);
-             const ledgerData = {
-                studentId: payment.studentId,
-                type: LedgerTransactionType.CREDIT,
-                amount: payment.amount,
-                description: `Admission Payment (${payment.method || 'ONLINE'}) - ${meta?.feeComponent || 'TUITION'}`,
-                referenceId: payment.id,
-                referenceType: 'PAYMENT',
-                feeHeadId: payment.feeHeadId, 
-                createdBy: adminId || 'SYSTEM'
-             };
-
-             const promises: Promise<any>[] = [
-                 tx.studentLedger.create({ data: ledgerData as any }) // Type assertion to bypass strict input check if needed
-             ];
-
-             if (meta && meta.targetAction === 'FINALIZE_ADMISSION') {
-                 logger.info(`[_completeAdmissionTransaction] Triggering associated admission updates (Allocation/Scholarship)`);
-                 promises.push(this.executeAdmissionUpdates(payment.studentId, meta, payment.id, adminId || 'SYSTEM', tx));
-             }
-
              await Promise.all(promises);
-
-             logger.info(`[_completeAdmissionTransaction] Payment finalized successfully for PaymentID=${payment.id}. Metadata Updated=${!!gatewayResponse}`);
-             return { success: true, message: "Payment Verified and Admission Finalized", status: PaymentStatus.SUCCESS };
+             return { success: true, status: PaymentStatus.SUCCESS };
          });
 
-         // Auto-generate invoice (Outside TX)
+         // Invoice (Unified) for Bundle
+         // We pass ALL payment IDs to Invoice Service (requires update to InvoiceService to handle bundle detection automatically or explicitly)
+         // For now, if we call generateInvoiceForPayment on the FIRST one, and update InvoiceService to check siblings, it works.
          try {
-             logger.info(`[_completeAdmissionTransaction] Auto-generating invoice for PaymentID=${payment.id}`);
-             await InvoiceService.generateInvoiceForPayment(payment.id);
-             logger.info(`[_completeAdmissionTransaction] Invoice generated successfully for PaymentID=${payment.id}`);
-         } catch (err) {
-             logger.warn(`[_completeAdmissionTransaction] Failed to auto-generate invoice for PaymentID=${payment.id}: ${err}`);
-         }
+             await InvoiceService.generateInvoiceForPayment(primaryPayment.id);
+         } catch (err) { logger.warn(`Failed to auto-generate invoice: ${err}`); }
          
-         // Fetch final consolidated data to return to client
-         const finalPayment = await prisma.payment.findUnique({
-             where: { id: payment.id }
-         });
-
-         let finalInvoiceUrl = finalPayment?.invoiceUrl;
-         if (finalInvoiceUrl) {
-             finalInvoiceUrl = await convertToPresignedUrl(finalInvoiceUrl);
-         }
-
+         // Final Return
+         const finalPayment = await prisma.payment.findUnique({ where: { id: primaryPayment.id } });
          return { 
-            ...result, 
-            data: {
-                paymentId: finalPayment?.id,
-                invoiceUrl: finalInvoiceUrl,
-                amount: finalPayment?.amount,
-                transactionId: finalPayment?.providerTxId,
-                metadata: finalPayment?.metadata,
-                payment: finalPayment
-            }
+             success: true, 
+             message: "Payment Verified and Finalized", 
+             status: PaymentStatus.SUCCESS,
+             data: {
+                 paymentId: finalPayment?.id,
+                 invoiceUrl: await convertToPresignedUrl(finalPayment?.invoiceUrl),
+                 amount: payments.reduce((sum, p) => sum + p.amount, 0),
+                 transactionId: finalPayment?.providerTxId
+             }
          };
     },
 

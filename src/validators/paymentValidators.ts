@@ -7,7 +7,7 @@ export const payFeeComponentSchema = z.object({
         amount: z.number().positive("Amount must be positive"),
         mode: z.nativeEnum(PaymentMode),
         method: z.nativeEnum(PaymentMethod).optional(),
-        component: z.nativeEnum(PaymentComponent),
+        component: z.union([z.nativeEnum(PaymentComponent), z.string()]),
         feeHeadId: z.string().uuid().optional(),
         remarks: z.string().optional(),
         referenceNumber: z.string().optional(), 

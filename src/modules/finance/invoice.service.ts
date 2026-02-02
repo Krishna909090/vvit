@@ -26,44 +26,63 @@ export const InvoiceService = {
              logger.warn(`[InvoiceService] Payment ${paymentId} is not SUCCESS (Status: ${payment.status}). Proceeding with caution.`);
         }
 
+        // --- NEW: Bundle Detection Logic ---
+        // Find siblings sharing the same Transaction ID or Reference Number to generate a Unified Invoice
+        let allPayments = [payment];
+        
+        // Conditions to look for siblings:
+        // 1. Has providerTxId (Online or verified Offline)
+        // 2. OR Has referenceNumber (Offline) in a way that groups them
+        const groupingId = payment.providerTxId || (payment.method !== 'ONLINE' ? payment.referenceNumber : null);
+        
+        if (groupingId) {
+             const siblings = await prisma.payment.findMany({
+                 where: {
+                     OR: [
+                         { providerTxId: groupingId },
+                         { referenceNumber: groupingId }
+                     ],
+                     id: { not: paymentId },
+                     status: PaymentStatus.SUCCESS, 
+                     studentId: payment.studentId // Safety check
+                 },
+                 include: { feeHead: true }
+             });
+             if (siblings.length > 0) {
+                 allPayments = [payment, ...siblings];
+                 logger.info(`[InvoiceService] Detected bundle. Merging ${allPayments.length} payments for invoice.`);
+             }
+        }
+
+        const primaryPayment = allPayments[0]; // Use first as primary for metadata (dates, student, etc)
+
         // Logic copied/adapted from payment.service.ts to match Entrance Fee format
         // Format: VVIT/YEAR/APP_ID/RECEIPT_NO
         const feeHeader = 'VVIT'; 
         const year = new Date().getFullYear();
-        const applicationNumber = payment.student.applicationId || payment.studentId.substring(0,8).toUpperCase(); 
+        const applicationNumber = primaryPayment.student.applicationId || primaryPayment.studentId.substring(0,8).toUpperCase(); 
 
         // Count existing successful payments for this student to generate serial number
-        // We might want to use the current payment's index + 1 logic if strictly reproducing history, 
-        // but strictly counting all successful ones is decent.
-        const paymentCount = await prisma.payment.count({
-            where: {
-                studentId: payment.studentId,
-                status: PaymentStatus.SUCCESS,
-                // created_at <= this payment? To keep serial stable?
-                // For now, simpler count is fine as requested.
-            }
-        });
-        
-        let receiptNo = 1;
         // Optimization: Checking how many payments exist BEFORE this one to get stable number
+        // We count *transactions* (unique timestamps or groups) ideally, but counting rows is safer for uniqueness.
         const priorPayments = await prisma.payment.count({
             where: {
-                studentId: payment.studentId,
+                studentId: primaryPayment.studentId,
                 status: PaymentStatus.SUCCESS,
-                createdAt: { lt: payment.createdAt || new Date() }
+                createdAt: { lt: primaryPayment.createdAt || new Date() }
             }
         });
-        receiptNo = priorPayments + 1;
+        const receiptNo = priorPayments + 1;
 
         const receiptNumberStr = receiptNo.toString().padStart(3, '0');
         const invoiceNumber = `${feeHeader}/${year}/${applicationNumber}/${receiptNumberStr}`;
 
         // Real TX ID
-        let realTransactionId = payment.providerTxId || payment.referenceNumber || payment.id;
+        let realTransactionId = primaryPayment.providerTxId || primaryPayment.referenceNumber || primaryPayment.id;
         
         // Check Metadata for Gateway Response ID (PhonePe)
         // Similar to processPaymentSuccess logic in payment.service.ts
-        const metadata: any = payment.metadata;
+        const metadata: any = primaryPayment.metadata;
         if (metadata) {
             if (metadata?.paymentDetails?.[0]?.transactionId) {
                 realTransactionId = metadata.paymentDetails[0].transactionId;
@@ -71,44 +90,46 @@ export const InvoiceService = {
                 realTransactionId = metadata.data.paymentDetails[0].transactionId;
             }
         }
-        // Determine Description
-        let description = 'Fee Payment';
-        const component = payment.component || '';
-        
-        // Detailed check based on component and fee head
-        if (component === PaymentComponent.APPLICATION_FEE) {
-            description = 'Application Fee';
-        } else if (component === PaymentComponent.SCHOLARSHIP_TOKEN) {
-            description = 'Admission Fee';
-        } else if (component === PaymentComponent.TUITION) {
-            description = 'Tuition Fee';
-        } else if (component === PaymentComponent.HOSTEL) {
-            description = 'Hostel Fee';
-        } else if (component === PaymentComponent.TRANSPORT) {
-            description = 'Transport Fee';
-        } else {
-            // Component is OTHER or unmapped
-            if (payment.feeHead) {
-                description = payment.feeHead.name;
-            } else {
-                // Fallback checks on component name if it somehow contains keywords
-                if (component.includes('HOSTEL')) {
-                    description = 'Hostel Fee';
-                } else if (component.includes('TRANSPORT')) {
-                    description = 'Transport Fee';
-                } else {
-                    description = 'Other Fee';
-                }
-            }
-        }
 
-            // items array construction
-            let invoiceItems: { description: string, amount: number }[] = [];
-            
-            if (component === 'MULTI_COMPONENT' && metadata && metadata.components && Array.isArray(metadata.components)) {
+        // Determine Description & Items
+        let description = 'Fee Payment';
+        let invoiceItems: { description: string, amount: number }[] = [];
+        let totalAmount = 0;
+
+        // Helper to get description for a payment row
+        const getPaymentDescription = (p: any) => {
+             if (p.feeHead) return p.feeHead.name;
+             
+             const c = p.component;
+             if (c === PaymentComponent.APPLICATION_FEE) return 'Application Fee';
+             if (c === PaymentComponent.SCHOLARSHIP_TOKEN) return 'Admission Fee (Token)';
+             if (c === PaymentComponent.TUITION) return 'Tuition Fee';
+             if (c === PaymentComponent.HOSTEL) return 'Hostel Fee';
+             if (c === PaymentComponent.HOSTEL_ACCOMMODATION) return 'Hostel Accommodation Fee';
+             if (c === PaymentComponent.HOSTEL_MESS) return 'Mess Fee';
+             if (c === PaymentComponent.TRANSPORT) return 'Transport Fee';
+             if (c === PaymentComponent.BOOK_BANK) return 'Book Bank Fee';
+             // Fallback
+             return c ? c.replace(/_/g, ' ') : 'Fee Component';
+        };
+
+        if (allPayments.length > 1) {
+             // Multi-Row Bundle
+             description = `Consolidated Payment (${allPayments.length} items)`;
+             invoiceItems = allPayments.map(p => ({
+                 description: getPaymentDescription(p),
+                 amount: p.amount
+             }));
+             totalAmount = allPayments.reduce((sum, p) => sum + p.amount, 0);
+        } else {
+             // Single Row Logic (Backward Compatibility)
+             // Check if it's a "MULTI_COMPONENT" row with metadata items (Legacy support)
+             const component = primaryPayment.component;
+             description = getPaymentDescription(primaryPayment);
+             
+             if (component === 'MULTI_COMPONENT' && metadata && metadata.components && Array.isArray(metadata.components)) {
                  invoiceItems = metadata.components.map((c: any) => {
                      let label = c.component;
-                     // Map to readable names
                      if (label === PaymentComponent.TUITION) label = 'Tuition Fee';
                      else if (label === PaymentComponent.TRANSPORT) label = 'Transport Fee';
                      else if (label === PaymentComponent.HOSTEL) label = 'Hostel Fee'; 
@@ -122,34 +143,34 @@ export const InvoiceService = {
                          amount: c.amount
                      };
                  });
-                 // Override main description if it's generic
                  description = 'Multiple Fee Payment';
+                 totalAmount = primaryPayment.amount; // Already summed in single row
             } else {
-                 invoiceItems = [
-                    {
-                        description: description,
-                        amount: payment.amount
-                    }
-                ];
+                 invoiceItems = [{
+                     description: description,
+                     amount: primaryPayment.amount
+                 }];
+                 totalAmount = primaryPayment.amount;
             }
+        }
 
-            // Prepare Data
-            const invoiceData: any = {
-                invoiceNumber: invoiceNumber,
-                date: payment.createdAt || new Date(),
-                studentName: payment.student.name,
-                studentId: payment.student.applicationId || payment.studentId,
-                paymentMethod: payment.method || 'ONLINE',
-                transactionId: realTransactionId,
-                amount: payment.amount,
-                description: description,
-                items: invoiceItems,
+        // Prepare Data
+        const invoiceData: any = {
+            invoiceNumber: invoiceNumber,
+            date: primaryPayment.createdAt || new Date(),
+            studentName: primaryPayment.student.name,
+            studentId: primaryPayment.student.applicationId || primaryPayment.studentId,
+            paymentMethod: primaryPayment.method || 'ONLINE',
+            transactionId: realTransactionId,
+            amount: totalAmount,
+            description: description,
+            items: invoiceItems,
             address: {
-                line1: (payment.student as any).addressLine1 || (payment.student as any).address || '',
-                line2: (payment.student as any).addressLine2 || (payment.student as any).address2 || '',
-                city: payment.student.city || '',
-                state: payment.student.state || '',
-                pincode: payment.student.pincode || ''
+                line1: (primaryPayment.student as any).addressLine1 || (primaryPayment.student as any).address || '',
+                line2: (primaryPayment.student as any).addressLine2 || (primaryPayment.student as any).address2 || '',
+                city: primaryPayment.student.city || '',
+                state: primaryPayment.student.state || '',
+                pincode: primaryPayment.student.pincode || ''
             }
         };
 
@@ -161,14 +182,14 @@ export const InvoiceService = {
         const s3Key = `student/${applicationNumber}/invoices/${realTransactionId}.pdf`;
         const invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
         
-        logger.info(`[InvoiceService] Valid URL generated: ${invoiceUrl}`);
+        logger.info(`[InvoiceService] Valid URL generated: ${invoiceUrl}. Updating ${allPayments.length} payment records.`);
 
-        // Update Payment
-        await prisma.payment.update({
-            where: { id: paymentId },
+        // Update ALL involved records
+        const paymentIds = allPayments.map(p => p.id);
+        await prisma.payment.updateMany({
+            where: { id: { in: paymentIds } },
             data: {
-                invoiceUrl: invoiceUrl,
-                // If we added invoiceNumber column to DB, we would save it here.
+                invoiceUrl: invoiceUrl
             }
         });
 
