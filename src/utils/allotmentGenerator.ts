@@ -214,23 +214,22 @@ function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
     .font('Helvetica-Bold')
     .fontSize(12)
     .fillColor('#2E4053')
-    .text('Instructions', 40, doc.y)
+    .text('Important Conditions of Provisional Admission', 40, doc.y)
 
   doc.moveDown(0.8)
 
   doc.font('Helvetica').fontSize(10).fillColor('#000') // Increased Font Size
 
   const instructions = [
-    '1. The candidate is required to download this Provisional Allotment Order and report to the allotted college physically for verification.',
-    '2. The candidate must produce all original certificates (SSC, Intermediate/Diploma, Study Certificates, Caste Certificate, etc.) along with two sets of xerox copies at the time of reporting.',
-    '3. Students are required to pay the tuition fee and other applicable college fees within the stipulated deadline mentioned in the academic calendar.',
-    '4. Candidates seeking fee reimbursement (Jagananna Vidya Deevena) must submit the necessary income and caste certificates as per government norms.',
-    '5. Failure to report to the college and complete the admission formalities within the specified dates will lead to the automatic cancellation of the allotted seat.',
-    '6. The admission is provisional and subject to the approval of the University and the State Council of Higher Education (APSCHE).',
-    '7. Any discrepancy found in the documents during verification or at a later stage will result in the cancellation of admission and appropriate legal action.',
-    '8. Students must adhere to the college Code of Conduct and Anti-Ragging regulations. Ragging is a criminal offence and strict disciplinary action will be taken against offenders.',
-    '9. For hostel accommodation and transport facilities, students should contact the administrative office at the time of reporting.',
-    '10. Classes will commence as per the schedule notified on the college website. Regular attendance is mandatory.'
+    '1. Provisional Nature of Admission: The admission offered through this letter is purely provisional in nature and is subject to fulfilment of all eligibility requirements as prescribed by VVIT University and statutory authorities.',
+    '2. Confirmation of Admission: Confirmation of admission shall be strictly subject to:',
+    '   o Submission of all original documents as specified in the separate annexures applicable for UG and PG programmes, and',
+    '   o Payment of all applicable fee components, including but not limited to Tuition Fee, Hostel Fee and/or Transportation Fee, within the stipulated time.',
+    '3. Change of Branch / Programme: Any request for change of branch or change of programme shall be considered solely at the discretion of the Director – Admissions, subject to availability of seats and eligibility criteria.',
+    '   Such requests must be submitted through:',
+    '   o Official Email: admissions@vvitu.ac.in',
+    '   o Handwritten letter submitted to Director Admissions.',
+    '4. Merit Scholarship Condition: Students who are awarded a Merit Scholarship are required to pay the complete applicable fee components on or before the Official Reporting Day, which will be notified separately by the University. Adjustment of scholarship benefits, if any, shall be governed by the University norms.'
   ]
 
   instructions.forEach(text => {
