@@ -15,6 +15,7 @@ export interface AllotmentData {
   allottedCollege: string
   allottedCourse: string
   profilePhotoUrl?: string
+  totalPending?: number
 }
 
 /* ================= HELPERS ================= */
@@ -30,12 +31,10 @@ async function fetchImage(url: string): Promise<Buffer | null> {
 
 /* ================= MAIN ================= */
 
-/* ================= MAIN ================= */
-
 export const generateAllotmentOrderPDF = async (
   data: AllotmentData
 ): Promise<Buffer> => {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     try {
       const doc = new PDFDocument({ size: 'A4', margin: 40 })
       const buffers: Buffer[] = []
@@ -45,10 +44,16 @@ export const generateAllotmentOrderPDF = async (
       doc.on('error', reject)
 
       drawHeader(doc)
+      drawBigWatermark(doc)
+
+      if (data.profilePhotoUrl) {
+        await drawProfilePhoto(doc, data.profilePhotoUrl)
+      }
+
       drawTitle(doc)
       drawMainTable(doc, data)
-      drawBigWatermark(doc)
       drawUniversityInstructions(doc)
+      drawFooter(doc)
 
       doc.end()
     } catch (err) {
@@ -59,135 +64,167 @@ export const generateAllotmentOrderPDF = async (
 
 /* ================= HEADER ================= */
 
-/* ================= HEADER ================= */
-
 function drawHeader(doc: PDFKit.PDFDocument) {
   const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
 
-  doc.rect(0, 0, doc.page.width, 95).fill('#F4F6F7')
-
+  // 3. LOGO (Row 2, Bigger, Beside Address) - Moved Down
   if (fs.existsSync(logoPath)) {
-    doc.image(logoPath, 30, 22, { width: 60 })
+     // Moved down from 25 to 45
+    doc.image(logoPath, 30, 45, { width: 70 })
   }
 
+  // 1. COLLEGE NAME (Centered, Single Line)
   doc
     .font('Helvetica-Bold')
-    .fontSize(11)
-    .fillColor('#1B2631')
+    .fontSize(14) 
+    .fillColor('#000000')
     .text(
       'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
-      100,
-      30,
-      { width: 480 }
+      0, // Left 0
+      30, // Y
+      { width: doc.page.width, align: 'center', lineBreak: false } // Full width center
     )
 
+  // 2. ADDRESS (Centered, Single Line)
   doc
     .font('Helvetica')
     .fontSize(10)
-    .fillColor('#34495E')
+    .fillColor('#000000')
     .text(
-      'Uppalapadu Road, Nambur, DT, Pedhakakani Mandal, Guntur, Andhra Pradesh 522508',
-      0,
-      55,
-      { width: doc.page.width, align: 'center' }
+      'Uppalapadu Road, Nambur, Pedhakakani Mandal, Guntur, Andhra Pradesh – 522508',
+      0, 
+      50, 
+      { width: doc.page.width, align: 'center', lineBreak: false }
     )
 
-  doc.y = 115
+  // Move Title Up: Was 110, now 85
+  doc.y = 85 
 }
 
 /* ================= TITLE ================= */
 
 function drawTitle(doc: PDFKit.PDFDocument) {
+  // Ensure perfectly centered
   doc
     .font('Helvetica-Bold')
-    .fontSize(16)
-    .fillColor('#2E4053')
-    .text('PROVISIONAL ALLOTMENT ORDER', { align: 'center', underline: true })
+    .fontSize(16) // Slightly smaller strictly to ensure single line if needed? 18 fine.
+    .fillColor('#1C2833')
+    .text('PROVISIONAL ALLOTMENT ORDER', 0, doc.y, { align: 'center', width: doc.page.width })
 
-  doc.moveDown(1.0)
+  doc
+    .moveDown(0.3)
+    .fontSize(10)
+    .fillColor('#566573')
+    .text('(Academic Year 2025–2026)', { align: 'center', width: doc.page.width })
+
+  doc.moveDown(1.2)
 }
 
 /* ================= MAIN TABLE ================= */
 
 function drawMainTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
-  // Title removed as requested
+  const startY = doc.y
+  const col1X = 40
+  const col2X = 140
+  const col3X = 310
+  const col4X = 400
+  const width = 515
+  const rowHeight = 35
+  const rowCount = 5
 
-  const startY = doc.y;
-  const col1X = 40;
-  const col2X = 140; // Value 1 start
-  const col3X = 310; // Label 2 start
-  const col4X = 400; // Value 2 start
-  const width = 515;
-  const rowHeight = 35; 
-  const rowCount = 5;
+  doc.strokeColor('#D5D8DC')
+  doc.rect(40, startY, width, rowHeight * rowCount).stroke()
 
-  // Draw Table Border
-  doc.rect(40, startY, width, rowHeight * rowCount).stroke();
-
-  // Horizontal Lines
   for (let i = 1; i < rowCount; i++) {
-    doc.moveTo(40, startY + rowHeight * i).lineTo(555, startY + rowHeight * i).stroke();
+    doc
+      .moveTo(40, startY + rowHeight * i)
+      .lineTo(555, startY + rowHeight * i)
+      .stroke()
   }
 
-  // Vertical Dividers
-  
-  // 1. First vertical divider (Separates Label1 from Value1) - Runs through ALL rows
-  doc.moveTo(col2X, startY).lineTo(col2X, startY + rowHeight * rowCount).stroke();
+  doc.moveTo(col2X, startY).lineTo(col2X, startY + rowHeight * rowCount).stroke()
+  doc.moveTo(col3X, startY).lineTo(col3X, startY + rowHeight * 3).stroke()
+  doc.moveTo(col4X, startY).lineTo(col4X, startY + rowHeight * 3).stroke()
 
-  // 2. Second & Third vertical dividers (For 4-column structure) - Runs only for first 3 rows
-  doc.moveTo(col3X, startY).lineTo(col3X, startY + rowHeight * 3).stroke();
-  doc.moveTo(col4X, startY).lineTo(col4X, startY + rowHeight * 3).stroke();
+  const paddingY = 12
 
+  drawCell(doc, 'Candidate Name', col1X, startY, paddingY, true)
+  drawCell(doc, data.studentName, col2X, startY, paddingY, false)
+  drawCell(doc, 'Application ID', col3X, startY, paddingY, true)
+  drawCell(doc, data.applicationId, col4X, startY, paddingY, false)
 
-  // Data Contena
-  doc.fillColor('#000000');
-  const fontSizeLabel = 10;
-  const fontSizeValue = 10;
-  const paddingY = 12;
+  drawCell(doc, 'Father Name', col1X, startY + rowHeight, paddingY, true)
+  drawCell(doc, data.fatherName, col2X, startY + rowHeight, paddingY, false)
+  drawCell(doc, 'Gender', col3X, startY + rowHeight, paddingY, true)
+  drawCell(doc, data.gender, col4X, startY + rowHeight, paddingY, false)
 
-  // Row 1
-  drawCell(doc, 'Candidate Name', col1X, startY, paddingY, true);
-  drawCell(doc, data.studentName, col2X, startY, paddingY, false);
-  drawCell(doc, 'Application ID', col3X, startY, paddingY, true);
-  drawCell(doc, data.applicationId, col4X, startY, paddingY, false);
+  drawCell(doc, 'Mother Name', col1X, startY + rowHeight * 2, paddingY, true)
+  drawCell(doc, data.motherName, col2X, startY + rowHeight * 2, paddingY, false)
+  drawCell(doc, 'State', col3X, startY + rowHeight * 2, paddingY, true)
+  drawCell(doc, data.state, col4X, startY + rowHeight * 2, paddingY, false)
 
-  // Row 2
-  drawCell(doc, 'Father Name', col1X, startY + rowHeight, paddingY, true);
-  drawCell(doc, data.fatherName, col2X, startY + rowHeight, paddingY, false);
-  drawCell(doc, 'Gender', col3X, startY + rowHeight, paddingY, true);
-  drawCell(doc, data.gender, col4X, startY + rowHeight, paddingY, false);
+  drawCell(doc, 'Allotted Course', col1X, startY + rowHeight * 3, paddingY, true)
+  doc.text(
+    data.allottedCourse,
+    col2X + 5,
+    startY + rowHeight * 3 + paddingY,
+    { width: 380 }
+  )
 
-  // Row 3 (Mother Name | Empty)
-  drawCell(doc, 'Mother Name', col1X, startY + rowHeight * 2, paddingY, true);
-  drawCell(doc, data.motherName, col2X, startY + rowHeight * 2, paddingY, false);
-  drawCell(doc, 'State', col3X, startY + rowHeight * 2, paddingY, true);
-  drawCell(doc, data.state, col4X, startY + rowHeight * 2, paddingY, false);
+  doc.roundedRect(40, startY + rowHeight * 4, width, rowHeight, 6).fill('#FEF5E7')
 
-  // Row 4 (Allotted College - Full Span)
-  drawCell(doc, 'Allotted Course', col1X, startY + rowHeight * 3, paddingY, true);
-  doc.font('Helvetica').fontSize(fontSizeValue).text(data.allottedCourse, col2X + 5, startY + rowHeight * 3 + paddingY, { width: 380 });
+  doc
+    .font('Helvetica-Bold')
+    .fillColor('#7D6608')
+    .text('Total Pending Fee', col1X + 5, startY + rowHeight * 4 + paddingY)
 
-  doc.y = startY + rowHeight * rowCount + 30;
-}
-
-function drawCell(doc: PDFKit.PDFDocument, text: string, x: number, y: number, paddingY: number, isBold: boolean) {
-  doc.font(isBold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10).text(text, x + 5, y + paddingY);
-}
-
-/* ================= TABLE HELPERS ================= */
-
-function drawTableHeader(doc: PDFKit.PDFDocument, title: string) {
   doc
     .font('Helvetica-Bold')
     .fontSize(12)
-    .fillColor('#1F618D')
-    .text(title)
-  
-  doc.moveDown(0.8);
+    .fillColor('#000000') // Changed from Red to Black
+    .text(
+      `INR ${data.totalPending?.toLocaleString('en-IN') || '0'}`,
+      col2X + 5,
+      startY + rowHeight * 4 + paddingY,
+      { width: 380 }
+    )
+
+  doc.y = startY + rowHeight * rowCount + 30
 }
 
-function drawRow(doc: PDFKit.PDFDocument, label: string, value: string) {
-  // Deprecated
+/* ================= PROFILE PHOTO ================= */
+
+async function drawProfilePhoto(doc: PDFKit.PDFDocument, url: string) {
+  try {
+    const photoBuffer = await fetchImage(url)
+    if (photoBuffer) {
+      // Position: Top Right
+      const x = doc.page.width - 40 - 90; 
+      const y = 30; // Aligned roughly with Name/Logo
+      
+      doc.save()
+      doc.image(photoBuffer, x, y, { fit: [90, 90] })
+      doc.rect(x, y, 90, 90).stroke()
+      doc.restore()
+    }
+  } catch (err) {
+    console.error("Error drawing profile photo:", err);
+  }
+}
+
+function drawCell(
+  doc: PDFKit.PDFDocument,
+  text: string,
+  x: number,
+  y: number,
+  paddingY: number,
+  isBold: boolean
+) {
+  doc
+    .font(isBold ? 'Helvetica-Bold' : 'Helvetica')
+    .fontSize(10)
+    .fillColor('#000')
+    .text(text, x + 5, y + paddingY)
 }
 
 /* ================= BIG WATERMARK ================= */
@@ -197,9 +234,9 @@ function drawBigWatermark(doc: PDFKit.PDFDocument) {
   if (!fs.existsSync(logoPath)) return
 
   doc.save()
-  doc.opacity(0.04)
+  doc.opacity(0.05)
 
-  const size = 350
+  const size = 320
   const x = doc.page.width / 2 - size / 2
   const y = doc.page.height / 2 - size / 2
 
@@ -210,15 +247,27 @@ function drawBigWatermark(doc: PDFKit.PDFDocument) {
 /* ================= UNIVERSITY INSTRUCTIONS ================= */
 
 function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
+  const startY = doc.y;
+  const boxPadding = 15;
+  
+  // Calculate height needed (Approximate or measure)
+  // We have Title + 4 Instructions with wrapping text.
+  // Better approach: Draw everything, then draw rect around it? 
+  // PDFKit draws linearly. We need to save Y, draw, get end Y, then draw rect?
+  // Or Fixed size/dynamic calculation.
+  
+  // Let's use a "Group" concept by saving Y.
+  const contentStartY = startY + boxPadding;
+  
   doc
     .font('Helvetica-Bold')
     .fontSize(12)
     .fillColor('#2E4053')
-    .text('Important Conditions of Provisional Admission', 40, doc.y)
+    .text('Important Conditions of Provisional Admission', 40 + boxPadding, contentStartY, { underline: true })
 
   doc.moveDown(0.8)
 
-  doc.font('Helvetica').fontSize(10).fillColor('#000') // Increased Font Size
+  doc.font('Helvetica').fontSize(10).fillColor('#000')
 
   const instructions = [
     '1. Provisional Nature of Admission: The admission offered through this letter is purely provisional in nature and is subject to fulfilment of all eligibility requirements as prescribed by VVIT University and statutory authorities.',
@@ -233,7 +282,29 @@ function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
   ]
 
   instructions.forEach(text => {
-    doc.text(text, 40, doc.y, { width: 515, align: 'left', lineGap: 4 })
+    // Indent text inside box
+    doc.text(text, 40 + boxPadding, doc.y, { width: 515 - (boxPadding * 2), align: 'left', lineGap: 4 })
     doc.moveDown(0.5)
-  })
+  });
+  
+  const endY = doc.y + boxPadding;
+  
+  // Draw Box
+  doc.rect(40, startY, 515, endY - startY).strokeColor('#000000').stroke();
+  
+  doc.y = endY + 10;
+}
+
+/* ================= FOOTER ================= */
+
+function drawFooter(doc: PDFKit.PDFDocument) {
+  doc
+    .fontSize(9)
+    .fillColor('#7B7D7D')
+    .text(
+      'This is a system-generated provisional allotment order. Signature not required.',
+      40,
+      doc.page.height - 60,
+      { width: 515, align: 'center' }
+    )
 }

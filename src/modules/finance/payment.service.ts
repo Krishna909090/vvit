@@ -1899,6 +1899,10 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                  profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl) || undefined;
              }
              
+             // Check Pending Fee
+             const financialHistory = await getStudentFinancialHistory(studentId);
+             const totalPending = financialHistory.summary.totalPending;
+
             const allotmentData = {
                 applicationId: student.applicationId ?? '',
                 studentName: student.name,
@@ -1913,7 +1917,8 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                 reportingDate: format(reportingDate, 'dd.MM.yyyy'),
                 phase: 'First Phase',
                 feeReimbursement: 'NO',
-                profilePhotoUrl: profilePhotoUrl
+                profilePhotoUrl: profilePhotoUrl,
+                totalPending: totalPending
             };
 
             const pdfBuffer = await generateAllotmentOrderPDF(allotmentData);
@@ -2289,6 +2294,8 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 7. PAID CALCULATION
     payments.forEach(p => {
+         if (p.component === PaymentComponent.APPLICATION_FEE) return; // Skip Application Fee
+
          let key = 'OTHER';
          if (p.feeDemand?.feeStructure?.feeHead) {
              key = getCategoryFromHeadName(p.feeDemand.feeStructure.feeHead.name);
@@ -2316,7 +2323,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 8. FINAL SUMMARY
     const totalDemanded = Object.values(breakdown).reduce((sum, cat) => sum + cat.demanded, 0);
-    const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+    const totalPaid = payments
+        .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
+        .reduce((sum, p) => sum + p.amount, 0);
     const totalDiscount = ledgers
         .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT')
         .reduce((sum, l) => sum + l.amount, 0);
