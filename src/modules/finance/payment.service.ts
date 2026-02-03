@@ -1885,7 +1885,8 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                         transportRoute: true
                     } 
                 },
-                convenorDetails: true 
+                convenorDetails: true,
+                scholarshipAllocation: { include: { rule: true } }
             }
         });
 
@@ -1901,7 +1902,13 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
              
              // Check Pending Fee
              const financialHistory = await getStudentFinancialHistory(studentId);
-             const totalPending = financialHistory.summary.totalPending;
+             const { summary, breakdown } = financialHistory;
+             const totalPending = summary.totalPending;
+
+             // Extract Fee and Scholarship Details
+             const tuitionFee = breakdown['TUITION']?.demanded || 0;
+             const scholarshipDiscount = breakdown['TUITION']?.discount || 0; // Discount applied to Tuition
+             const scholarshipPercentage = student.scholarshipAllocation?.rule?.discountPercentage || 0;
 
             const allotmentData = {
                 applicationId: student.applicationId ?? '',
@@ -1918,7 +1925,10 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                 phase: 'First Phase',
                 feeReimbursement: 'NO',
                 profilePhotoUrl: profilePhotoUrl,
-                totalPending: totalPending
+                totalPending: totalPending,
+                scholarshipPercentage,
+                scholarshipDiscount,
+                tuitionFee,
             };
 
             const pdfBuffer = await generateAllotmentOrderPDF(allotmentData);

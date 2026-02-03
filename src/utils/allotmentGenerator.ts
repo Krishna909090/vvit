@@ -16,6 +16,9 @@ export interface AllotmentData {
   allottedCourse: string
   profilePhotoUrl?: string
   totalPending?: number
+  scholarshipPercentage?: number
+  scholarshipDiscount?: number
+  tuitionFee?: number
 }
 
 /* ================= HELPERS ================= */
@@ -24,7 +27,8 @@ async function fetchImage(url: string): Promise<Buffer | null> {
   try {
     const res = await axios.get(url, { responseType: 'arraybuffer' })
     return Buffer.from(res.data)
-  } catch {
+  } catch (error: any) {
+    console.error(`Failed to fetch image from ${url}:`, error.message);
     return null
   }
 }
@@ -53,7 +57,7 @@ export const generateAllotmentOrderPDF = async (
       drawTitle(doc)
       drawMainTable(doc, data)
       drawUniversityInstructions(doc)
-      drawFooter(doc)
+      // drawFooter(doc)
 
       doc.end()
     } catch (err) {
@@ -65,14 +69,13 @@ export const generateAllotmentOrderPDF = async (
 /* ================= HEADER ================= */
 
 function drawHeader(doc: PDFKit.PDFDocument) {
-  const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
+  const logoPath = path.join(process.cwd(), 'src/assets/logo.png')
 
-  // 3. LOGO (Row 2, Bigger, Beside Address) - Moved Down
+  // 3. LOGO (Row 2, Bigger, Beside Address) - Moved Down as requested
   if (fs.existsSync(logoPath)) {
-     // Moved down from 25 to 45
-    doc.image(logoPath, 30, 45, { width: 70 })
+    doc.image(logoPath, 30, 70, { width: 70 })
   }
-
+  
   // 1. COLLEGE NAME (Centered, Single Line)
   doc
     .font('Helvetica-Bold')
@@ -82,7 +85,7 @@ function drawHeader(doc: PDFKit.PDFDocument) {
       'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
       0, // Left 0
       30, // Y
-      { width: doc.page.width, align: 'center', lineBreak: false } // Full width center
+      { width: doc.page.width, align: 'center', lineBreak: false } 
     )
 
   // 2. ADDRESS (Centered, Single Line)
@@ -96,8 +99,7 @@ function drawHeader(doc: PDFKit.PDFDocument) {
       50, 
       { width: doc.page.width, align: 'center', lineBreak: false }
     )
-
-  // Move Title Up: Was 110, now 85
+  
   doc.y = 85 
 }
 
@@ -107,7 +109,7 @@ function drawTitle(doc: PDFKit.PDFDocument) {
   // Ensure perfectly centered
   doc
     .font('Helvetica-Bold')
-    .fontSize(16) // Slightly smaller strictly to ensure single line if needed? 18 fine.
+    .fontSize(16) 
     .fillColor('#1C2833')
     .text('PROVISIONAL ALLOTMENT ORDER', 0, doc.y, { align: 'center', width: doc.page.width })
 
@@ -117,20 +119,21 @@ function drawTitle(doc: PDFKit.PDFDocument) {
     .fillColor('#566573')
     .text('(Academic Year 2025–2026)', { align: 'center', width: doc.page.width })
 
-  doc.moveDown(1.2)
+  // Adjusted spacing
+  doc.moveDown(1.0) 
 }
 
 /* ================= MAIN TABLE ================= */
 
 function drawMainTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
-  const startY = doc.y
+  const startY = Math.max(doc.y, 135) // Ensure clearing header logo/photo (ends approx 140)
   const col1X = 40
-  const col2X = 140
-  const col3X = 310
-  const col4X = 400
+  const col2X = 190 // Increased Col 1 Width (40 to 190 = 150 width)
+  const col3X = 330 // Shifted Col 3 to maintain balance (Col 2: 190 to 330 = 140 width)
+  const col4X = 410 // Shifted Col 4 (Col 3: 330 to 410 = 80 width. Label "App ID" fits?)
   const width = 515
-  const rowHeight = 35
-  const rowCount = 5
+  const rowHeight = 28 // Reduced Row Height (Compact)
+  const rowCount = 8 
 
   doc.strokeColor('#D5D8DC')
   doc.rect(40, startY, width, rowHeight * rowCount).stroke()
@@ -142,54 +145,80 @@ function drawMainTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
       .stroke()
   }
 
+  // Vertical Lines - Main Column Separator
   doc.moveTo(col2X, startY).lineTo(col2X, startY + rowHeight * rowCount).stroke()
+  
+  // Vertical Lines - 3rd/4th Columns (Split for Details) - Top Block Only (Rows 1-3)
   doc.moveTo(col3X, startY).lineTo(col3X, startY + rowHeight * 3).stroke()
   doc.moveTo(col4X, startY).lineTo(col4X, startY + rowHeight * 3).stroke()
+  
+  // NOTE: No vertical lines for Bottom Block (Rows 5-7) to allow full width for Tuition details
 
-  const paddingY = 12
+  const paddingY = 9 // Reduced padding for smaller row height
 
+  // Row 1
   drawCell(doc, 'Candidate Name', col1X, startY, paddingY, true)
   drawCell(doc, data.studentName, col2X, startY, paddingY, false)
   drawCell(doc, 'Application ID', col3X, startY, paddingY, true)
   drawCell(doc, data.applicationId, col4X, startY, paddingY, false)
 
+  // Row 2
   drawCell(doc, 'Father Name', col1X, startY + rowHeight, paddingY, true)
   drawCell(doc, data.fatherName, col2X, startY + rowHeight, paddingY, false)
   drawCell(doc, 'Gender', col3X, startY + rowHeight, paddingY, true)
   drawCell(doc, data.gender, col4X, startY + rowHeight, paddingY, false)
 
+  // Row 3
   drawCell(doc, 'Mother Name', col1X, startY + rowHeight * 2, paddingY, true)
   drawCell(doc, data.motherName, col2X, startY + rowHeight * 2, paddingY, false)
   drawCell(doc, 'State', col3X, startY + rowHeight * 2, paddingY, true)
   drawCell(doc, data.state, col4X, startY + rowHeight * 2, paddingY, false)
 
+  // Row 4: Allotted Course (Spans across)
   drawCell(doc, 'Allotted Course', col1X, startY + rowHeight * 3, paddingY, true)
   doc.text(
     data.allottedCourse,
     col2X + 5,
     startY + rowHeight * 3 + paddingY,
-    { width: 380 }
+    { width: 350 }
   )
 
-  doc.roundedRect(40, startY + rowHeight * 4, width, rowHeight, 6).fill('#FEF5E7')
+  // Row 5: Actual Tuition Fee
+  drawCell(doc, 'Actual Tuition fee', col1X, startY + rowHeight * 4, paddingY, true)
+  drawCell(doc, `INR ${(data.tuitionFee || 0).toLocaleString('en-IN')}`, col2X, startY + rowHeight * 4, paddingY, false)
+
+  // Row 6: Scholarship Applied
+  drawCell(doc, 'Scholarship applied', col1X, startY + rowHeight * 5, paddingY, true)
+  const scholarshipText = `INR ${(data.scholarshipDiscount || 0).toLocaleString('en-IN')} (${data.scholarshipPercentage || 0}%)`
+  drawCell(doc, scholarshipText, col2X, startY + rowHeight * 5, paddingY, false)
+
+  // Row 7: Tuition Fee Payable per Year
+  const payable = (data.tuitionFee || 0) - (data.scholarshipDiscount || 0)
+  drawCell(doc, 'Tuition fee payable per year', col1X, startY + rowHeight * 6, paddingY, true)
+  drawCell(doc, `INR ${payable.toLocaleString('en-IN')}`, col2X, startY + rowHeight * 6, paddingY, false)
+
+
+  // Row 8: Total Pending
+  doc.roundedRect(40, startY + rowHeight * 7, width, rowHeight, 6).fill('#FEF5E7')
 
   doc
     .font('Helvetica-Bold')
+    .fontSize(10) // Match cell font size
     .fillColor('#7D6608')
-    .text('Total Pending Fee', col1X + 5, startY + rowHeight * 4 + paddingY)
+    .text('Total Pending Fee', col1X + 5, startY + rowHeight * 7 + paddingY)
 
   doc
     .font('Helvetica-Bold')
-    .fontSize(12)
-    .fillColor('#000000') // Changed from Red to Black
+    .fontSize(10)
+    .fillColor('#000000') 
     .text(
       `INR ${data.totalPending?.toLocaleString('en-IN') || '0'}`,
       col2X + 5,
-      startY + rowHeight * 4 + paddingY,
-      { width: 380 }
+      startY + rowHeight * 7 + paddingY,
+      { width: 350 }
     )
 
-  doc.y = startY + rowHeight * rowCount + 30
+  doc.y = startY + rowHeight * rowCount + 15
 }
 
 /* ================= PROFILE PHOTO ================= */
@@ -199,12 +228,13 @@ async function drawProfilePhoto(doc: PDFKit.PDFDocument, url: string) {
     const photoBuffer = await fetchImage(url)
     if (photoBuffer) {
       // Position: Top Right
-      const x = doc.page.width - 40 - 90; 
-      const y = 30; // Aligned roughly with Name/Logo
+      const photoSize = 55;
+      const x = doc.page.width - 40 - photoSize; 
+      const y = 60; // Position Y=70
       
       doc.save()
-      doc.image(photoBuffer, x, y, { fit: [90, 90] })
-      doc.rect(x, y, 90, 90).stroke()
+      doc.image(photoBuffer, x, y, { fit: [photoSize, photoSize] })
+      doc.rect(x, y, photoSize, photoSize).stroke()
       doc.restore()
     }
   } catch (err) {
@@ -222,7 +252,7 @@ function drawCell(
 ) {
   doc
     .font(isBold ? 'Helvetica-Bold' : 'Helvetica')
-    .fontSize(10)
+    .fontSize(9) // Smaller Font
     .fillColor('#000')
     .text(text, x + 5, y + paddingY)
 }
@@ -249,25 +279,17 @@ function drawBigWatermark(doc: PDFKit.PDFDocument) {
 function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
   const startY = doc.y;
   const boxPadding = 15;
-  
-  // Calculate height needed (Approximate or measure)
-  // We have Title + 4 Instructions with wrapping text.
-  // Better approach: Draw everything, then draw rect around it? 
-  // PDFKit draws linearly. We need to save Y, draw, get end Y, then draw rect?
-  // Or Fixed size/dynamic calculation.
-  
-  // Let's use a "Group" concept by saving Y.
   const contentStartY = startY + boxPadding;
   
   doc
     .font('Helvetica-Bold')
-    .fontSize(12)
+    .fontSize(10)
     .fillColor('#2E4053')
     .text('Important Conditions of Provisional Admission', 40 + boxPadding, contentStartY, { underline: true })
 
   doc.moveDown(0.8)
 
-  doc.font('Helvetica').fontSize(10).fillColor('#000')
+  doc.font('Helvetica').fontSize(8).fillColor('#000')
 
   const instructions = [
     '1. Provisional Nature of Admission: The admission offered through this letter is purely provisional in nature and is subject to fulfilment of all eligibility requirements as prescribed by VVIT University and statutory authorities.',
@@ -278,13 +300,16 @@ function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
     '   Such requests must be submitted through:',
     '   o Official Email: admissions@vvitu.ac.in',
     '   o Handwritten letter submitted to Director Admissions.',
-    '4. Merit Scholarship Condition: Students who are awarded a Merit Scholarship are required to pay the complete applicable fee components on or before the Official Reporting Day, which will be notified separately by the University. Adjustment of scholarship benefits, if any, shall be governed by the University norms.'
+    '4. Merit Scholarship Condition: Students who are awarded a Merit Scholarship are required to pay the complete applicable fee components on or before the Official Reporting Day, which will be notified separately by the University. Adjustment of scholarship benefits, if any, shall be governed by the University norms.',
+    '5. Continuation of Merit Scholarship after 1st year:',
+    '   o Attendance, Conduct and Discipline: Candidate must maintain 75% attendance in each Semester and have no history of major disciplinary violations or "code of conduct" breaches.',
+    '   o Academic Progression: Students must clear all registered courses in a given semester in the first attempt, having backlogs can lead to the discontinuation of the Merit scholarship from the subsequent Academic year.'
   ]
 
   instructions.forEach(text => {
     // Indent text inside box
-    doc.text(text, 40 + boxPadding, doc.y, { width: 515 - (boxPadding * 2), align: 'left', lineGap: 4 })
-    doc.moveDown(0.5)
+    doc.text(text, 40 + boxPadding, doc.y, { width: 515 - (boxPadding * 2), align: 'left', lineGap: 2 })
+    doc.moveDown(0.2)
   });
   
   const endY = doc.y + boxPadding;
@@ -297,14 +322,14 @@ function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
 
 /* ================= FOOTER ================= */
 
-function drawFooter(doc: PDFKit.PDFDocument) {
-  doc
-    .fontSize(9)
-    .fillColor('#7B7D7D')
-    .text(
-      'This is a system-generated provisional allotment order. Signature not required.',
-      40,
-      doc.page.height - 60,
-      { width: 515, align: 'center' }
-    )
-}
+// function drawFooter(doc: PDFKit.PDFDocument) {
+//   doc
+//     .fontSize(9)
+//     .fillColor('#7B7D7D')
+//     .text(
+//       'This is a system-generated provisional allotment order. Signature not required.',
+//       40,
+//       doc.page.height - 60,
+//       { width: 515, align: 'center' }
+//     )
+// }
