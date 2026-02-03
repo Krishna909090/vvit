@@ -116,6 +116,11 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
 
     logger.info(`[registerStudent] Generated applicationId: ${applicationId}`);
 
+    // Fetch Active Academic Year
+    const activeAcademicYear = await prisma.academicYear.findFirst({
+        where: { isActive: true, isDeleted: false }
+    });
+
     // Transaction to create Student and related tables
     const student = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // Double-check uniqueness within transaction
@@ -165,7 +170,8 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
         await tx.studentAdmission.create({
             data: {
                 studentId: newStudent.id,
-                status: AdmissionStatus.REGISTERED
+                status: AdmissionStatus.REGISTERED,
+                academicYearId: activeAcademicYear?.id
             }
         });
 

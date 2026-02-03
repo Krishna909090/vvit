@@ -136,6 +136,7 @@ model AcademicYear {
   isDeleted         Boolean?            @default(false)
   feeStructures     FeeStructure[]
   enrollments       StudentEnrollment[]
+  studentAdmissions StudentAdmission[]
   studentFeeDemands StudentFeeDemand[]
 }
 
@@ -290,6 +291,8 @@ model StudentAdmission {
   hostelType        HostelType?
   hostelId          String?
   transportRouteId  String?
+  academicYearId    String?
+
   roomNumber        String?
   allottedCourseId  String?
   createdAt         DateTime?          @default(now())
@@ -299,6 +302,7 @@ model StudentAdmission {
   hostel            Hostel?            @relation(fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student           Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   transportRoute    TransportRoute?    @relation(fields: [transportRouteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear      AcademicYear?      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model StudentDocument {
