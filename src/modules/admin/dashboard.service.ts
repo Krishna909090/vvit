@@ -210,12 +210,7 @@ export const DashboardService = {
         else if (type === 'allocated_no_scholarship') {
             where = {
                 admissionDetails: { allottedCourseId: { not: null } },
-                // Use AND to ensure they have a scholarship record but it says NO
-                // OR if they have NO scholarship record at all (implies not eligible yet or processed)
-                OR: [
-                    { studentScholarship: null },
-                    { studentScholarship: { isEligible: 'NO' } }
-                ]
+                studentScholarship: { isEligible: 'NO' }
             };
         } else {
             // Default: All students
@@ -245,9 +240,20 @@ export const DashboardService = {
                             allottedCourse: { select: { name: true } }
                         }
                     },
+                    // Return both to be safe, but allocation is the filter source
                     studentScholarship: {
                         select: {
                             scholarshipPercentage: true
+                        }
+                    },
+                    scholarshipAllocation: {
+                        select: {
+                            rule: {
+                                select: {
+                                    discountPercentage: true,
+                                    name: true
+                                }
+                            }
                         }
                     }
                 },
