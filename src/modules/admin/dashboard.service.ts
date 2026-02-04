@@ -196,7 +196,10 @@ export const DashboardService = {
                 OR: [
                     { admissionDetails: null },
                     { admissionDetails: { allottedCourseId: null } }
-                ]
+                ],
+                studentScholarship: {
+                    isEligible: { in: ['YES', 'NO'] }
+                }
             };
         } 
         // 2. Seat Allocated WITH Scholarship (Eligible)
