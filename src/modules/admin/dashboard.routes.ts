@@ -12,6 +12,7 @@ router.get('/trends', DashboardController.getRegistrationTrends);
 router.get('/recent-students', DashboardController.getRecentStudents);
 router.get('/seat-allocation-stats', DashboardController.getSeatAllocationStats);
 router.get('/seat-allocation-counts', DashboardController.getSeatAllocationCounts);
+router.get('/course-codes', DashboardController.getCourseCodes);
 router.get('/course-stats', DashboardController.getCourseStats);
 
 export default router;

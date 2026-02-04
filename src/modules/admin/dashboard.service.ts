@@ -186,27 +186,70 @@ export const DashboardService = {
         });
     },
 
-    async getSeatAllocationStats(type: string, page: number = 1, limit: number = 10) {
+    async getSeatAllocationStats(type: string, page: number = 1, limit: number = 10, search?: string) {
         const skip = (page - 1) * limit;
         let where: any = {};
 
-        // 1. Seat Not allocated
+        // === SEARCH LOGIC ===
+        if (search) {
+            where.OR = [
+                { applicationId: { contains: search, mode: 'insensitive' } },
+                { name: { contains: search, mode: 'insensitive' } },
+                { phone: { contains: search, mode: 'insensitive' } },
+                // Add Course Search
+                {
+                    admissionDetails: {
+                        allottedCourse: {
+                            OR: [
+                                { name: { contains: search, mode: 'insensitive' } },
+                                { code: { contains: search, mode: 'insensitive' } }
+                            ]
+                        }
+                    }
+                }
+            ];
+        }
+
+        // === FILTER LOGIC ===
+        // 1. Not Allocated (Any Scholarship Status)
         if (type === 'not_allocated') {
-            where = {
+            const notAllocatedCondition = {
                 OR: [
                     { admissionDetails: null },
                     { admissionDetails: { allottedCourseId: null } }
                 ]
             };
+            where = { ...where, ...notAllocatedCondition };
         } 
-        // 2. Seat Allocated (Any)
+        // 2. Allocated (Any Scholarship Status)
         else if (type === 'allocated') {
-            where = {
-                admissionDetails: { allottedCourseId: { not: null } }
+            where = { ...where, admissionDetails: { allottedCourseId: { not: null } } };
+        }
+        // 3. Not Allocated AND Eligible (Scholarship YES)
+        else if (type === 'not_allocated_eligible') {
+            const notAllocatedCondition = {
+                OR: [
+                    { admissionDetails: null },
+                    { admissionDetails: { allottedCourseId: null } }
+                ]
             };
-        } else {
-            // Default: All students
-             where = {};
+            where = { 
+                ...where, 
+                ...notAllocatedCondition,
+                studentScholarship: { isEligible: 'YES' }
+            };
+        }
+        // 4. Allocated AND Not Eligible (Scholarship NO)
+        else if (type === 'allocated_not_eligible') {
+             where = { 
+                ...where, 
+                admissionDetails: { allottedCourseId: { not: null } },
+                studentScholarship: { isEligible: 'NO' }
+            };
+        }
+        // 5. All Students (No specific filter, just search if present)
+        else if (type === 'all') {
+            // No additional quota/allocation filters
         }
 
         const [total, students] = await Promise.all([
@@ -219,9 +262,11 @@ export const DashboardService = {
                     id: true,
                     userId: true,
                     name: true,
+                    fatherName: true,
+                    gender: true,
+                    phone: true,
                     applicationId: true,
                     email: true,
-                    phone: true,
                     degreeType: true,
                     admissionDetails: {
                         select: {
@@ -229,14 +274,14 @@ export const DashboardService = {
                             status: true,
                             totalFee: true,
                             paidFee: true,
-                            allottedCourse: { select: { name: true } }
+                            allottedCourse: { select: { name: true, code: true } }
                         }
                     },
-                    // Return both to be safe, but allocation is the filter source
                     studentScholarship: {
                         select: {
                             scholarshipPercentage: true,
-                            isEligible: true
+                            isEligible: true,
+                            type: true
                         }
                     },
                     scholarshipAllocation: {
@@ -260,6 +305,20 @@ export const DashboardService = {
             totalPages: Math.ceil(total / limit),
             data: students
         };
+    },
+
+    /**
+     * Get All Course Codes
+     */
+    async getCourseCodes() {
+        return await prisma.course.findMany({
+            select: {
+                id: true,
+                name: true,
+                code: true
+            },
+            orderBy: { name: 'asc' }
+        });
     },
 
     /**
