@@ -1274,64 +1274,12 @@ export const AdminStudentService = {
     },
 
     async getScholarshipStats() {
-        // 1. Get Aggregate Counts (YES vs NO)
-        const eligibilityStats = await prisma.studentScholarship.groupBy({
-            by: ['isEligible'],
+        // Group by degreeType and scholarshipPercentage
+        const dbStats = await prisma.studentScholarship.groupBy({
+            by: ['degreeType', 'scholarshipPercentage'],
             _count: {
                 studentId: true
             }
-        });
-
-        const totalEligible = eligibilityStats.find(s => s.isEligible === 'YES')?._count.studentId || 0;
-        const totalNotEligible = eligibilityStats.find(s => s.isEligible === 'NO')?._count.studentId || 0;
-
-        // 2. Fetch Detailed Student Data
-        // Instead of GroupBy, we fetch all relevant scholarship records with Student Info
-        const allScholarships = await prisma.studentScholarship.findMany({
-            include: {
-                student: {
-                    select: {
-                        id: true,
-                        name: true,
-                        applicationId: true,
-                        email: true,
-                        admissionDetails: {
-                            select: {
-                                allottedCourse: { select: { name: true } },
-                                status: true
-                            }
-                        }
-                    }
-                }
-            },
-            orderBy: { createdAt: 'desc' }
-        });
-
-        // 3. Process Data into Map
-        // Key: "DegreeType-Percentage"
-        const statsMap = new Map<string, any[]>();
-        
-        allScholarships.forEach(record => {
-            const degree = record.degreeType || 'Unknown';
-            const percentage = record.isEligible === 'NO' ? 0 : (record.scholarshipPercentage || 0);
-            const key = `${degree}-${percentage}`;
-            
-            if (!statsMap.has(key)) {
-                statsMap.set(key, []);
-            }
-            
-            const studentData = {
-                id: record.student.id,
-                name: record.student.name,
-                applicationId: record.student.applicationId,
-                email: record.student.email,
-                allottedCourse: record.student.admissionDetails?.allottedCourse?.name || null,
-                admissionStatus: record.student.admissionDetails?.status || null,
-                scholarshipPercentage: percentage,
-                isEligible: record.isEligible
-            };
-            
-            statsMap.get(key)?.push(studentData);
         });
 
         // Define required combinations
@@ -1345,51 +1293,51 @@ export const AdminStudentService = {
             { degreeType: 'M.Tech', scholarshipPercentage: 25 }
         ];
 
-        const breakdown: { 
-            degreeType: string; 
-            scholarshipPercentage: number; 
-            count: number; 
-            students: any[] 
-        }[] = [];
+        // Create a map of existing stats
+        // Key: "DegreeType-Percentage"
+        const statsMap = new Map();
+        dbStats.forEach(item => {
+            const key = `${item.degreeType}-${item.scholarshipPercentage}`;
+            statsMap.set(key, item._count.studentId);
+        });
 
-        // 4. Populate Breakdown with Defaults
+        const finalStats: { degreeType: string; scholarshipPercentage: number | null; count: number }[] = [];
+
+        // 1. Add required defaults (overwriting with actuals if present)
         manualDefaults.forEach(def => {
             const key = `${def.degreeType}-${def.scholarshipPercentage}`;
-            const students = statsMap.get(key) || [];
-            
-            breakdown.push({
+            const count = statsMap.get(key) || 0;
+            finalStats.push({
                 degreeType: def.degreeType,
                 scholarshipPercentage: def.scholarshipPercentage,
-                count: students.length,
-                students: students
+                count: count
             });
-            
-            // Mark as processed
+            // Mark as processed so we don't duplicate if we want to show "others"
             statsMap.delete(key);
         });
+
+        // 2. Add any other combinations found in DB that were not in manual defaults
+        statsMap.forEach((count, key) => {
+             // We need to parse the key back, or better yet, loop through original dbStats and check if processed.
+             // But map key iteration is string based. 
+             // Let's loop dbStats again simply.
+        });
         
-        // 5. Add Remaining Categories (e.g. 0% / Not Eligible, or other odd percentages)
-        statsMap.forEach((students, key) => {
-             const [degree, pctStr] = key.split('-');
-             const pct = Number(pctStr);
-             
-             breakdown.push({
-                 degreeType: degree,
-                 scholarshipPercentage: pct,
-                 count: students.length,
-                 students: students
-             });
+        // Simpler approach for step 2:
+        dbStats.forEach(item => {
+             const isDefault = manualDefaults.some(d => d.degreeType === item.degreeType && d.scholarshipPercentage === item.scholarshipPercentage);
+             if (!isDefault) {
+                 finalStats.push({
+                     degreeType: item.degreeType || 'Unknown',
+                     scholarshipPercentage: item.scholarshipPercentage,
+                     count: item._count.studentId
+                 });
+             }
         });
 
-        return {
-            totalEligible,
-            totalNotEligible,
-            breakdown: breakdown.sort((a, b) => a.degreeType.localeCompare(b.degreeType) || a.scholarshipPercentage - b.scholarshipPercentage)
-        };
+        return finalStats;
+
     },
-
-
-
 
 
 
