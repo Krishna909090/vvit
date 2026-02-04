@@ -423,7 +423,7 @@ export const finalizeAdmissionSchema = z.object({
         scholarship: z.object({
             percentage: z.number().min(0).max(100),
             ruleId: z.string().uuid().optional(),
-        }),
+        }).nullable(),
         allocation: z.object({
             type: z.nativeEnum(AccommodationType),
             hostelId: z.string().uuid().optional(),
