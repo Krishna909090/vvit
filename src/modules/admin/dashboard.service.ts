@@ -266,46 +266,26 @@ export const DashboardService = {
      * Get summary counts for Seat Allocation Stats
      */
     async getSeatAllocationCounts(filter?: string) {
-        // Shared Selection
-        const select = {
-            id: true,
-            name: true,
-            applicationId: true,
-            email: true,
-            phone: true,
-            degreeType: true,
-            admissionDetails: {
-                select: {
-                    status: true,
-                    allottedCourse: { select: { name: true } }
-                }
-            }
-        };
-
         const result: any = {};
 
         // 1. Not Allocated
         if (!filter || filter === 'not_allocated') {
-            result.notAllocated = await prisma.student.findMany({
+            result.notAllocated = await prisma.student.count({
                 where: {
                     OR: [
                         { admissionDetails: null },
                         { admissionDetails: { allottedCourseId: null } }
                     ]
-                },
-                select,
-                orderBy: { createdAt: 'desc' }
+                }
             });
         }
 
         // 2. Allocated (Any)
         if (!filter || filter === 'allocated') {
-            result.allocated = await prisma.student.findMany({
+            result.allocated = await prisma.student.count({
                 where: {
                     admissionDetails: { allottedCourseId: { not: null } }
-                },
-                select,
-                orderBy: { createdAt: 'desc' }
+                }
             });
         }
 
