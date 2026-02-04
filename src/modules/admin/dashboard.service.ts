@@ -196,24 +196,13 @@ export const DashboardService = {
                 OR: [
                     { admissionDetails: null },
                     { admissionDetails: { allottedCourseId: null } }
-                ],
-                studentScholarship: {
-                    isEligible: { in: ['YES', 'NO'] }
-                }
+                ]
             };
         } 
-        // 2. Seat Allocated WITH Scholarship (Eligible)
-        else if (type === 'allocated_with_scholarship') {
+        // 2. Seat Allocated (Any)
+        else if (type === 'allocated') {
             where = {
-                admissionDetails: { allottedCourseId: { not: null } },
-                studentScholarship: { isEligible: 'YES' }
-            };
-        } 
-        // 3. Seat Allocated WITHOUT Scholarship (Not Eligible)
-        else if (type === 'allocated_no_scholarship') {
-            where = {
-                admissionDetails: { allottedCourseId: { not: null } },
-                studentScholarship: { isEligible: 'NO' }
+                admissionDetails: { allottedCourseId: { not: null } }
             };
         } else {
             // Default: All students
@@ -246,7 +235,8 @@ export const DashboardService = {
                     // Return both to be safe, but allocation is the filter source
                     studentScholarship: {
                         select: {
-                            scholarshipPercentage: true
+                            scholarshipPercentage: true,
+                            isEligible: true
                         }
                     },
                     scholarshipAllocation: {
@@ -271,6 +261,57 @@ export const DashboardService = {
             data: students
         };
     },
+
+    /**
+     * Get summary counts for Seat Allocation Stats
+     */
+    async getSeatAllocationCounts(filter?: string) {
+        // Shared Selection
+        const select = {
+            id: true,
+            name: true,
+            applicationId: true,
+            email: true,
+            phone: true,
+            degreeType: true,
+            admissionDetails: {
+                select: {
+                    status: true,
+                    allottedCourse: { select: { name: true } }
+                }
+            }
+        };
+
+        const result: any = {};
+
+        // 1. Not Allocated
+        if (!filter || filter === 'not_allocated') {
+            result.notAllocated = await prisma.student.findMany({
+                where: {
+                    OR: [
+                        { admissionDetails: null },
+                        { admissionDetails: { allottedCourseId: null } }
+                    ]
+                },
+                select,
+                orderBy: { createdAt: 'desc' }
+            });
+        }
+
+        // 2. Allocated (Any)
+        if (!filter || filter === 'allocated') {
+            result.allocated = await prisma.student.findMany({
+                where: {
+                    admissionDetails: { allottedCourseId: { not: null } }
+                },
+                select,
+                orderBy: { createdAt: 'desc' }
+            });
+        }
+
+        return result;
+    },
+
 
     /**
      * Get Course Statistics (Seats Filled vs Total)

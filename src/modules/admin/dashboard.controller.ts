@@ -51,6 +51,17 @@ export const DashboardController = {
         });
     }),
 
+    getSeatAllocationCounts: catchAsync(async (req: Request, res: Response) => {
+        const { filter } = req.query;
+        const counts = await DashboardService.getSeatAllocationCounts(filter as string);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: counts
+        });
+    }),
+
     getCourseStats: catchAsync(async (req: Request, res: Response) => {
         const stats = await DashboardService.getCourseSeatStats();
         sendResponse({
