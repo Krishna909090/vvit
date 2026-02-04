@@ -436,7 +436,7 @@ export const finalizeAdmissionSchema = z.object({
             return true;
         }, {
             message: "Hostel ID or Transport Route ID is required based on allocation type",
-        }),
+        }).optional(),
         course: z.object({
             allottedCourseId: z.string().uuid(),
         }),

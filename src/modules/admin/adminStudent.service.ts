@@ -1574,6 +1574,11 @@ export const AdminStudentService = {
         logger.info(`[finalizeAdmission] Request received for student=${payload.studentId} method=${payload?.payment?.method}`);
         logger.debug(`[finalizeAdmission] Full Payload: ${JSON.stringify(payload)}`);
         
+        // Ensure allocation exists (default to NONE) - User Request: neither hostel/transport mandatory
+        if (!payload.allocation) {
+            payload.allocation = { type: AccommodationType.NONE };
+        }
+        
         const { studentId, payment, scholarship, allocation, course } = payload;
         
         // 1. Validation Checks (Parallelized for Performance)
