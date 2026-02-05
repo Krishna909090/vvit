@@ -222,7 +222,7 @@ export const DashboardService = {
             where = { 
                 ...where, 
                 ...notAllocatedCondition,
-                scholarshipAllocation: { isNot: null }
+                studentScholarship: { isNot: null }
             };
         } 
         // 2. Allocated (Any Scholarship Status)
@@ -338,7 +338,8 @@ export const DashboardService = {
                     OR: [
                         { admissionDetails: null },
                         { admissionDetails: { allottedCourseId: null } }
-                    ]
+                    ],
+                    studentScholarship: { isNot: null }
                 }
             });
         }
