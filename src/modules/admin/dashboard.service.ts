@@ -344,13 +344,31 @@ export const DashboardService = {
             });
         }
 
-        // 2. Allocated (Any)
+        // 2. Allocated - Breakdown by Eligibility
         if (!filter || filter === 'allocated') {
-            result.allocated = await prisma.student.count({
-                where: {
-                    admissionDetails: { allottedCourseId: { not: null } }
-                }
-            });
+             const allocatedCondition = {
+                admissionDetails: { allottedCourseId: { not: null } }
+            };
+
+            const [eligible, notEligible] = await Promise.all([
+                // Eligible: YES
+                prisma.student.count({
+                    where: {
+                        ...allocatedCondition,
+                        studentScholarship: { isEligible: 'YES' }
+                    }
+                }),
+                // Eligible: NO
+                prisma.student.count({
+                    where: {
+                        ...allocatedCondition,
+                        studentScholarship: { isEligible: 'NO' }
+                    }
+                })
+            ]);
+
+            result.scholarshipApprovedwithSeat = eligible;
+            result.scholarshipNotApprovedwithSeat = notEligible;
         }
 
         return result;
