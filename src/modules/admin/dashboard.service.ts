@@ -243,6 +243,28 @@ export const DashboardService = {
                 studentScholarship: { isEligible: 'YES' }
             };
         }
+        // 3a. Not Allocated AND Not Eligible (Scholarship NO)
+        else if (type === 'not_allocated_not_eligible') {
+            const notAllocatedCondition = {
+                OR: [
+                    { admissionDetails: null },
+                    { admissionDetails: { allottedCourseId: null } }
+                ]
+            };
+            where = { 
+                ...where, 
+                ...notAllocatedCondition,
+                studentScholarship: { isEligible: 'NO' }
+            };
+        }
+        // 4. Allocated AND Eligible (Scholarship YES)
+        else if (type === 'allocated_eligible') {
+             where = { 
+                ...where, 
+                admissionDetails: { allottedCourseId: { not: null } },
+                studentScholarship: { isEligible: 'YES' }
+            };
+        }
         // 4. Allocated AND Not Eligible (Scholarship NO)
         else if (type === 'allocated_not_eligible') {
              where = { 
