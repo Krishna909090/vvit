@@ -251,9 +251,12 @@ export const DashboardService = {
                 studentScholarship: { isEligible: 'NO' }
             };
         }
-        // 5. All Students (No specific filter, just search if present)
+        // 5. All Students (Only with Scholarship Record)
         else if (type === 'all') {
-            // No additional quota/allocation filters
+             where = { 
+                ...where,
+                studentScholarship: { isNot: null }
+            };
         }
 
         const [total, students] = await Promise.all([
