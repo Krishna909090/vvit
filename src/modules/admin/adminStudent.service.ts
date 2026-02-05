@@ -73,6 +73,16 @@ export const AdminStudentService = {
             }
         }
 
+        if (query.hasDocuments === 'true') {
+            where.documents = {
+                some: {} 
+            };
+        } else if (query.hasDocuments === 'false') {
+             where.documents = {
+                none: {} 
+            };
+        }
+
         const [students, total] = await prisma.$transaction([
             prisma.student.findMany({
                 where,

@@ -137,6 +137,7 @@ export const getAllApplicationsSchema = z.object({
         courseType: z.string().optional(),
         applicationId: z.string().optional(),
         isScholarshipEligible: z.string().optional(),
+        hasDocuments: z.string().optional(),
     }),
 });
 
