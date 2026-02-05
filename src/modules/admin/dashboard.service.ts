@@ -211,7 +211,7 @@ export const DashboardService = {
         }
 
         // === FILTER LOGIC ===
-        // 1. Not Allocated (Any Scholarship Status)
+        // 1. Not Allocated (Only with Scholarship Allocation)
         if (type === 'not_allocated') {
             const notAllocatedCondition = {
                 OR: [
@@ -219,7 +219,11 @@ export const DashboardService = {
                     { admissionDetails: { allottedCourseId: null } }
                 ]
             };
-            where = { ...where, ...notAllocatedCondition };
+            where = { 
+                ...where, 
+                ...notAllocatedCondition,
+                scholarshipAllocation: { isNot: null }
+            };
         } 
         // 2. Allocated (Any Scholarship Status)
         else if (type === 'allocated') {
