@@ -136,6 +136,7 @@ export const getAllApplicationsSchema = z.object({
         quotaType: z.string().optional(),
         courseType: z.string().optional(),
         applicationId: z.string().optional(),
+        isScholarshipEligible: z.string().optional(),
     }),
 });
 
