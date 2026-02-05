@@ -132,6 +132,10 @@ export const getAllApplicationsSchema = z.object({
         page: z.string().transform(val => Number(val)).optional(),
         limit: z.string().transform(val => Number(val)).optional(),
         search: z.string().optional(),
+        status: z.string().optional(),
+        quotaType: z.string().optional(),
+        courseType: z.string().optional(),
+        applicationId: z.string().optional(),
     }),
 });
 

@@ -30,7 +30,7 @@ const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://loc
 
 export const AdminStudentService = {
     async getAllApplications(query: any) {
-        const { page = 1, limit = 10, search, status, quotaType, courseType } = query;
+        const { page = 1, limit = 10, search, status, quotaType, courseType, applicationId } = query;
         const skip = (Number(page) - 1) * Number(limit);
 
         const where: any = {};
@@ -41,6 +41,10 @@ export const AdminStudentService = {
                 { phone: { contains: String(search), mode: 'insensitive' } },
                 { applicationId: { contains: String(search), mode: 'insensitive' } }
             ];
+        }
+
+        if (applicationId) {
+            where.applicationId = String(applicationId);
         }
 
         if (status) {
