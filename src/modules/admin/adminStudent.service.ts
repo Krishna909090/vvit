@@ -62,9 +62,15 @@ export const AdminStudentService = {
         }
         
         if (isScholarshipEligible) {
-             where.studentScholarship = {
-                isEligible: String(isScholarshipEligible)
-            };
+            if (String(isScholarshipEligible).toUpperCase() === 'NULL') {
+                where.studentScholarship = null;
+            } else if (String(isScholarshipEligible).toUpperCase() === 'NOT_NULL') {
+                where.studentScholarship = { isNot: null };
+            } else {
+                where.studentScholarship = {
+                    isEligible: String(isScholarshipEligible)
+                };
+            }
         }
 
         const [students, total] = await prisma.$transaction([
