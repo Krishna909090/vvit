@@ -19,7 +19,7 @@ import { sendAdmissionFeeReceipt, sendPaymentReceipt } from '../../utils/emailSe
 // @ts-ignore
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
 import { InvoiceService } from '../finance/invoice.service';
-import { getPhonePeClient } from '../finance/payment.service';
+import { getPhonePeClient, initiatePhonePePayment } from '../finance/payment.service';
 
 // --- CONFIGURATION CONSTANTS ---
 const PHONEPE_MERCHANT_ID = process.env.PHONEPE_MERCHANT_ID || '';
@@ -1786,16 +1786,10 @@ export const AdminStudentService = {
                  if (targetComponent === PaymentComponent.HOSTEL || targetComponent === PaymentComponent.HOSTEL_ACCOMMODATION) clientType = 'HOSTEL';
                  else if (targetComponent === PaymentComponent.HOSTEL_MESS) clientType = 'MESS';
 
-                 const client = getPhonePeClient(clientType);
- 
-                 const request = StandardCheckoutPayRequest.builder()
-                     .merchantOrderId(merchantTransactionId)
-                     .amount(Math.round(payment.amount * 100))
-                     .redirectUrl(`${FRONTEND_URL_ADMISSION}/admin/seatallotment/details?studentId=${studentId}&paymentId=${newPayment.id}`)
-                     .build();
-
-                 const response = await client.pay(request);
-                 const redirectUrl = response.redirectUrl;
+                 const callbackUrl = `${FRONTEND_URL_ADMISSION}/admin/seatallotment/details?studentId=${studentId}&paymentId=${newPayment.id}`;
+                 
+                 const result = await initiatePhonePePayment(studentId, payment.amount, merchantTransactionId, callbackUrl, clientType);
+                 const redirectUrl = result.redirectUrl;
 
                  logger.info(`[finalizeAdmission][Online] Payment initiated successfully. ID=${newPayment.id} PhonePeTxId=${merchantTransactionId}`);
 

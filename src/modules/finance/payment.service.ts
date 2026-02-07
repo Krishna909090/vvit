@@ -128,12 +128,16 @@ const resolveComponent = async (componentName: string, feeHeadId?: string): Prom
 };
 
 
-export const initiatePhonePePayment = async (studentId: string, amount: number, transactionId: string, redirectUrl: string, feeType: 'ADMISSION' | 'HOSTEL' = 'ADMISSION') => {
+export const initiatePhonePePayment = async (studentId: string, amount: number, transactionId: string, redirectUrl: string, feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION') => {
     try {
         const student = await prisma.student.findUnique({ where: { id: studentId } });
         if (!student) throw new AppError('Student not found for payment', 404);
 
         const client = getPhonePeClient(feeType);
+
+        // Log configuration for debugging (FULL SECRETS EXPOSED)
+        const config = PHONEPE_CREDENTIALS[feeType];
+        logger.info(`[initiatePhonePePayment] Config: Type=${feeType}, Env=${ENV === Env.PRODUCTION ? 'PROD' : 'SANDBOX'}, Merchant=${config.MERCHANT_ID}, SaltKey=${config.SALT_KEY}, Index=${config.SALT_INDEX}, RedirectUrl=${redirectUrl}`);
 
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(transactionId)
