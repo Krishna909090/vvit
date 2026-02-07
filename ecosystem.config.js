@@ -40,13 +40,7 @@ module.exports = {
             max_memory_restart: '500M',
             env: {
                 NODE_ENV: 'development',
-                ENABLE_SCHEDULER: 'true',
-                USE_LOCAL_DB: 'true',
-                DB_HOST: 'localhost',
-                DB_PORT: '5432',
-                DB_NAME: 'vvit',
-                DB_USER: 'postgres',
-                DB_PASSWORD: '',
+                ENABLE_SCHEDULER: 'true'
             }
         },
         {

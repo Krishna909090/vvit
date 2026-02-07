@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import * as controller from './hostelPrice.controller';
-import { authenticate, authorize } from '../../middlewares/authMiddleware';
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
+
+import { validateRequest } from '../../middlewares/validationMiddleware';
+import { createHostelPriceCategorySchema, updateHostelPriceCategorySchema } from '../../validators/hostelValidators';
 
 const router = Router();
 
@@ -10,9 +13,9 @@ router.get('/', controller.getAllPriceCategories);
 router.get('/:id', controller.getPriceCategoryById);
 
 // Admin only routes
-router.use(authorize(['ADMIN', 'SUPER_ADMIN']));
-router.post('/', controller.createPriceCategory);
-router.put('/:id', controller.updatePriceCategory);
+router.use(authorizePermission('hostel.create.all'));
+router.post('/', validateRequest(createHostelPriceCategorySchema), controller.createPriceCategory);
+router.put('/:id', validateRequest(updateHostelPriceCategorySchema), controller.updatePriceCategory);
 router.delete('/:id', controller.deletePriceCategory);
 
 export default router;

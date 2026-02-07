@@ -67,7 +67,8 @@ export const createDepartment = catchAsync(async (req: Request, res: Response, n
 });
 
 export const getDepartments = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const departments = await AcademicService.getDepartments();
+    const { search } = req.query;
+    const departments = await AcademicService.getDepartments(search as string);
     sendResponse({ res, statusCode: 200, success: true, data: departments });
 });
 
@@ -111,9 +112,9 @@ export const createCourse = catchAsync(async (req: Request, res: Response, next:
 });
 
 export const getCourses = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { departmentId, degree } = req.query;
+    const { departmentId, degree, search } = req.query;
     
-    const courses = await AcademicService.getCourses(departmentId as string, degree as string);
+    const courses = await AcademicService.getCourses(departmentId as string, degree as string, search as string);
     
     sendResponse({ res, statusCode: 200, success: true, data: courses });
 });

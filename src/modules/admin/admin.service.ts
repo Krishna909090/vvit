@@ -2,7 +2,8 @@ import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
-import { FeeStatus, Role, AgentCommissionStatus } from '@prisma/client';
+import { FeeStatus, AgentCommissionStatus } from '@prisma/client';
+import { Role, RoleType } from '../../constants/roles';
 import { maskPhone, maskEmail } from '../../utils/mask';
 import bcrypt from 'bcryptjs';
 
@@ -60,23 +61,11 @@ export const AdminService = {
         };
     },
 
-    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: Role; password?: string }, currentUserId?: string) {
-        const { phone, name, email, role, password } = data;
+    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: any; password?: string; groupIds?: string[] }, currentUserId?: string) {
+        const { phone, name, email, role, password, groupIds } = data;
 
         if (!phone) {
             throw new AppError("Phone number is required", 400);
-        }
-
-        if (!role) {
-            throw new AppError("Role is required", 400);
-        }
-
-        const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR];
-        if (!allowedRoles.includes(role)) {
-            logger.warn(
-                `[addAdmin] invalid role assignment attempt: role=${role}, phone=${maskPhone(phone)}, by=${currentUserId}`
-            );
-            throw new AppError("Invalid role for admin creation", 400);
         }
 
         const normalizedPhone = phone.trim();
@@ -93,45 +82,23 @@ export const AdminService = {
         const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
 
         if (user) {
-            if (user.role !== role) {
-                logger.warn(
-                    `[addAdmin] role conflict for userId=${user.id}. Existing role=${user.role}, requested role=${role}`
-                );
-                throw new AppError(
-                    `User already exists with role ${user.role}. Cannot change role to ${role}.`,
-                    400
-                );
+            // Logic Relaxed: Update role if different, don't throw conflict.
+            if (role && user.role !== role) {
+                logger.info(`[addAdmin] User exists. Updating role from ${user.role} to ${role}`);
             }
-
-            logger.info(
-                `[addAdmin] User found with phone=${maskPhone(normalizedPhone)}, same role=${role}. Updating basic details.`
-            );
 
             user = await prisma.user.update({
                 where: { id: user.id },
                 data: {
                     name: name ?? user.name,
                     email: normalizedEmail ?? user.email,
-                    password: passwordHash ?? user.password // Update password if provided
+                    password: passwordHash ?? user.password,
+                    role: role ?? user.role, // Update role if provided
+                    updatedBy: currentUserId
                 },
             });
         } else {
-            if (role === Role.SUPER_ADMIN) {
-                const existingSuperAdmin = await prisma.user.findFirst({
-                    where: { role: Role.SUPER_ADMIN },
-                });
-
-                if (existingSuperAdmin) {
-                    logger.warn(
-                        `[addAdmin] SUPER_ADMIN already exists: id=${existingSuperAdmin.id}, phone=${maskPhone(existingSuperAdmin.phone)}`
-                    );
-                    throw new AppError(
-                        "A SUPER_ADMIN already exists. Cannot create another SUPER_ADMIN.",
-                        400
-                    );
-                }
-            }
-
+            // Logic Relaxed: Removed Super Admin uniqueness check and Student restrictions.
             logger.info(
                 `[addAdmin] Creating new user with role=${role} and phone=${maskPhone(normalizedPhone)}`
             );
@@ -141,10 +108,37 @@ export const AdminService = {
                     phone: normalizedPhone,
                     name,
                     email: normalizedEmail,
-                    role,
-                    password: passwordHash
+                    role: role || 'STAFF', // Default if missing, or use payload // Ensure this matches Schema Enum if strict
+                    password: passwordHash,
+                    createdBy: currentUserId,
+                    updatedBy: currentUserId
                 },
             });
+        }
+
+        // Explicit Group Assignment via Payload (The Priority)
+        if (user && groupIds && groupIds.length > 0) {
+            logger.info(`[addAdmin] Assigning user=${user.id} to groups=${groupIds.join(', ')}`);
+            const userGroupsData = groupIds.map(groupId => ({
+                userId: user!.id,
+                groupId
+            }));
+            
+            // Assign groups properly
+            for (const ug of userGroupsData) {
+                try {
+                    // Using Upsert or Create based on schema constraints (usually composite userId+groupId)
+                    await prisma.userGroup.upsert({
+                         where: {
+                             userId_groupId: { userId: ug.userId, groupId: ug.groupId }
+                         },
+                         create: ug,
+                         update: {} // No-op if exists
+                    });
+                } catch (e) {
+                     logger.error(`[addAdmin] Failed to assign group ${ug.groupId} to user ${user!.id}: ${e}`);
+                }
+            }
         }
 
         logger.info(
@@ -194,7 +188,7 @@ export const AdminService = {
      * Get all staff users (excluding students)
      * Supports filtering by role and search term
      */
-    async getStaffUsers(filters?: { role?: Role; search?: string }) {
+    async getStaffUsers(filters?: { role?: RoleType; search?: string }) {
         const where: any = {
             role: {
                 not: Role.STUDENT // Exclude students
@@ -241,7 +235,7 @@ export const AdminService = {
      * Update staff user details
      * Can update name, email, and role (excluding STUDENT role)
      */
-    async updateStaffUser(userId: string, data: { name?: string; email?: string; role?: Role }, currentUserId?: string) {
+    async updateStaffUser(userId: string, data: { name?: string; email?: string; role?: RoleType }, currentUserId?: string) {
         if (!userId) {
             throw new AppError('User ID is required', 400);
         }
@@ -262,9 +256,9 @@ export const AdminService = {
 
         // Validate role if being updated
         if (data.role) {
-            const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.STAFF, Role.INVIGILATOR, Role.AGENT];
-            if (!allowedRoles.includes(data.role)) {
-                throw new AppError('Invalid role for staff user', 400);
+            // Allow any role EXCEPT Student
+            if (data.role == Role.STUDENT) { // matching check roughly, Role enum is string usually
+                 throw new AppError('Cannot set user role to STUDENT via this API', 400);
             }
 
             // Prevent changing SUPER_ADMIN role if another SUPER_ADMIN exists
@@ -311,6 +305,13 @@ export const AdminService = {
                 updatedAt: true
             }
         });
+
+        // SYNC GROUP REMOVED - Groups must be managed explicitly via RBAC APIs
+        /*
+        if (data.role) {
+             // ... Logic removed to support manual assignment workflow
+        }
+        */
 
 
 

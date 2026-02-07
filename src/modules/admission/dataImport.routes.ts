@@ -2,7 +2,7 @@ import express from "express";
 import multer from "multer";
 import { importAdmissionData, createImportMapping } from './dataImport.controller';
 import { authenticate, authorize } from '../../middlewares/authMiddleware';
-import { Role } from "@prisma/client";
+import { Role } from '../../constants/roles';
 
 const router = express.Router();
 

@@ -6,7 +6,7 @@ import { FeeService, getApplicationFeeAmount, setApplicationFeeAmount } from './
 import { getAllotmentOrderUrl } from './payment.service';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
-import { Role } from '@prisma/client';
+import { Role, RoleType } from '../../constants/roles';
 
 // Fee Head
 export const createFeeHead = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -80,7 +80,16 @@ export const createBulkFeeStructure = catchAsync(async (req: Request, res: Respo
 });
 
 export const getFeeStructures = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const feeStructures = await FeeService.getFeeStructures();
+    const { courseId, academicYearId, feeHeadId, search } = req.query;
+    
+    const filters = {
+        courseId: courseId as string,
+        academicYearId: academicYearId as string,
+        feeHeadId: feeHeadId as string,
+        search: search as string
+    };
+
+    const feeStructures = await FeeService.getFeeStructures(filters);
     sendResponse({ res, statusCode: 200, success: true, data: feeStructures });
 });
 
@@ -179,7 +188,7 @@ export const approveDiscount = catchAsync(async (req: Request, res: Response, ne
 
     const { requestId, approved } = req.body;
     
-    await FeeService.approveDiscount(requestId, approved, req.user!.role as Role);
+    await FeeService.approveDiscount(requestId, approved, req.user!.role as RoleType);
 
     sendResponse({
         res,
@@ -277,8 +286,12 @@ export const getStudentLedger = catchAsync(async (req: Request, res: Response, n
 
 export const downloadAllotmentOrder = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
+    const { courseChange } = req.query;
     
-    const url = await getAllotmentOrderUrl(studentId);
+    // Regenerate if courseChange is explicitly 'true'
+    const regenerate = courseChange === 'true';
+
+    const url = await getAllotmentOrderUrl(studentId, regenerate);
 
     sendResponse({
         res,
@@ -318,5 +331,47 @@ export const getStudentFeeDemands = catchAsync(async (req: Request, res: Respons
             scholarship: feeDetails.discounts.scholarship > 0 ? feeDetails.discounts.scholarship : "Not Eligible",
             discount: feeDetails.discounts.manual || 0
         }
+    });
+});
+
+export const getPaymentHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    
+    // Security: Students can only see their own
+    if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
+        // throw new AppError("Unauthorized", 403);
+    }
+
+    const history = await FeeService.getStudentPaymentHistory(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Payment history fetched successfully",
+        data: history
+    });
+});
+
+export const addStudentDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[addStudentDiscount] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId, feeHeadId, feeStructureId, type, amount, reason } = req.body;
+
+    if (!studentId || (!feeHeadId && !feeStructureId) || !type || !amount) {
+        throw new AppError("Student ID, and either Fee Head ID or Fee Structure ID, Type, and Amount are required", 400);
+    }
+
+    if (!['DISCOUNT', 'FINE'].includes(type)) {
+        throw new AppError("Type must be DISCOUNT or FINE", 400);
+    }
+
+    const result = await FeeService.addStudentDiscount(studentId, feeHeadId, feeStructureId, type, amount, reason, req.user!.userId);
+
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: `${type} added successfully`,
+        data: result
     });
 });

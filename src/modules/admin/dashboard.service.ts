@@ -115,7 +115,7 @@ export const DashboardService = {
         const trendMap: Record<string, number> = {};
         
         rawStudents.forEach(s => {
-            const dateStr = s.createdAt.toISOString().split('T')[0];
+            const dateStr = (s.createdAt ?? new Date()).toISOString().split('T')[0];
             trendMap[dateStr] = (trendMap[dateStr] || 0) + 1;
         });
 
@@ -183,6 +183,257 @@ export const DashboardService = {
             orderBy: {
                 createdAt: 'desc'
             }
+        });
+    },
+
+    async getSeatAllocationStats(type: string, page: number = 1, limit: number = 10, search?: string) {
+        const skip = (page - 1) * limit;
+        let where: any = {};
+
+        // === SEARCH LOGIC ===
+        if (search) {
+            where.OR = [
+                { applicationId: { contains: search, mode: 'insensitive' } },
+                { name: { contains: search, mode: 'insensitive' } },
+                { phone: { contains: search, mode: 'insensitive' } },
+                // Add Course Search
+                {
+                    admissionDetails: {
+                        allottedCourse: {
+                            OR: [
+                                { name: { contains: search, mode: 'insensitive' } },
+                                { code: { contains: search, mode: 'insensitive' } }
+                            ]
+                        }
+                    }
+                }
+            ];
+        }
+
+        // === FILTER LOGIC ===
+        // 1. Not Allocated (Only with Scholarship Allocation)
+        if (type === 'not_allocated') {
+            const notAllocatedCondition = {
+                OR: [
+                    { admissionDetails: null },
+                    { admissionDetails: { allottedCourseId: null } }
+                ]
+            };
+            where = { 
+                ...where, 
+                ...notAllocatedCondition,
+                studentScholarship: { isNot: null }
+            };
+        } 
+        // 2. Allocated (Any Scholarship Status)
+        else if (type === 'allocated') {
+            where = { ...where, admissionDetails: { allottedCourseId: { not: null } } };
+        }
+        // 3. Not Allocated AND Eligible (Scholarship YES)
+        else if (type === 'not_allocated_eligible') {
+            const notAllocatedCondition = {
+                OR: [
+                    { admissionDetails: null },
+                    { admissionDetails: { allottedCourseId: null } }
+                ]
+            };
+            where = { 
+                ...where, 
+                ...notAllocatedCondition,
+                studentScholarship: { isEligible: 'YES' }
+            };
+        }
+        // 3a. Not Allocated AND Not Eligible (Scholarship NO)
+        else if (type === 'not_allocated_not_eligible') {
+            const notAllocatedCondition = {
+                OR: [
+                    { admissionDetails: null },
+                    { admissionDetails: { allottedCourseId: null } }
+                ]
+            };
+            where = { 
+                ...where, 
+                ...notAllocatedCondition,
+                studentScholarship: { isEligible: 'NO' }
+            };
+        }
+        // 4. Allocated AND Eligible (Scholarship YES)
+        else if (type === 'allocated_eligible') {
+             where = { 
+                ...where, 
+                admissionDetails: { allottedCourseId: { not: null } },
+                studentScholarship: { isEligible: 'YES' }
+            };
+        }
+        // 4. Allocated AND Not Eligible (Scholarship NO)
+        else if (type === 'allocated_not_eligible') {
+             where = { 
+                ...where, 
+                admissionDetails: { allottedCourseId: { not: null } },
+                studentScholarship: { isEligible: 'NO' }
+            };
+        }
+        // 5. All Students (Only with Scholarship Record)
+        else if (type === 'all') {
+             where = { 
+                ...where,
+                studentScholarship: { isNot: null }
+            };
+        }
+
+        const [total, students] = await Promise.all([
+            prisma.student.count({ where }),
+            prisma.student.findMany({
+                where,
+                skip,
+                take: limit,
+                select: {
+                    id: true,
+                    userId: true,
+                    name: true,
+                    fatherName: true,
+                    gender: true,
+                    phone: true,
+                    applicationId: true,
+                    email: true,
+                    degreeType: true,
+                    admissionDetails: {
+                        select: {
+                            studentId: true,
+                            status: true,
+                            totalFee: true,
+                            paidFee: true,
+                            allottedCourse: { select: { name: true, code: true } }
+                        }
+                    },
+                    studentScholarship: {
+                        select: {
+                            scholarshipPercentage: true,
+                            isEligible: true,
+                            type: true
+                        }
+                    },
+                    scholarshipAllocation: {
+                        select: {
+                            rule: {
+                                select: {
+                                    discountPercentage: true,
+                                    name: true
+                                }
+                            }
+                        }
+                    }
+                },
+                orderBy: { createdAt: 'desc' }
+            })
+        ]);
+
+        return {
+            total,
+            page,
+            totalPages: Math.ceil(total / limit),
+            data: students
+        };
+    },
+
+    /**
+     * Get All Course Codes
+     */
+    async getCourseCodes() {
+        return await prisma.course.findMany({
+            select: {
+                id: true,
+                name: true,
+                code: true
+            },
+            orderBy: { name: 'asc' }
+        });
+    },
+
+    /**
+     * Get summary counts for Seat Allocation Stats
+     */
+    async getSeatAllocationCounts(filter?: string) {
+        const result: any = {};
+
+        // 1. Not Allocated
+        if (!filter || filter === 'not_allocated') {
+            result.notAllocated = await prisma.student.count({
+                where: {
+                    OR: [
+                        { admissionDetails: null },
+                        { admissionDetails: { allottedCourseId: null } }
+                    ],
+                    studentScholarship: { isNot: null }
+                }
+            });
+        }
+
+        // 2. Allocated - Breakdown by Eligibility
+        if (!filter || filter === 'allocated') {
+             const allocatedCondition = {
+                admissionDetails: { allottedCourseId: { not: null } }
+            };
+
+            const [eligible, notEligible] = await Promise.all([
+                // Eligible: YES
+                prisma.student.count({
+                    where: {
+                        ...allocatedCondition,
+                        studentScholarship: { isEligible: 'YES' }
+                    }
+                }),
+                // Eligible: NO
+                prisma.student.count({
+                    where: {
+                        ...allocatedCondition,
+                        studentScholarship: { isEligible: 'NO' }
+                    }
+                })
+            ]);
+
+            result.scholarshipApprovedwithSeat = eligible;
+            result.scholarshipNotApprovedwithSeat = notEligible;
+        }
+
+        return result;
+    },
+
+
+    /**
+     * Get Course Statistics (Seats Filled vs Total)
+     */
+    async getCourseSeatStats() {
+        // Fetch courses with their allotted student count
+        // We use the relation 'allottedStudents' in Course model
+        const courses = await prisma.course.findMany({
+            where: { isDeleted: false },
+            select: {
+                id: true,
+                code: true,
+                name: true,
+                totalSeats: true,
+                filledSeats: true, // This field exists but might not be auto-synced, good to double check via relation count if needed
+                _count: {
+                    select: { allottedStudents: true }
+                }
+            },
+            orderBy: { name: 'asc' }
+        });
+
+        // Map to simpler format and ensure 'filled' is accurate based on actual count if preferred, 
+        // or strictly follow existing logic. Ideally, we trust the DB count of relations.
+        return courses.map(c => {
+            const actualFilled = c._count.allottedStudents;
+            const total = c.totalSeats || 0;
+            return {
+                id: c.id,
+                code: c.code,
+                name: c.name,
+                totalSeats: total,
+                filledSeats: actualFilled,
+                remainingSeats: Math.max(0, total - actualFilled)
+            };
         });
     }
 };

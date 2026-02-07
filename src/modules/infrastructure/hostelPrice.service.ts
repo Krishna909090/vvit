@@ -2,7 +2,7 @@ import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import { HostelRoomType } from '@prisma/client';
 
-export const createPriceCategory = async (data: { sharing: number, roomType: HostelRoomType, price: number }, userId: string | null) => {
+export const createPriceCategory = async (data: { sharing: number, roomType: HostelRoomType, price: number, metadata?: any }, userId: string | null) => {
     // Check if exists
     const existing = await prisma.hostelPriceCategory.findFirst({
         where: {
@@ -39,7 +39,7 @@ export const getPriceCategoryById = async (id: string) => {
     return category;
 };
 
-export const updatePriceCategory = async (id: string, data: Partial<{ sharing: number, roomType: HostelRoomType, price: number }>, userId: string | null) => {
+export const updatePriceCategory = async (id: string, data: Partial<{ sharing: number, roomType: HostelRoomType, price: number, metadata?: any }>, userId: string | null) => {
     // Check existence
     const category = await prisma.hostelPriceCategory.findUnique({ where: { id } });
     if (!category) throw new AppError('Price category not found', 404);

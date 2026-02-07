@@ -12,8 +12,8 @@ const storage = multerS3({
         cb(null, { fieldName: file.fieldname });
     },
     key: function (req: any, file: any, cb: any) {
-        // Try to get studentId from authenticated user or params
-        const studentId = req.user?.userId || req.params.studentId || 'public';
+        // Priority: Phone (New Student via Admin) -> UserID (Logged in) -> Param StudentID -> Public
+        const studentId = req.query.phone || req.user?.userId || req.params.studentId || 'public';
         const folder = req.query.folder || 'documents';
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         const filename = `${folder}/${studentId}/${file.fieldname}-${uniqueSuffix}${path.extname(file.originalname)}`;

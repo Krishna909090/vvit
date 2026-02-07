@@ -11,7 +11,8 @@ export const AcademicService = {
                 OR: [
                     { code: { equals: code, mode: 'insensitive' } },
                     { name: { equals: name, mode: 'insensitive' } }
-                ]
+                ],
+                isDeleted: false
             }
         });
 
@@ -74,7 +75,8 @@ export const AcademicService = {
                 OR: [
                     { code: { equals: code, mode: 'insensitive' } },
                     { name: { equals: name, mode: 'insensitive' } }
-                ]
+                ],
+                isDeleted: false
             }
         });
 
@@ -87,9 +89,18 @@ export const AcademicService = {
         });
     },
 
-    async getDepartments() {
+    async getDepartments(search?: string) {
+        const where: any = { isDeleted: false };
+        
+        if (search) {
+             where.OR = [
+                { name: { contains: search, mode: 'insensitive' } },
+                { code: { contains: search, mode: 'insensitive' } }
+             ];
+        }
+
         const depts = await prisma.department.findMany({
-            where: { isDeleted: false },
+            where,
             include: {
                 courses: { where: { isDeleted: false } },
                 school: true
@@ -158,7 +169,8 @@ export const AcademicService = {
                     {
                         code: { equals: code, mode: 'insensitive' }
                     }
-                ]
+                ],
+                isDeleted: false
             }
         });
 
@@ -178,7 +190,7 @@ export const AcademicService = {
         });
     },
 
-    async getCourses(departmentId?: string, degree?: string) {
+    async getCourses(departmentId?: string, degree?: string, search?: string) {
         const where: any = { isDeleted: false };
         if (departmentId) {
             where.departmentId = String(departmentId);
@@ -186,6 +198,13 @@ export const AcademicService = {
         if (degree) {
             where.degree = String(degree);
         }
+        if (search) {
+             where.OR = [
+                { name: { contains: search, mode: 'insensitive' } },
+                { code: { contains: search, mode: 'insensitive' } }
+             ];
+        }
+
         const courses = await prisma.course.findMany({
             where,
             include: { department: true, specializations: true }
@@ -239,7 +258,8 @@ export const AcademicService = {
            const existingCourse = await prisma.course.findFirst({
                 where: {
                     code: { equals: code, mode: 'insensitive' },
-                    id: { not: id }
+                    id: { not: id },
+                    isDeleted: false
                 }
             });
             if (existingCourse) {
@@ -272,7 +292,7 @@ export const AcademicService = {
             throw new AppError("Course (Specialization Parent) not found", 404);
         }
 
-        const existingSpecialization = await prisma.specialization.findUnique({ where: { code } });
+        const existingSpecialization = await prisma.specialization.findFirst({ where: { code, isDeleted: false } });
         if (existingSpecialization) {
             throw new AppError("Specialization code exists", 409);
         }
@@ -381,10 +401,10 @@ export const AcademicService = {
                 departmentName: spec.course.department.name,
                 totalSeats: spec.totalSeats,
                 filledSeats: spec.filledSeats, // Count from Specialization table cache
-                availableSeats: spec.totalSeats - spec.filledSeats,
+                availableSeats: spec.totalSeats - (spec.filledSeats ?? 0),
                 actualFilledCount: actualCount, // Count from StudentAdmission table (Truth)
                 isSync: spec.filledSeats === actualCount, // Verification
-                discrepancy: spec.filledSeats - actualCount
+                discrepancy: (spec.filledSeats ?? 0) - actualCount
             };
         });
 
@@ -417,7 +437,7 @@ export const AcademicService = {
 
     // Academic Year
     async createAcademicYear(code: string, startDate: string, endDate: string, isActive: boolean, createdBy?: string) {
-        const existingYear = await prisma.academicYear.findUnique({ where: { code } });
+        const existingYear = await prisma.academicYear.findFirst({ where: { code, isDeleted: false } });
         if (existingYear) {
             throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_EXISTS, 409);
         }
@@ -473,7 +493,8 @@ export const AcademicService = {
         const existingBatch = await prisma.batch.findFirst({
             where: {
                 name: { equals: name, mode: 'insensitive' },
-                specializationId
+                specializationId,
+                isDeleted: false
             }
         });
 
@@ -485,6 +506,7 @@ export const AcademicService = {
             data: {
                 name,
                 specializationId,
+                courseId: specialization.courseId,
                 startDate: new Date(startDate),
                 endDate: new Date(endDate),
                 createdBy
@@ -544,7 +566,8 @@ export const AcademicService = {
         const existingSection = await prisma.section.findFirst({
             where: {
                 name: { equals: name, mode: 'insensitive' },
-                batchId
+                batchId,
+                isDeleted: false
             }
         });
 

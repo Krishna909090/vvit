@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { AccommodationType, HostelType } from '@prisma/client';
-import { Role } from "@prisma/client";
+import { AccommodationType, HostelType, PaymentMethod, HostelPaymentMode } from '@prisma/client';
+import { Role } from '../constants/roles';
 
 export const enableExamSchema = z.object({
     body: z.object({
@@ -106,6 +106,7 @@ export const updateAdmissionDetailsSchema = z.object({
         hostelType: z.nativeEnum(HostelType).optional().nullable(),
         hostelId: z.string().uuid().optional().nullable(),
         transportRouteId: z.string().optional().nullable(),
+        hostelPaymentMode: z.nativeEnum(HostelPaymentMode).optional().nullable(),
         paidAmount: z.number().min(0).optional(),
     }).refine((data) => {
         if (data.accommodationType === AccommodationType.HOSTEL) {
@@ -131,6 +132,12 @@ export const getAllApplicationsSchema = z.object({
         page: z.string().transform(val => Number(val)).optional(),
         limit: z.string().transform(val => Number(val)).optional(),
         search: z.string().optional(),
+        status: z.string().optional(),
+        quotaType: z.string().optional(),
+        courseType: z.string().optional(),
+        applicationId: z.string().optional(),
+        isScholarshipEligible: z.string().optional(),
+        hasDocuments: z.string().optional(),
     }),
 });
 
@@ -155,11 +162,9 @@ export const addAdminSchema = z.object({
 
     role: z
       .string()
-      .min(1, "Role is required")                
-      .transform((val) => val.toUpperCase())    
-      .refine((val) => AllowedRoles.includes(val as any), {
-        message: "Invalid role for admin creation",
-      }),
+      .optional()
+      .transform((val) => val ? val.toUpperCase() : val),
+    groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
   }),
 });
 
@@ -325,7 +330,7 @@ export const updateStaffUserSchema = z.object({
     body: z.object({
         name: z.string().trim().min(1, 'Name cannot be empty').optional(),
         email: z.string().email('Invalid email address').optional(),
-        role: z.nativeEnum(Role).optional(),
+        role: z.string().refine(val => Object.values(Role).includes(val as any)).optional(),
     }).refine(
         (data) => data.name !== undefined || data.email !== undefined || data.role !== undefined,
         {
@@ -403,9 +408,51 @@ export const updateAcademicQualificationSchema = z.object({
     }),
 });
 
+
 export const deleteAcademicQualificationSchema = z.object({
     params: z.object({
         id: z.string().uuid("Invalid Qualification ID"),
     }),
 });
+
+export const finalizeAdmissionSchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid(),
+        payment: z.object({
+            method: z.nativeEnum(PaymentMethod),
+            amount: z.number().positive(),
+            referenceNumber: z.string().optional(),
+            date: z.string().datetime().or(z.date()).optional(),
+            feeHeadId: z.string().uuid().optional(), 
+            feeStructureId: z.string().uuid().optional(),
+        }),
+        scholarship: z.object({
+            percentage: z.number().min(0).max(100).nullable(),
+            ruleId: z.string().uuid().optional(),
+        }).nullable(),
+        allocation: z.object({
+            type: z.nativeEnum(AccommodationType),
+            hostelId: z.string().uuid().optional(),
+            transportRouteId: z.string().uuid().optional(),
+            hostelType: z.nativeEnum(HostelType).optional(),
+            hostelPaymentMode: z.nativeEnum(HostelPaymentMode).optional(),
+        }).refine((data) => {
+            if (data.type === AccommodationType.HOSTEL) return !!data.hostelId;
+            if (data.type === AccommodationType.TRANSPORT) return !!data.transportRouteId;
+            return true;
+        }, {
+            message: "Hostel ID or Transport Route ID is required based on allocation type",
+        }).optional(),
+        course: z.object({
+            allottedCourseId: z.string().uuid(),
+        }),
+    }),
+});
+
+export const verifyPaymentSchema = z.object({
+    body: z.object({
+        paymentId: z.string().uuid("Invalid Payment ID"),
+    }),
+});
+
 

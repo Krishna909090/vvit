@@ -24,3 +24,24 @@ export const updateHostelSchema = z.object({
         wardenName: z.string().optional(),
     }),
 });
+
+export const createHostelPriceCategorySchema = z.object({
+    body: z.object({
+        sharing: z.any().transform(val => Number(val)).refine(val => [2, 4, 6, 8, 10].includes(val), "Sharing must be 2, 4, 6, 8, or 10"),
+        roomType: z.enum(['AC', 'NON_AC']),
+        price: z.number().min(0),
+        metadata: z.record(z.string(), z.any()).optional()
+    })
+});
+
+export const updateHostelPriceCategorySchema = z.object({
+    params: z.object({
+        id: z.string().uuid()
+    }),
+    body: z.object({
+        sharing: z.any().transform(val => Number(val)).refine(val => [2, 4, 6, 8, 10].includes(val), "Sharing must be 2, 4, 6, 8, or 10").optional(),
+        roomType: z.enum(['AC', 'NON_AC']).optional(),
+        price: z.number().min(0).optional(),
+        metadata: z.record(z.string(), z.any()).optional()
+    })
+});

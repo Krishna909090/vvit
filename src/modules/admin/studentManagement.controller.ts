@@ -7,7 +7,7 @@ import { sendResponse } from '../../utils/response';
 import { AdminStudentService } from './adminStudent.service';
 import * as StudentService from '../student/student.service';
 import prisma from '../../config/prisma';
-import { Role } from '@prisma/client';
+import { Role } from '../../constants/roles';
 import fs from 'fs';
 import path from 'path';
 
@@ -205,6 +205,17 @@ export const downloadStudentDocuments = catchAsync(async (req: Request, res: Res
     });
 });
 
+// Download Application PDF
+export const downloadApplication = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+
+    const pdfBuffer = await AdminStudentService.downloadApplication(studentId);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=application_${studentId}.pdf`);
+    res.send(pdfBuffer);
+});
+
 // Update Roll Number
 export const updateRollNumber = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateRollNumber] by=${req.user?.userId || 'anonymous'}`);
@@ -295,6 +306,21 @@ export const getStudentDetails = catchAsync(async (req: Request, res: Response, 
     });
 });
 
+// Get Student Details By Application ID
+export const getStudentDetailsByApplicationId = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { applicationId } = req.params;
+
+    const data = await AdminStudentService.getStudentDetailsByApplicationId(applicationId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data
+    });
+});
+
 // Update Academic Qualification
 export const updateAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
@@ -368,4 +394,144 @@ export const deleteAcademicQualification = catchAsync(async (req: Request, res: 
         message: result.message
     });
 });
+
+// Validate Academic Qualification
+export const validateAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[validateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const result = await AdminStudentService.validateAcademicQualification(id, status, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.message
+    });
+});
+
+// Update Student Scholarship
+export const updateStudentScholarship = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[updateStudentScholarship] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId } = req.body;
+
+    const result = await AdminStudentService.updateStudentScholarship(studentId, req.body, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Student scholarship updated successfully',
+        data: result
+    });
+});
+
+// Get Student Scholarships
+export const getStudentScholarships = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getStudentScholarships] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId } = req.params;
+
+    const results = await AdminStudentService.getStudentScholarships(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: results
+    });
+});
+
+// Get Scholarship Stats
+export const getScholarshipStats = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getScholarshipStats] by=${req.user?.userId || 'anonymous'}`);
+
+    const stats = await AdminStudentService.getScholarshipStats();
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: stats
+    });
+});
+
+// Edit Student Scholarship (PUT)
+export const editStudentScholarship = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[editStudentScholarship] by=${req.user?.userId || 'anonymous'}`);
+    const { id } = req.params;
+
+    const result = await AdminStudentService.editStudentScholarship(id, req.body, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Student scholarship updated successfully',
+        data: result
+    });
+});
+
+// Finalize Admission (One-Shot Payment & Allocation)
+export const finalizeAdmission = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[finalizeAdmission] by=${req.user?.userId || 'anonymous'}`);
+
+    const result = await AdminStudentService.finalizeAdmission(req.body, req.user?.userId!);
+
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: result.message,
+        data: result
+    });
+});
+
+// Verify Online Payment & Finalize
+export const verifyPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[verifyPayment] by=${req.user?.userId || 'anonymous'}`);
+
+    const { paymentId } = req.body;
+    const result = await AdminStudentService.verifyAndCompletePayment(paymentId, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result?.message,
+        data: result
+    });
+});
+
+// Get Admission Fee Invoice
+export const getAdmissionInvoice = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getAdmissionInvoice] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId } = req.params;
+
+    // Security check: if student, ensure accessing own data
+    if (req.user?.role === Role.STUDENT) {
+        // ... (student ID check logic if standardized, or rely on service if we passed userId)
+        // For now, assuming standard admin/student access pattern.
+        // Assuming studentId param is expected.
+        const userStudent = await StudentService.getStudentByUserId(req.user.userId!);
+        if (userStudent && userStudent.id !== studentId) {
+             throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
+    }
+
+    const result = await AdminStudentService.getAdmissionInvoice(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
+
+
 

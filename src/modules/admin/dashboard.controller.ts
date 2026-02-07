@@ -34,5 +34,52 @@ export const DashboardController = {
             success: true,
             data: students
         });
+    }),
+
+    getSeatAllocationStats: catchAsync(async (req: Request, res: Response) => {
+        const { type, page, limit, search } = req.query;
+        const stats = await DashboardService.getSeatAllocationStats(
+            type as string, 
+            parseInt(page as string) || 1, 
+            parseInt(limit as string) || 10,
+            search as string
+        );
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: stats
+        });
+    }),
+
+    getCourseCodes: catchAsync(async (req: Request, res: Response) => {
+        const codes = await DashboardService.getCourseCodes();
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: codes
+        });
+    }),
+
+    getSeatAllocationCounts: catchAsync(async (req: Request, res: Response) => {
+        const { filter } = req.query;
+        const counts = await DashboardService.getSeatAllocationCounts(filter as string);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: counts
+        });
+    }),
+
+    getCourseStats: catchAsync(async (req: Request, res: Response) => {
+        const stats = await DashboardService.getCourseSeatStats();
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: stats
+        });
     })
 };

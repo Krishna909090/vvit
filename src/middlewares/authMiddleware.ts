@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { Role } from '@prisma/client';
+import { Role, RoleType } from '../constants/roles';
 import logger from '../utils/logger';
 import { AppError } from '../utils/AppError';
 
@@ -18,7 +18,7 @@ export const authenticate = (req: Request, res: Response, next: NextFunction) =>
     const token = authHeader.split(' ')[1];
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; role: Role };
+        const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; role: RoleType };
         req.user = decoded;
         next();
     } catch (error) {
@@ -27,7 +27,7 @@ export const authenticate = (req: Request, res: Response, next: NextFunction) =>
     }
 };
 
-export const authorize = (roles: (Role | string)[]) => {
+export const authorize = (roles: (RoleType | string)[]) => {
     return (req: Request, res: Response, next: NextFunction) => {
         logger.info(req.user)
         if (!req.user || !roles.includes(req.user.role)) {

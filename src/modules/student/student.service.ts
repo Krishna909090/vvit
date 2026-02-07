@@ -11,13 +11,27 @@ import { verifyAadhar } from '../integration/integration.service';
 import { deleteFileFromS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { MESSAGES } from '../../constants/messages';
 import { formatDate, formatTime, formatDateTime } from '../../utils/dateFormatter';
+import { maskAadhaar } from '../../utils/mask';
 export const registerStudent = async (data: any, agentId: string | null, userId: string | null, currentUserId: string | null) => {
     // Check for duplicate registration
     const dobDate = data.dob ? new Date(data.dob) : undefined;
 
+    // Verify Aadhaar BEFORE masking
+    if (data.aadharNumber) {
+        // If data is already masked (starts with XXXX), skip verification? 
+        // Or assume input is always raw from client.
+        // Proceeding with verification of raw number.
+        const isValidAadhar = await verifyAadhar(data.aadharNumber);
+        if (!isValidAadhar) {
+            throw new AppError(MESSAGES.ERROR.INVALID_AADHAR, 400);
+        }
+        // Mask Aadhaar for storage
+        data.aadharNumber = maskAadhaar(data.aadharNumber);
+    }
+
     const orConditions: any[] = [
-        { email: data.email },
-        { aadharNumber: data.aadharNumber }
+        { email: data.email }
+        // { aadharNumber: data.aadharNumber } // Removed: Cannot check uniqueness on masked values
     ];
 
     if (userId) {
@@ -33,17 +47,9 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
     if (existingStudent) {
         let conflict = 'details';
         if (existingStudent.email === data.email) conflict = 'Email';
-        else if (existingStudent.aadharNumber === data.aadharNumber) conflict = 'Aadhar Number';
         else if (userId && existingStudent.userId === userId) conflict = 'User Account';
         
         throw new AppError(`Student conflict: A student is already registered with this ${conflict}`, 400);
-    }
-
-    if (data.aadharNumber) {
-        const isValidAadhar = await verifyAadhar(data.aadharNumber);
-        if (!isValidAadhar) {
-            throw new AppError(MESSAGES.ERROR.INVALID_AADHAR, 400);
-        }
     }
 
     const isOffline = data.isOffline || data.applicationMode === 'SEAT_BOOKING' || data.applicationMode === 'OFFLINE';
@@ -110,6 +116,11 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
 
     logger.info(`[registerStudent] Generated applicationId: ${applicationId}`);
 
+    // Fetch Active Academic Year
+    const activeAcademicYear = await prisma.academicYear.findFirst({
+        where: { isActive: true, isDeleted: false }
+    });
+
     // Transaction to create Student and related tables
     const student = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // Double-check uniqueness within transaction
@@ -159,7 +170,8 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
         await tx.studentAdmission.create({
             data: {
                 studentId: newStudent.id,
-                status: AdmissionStatus.REGISTERED
+                status: AdmissionStatus.REGISTERED,
+                academicYearId: activeAcademicYear?.id
             }
         });
 
@@ -198,6 +210,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
             pref2: true,
             pref3: true,
             degreeType: true,
+            userId: true,
             applicationId: true // Needed for logger and likely client
         }
     });
@@ -506,6 +519,7 @@ export const getStudentByUserId = async (userId: string) => {
             pincode: true,
             profilePhotoUrl: true,
             isKycVerified: true,
+            userId:true,
             pref1: true,
             pref1Course: {
                 select: { name: true }
@@ -569,7 +583,8 @@ export const getStudentByUserId = async (userId: string) => {
                     updatedAt: true
                 }
             },
-            academicQualifications: true
+            academicQualifications: true,
+            studentScholarship: true
         }
     });
 
@@ -627,6 +642,7 @@ export const getStudentByUserId = async (userId: string) => {
         pref2CourseName: student.pref2Course?.name,
         pref3CourseName: student.pref3Course?.name,
         profilePhotoUrl,
+        aadharNumber: maskAadhaar(student.aadharNumber),
         documents: documentsWithPresignedUrls,
         examDetails: student.examDetails ? {
             ...student.examDetails,
@@ -751,4 +767,87 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
     });
 
     return { message: 'Personal details updated successfully' };
+};
+
+export const changeServicePreferences = async (studentId: string, data: any, currentUserId: string | null) => {
+    const { type, value, reason } = data;
+
+    // 1. Verify Student
+    const student = await prisma.student.findUnique({
+        where: { id: studentId },
+        include: { admissionDetails: true }
+    });
+
+    if (!student) {
+        throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+    }
+    
+    // Ownership check (unless admin, but assuming this is student facing primarily)
+    if (currentUserId && student.userId !== currentUserId) {
+         // Add role check if needed, strictly student for now based on flow
+         // If admin calls this service, pass null or handle upstream. 
+         // For now, strict ownership:
+         throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+    }
+
+    if (type === 'PAYMENT_MODE') {
+        // Direct Update
+        if (!['SEMWISE', 'YEARWISE'].includes(value)) {
+            throw new AppError('Invalid payment mode. Must be SEMWISE or YEARWISE', 400);
+        }
+
+        await prisma.studentAdmission.update({
+            where: { studentId },
+            data: {
+                hostelPaymentMode: value,
+                updatedAt: new Date()
+            }
+        });
+
+        return { success: true, message: 'Payment mode updated successfully', status: 'UPDATED' };
+
+    } else if (type === 'FACILITY') {
+        // Request Based
+        // Check pending requests
+        const pendingRequest = await prisma.serviceChangeRequest.findFirst({
+            where: {
+                studentId,
+                type: 'FACILITY', // Using the enum mapped string
+                status: 'REQUESTED'
+            }
+        });
+
+        if (pendingRequest) {
+            throw new AppError('A facility change request is already pending', 409);
+        }
+
+        // Validate target value
+        const targetValue = value === 'HOSTEL' ? 'HOSTEL' : (value === 'TRANSPORT' ? 'TRANSPORT' : null);
+        if (!targetValue) {
+             throw new AppError('Invalid facility type. Must be HOSTEL or TRANSPORT', 400);
+        }
+        
+        // Check current value
+        const currentVal = student.admissionDetails?.accommodationType || 'NONE';
+        
+        if (currentVal === targetValue) {
+            throw new AppError(`You are already allocated to ${targetValue}`, 400);
+        }
+
+        await prisma.serviceChangeRequest.create({
+            data: {
+                studentId,
+                type: 'FACILITY',
+                fromValue: currentVal,
+                toValue: targetValue,
+                reason,
+                status: 'REQUESTED'
+            }
+        });
+
+        return { success: true, message: 'Facility change request submitted successfully', status: 'REQUESTED' };
+
+    } else {
+        throw new AppError('Invalid request type', 400);
+    }
 };

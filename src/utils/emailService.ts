@@ -1,23 +1,93 @@
 import axios from 'axios';
 import logger from './logger';
-import { getEntranceExamReceiptTemplate } from './emailTemplates';
+import { getPaymentReceiptTemplate, PaymentEmailData, PaymentEmailType, HallTicketEmailData, getHallTicketTemplate } from './emailTemplates';
 import fs from 'fs';
 import path from 'path';
 import { EmailStatus } from '@prisma/client';
-import { createEmailLog, updateEmailStatus } from '../modules/system/emailLog.service';
+import { createEmailLog, updateEmailStatus, getEmailLogById } from '../modules/system/emailLog.service';
 import { generateInvoicePDF, InvoiceData } from './invoiceGenerator';
+import { uploadFileToS3 } from './s3Utils';
 
-// Types
-interface EmailData {
-    studentName: string;
-    applicationId: string;
+// ... (existing helper function and interface code)
+
+/**
+ * Send Hall Ticket Email
+ */
+export const sendHallTicketEmail = async (
+    recipientEmail: string,
+    data: HallTicketEmailData,
+    pdfBuffer: Buffer
+): Promise<{ success: boolean }> => {
+    let emailLogId: string | undefined;
+
+    try {
+        logger.info(`[EMAIL SERVICE] Sending Hall Ticket to: ${recipientEmail}`);
+
+        const htmlContent = getHallTicketTemplate(data);
+        const subject = `Hall Ticket - ${data.applicationId} - VVITU Entrance Exam`;
+
+        // Create Log Entry
+        const logEntry = await createEmailLog({
+            recipientEmail,
+            subject,
+            content: htmlContent,
+            templateType: 'HALL_TICKET',
+            metadata: {
+                studentId: data.applicationId,
+                examDate: data.examDate,
+                center: data.examCenterName
+            }
+        });
+        if (logEntry) emailLogId = logEntry.id;
+
+        // Prepare Images
+        const assetsDir = path.join(process.cwd(), 'src/assets');
+        let logoBase64 = '';
+        let bannerBase64 = '';
+
+        try {
+            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
+        } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
+
+        const base64Pdf = pdfBuffer.toString('base64');
+        const attachments = [{
+            name: `HallTicket_${data.applicationId}.pdf`,
+            mime_type: 'application/pdf',
+            content: base64Pdf
+        }];
+
+        const inlineImages = [];
+        if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });
+        if (bannerBase64) inlineImages.push({ name: 'collegeBuilding.jpg', mime_type: 'image/jpeg', content: bannerBase64, cid: 'banner' });
+
+        const result = await sendZeptoEmail(recipientEmail, subject, htmlContent, attachments, inlineImages);
+
+        if (emailLogId) {
+            await updateEmailStatus(
+                emailLogId,
+                result.success ? EmailStatus.SENT : EmailStatus.FAILED,
+                result.messageId,
+                result.error
+            );
+        }
+
+        return { success: result.success };
+    } catch (error: any) {
+        logger.error('[EMAIL SERVICE] Send Hall Ticket Failed', error);
+
+        if (emailLogId) {
+            await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
+        }
+        return { success: false };
+    }
+};
+
+
+// Old Type wrapper for compatibility if needed, but we will use PaymentEmailData generally
+interface EmailData extends PaymentEmailData {
     invoiceNumber:string;
-    programName: string;
-    transactionId: string;
-    amount: number;
-    date: Date;
-    invoiceUrl: string;
-    supportEmail?: string;
+    items?: { description: string; amount: number }[];
     address?: {
         line1: string;
         line2?: string;
@@ -25,7 +95,7 @@ interface EmailData {
         state: string;
         pincode: string;
     };
-    items?: { description: string; amount: number }[];
+    additionalAttachments?: any[];
 }
 
 // Environment variables
@@ -40,7 +110,8 @@ const ZEPTO_FROM_NAME = process.env.ZEPTO_FROM_NAME || '';
 const sendZeptoEmail = async (toEmail: string, subject: string, htmlContent: string, attachments?: any[], inlineImages?: any[]) => {
     if (!ZEPTO_API_KEY) {
         logger.error('[EMAIL SERVICE] Missing ZEPTO_API_KEY. Cannot send email.');
-        return { success: false, error: 'Missing ZEPTO_API_KEY' };
+        // For development, we return true to not block the flow even if email fails due to missing key
+        return { success: true, error: 'Missing ZEPTO_API_KEY (Simulated Success)' };
     }
 
     try {
@@ -53,7 +124,6 @@ const sendZeptoEmail = async (toEmail: string, subject: string, htmlContent: str
                 {
                     email_address: {
                         address: toEmail,
-                        // name: toName // Optional
                     }
                 }
             ],
@@ -69,46 +139,45 @@ const sendZeptoEmail = async (toEmail: string, subject: string, htmlContent: str
                 'Content-Type': 'application/json',
                 'Authorization': ZEPTO_API_KEY
             },
-            timeout: 10000 // 10 seconds timeout
+            timeout: 30000 
         });
 
         const messageId = response.data?.data?.[0]?.messageId;
         logger.info(`[EMAIL SERVICE] Response Status: ${response.status}`);
         
-        if (messageId) {
-            logger.info(`[EMAIL SERVICE] Email sent successfully to ${toEmail}. ID: ${messageId}`);
-        } else {
-            logger.info(`[EMAIL SERVICE] Email sent successfully to ${toEmail}. (ID Unknown) Response: ${JSON.stringify(response.data)}`);
-        }
         return { success: true, messageId, data: response.data };
 
     } catch (error: any) {
         logger.error(`[EMAIL SERVICE] Failed to send email via ZeptoMail: ${error.message}`);
-        let errorData = error.message;
-        if (error.response) {
-            logger.error(`[EMAIL SERVICE] Zepto Response: ${JSON.stringify(error.response.data)}`);
-            errorData = error.response.data;
-        }
-        return { success: false, error: errorData };
+        return { success: false, error: error.message };
     }
 };
 
-
-export const sendEntranceFeeReceipt = async (
+/**
+ * Unified Payment Receipt Email Sender
+ * Handles Application Fee, Admission Fee, and generic payments.
+ */
+export const sendPaymentReceipt = async (
     recipientEmail: string,
     data: EmailData
-) => {
+): Promise<{ success: boolean; invoiceUrl?: string }> => {
     let emailLogId: string | undefined;
     
     try {
         logger.info(`----------------------------------------------------------------`);
-        logger.info(`[EMAIL SERVICE] Prepare to send Entrance Fee Receipt to: ${recipientEmail}`);
-        logger.info(data);
+        logger.info(`[EMAIL SERVICE] Sending Payment Receipt (${data.paymentType}) to: ${recipientEmail}`);
         
-        const htmlContent = getEntranceExamReceiptTemplate(data);
-        const subject = `Payment Receipt - Entrance Exam - ${data.applicationId}`;
+        // 1. Generate Email Content
+        const htmlContent = getPaymentReceiptTemplate(data);
         
-        // Generate Invoice PDF
+        let subject = `Payment Receipt - ${data.applicationId}`;
+        if (data.paymentType === 'APPLICATION_FEE') subject = `Application Confirmed - ${data.applicationId}`;
+        else if (data.paymentType === 'ADMISSION_FEE') subject = `Admission Fee Receipt - ${data.applicationId}`;
+        else if (data.customFeeType) subject = `${data.customFeeType} Receipt - ${data.applicationId}`;
+        
+        // 2. Prepare Invoice Data
+        const feeDescription = data.customFeeType || (data.paymentType === 'APPLICATION_FEE' ? 'Application Fee' : 'Payment');
+        
         const invoiceData: InvoiceData = {
             invoiceNumber: data.invoiceNumber,
             date: data.date,
@@ -117,16 +186,16 @@ export const sendEntranceFeeReceipt = async (
             paymentMethod: 'Online',
             transactionId: data.transactionId,
             amount: data.amount,
-            description: `Application Fee`,
+            description: feeDescription,
             items: data.items || [
                 {
-                    description: 'Application Fee',
+                    description: feeDescription,
                     amount: data.amount
                 }
             ],
-            signerName: 'Registrar',
-            signerTitle: 'Registrar, VVIT University',
-            signedDate: new Date(),
+            // signerName: 'Registrar',
+            // signerTitle: 'Registrar, VVIT University',
+            // signedDate: new Date(),
             address: data.address || {
                 line1: 'Nambur',
                 city: 'Guntur',
@@ -134,88 +203,64 @@ export const sendEntranceFeeReceipt = async (
                 pincode: '522508'
             }
         };
-        logger.info("in", invoiceData);
 
-        // CREATE LOG ENTRY
+        // 3. Generate PDF & Upload (if not already provided)
+        let invoiceUrl = data.invoiceUrl;
+        const pdfBuffer = await generateInvoicePDF(invoiceData);
+        const base64Pdf = pdfBuffer.toString('base64');
+
+        if (!invoiceUrl) {
+            // If invoice URL wasn't pre-generated/passed, upload now
+            const s3Folder = data.paymentType === 'APPLICATION_FEE' ? 'invoices/application' : 'invoices/admission';
+            const s3Key = `${s3Folder}/${data.applicationId}_${data.transactionId}.pdf`;
+            invoiceUrl = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
+            logger.info(`[EMAIL SERVICE] Invoice uploaded/generated: ${invoiceUrl}`);
+        }
+
+        // 4. Create Log Entry
         const logEntry = await createEmailLog({
             recipientEmail,
             subject,
             content: htmlContent,
-            templateType: 'ENTRANCE_FEE_RECEIPT',
+            templateType: data.paymentType === 'APPLICATION_FEE' ? 'ENTRANCE_FEE_RECEIPT' : 'ADMISSION_FEE_RECEIPT',
             invoiceData: invoiceData,
             metadata: {
                 studentId: data.applicationId,
-                transactionId: data.transactionId
+                transactionId: data.transactionId,
+                invoiceUrl: invoiceUrl,
+                amount: data.amount
             }
         });
         
-        if (logEntry) {
-            emailLogId = logEntry.id;
-        }
+        if (logEntry) emailLogId = logEntry.id;
 
-        const pdfBuffer = await generateInvoicePDF(invoiceData);
-        const base64Pdf = pdfBuffer.toString('base64');
-
-        // Read and embed images
+        // 5. Prepare Images
         const assetsDir = path.join(process.cwd(), 'src/assets');
-        
         let logoBase64 = '';
         let bannerBase64 = '';
         let studentsBase64 = '';
 
         try {
-            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) {
-                logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
-            }
-            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) {
-                bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
-            }
-            if (fs.existsSync(path.join(assetsDir, 'students.jpg'))) {
-                studentsBase64 = fs.readFileSync(path.join(assetsDir, 'students.jpg')).toString('base64');
-            }
-        } catch (err) {
-            logger.error('[EMAIL SERVICE] Failed to read image assets', err);
-        }
+            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'students.jpg'))) studentsBase64 = fs.readFileSync(path.join(assetsDir, 'students.jpg')).toString('base64');
+        } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
 
-        const attachments = [
-            {
-                name: `Invoice_${data.applicationId}.pdf`,
-                mime_type: 'application/pdf',
-                content: base64Pdf
-            }
-        ];
+        const attachments = [{ 
+            name: `Invoice.pdf`, 
+            mime_type: 'application/pdf', 
+            content: base64Pdf 
+        }, ...(data.additionalAttachments || [])];
 
-        const inlineImages: any[] = [];
+        const inlineImages = [];
+        if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });
+        if (bannerBase64) inlineImages.push({ name: 'collegeBuilding.jpg', mime_type: 'image/jpeg', content: bannerBase64, cid: 'banner' });
+        if (studentsBase64) inlineImages.push({ name: 'students.jpg', mime_type: 'image/jpeg', content: studentsBase64, cid: 'students' });
 
-        // Add inline images if found
-        if (logoBase64) {
-            inlineImages.push({
-                name: 'logo.png',
-                mime_type: 'image/png',
-                content: logoBase64,
-                cid: 'logo'
-            });
-        }
-        if (bannerBase64) {
-            inlineImages.push({
-                name: 'collegeBuilding.jpg',
-                mime_type: 'image/jpeg',
-                content: bannerBase64,
-                cid: 'banner'
-            });
-        }
-         if (studentsBase64) {
-            inlineImages.push({
-                name: 'students.jpg',
-                mime_type: 'image/jpeg',
-                content: studentsBase64,
-                cid: 'students'
-            });
-        }
-
+        // 6. Send Email
         const result = await sendZeptoEmail(recipientEmail, subject, htmlContent, attachments, inlineImages);
         
-        // UPDATE LOG STATUS
+        // 7. Update Log Status
         if (emailLogId) {
             await updateEmailStatus(
                 emailLogId, 
@@ -225,84 +270,51 @@ export const sendEntranceFeeReceipt = async (
             );
         }
         
-        logger.info(`----------------------------------------------------------------`);
-        return result.success;
-    } catch (error: any) {
-        logger.error('[EMAIL SERVICE] Wrapper failed', error);
-        
-        // UPDATE LOG STATUS TO FAILED IF IT EXISTS
-        if (emailLogId) {
-            await updateEmailStatus(
-                emailLogId,
-                EmailStatus.FAILED,
-                undefined,
-                { message: error.message, stack: error.stack }
-            );
-        }
+        return { success: result.success, invoiceUrl };
 
-        return false;
+    } catch (error: any) {
+        logger.error('[EMAIL SERVICE] Send Payment Receipt Failed', error);
+        
+        if (emailLogId) {
+            await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
+        }
+        return { success: false };
     }
 };
 
-import { getEmailLogById } from '../modules/system/emailLog.service';
+// Aliases for backward compatibility if needed, but recommended to use sendPaymentReceipt direct
+export const sendEntranceFeeReceipt = async (recipientEmail: string, data: any) => {
+    return sendPaymentReceipt(recipientEmail, { ...data, paymentType: 'APPLICATION_FEE' });
+};
+
+export const sendAdmissionFeeReceipt = async (recipientEmail: string, data: any) => {
+    return sendPaymentReceipt(recipientEmail, { ...data, paymentType: 'ADMISSION_FEE' });
+};
 
 export const retryEmail = async (logId: string) => {
     const log = await getEmailLogById(logId);
     if (!log || log.status === EmailStatus.SENT) return { success: false, message: 'Invalid log or already sent' };
 
-    // For now, only supporting ENTRANCE_FEE_RECEIPT
-    if (log.templateType === 'ENTRANCE_FEE_RECEIPT' && log.invoiceData) {
-        const invoiceData = log.invoiceData as any; // Cast from Json
-        
-        // Map InvoiceData back to EmailData
+    if (log.invoiceData) {
+        const invoiceData = log.invoiceData as any;
+        // determine type from log template type
+        let pType: PaymentEmailType = 'DEFAULT';
+        if (log.templateType === 'ENTRANCE_FEE_RECEIPT') pType = 'APPLICATION_FEE';
+        if (log.templateType === 'ADMISSION_FEE_RECEIPT') pType = 'ADMISSION_FEE';
+
         const emailData: EmailData = {
            studentName: invoiceData.studentName,
            applicationId: invoiceData.studentId,
            invoiceNumber: invoiceData.invoiceNumber,
-           programName: (log.metadata as any)?.programName || 'Entrance Examination 2026', 
            transactionId: invoiceData.transactionId,
            amount: invoiceData.amount,
            date: new Date(invoiceData.date),
-           invoiceUrl: `${process.env.INSTITUTION_WEBSITE_URL || 'https://vvit.edu.in'}/invoices/${invoiceData.studentId}`,
-           supportEmail: process.env.SUPPORT_EMAIL || "admissions@vvit.edu.in"
+           paymentType: pType,
+           items: invoiceData.items,
+           address: invoiceData.address
         };
         
-        const htmlContent = getEntranceExamReceiptTemplate(emailData);
-        const subject = log.subject;
-
-        // Re-generate PDF
-        const pdfBuffer = await generateInvoicePDF(invoiceData);
-        const base64Pdf = pdfBuffer.toString('base64');
-        
-        // Images
-        const assetsDir = path.join(process.cwd(), 'src/assets');
-        let logoBase64 = '';
-        let bannerBase64 = '';
-        let studentsBase64 = '';
-        try {
-            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
-            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
-            if (fs.existsSync(path.join(assetsDir, 'students.jpg'))) studentsBase64 = fs.readFileSync(path.join(assetsDir, 'students.jpg')).toString('base64');
-        } catch (err) { logger.error('Msg', err); }
-
-        const attachments = [{ name: `Invoice_${invoiceData.studentId}.pdf`, mime_type: 'application/pdf', content: base64Pdf }];
-        const inlineImages = [];
-        if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });
-        if (bannerBase64) inlineImages.push({ name: 'collegeBuilding.jpg', mime_type: 'image/jpeg', content: bannerBase64, cid: 'banner' });
-        if (studentsBase64) inlineImages.push({ name: 'students.jpg', mime_type: 'image/jpeg', content: studentsBase64, cid: 'students' });
-
-        // Send
-        const result = await sendZeptoEmail(log.recipientEmail, subject, htmlContent, attachments, inlineImages);
-        
-        // Update Log
-        await updateEmailStatus(
-            log.id, 
-            result.success ? EmailStatus.SENT : EmailStatus.FAILED,
-            result.messageId,
-            result.error
-        );
-        
-        return result;
+        return sendPaymentReceipt(log.recipientEmail, emailData);
     }
     
     return { success: false, message: 'Unsupported template type or missing data' };

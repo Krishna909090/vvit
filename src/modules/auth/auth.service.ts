@@ -3,12 +3,13 @@ import jwt from "jsonwebtoken";
 import axios from "axios";
 import bcrypt from "bcryptjs";
 import prisma from '../../config/prisma';
-import { Role } from "@prisma/client";
+import { Role } from '../../constants/roles'; // Updated Import
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { sendBsnlOtp, sendZeptoEmail } from '../integration/integration.service';
 import { MESSAGES } from '../../constants/messages';
 import { maskPhone, maskEmail } from '../../utils/mask';
+import { getUserPermissions, getUserModules } from '../rbac/services/rbac.service';
 
 // JWT_SECRET is validated on startup by envValidator - no fallback needed
 const JWT_SECRET = process.env.JWT_SECRET!;
@@ -46,12 +47,27 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
 
   if (!user) {
     if (phone) {
+      // 1. Create User
       user = await prisma.user.create({
         data: {
           phone,
           role: Role.STUDENT,
         },
       });
+
+      // 2. Assign to Student Group
+      const studentGroup = await prisma.group.findUnique({ where: { name: 'StudentGroup' } });
+      if (studentGroup) {
+        await prisma.userGroup.create({
+          data: {
+            userId: user.id,
+            groupId: studentGroup.id,
+          },
+        });
+      } else {
+        logger.error(`[sendOtp] CRITICAL: StudentGroup not found. User ${user.id} created without group.`);
+      }
+
       isNewUser = true;
       logger.info(
         `[sendOtp] New STUDENT user created: id=${user.id}, phone=${maskPhone(phone)}`
@@ -252,11 +268,26 @@ export const verifyOtp = async (
     )}, email=${maskEmail(user.email)}`
   );
 
+  // Fetch Permissions and Modules
+  const { permissions } = await getUserPermissions(user.id);
+  const modules = await getUserModules(permissions);
+
+  // Group permissions by module
+  // Group permissions by module
+  const groupedPermissions = permissions.reduce((acc: any, p: string) => {
+    const key = p.split('.')[0];
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(p);
+    return acc;
+  }, {});
+
   return {
     token,
     role: user.role,
     id: user.id,
-    phone:user.phone
+    phone: user.phone,
+    permissions: groupedPermissions,
+    modules
   };
 };
 
@@ -272,7 +303,7 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
   if (!user) throw new AppError("Invalid credentials", 400);
 
   // Students use OTP
-  if (user.role === Role.STUDENT) throw new AppError("Students must login via OTP", 400);
+  if (user?.role === Role.STUDENT) throw new AppError("Students must login via OTP", 400);
 
   if (!user.password) throw new AppError("Password login not enabled for this user", 400);
 
@@ -287,7 +318,22 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
 
   logger.info(`[login] Password login success: userId=${user.id}`);
 
-  return { token, role: user.role, id: user.id };
+  // Fetch Permissions and Modules
+  const { permissions } = await getUserPermissions(user.id);
+  const modules = await getUserModules(permissions);
+
+  // Group permissions by module
+  // Group permissions by module
+  const groupedPermissions = permissions.reduce((acc: any, p: string) => {
+    const key = p.split('.')[0];
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(p);
+    return acc;
+  }, {});
+
+  logger.info(`[login] Returning data: role=${user.role}, permissionsCount=${permissions.length}, modulesCount=${modules.length}`);
+
+  return { token, role: user.role, id: user.id, permissions: groupedPermissions, modules };
 };
 
 export const generateAadhaarOtp = async (idNumber: string) => {

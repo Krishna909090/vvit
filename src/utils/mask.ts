@@ -14,3 +14,10 @@ export const maskEmail = (email?: string | null): string => {
   if (local.length <= 1) return `*...@${domain}`;
   return `${local[0]}***@${domain}`;
 };
+
+export const maskAadhaar = (aadhaar?: string | null): string => {
+    if (!aadhaar) return "N/A";
+    const trimmed = aadhaar.toString().trim().replace(/\s/g, ''); // Remove spaces
+    if (trimmed.length <= 4) return "XXXX";
+    return "XXXX XXXX " + trimmed.slice(-4);
+};

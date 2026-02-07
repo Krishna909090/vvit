@@ -3,6 +3,8 @@ import path from 'path'
 import fs from 'fs'
 import { format } from 'date-fns'
 
+/* ================= INTERFACES ================= */
+
 export interface InvoiceItem {
   description: string
   amount: number
@@ -16,14 +18,8 @@ export interface InvoiceData {
   paymentMethod: string
   transactionId: string
   amount: number
-  description: string // Fallback or main subject
-  
-  items?: InvoiceItem[] // New Support for multiple items
-
-  signerName?: string          
-  signerTitle?: string         
-  signedDate?: Date           
-
+  description: string
+  items?: InvoiceItem[]
   address: {
     line1: string
     line2?: string
@@ -33,34 +29,39 @@ export interface InvoiceData {
   }
 }
 
-export const generateInvoicePDF = async (data: InvoiceData): Promise<Buffer> => {
+/* ================= MAIN ================= */
+
+export const generateInvoicePDF = async (
+  data: InvoiceData
+): Promise<Buffer> => {
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: 'A4', margin: 40 }) // Reduced margin slightly
-      const buffers: Buffer[] = []
+      const doc = new PDFDocument({
+        size: 'A4',
+        margin: 30
+      })
 
+      const buffers: Buffer[] = []
       doc.on('data', buffers.push.bind(buffers))
       doc.on('end', () => resolve(Buffer.concat(buffers)))
       doc.on('error', reject)
 
-      // Background Color (simulated by a large rectangle, optional, but paper is usually white)
-      // doc.rect(0, 0, doc.page.width, doc.page.height).fill('#f8f9fa'); 
+      // Top Half - Student Copy
+      drawInvoiceInstance(doc, data, 0, 'STUDENT COPY')
 
-      // 1. Header Section
-      drawHeader(doc)
-
-      // 2. Info Grid (Billed To / Invoice Details)
-      // We wrap this in a rounded rectangle container style if desired, or just whitespace
-      drawInfoGrid(doc, data)
-
-      // 3. Subject & Big Total Bar
-      drawSubjectAndTotalBar(doc, data)
-
-      // 4. Items Table
-      drawItemsTable(doc, data)
-
-      // 5. Footer
-      drawFooter(doc)
+      // Cut Line (Dashed)
+      const midY = 421;
+      doc
+         .strokeColor('#ccc')
+         .dash(5, { space: 5 })
+         .moveTo(0, midY)
+         .lineTo(595, midY)
+         .stroke();
+      
+      doc.undash(); // Reset dash
+      
+      // Bottom Half - Office Copy
+      drawInvoiceInstance(doc, data, 421, 'OFFICE COPY')
 
       doc.end()
     } catch (err) {
@@ -69,234 +70,226 @@ export const generateInvoicePDF = async (data: InvoiceData): Promise<Buffer> => 
   })
 }
 
+/* ================= DRAWING LOGIC ================= */
+
+function drawInvoiceInstance(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number, copyLabel: string) {
+    drawHeader(doc, offsetY)
+    drawWatermark(doc, copyLabel, offsetY)
+    drawInfoGrid(doc, data, offsetY)
+    drawSubjectBar(doc, data, offsetY)
+    drawItemsTable(doc, data, offsetY)
+    drawFooter(doc, offsetY)
+}
+
+function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) {
+    doc.save()
+    doc.font('Helvetica-Bold')
+       .fontSize(10)
+       .fillColor('#e74c3c')
+       .text(label, 0, offsetY + 70, {
+           align: 'center',
+           width: doc.page.width
+       })
+    doc.restore()
+}
+
 /* ================= HEADER ================= */
-function drawHeader(doc: PDFKit.PDFDocument) {
+
+function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
   const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
 
-  // University Header - Centered at top
+  // University name
   doc
     .font('Helvetica-Bold')
-    .fontSize(12)
-    .fillColor('#C0392B') // VVIT Red
-    .text('VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY', 0, 20, { align: 'center', width: doc.page.width })
+    .fontSize(11)
+    .fillColor('#C0392B')
+    .text(
+      'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
+      0,
+      topY + 20,
+      { align: 'center', width: doc.page.width }
+    )
 
-  // Logo (Left)
+  // Logo (left)
   if (fs.existsSync(logoPath)) {
-    doc.image(logoPath, 40, 50, { width: 80 })
+    doc.image(logoPath, 30, topY + 45, { width: 60 })
   } else {
-    // Fallback if logo missing
     doc
       .font('Helvetica-Bold')
-      .fontSize(20)
-      .fillColor('#C0392B') // Red color like VVIT
-      .text('VVIT', 40, 60)
-      .fontSize(10)
-      .text('UNIVERSITY', 40, 85)
+      .fontSize(14)
+      .fillColor('#C0392B')
+      .text('VVIT', 30, topY + 55)
   }
 
-  // Address (Right)
-  const rightX = 350
-  const topY = 60
-
-  doc.font('Helvetica').fontSize(9).fillColor('#555555')
-
-  doc.text('VVIT University, Uppalapadu Road', rightX, topY, { align: 'right' })
-  doc.text('Nambur, DT, Pedhakakani Mandal,', rightX, topY + 14, { align: 'right' })
-  doc.text('Guntur, Andhra Pradesh 522508', rightX, topY + 28, { align: 'right' })
+  // Address (right – unchanged content)
+  doc
+    .font('Helvetica')
+    .fontSize(8)
+    .fillColor('#555')
+    .text(
+      'VVIT University, Uppalapadu Road,\nNambur, DT, Pedhakakani Mandal,\nGuntur, Andhra Pradesh – 522508',
+      350,
+      topY + 48,
+      { align: 'right' }
+    )
 }
 
 /* ================= INFO GRID ================= */
-function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData) {
-  // Container Box (Rounded) - Optional, mimicking the "card" look
-  const containerTop = 130
-  const containerHeight = 150
-  const containerWidth = 515
-  
-  // Draw card border/bg
+
+function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
+  const top = offsetY + 95
+
   doc
-    .roundedRect(40, containerTop, containerWidth, 135, 8) 
-    .strokeColor('#f0f0f0')
-    .lineWidth(1)
+    .roundedRect(30, top, 535, 85, 6)
+    .strokeColor('#eaeaea')
     .stroke()
 
-  const startY = containerTop + 20
-  const leftColX = 60
-  const rightColX = 320
+  const leftX = 45
+  const rightX = 320
+  let y = top + 12
 
-  // ... (content omitted for brevity in thought process, but included in tool call) ...
-  // Since I can't selectively replace multiple disconnected chunks easily in one ReplaceFileContent without context, 
-  // I will just locate the specific lines to change Y positions.
+  doc.font('Helvetica-Bold').fontSize(8).fillColor('#7f8c8d')
+  doc.text('BILLED TO', leftX, y)
+  doc.text('INVOICE DETAILS', rightX, y)
 
-// Actually, ReplaceFileContent works best on a single block. 
-// I will target the InfoGrid function first to fix the rect height.
+  y += 12
 
+  doc.font('Helvetica-Bold').fontSize(9).fillColor('#000')
+  doc.text(data.studentName, leftX, y)
 
-  // --- Left Column: Billed To ---
-  // Ensure font is set before text
-  doc.font('Helvetica-Bold').fontSize(10).fillColor('#7f8c8d')
-  doc.text('Billed To:', leftColX, startY)
-  
-  doc.font('Helvetica-Bold').fontSize(10).fillColor('#333333')
-  doc.text(data.studentName, leftColX, startY + 20)
+  doc.font('Helvetica').fontSize(9).fillColor('#333')
+  doc.text(`Student ID: ${data.studentId}`, leftX, y + 12)
+  doc.text(
+    `${data.address.line1}${data.address.line2 ? ', ' + data.address.line2 : ''}`,
+    leftX,
+    y + 24
+  )
+  doc.text(
+    `${data.address.city}, ${data.address.state} - ${data.address.pincode}`,
+    leftX,
+    y + 36
+  )
 
-  doc.font('Helvetica').fontSize(10).fillColor('#555555')
-  doc.text(`Student ID: ${data.studentId}`, leftColX, startY + 35)
-  doc.text(data.address.line1, leftColX, startY + 50)
-  
-  // Handle optional address line 2 if present
-  let cityStateY = startY + 65
-  if(data.address.line2) {
-      doc.text(data.address.line2, leftColX, cityStateY)
-      cityStateY += 15
-  }
-
-  const addrCheck = [data.address.city, data.address.state, data.address.pincode].filter(Boolean).join(', ')
-  doc.text(addrCheck, leftColX, cityStateY)
-
-  // --- Right Column: Invoice Details ---
-  doc.font('Helvetica-Bold').fontSize(10).fillColor('#7f8c8d')
-  doc.text('Invoice Details:', rightColX, startY)
-  
-  const rightLabelX = rightColX
-  const rightValueX = rightColX + 90
-  const rowH = 15
-  let currentY = startY + 20
-
-  // Invoice No
-  doc.font('Helvetica').fillColor('#555555').text('Invoice No', rightLabelX, currentY)
-  doc.text(': ' + data.invoiceNumber, rightValueX, currentY)
-  currentY += rowH
-
-  // Date
-  doc.text('Date', rightLabelX, currentY)
-  doc.text(': ' + format(data.date, 'dd/MM/yyyy'), rightValueX, currentY)
-  currentY += rowH
-
-  // Transaction ID
-  doc.text('Transaction ID', rightLabelX, currentY)
-  // Ensure long transaction IDs do not wrap uglily, though usually they fit
-  doc.text(': ' + data.transactionId, rightValueX, currentY)
-  currentY += rowH
-
-  // Payment Method
-  doc.text('Payment Method', rightLabelX, currentY)
-  doc.text(': ' + data.paymentMethod, rightValueX, currentY)
+  doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, y)
+  doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y + 12)
+  doc.text(`Txn ID: ${data.transactionId}`, rightX, y + 24)
+  doc.text(`Payment: ${data.paymentMethod}`, rightX, y + 36)
 }
 
-/* ================= SUBJECT & TOTAL BAR ================= */
-function drawSubjectAndTotalBar(doc: PDFKit.PDFDocument, data: InvoiceData) {
-  const y = 295 // Increased spacing below Info Grid
-  const subjectX = 60
-  const dateX = 320
+/* ================= SUBJECT BAR ================= */
 
-  // Subject Label
-  doc.font('Helvetica').fontSize(9).fillColor('#7f8c8d')
-  doc.text('Subject', subjectX, y)
-  // Subject Value
-  doc.font('Helvetica-Bold').fontSize(10).fillColor('#000000')
-  doc.text(data.description, subjectX, y + 15)
+function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
+  const y = offsetY + 195
+  const barX = 30
+  const barWidth = 535
+  const padding = 15
 
-  // Invoice Date Label
-  doc.font('Helvetica').fontSize(9).fillColor('#7f8c8d')
-  doc.text('Invoice date', 40, y, { align: 'right', width: 515 })
-  // Invoice Date Value
-  doc.font('Helvetica-Bold').fontSize(10).fillColor('#000000')
-  doc.text(format(data.date, 'dd MMM, yyyy'), 40, y + 15, { align: 'right', width: 515 })
+  // Draw background
+  doc
+    .save()
+    .roundedRect(barX, y, barWidth, 32, 6)
+    .fill('#f8f9fa')
+    .restore()
 
+  // Subject (left)
+  doc
+    .fillColor('#000')
+    .font('Helvetica-Bold')
+    .fontSize(9)
+    .text(`Subject: ${data.description}`, barX + padding, y + 10, {
+      width: barWidth - 120 // reserve space for amount
+    })
 
-}
-
-/* ================= TABLE ================= */
-function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData) {
-  const tableTop = 360
-  
-  // Header Row Line (Top)
-  drawLine(doc, tableTop)
-  
-  // Header Text
-  const sNoX = 60
-  const descX = 160 // Moved right a bit for spacing
-  const amtX = 545 // Right aligned anchor
-
-  doc.font('Helvetica-Bold').fontSize(8).fillColor('#95a5a6')
-  doc.text('S.NO', sNoX, tableTop + 8)
-  doc.text('DESCRIPTION', descX, tableTop + 8)
-  
-  const amtLabel = "AMOUNT (INR)"
-  doc.text(amtLabel, amtX - doc.widthOfString(amtLabel), tableTop + 8)
-
-  // Header Row Line (Bottom)
-  drawLine(doc, tableTop + 25)
-
-  // Items
-  let y = tableTop + 40
-  const items = data.items && data.items.length > 0 
-                ? data.items 
-                : [{ description: data.description, amount: data.amount }] // Fallback
-
-  doc.font('Helvetica').fontSize(10).fillColor('#2c3e50') // Dark text for items
-
-  items.forEach((item, index) => {
-    // S.No
-    doc.text((index + 1).toString(), sNoX + 5, y)
-    
-    // Description
-    doc.text(item.description, descX, y)
-    
-    // Amount - REMOVED 'Rs. ' prefix as requested
-    const amtStr = item.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })
-    doc.text(amtStr, amtX - doc.widthOfString(amtStr), y)
-    
-    y += 25
+  // Amount (RIGHT – SAFE positioning)
+  const totalStr = data.amount.toLocaleString('en-IN', {
+    minimumFractionDigits: 2
   })
 
-  // Final Divider
-  drawLine(doc, y + 10)
+  const textWidth = doc.widthOfString(totalStr)
 
-  // --- FOOTER TOTALS ---
-  y += 25 // Spacing
-  const labelX = 380
-  const valueAnchorX = 545
+  doc
+    .fontSize(10)
+    .text(
+      totalStr,
+      barX + barWidth - padding - textWidth,
+      y + 9
+    )
+}
 
-  doc.font('Helvetica').fontSize(10).fillColor('#000000')
 
-  // Subtotal
-  doc.text('Subtotal', labelX, y)
-  const subTotalStr = `${data.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
-  doc.text(subTotalStr, valueAnchorX - doc.widthOfString(subTotalStr), y)
-  
-  // Tax Removed
+/* ================= ITEMS TABLE ================= */
 
-  drawLine(doc, y + 20, 360, 555) // Small divider for total
+function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
+  let y = offsetY + 240
 
-  y += 25
-  // Total
-  doc.font('Helvetica-Bold').fontSize(11).fillColor('#000000')
-  doc.text('Total', labelX, y)
-  const totalStr = `Rs. ${data.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
-  doc.text(totalStr, valueAnchorX - doc.widthOfString(totalStr), y)
+  drawLine(doc, y)
+  y += 6
+
+  doc.font('Helvetica-Bold').fontSize(8).fillColor('#7f8c8d')
+  doc.text('S.NO', 45, y)
+  doc.text('DESCRIPTION', 90, y)
+  doc.text('AMOUNT (INR)', 460, y)
+
+  y += 12
+  drawLine(doc, y)
+  y += 8
+
+  const items =
+    data.items && data.items.length
+      ? data.items
+      : [{ description: data.description, amount: data.amount }]
+
+  doc.font('Helvetica').fontSize(9).fillColor('#000')
+
+  items.forEach((item, index) => {
+    doc.text(String(index + 1), 45, y)
+    doc.text(item.description, 90, y, { width: 350 })
+    doc.text(
+      item.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
+      460,
+      y
+    )
+    y += 18
+  })
+
+  drawLine(doc, y + 4)
+  y += 8
+
+  // TOTAL Row
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#000')
+  doc.text('TOTAL', 90, y)
+  doc.text(
+    data.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
+    460,
+    y
+  )
 }
 
 /* ================= FOOTER ================= */
-function drawFooter(doc: PDFKit.PDFDocument) {
-  const bottomY = 750
-  
+
+function drawFooter(doc: PDFKit.PDFDocument, offsetY: number) {
   doc
     .font('Helvetica')
-    .fontSize(9)
-    .fillColor('#95a5a6')
+    .fontSize(8)
+    .fillColor('#999')
     .text(
       'This is a system generated invoice and does not require a physical signature',
       0,
-      bottomY,
+      offsetY + 380,
       { align: 'center', width: doc.page.width }
     )
 }
 
-/* ================= HELPERS ================= */
-function drawLine(doc: PDFKit.PDFDocument, y: number, startX = 40, endX = 555) {
+/* ================= HELPER ================= */
+
+function drawLine(
+  doc: PDFKit.PDFDocument,
+  y: number,
+  startX = 30,
+  endX = 565
+) {
   doc
-    .strokeColor('#ecf0f1') // Very light grey Line
+    .strokeColor('#eaeaea')
     .lineWidth(1)
     .moveTo(startX, y)
     .lineTo(endX, y)

@@ -13,6 +13,7 @@ import { encrypt, decrypt } from '../../utils/encryption';
 import { formatDate, formatTime, formatDateTime } from '../../utils/dateFormatter';
 import { generateHallTicketPDF } from '../../utils/pdfGenerator';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
+import { sendHallTicketEmail } from '../../utils/emailService';
 
 /* -------------------------------------------------------------------------- */
 /*                               HELPER FUNCTIONS                             */
@@ -393,7 +394,7 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
         AdmissionStatus.EXAM_SCHEDULED
     ];
     
-    if (!student.admissionDetails || !validStatuses.includes(student.admissionDetails.status)) {
+    if (!student.admissionDetails || !student.admissionDetails.status || !validStatuses.includes(student.admissionDetails.status)) {
         throw new AppError(
             `Student admission status (${student.admissionDetails?.status}) is not eligible for exam attendance. Must be TEST_FEE_PAID or HALL_TICKET_GENERATED.`,
             400
@@ -452,7 +453,7 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
     }
 
     // STRICT VALIDATION 6: Check scan time validity (attendance record should not be too old)
-    const scanTime = new Date(attendanceRecord.scannedAt);
+    const scanTime = new Date(attendanceRecord.scannedAt ?? new Date());
     const now = new Date();
     const hoursSinceScan = (now.getTime() - scanTime.getTime()) / (1000 * 60 * 60);
     
@@ -550,6 +551,28 @@ export const updateStudentExamScore = async (studentId: string, score: number, c
             data: {
                 examScore: Number(score),
                 isQualified
+            }
+        });
+
+        // Fetch user application Id to use as hall ticket number
+        const student = await tx.student.findUnique({
+             where: { id: studentId },
+             select: { applicationId: true }
+        });
+
+        // Store in AcademicQualification as requested
+        // Required fields: level, board, yearOfPassing
+        await tx.academicQualification.create({
+            data: {
+                studentId,
+                level: 'VVITAT',
+                gpaOrMarks: score.toString(),
+                board: 'VVIT', // Defaulting as it's required
+                yearOfPassing: new Date().getFullYear().toString(), // Defaulting as it's required
+                hallTicketNumber: student?.applicationId || 'UNKNOWN', // Using Application ID as Hall Ticket Number
+                percentage: Number(score), // Also storing as float for potential querying
+                createdBy: adminId,
+                updatedBy: adminId
             }
         });
 
@@ -778,7 +801,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         });
         if (!slot) throw new AppError(MESSAGES.ERROR.SLOT_NOT_FOUND, 404);
 
-        if (slot.filled >= slot.capacity) {
+        if ((slot.filled ?? 0) >= slot.capacity) {
             throw new AppError(MESSAGES.ERROR.SLOT_FULL, 400);
         }
 
@@ -901,6 +924,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         const rawS3Url = await uploadFileToS3(pdfBuffer, key, 'application/pdf');
 
         // Update the Hall Ticket record with the URL
+        // Update the Hall Ticket record with the URL
         if (rawS3Url) {
             await prisma.hallTicket.update({
                 where: { id: result.hallTicketId },
@@ -915,8 +939,31 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
                 hallTicketUrl = rawS3Url; // Fallback
             }
         }
+        
+        // Send Hall Ticket Email
+        if (student.email) {
+            try {
+                await sendHallTicketEmail(
+                     student.email,
+                     {
+                         studentName: student.name,
+                         applicationId: student.applicationId || '',
+                         examDate: formatDate(result.slot.date) || '',
+                         startTime: formatTime(result.slot.startTime) || '',
+                         examCenterName: result.slot.examCenter.name || '',
+                         examCenterAddress: result.slot.examCenter.address || 'Refer Hall Ticket for Address',
+                     },
+                     pdfBuffer
+                 );
+                 logger.info(`[bookExamSlot] Hall Ticket email sent to ${student.email}`);
+            } catch (emailErr) {
+                logger.error(`[bookExamSlot] Failed to send Hall Ticket email: ${emailErr}`);
+                // Non-blocking
+            }
+        }
 
     } catch (e) {
+// ... existing code ...
         logger.error(`[bookExamSlot] Failed to generate/upload PDF for student ${studentId}. Slot is booked but ticket missing URL. Error: ${e}`);
         // We do NOT throw here, so the booking remains valid. 
         // The user can later "download hall ticket" which should handle generation on the fly if missing.
@@ -1101,7 +1148,7 @@ export const updateExamSlot = async (id: string, data: any, userId?: string) => 
     const slot = await prisma.examSlot.findUnique({ where: { id } });
     if (!slot) throw new AppError(MESSAGES.ERROR.SLOT_NOT_FOUND, 404);
 
-    if (data.capacity && data.capacity < slot.filled) {
+    if (data.capacity && data.capacity < (slot.filled ?? 0)) {
         throw new AppError(MESSAGES.ERROR.CAPACITY_REDUCTION_ERROR, 400);
     }
 
@@ -1153,7 +1200,7 @@ export const deleteExamSlot = async (id: string) => {
         throw new AppError(MESSAGES.ERROR.SLOT_NOT_FOUND, 404);
     }
 
-    if (slot.filled > 0) {
+    if ((slot.filled ?? 0) > 0) {
         logger.warn(
             `[deleteExamSlot] Cannot delete slot with booked students: id=${id} filled=${slot.filled}`
         );

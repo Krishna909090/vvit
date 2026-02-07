@@ -1,240 +1,389 @@
-import PDFDocument from 'pdfkit';
-import path from 'path';
-import axios from 'axios';
-import fs from 'fs';
-import { format } from 'date-fns';
+import PDFDocument from 'pdfkit'
+import path from 'path'
+import axios from 'axios'
+import fs from 'fs'
 
-export interface FeeComponent {
-    name: string;
-    amount: number;
-}
+/* ================= INTERFACES ================= */
 
 export interface AllotmentData {
-    applicationId: string;
-    studentName: string;
-    fatherName: string;
-    gender: string;
-    region: string;
-    allottedCollege: string;
-    allottedCourse: string;
-    allottedCategory: string;
-    reportingDate: string;
-    phase: string;
-    feeReimbursement: string;
-    profilePhotoUrl?: string; 
-    
-    // Fee Details
-    feeBreakdown: FeeComponent[];
-    totalFee: number;
-    totalPaid: number;
+  applicationId: string
+  studentName: string
+  fatherName: string
+  motherName: string
+  gender: string
+  state: string
+  allottedCollege: string
+  allottedCourse: string
+  profilePhotoUrl?: string
+  totalPending?: number
+  scholarshipPercentage?: number
+  scholarshipDiscount?: number
+  tuitionFee?: number
 }
+
+/* ================= HELPERS ================= */
 
 async function fetchImage(url: string): Promise<Buffer | null> {
+  try {
+    const res = await axios.get(url, { responseType: 'arraybuffer' })
+    return Buffer.from(res.data)
+  } catch (error: any) {
+    console.error(`Failed to fetch image from ${url}:`, error.message);
+    return null
+  }
+}
+
+/* ================= MAIN ================= */
+
+export const generateAllotmentOrderPDF = async (
+  data: AllotmentData
+): Promise<Buffer> => {
+  return new Promise(async (resolve, reject) => {
     try {
-        const response = await axios.get(url, { responseType: 'arraybuffer' });
-        return Buffer.from(response.data);
-    } catch (e) {
-        return null;
+      const doc = new PDFDocument({ size: 'A4', margin: 40 })
+      const buffers: Buffer[] = []
+
+      doc.on('data', buffers.push.bind(buffers))
+      doc.on('end', () => resolve(Buffer.concat(buffers)))
+      doc.on('error', reject)
+
+      // 1. Header (Logo Top Center, Address)
+      drawHeader(doc)
+      drawBigWatermark(doc)
+
+      // 2. Title Section
+      drawTitle(doc)
+
+      // 3. Student Details (Left) and Profile Photo (Right)
+      //    We must draw Photo FIRST or calculate height to ensure text flows correctly?
+      //    Actually we can draw them independently at fixed/calculated Y.
+      const detailsEndY = await drawStudentDetailsSection(doc, data);
+      
+      // 4. Fee Table (Below details)
+      doc.y = detailsEndY + 10;
+      drawFeeTable(doc, data)
+
+      // 5. Instructions
+      drawUniversityInstructions(doc)
+
+      drawFooter(doc)
+
+      doc.end()
+    } catch (err) {
+      reject(err)
     }
+  })
 }
 
-export const generateAllotmentOrderPDF = async (data: AllotmentData): Promise<Buffer> => {
-    let photoBuffer: Buffer | null = null;
-    if (data.profilePhotoUrl) {
-        photoBuffer = await fetchImage(data.profilePhotoUrl);
-    }
+// ... (existing code)
 
-    return new Promise((resolve, reject) => {
-        try {
-            const doc = new PDFDocument({ size: 'A4', margin: 40 });
-            const buffers: Buffer[] = [];
-
-            doc.on('data', buffers.push.bind(buffers));
-            doc.on('end', () => resolve(Buffer.concat(buffers)));
-            doc.on('error', (err) => reject(err));
-
-            drawHeader(doc, photoBuffer);
-            drawStudentTable(doc, data);
-            drawAllotmentBody(doc, data);
-            drawFeeTable(doc, data);
-            drawInstructions(doc, data);
-            drawFooter(doc);
-
-            doc.end();
-        } catch (error) {
-            reject(error);
-        }
-    });
-};
-
-function drawHeader(doc: PDFKit.PDFDocument, photoBuffer: Buffer | null) {
-    const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png');
-    const fallbackLogo = path.join(process.cwd(), 'src/assets/logo.png');
-
-    // University Header - Centered at top
-    doc
-        .font('Helvetica-Bold')
-        .fontSize(11) // Smaller font for long name
-        .fillColor('#C0392B')
-        .text('VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY', 0, 20, { align: 'center', width: doc.page.width });
-
-    // Logo Left - Shifted down to Y=50
-    if (fs.existsSync(logoPath)) {
-        doc.image(logoPath, 40, 50, { width: 60 });
-    } else if (fs.existsSync(fallbackLogo)) {
-        doc.image(fallbackLogo, 40, 50, { width: 60 });
-    }
-
-    // Photo Right - Shifted down to Y=50
-    if (photoBuffer) {
-        doc.image(photoBuffer, 480, 50, { width: 70, height: 80 }); 
-        doc.rect(480, 50, 70, 80).stroke(); 
-    } else {
-        doc.rect(480, 50, 70, 80).stroke();
-        doc.fontSize(8).text('PHOTO', 480, 85, { width: 70, align: 'center' });
-    }
-
-    // Center Text (Address) - Shifted down
-    doc.font('Helvetica').fontSize(10).fillColor('#000');
-    doc.text('(Established under Andhra Pradesh Private Universities Act 2016)', 110, 65, { align: 'center', width: 360 });
-    doc.text('Nambur (V), Peda Kakani (Md), Guntur (Dt) - 522508', 110, 80, { align: 'center', width: 360 });
-    doc.text('Guntur District, Andhra Pradesh, India.', 110, 95, { align: 'center', width: 360 });
-
-    doc.moveTo(40, 140).lineTo(555, 140).stroke();
-}
-
-function drawStudentTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    const startY = 160; 
-    const col1X = 40;
-    const col2X = 140; 
-    const col3X = 300; 
-    const col4X = 400; 
-    const rowHeight = 35; 
-    
-    // Removed Row 1 (Hall Ticket / Rank)
-    // Removed Row 3 (Caste / Fee Reimb) -> Keeping Fee Reimb merged with Gender/Region?
-    // User said remove "caste". 
-    // I'll simplify to 2 Rows.
-
-    doc.lineWidth(0.5).rect(40, startY, 515, rowHeight * 2).stroke();
-    
-    doc.moveTo(40, startY + rowHeight).lineTo(555, startY + rowHeight).stroke();
-    
-    doc.moveTo(140, startY).lineTo(140, startY + rowHeight * 2).stroke(); 
-    doc.moveTo(300, startY).lineTo(300, startY + rowHeight * 2).stroke(); 
-    doc.moveTo(400, startY).lineTo(400, startY + rowHeight * 2).stroke(); 
-
-    doc.font('Helvetica-Bold').fontSize(9).fillColor('#000');
-    
-    // Row 1: Candidate Name & Father Name
-    drawCell(doc, "Candidate's Name", col1X + 5, startY + 12);
-    doc.font('Helvetica').text(data.studentName.toUpperCase(), col2X + 5, startY + 12, { width: 150 });
-    
-    doc.font('Helvetica-Bold').text("Father's Name", col3X + 5, startY + 12);
-    doc.font('Helvetica').text(data.fatherName.toUpperCase(), col4X + 5, startY + 12, { width: 150 });
-
-    // Row 2: Gender/Region & Allotted Category 
-    // (Replacing Caste/Fee Reimb with simpler fields)
-    const r2Y = startY + rowHeight;
-    doc.font('Helvetica-Bold').text('Gender / Region', col1X + 5, r2Y + 12);
-    doc.font('Helvetica').text(`${data.gender} / ${data.region}`, col2X + 5, r2Y + 12);
-    
-    doc.font('Helvetica-Bold').text('Category', col3X + 5, r2Y + 12);
-    doc.font('Helvetica').text(data.allottedCategory, col4X + 5, r2Y + 12);
-}
-
-function drawCell(doc: PDFKit.PDFDocument, text: string, x: number, y: number) {
-    doc.text(text, x, y);
-}
-
-function drawAllotmentBody(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    let y = 250;
-    
-    doc.font('Helvetica-Bold').fontSize(11).fillColor('#000080'); 
-    doc.text(`PROVISIONAL ALLOTMENT ORDER`, 40, y, { align: 'center', width: 515 });
-    
-    y += 25;
-    
-    doc.font('Helvetica').fontSize(9).fillColor('#000000');
-    const text = `This is to inform that the options exercised by the candidate have been processed for allotment of seat in Colleges/Institutions based on rank, local area, gender, category, EWS, Special Reservation Category (CAP/PWD/SCOUTS) etc. The Convenor, APEAPCET-2025 admissions is pleased to allot a seat to the above candidate in`;
-    doc.text(text, 40, y, { align: 'justify', width: 515 }); 
-    
-    y += 45; // specific spacing for long text
-    
-    // Allotted Details Box
-    doc.rect(40, y, 515, 60).stroke();
-    
-    doc.font('Helvetica-Bold').fontSize(10);
-    doc.text(`College: ${data.allottedCollege}`, 50, y + 10);
-    doc.text(`Course: ${data.allottedCourse}`, 50, y + 35);
-}
-
-function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    let y = 350;
-    
-    doc.font('Helvetica-Bold').fontSize(10).fillColor('#000');
-    doc.text('Fee Details:', 40, y);
-    y += 15;
-
-    // Table Header
-    doc.rect(40, y, 300, 20).fill('#eee').stroke();
-    doc.fillColor('#000').text('Description', 50, y + 5);
-    doc.text('Amount (Rs)', 250, y + 5);
-    
-    y += 20;
-
-    // Rows
-    data.feeBreakdown.forEach(fee => {
-        doc.rect(40, y, 300, 20).stroke();
-        doc.font('Helvetica').text(fee.name, 50, y + 5);
-        doc.text(fee.amount.toLocaleString('en-IN'), 250, y + 5);
-        y += 20;
-    });
-
-    // Total Expected
-    doc.rect(40, y, 300, 20).stroke();
-    doc.font('Helvetica-Bold').text('Total Fee', 50, y + 5);
-    doc.text(data.totalFee.toLocaleString('en-IN'), 250, y + 5);
-    y += 20;
-
-    // Total Paid
-    doc.rect(40, y, 300, 20).stroke();
-    doc.fillColor('#008000').text('Total Paid', 50, y + 5); // Green
-    doc.text(data.totalPaid.toLocaleString('en-IN'), 250, y + 5);
-    y += 20;
-
-    // Balance
-    const balance = Math.max(0, data.totalFee - data.totalPaid);
-    doc.rect(40, y, 300, 20).stroke();
-    doc.fillColor('#FF0000').text('Balance Due', 50, y + 5); // Red
-    doc.text(balance.toLocaleString('en-IN'), 250, y + 5);
-}
-
-function drawInstructions(doc: PDFKit.PDFDocument, data: AllotmentData) {
-    let y = 600; // Push down
-    // Ensure we don't overlap if table is long (unlikely)
-    if (doc.y > 580) y = doc.y + 20;
-
-    doc.font('Helvetica-Bold').fontSize(10).fillColor('#000000');
-    doc.text('Instructions to Candidates', 40, y);
-    y += 15;
-    
-    doc.font('Helvetica').fontSize(9);
-    
-    const instructions = [
-        `1. Report to the college with this allotment order.`,
-        `2. Pay the balance fee before the due date.`
-    ];
-
-    instructions.forEach(inst => {
-        doc.text(inst, 40, y, { align: 'justify', width: 515 });
-        y += doc.heightOfString(inst, { width: 515 }) + 8;
-    });
-}
+/* ================= FOOTER ================= */
 
 function drawFooter(doc: PDFKit.PDFDocument) {
-    const bottomY = 750;
-    doc.fontSize(8).fillColor('#444');
-    doc.text('Computer Generated Report.', 40, bottomY);
-    doc.text('1/1', 540, bottomY);
+  const footerText = 'For any queries please contact admission office contact details: 9898989898, 98989798989';
+  
+  doc
+    .fontSize(9)
+    .font('Helvetica-Bold')
+    .fillColor('#000000')
+    .text(
+      footerText,
+      40,
+      doc.page.height - 60, // Position at bottom
+      { width: 515, align: 'center' }
+    )
+}
+
+function drawHeader(doc: PDFKit.PDFDocument) {
+  const startY = 15;
+  const logoPath = path.join(process.cwd(), 'src/assets/logo.png')
+  
+  // 1. LOGO: Top Center
+  // Assuming square logo approx 60x60
+  if (fs.existsSync(logoPath)) {
+    const logoSize = 60;
+    const logoX = (doc.page.width - logoSize) / 2;
+    doc.image(logoPath, logoX, startY, { width: logoSize })
+    
+    // Move Y below logo
+    doc.y = startY + logoSize + 10;
+  } else {
+    doc.y = startY;
+  }
+
+  // 2. COLLEGE NAME: Centered, Red/Orange
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(16) 
+    .fillColor('#E74C3C') // Red/Orange color
+    .text(
+      'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
+      0, // Left
+      doc.y,
+      { width: doc.page.width, align: 'center' } 
+    )
+  
+  doc.moveDown(0.3);
+
+  // 3. ADDRESS: Centered, Black, Smaller
+  doc
+    .font('Helvetica')
+    .fontSize(10)
+    .fillColor('#000000')
+    .text(
+      'Uppalapadu Road, Nambur, Pedhakakani Mandal, Guntur, Andhra Pradesh – 522508',
+      { width: doc.page.width, align: 'center' }
+    )
+
+  doc.moveDown(0.5);
+
+  // 4. Separator Line (Dashed)
+  const lineY = doc.y;
+  doc.save();
+  doc.strokeColor('#BDC3C7').dash(4, { space: 2 }).lineWidth(1)
+     .moveTo(40, lineY).lineTo(doc.page.width - 40, lineY).stroke();
+  doc.restore();
+
+  doc.moveDown(0.5);
+}
+
+/* ================= TITLE ================= */
+
+function drawTitle(doc: PDFKit.PDFDocument) {
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(14) 
+    .fillColor('#1C2833')
+    .text('PROVISIONAL ALLOTMENT ORDER', 0, doc.y, { align: 'center', width: doc.page.width, underline: true })
+
+  doc
+    .moveDown(0.3)
+    .fontSize(10)
+    .fillColor('#566573')
+    .text('(Academic Year 2026–2027)', { align: 'center', width: doc.page.width })
+
+  doc.moveDown(0.5) 
+}
+
+/* ================= STUDENT DETAILS & PHOTO ================= */
+
+async function drawStudentDetailsSection(doc: PDFKit.PDFDocument, data: AllotmentData): Promise<number> {
+  const startY = doc.y;
+  const colLabelX = 60;
+  const colValueX = 200;
+  const lineHeight = 20;
+
+  // Student Details Fields
+  const fields = [
+    { label: 'Candidate Name', value: data.studentName },
+    { label: 'Application ID', value: data.applicationId },
+    { label: 'Father Name', value: data.fatherName },
+    { label: 'Mother Name', value: data.motherName },
+    { label: 'Gender', value: data.gender },
+    { label: 'State', value: data.state },
+  ];
+
+  // Draw Text
+  doc.font('Helvetica').fontSize(10).fillColor('#000000');
+  
+  fields.forEach((field, index) => {
+    const y = startY + (index * lineHeight);
+    // Label
+    doc.text(field.label, colLabelX, y);
+    // Colon
+    doc.text(':', colValueX - 10, y);
+    // Value (Bold?) Image shows bold name? No, regular mostly, Name might be bold.
+    if (index === 0) doc.font('Helvetica-Bold');
+    doc.text(field.value, colValueX, y);
+    if (index === 0) doc.font('Helvetica');
+  });
+
+  const textEndY = startY + (fields.length * lineHeight);
+
+  // Draw Profile Photo (Right Side)
+  // Aligned with top of text approx.
+  if (data.profilePhotoUrl) {
+    try {
+        const photoBuffer = await fetchImage(data.profilePhotoUrl);
+        if (photoBuffer) {
+            const photoWidth = 100;
+            const photoHeight = 120; // Portrait aspect ratio?
+            const photoX = 420; // Right side
+            const photoY = startY; 
+            
+            doc.save();
+            // Clip rounded rectangle?
+            doc.roundedRect(photoX, photoY, photoWidth, photoHeight, 8).clip();
+            doc.image(photoBuffer, photoX, photoY, { fit: [photoWidth, photoHeight] });
+            doc.restore();
+            // Border
+            doc.roundedRect(photoX, photoY, photoWidth, photoHeight, 8).strokeColor('#000').lineWidth(1).stroke();
+            
+            // Adjust end Y if photo is taller than text
+            return Math.max(textEndY, photoY + photoHeight);
+        }
+    } catch (e) {
+        console.error('Error drawing profile photo in new layout', e);
+    }
+  }
+
+  return textEndY;
+}
+
+/* ================= FEE TABLE ================= */
+
+function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
+  const startY = doc.y;
+  const tableX = 50;
+  const tableWidth = 495; // 515? 
+  // Image shows table slightly inset?
+  const rowHeight = 30;
+  const col1W = 250; 
+  // Col 2 is the rest
+
+  const rows = [
+    { label: 'Allotted Branch', value: data.allottedCourse, highlight: false },
+    { label: 'Actual Tuition fee', value: `INR ${(data.tuitionFee || 0).toLocaleString('en-IN')}`, highlight: false },
+    { label: 'Scholarship Approved', value: `INR ${(data.scholarshipDiscount || 0).toLocaleString('en-IN')} (${data.scholarshipPercentage || 0}%)`, highlight: false },
+    { label: 'Tuition fee payable per year', value: `INR ${((data.tuitionFee || 0) - (data.scholarshipDiscount || 0)).toLocaleString('en-IN')}`, highlight: true }
+  ];
+
+  doc.font('Helvetica').fontSize(10);
+
+  let currentY = startY;
+
+  // Draw border rect for whole table
+  // Can draw row by row
+  
+  rows.forEach((row, i) => {
+    // Background for Highlight
+    if (row.highlight) {
+      doc.rect(tableX, currentY, tableWidth, rowHeight).fill('#FEF5E7'); // Light orange/beige
+      doc.fillColor('#000'); // Reset fill to black for text
+    }
+
+    // Border Rect
+    doc.rect(tableX, currentY, tableWidth, rowHeight).strokeColor('#E5E7E9').stroke(); // Light grey border
+
+    // Text Vertical Center
+    const textY = currentY + 10;
+
+    // Label
+    doc.font('Helvetica').fillColor('#5D6D7E') // Greyish label
+    doc.text(row.label, tableX + 20, textY);
+
+    // Value
+    doc.font('Helvetica-Bold').fillColor('#000000') // Black bold value
+    doc.text(row.value, tableX + col1W, textY);
+
+    currentY += rowHeight;
+  });
+
+  doc.y = currentY + 10;
+}
+
+
+/* ================= UNIVERSITY INSTRUCTIONS (Bottom Box) ================= */
+
+function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
+  const startY = doc.y;
+  
+  // If we are too low, add page? 
+  // But requirement is single page.
+  // We should be around Y=500. Page height is ~840. Space is ample.
+
+  const boxPadding = 10;
+  const contentStartY = startY + boxPadding;
+  
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(10)
+    .fillColor('#000000')
+    .text('Important Conditions of Provisional Admission', 50 + boxPadding, contentStartY, { underline: true })
+
+  doc.moveDown(0.5)
+
+  doc.font('Helvetica').fontSize(8).fillColor('#000')
+
+  const instructions = [
+    '1. Provisional Nature of Admission: The admission offered through this letter is purely provisional in nature and is subject to fulfilment of all eligibility requirements as prescribed by VVIT University and statutory authorities.',
+    '2. Confirmation of Admission: Confirmation of admission shall be strictly subject to:',
+    '2. Confirmation of Admission: Confirmation of admission shall be strictly subject to:',
+    '   • Submission of all original documents as specified in the separate annexures applicable for UG and PG programmes, and',
+    '   • Payment of all applicable fee components, including but not limited to Tuition Fee, Hostel Fee and/or Transportation Fee, within the stipulated time.',
+    '3. Change of Branch / Programme: Any request for change of branch or change of programme shall be considered solely at the discretion of the Director – Admissions, subject to availability of seats and eligibility criteria.',
+    '   Such requests must be submitted through:',
+    '   • Official Email: admissions@vvitu.ac.in',
+    '   • Handwritten letter submitted to Director Admissions.',
+    '4. Merit Scholarship Condition: Students who are awarded a Merit Scholarship are required to pay the complete applicable fee components on or before the Official Reporting Day, which will be notified separately by the University. Adjustment of scholarship benefits, if any, shall be governed by the University norms.',
+    '5. Continuation of Merit Scholarship after 1st year:',
+    '   • Attendance, Conduct and Discipline: Candidate must maintain 75% attendance in each Semester and have no history of major disciplinary violations or "code of conduct" breaches.',
+    '   • Academic Progression: Students must clear all registered courses in a given semester in the first attempt, having backlogs can lead to the discontinuation of the Merit scholarship from the subsequent Academic year.'
+  ]
+
+  instructions.forEach(text => {
+    const startX = 50 + boxPadding;
+    const fullWidth = 495 - (boxPadding * 2);
+    let bullet = '';
+    let content = text;
+    let indent = 0;
+    
+    // Check for Main Point (e.g. "1. ")
+    const mainMatch = text.match(/^(\d+\.)\s+(.*)/);
+    // Check for Sub Point (e.g. "   • ")
+    const subMatch = text.match(/^\s+(•)\s+(.*)/);
+
+    const currentY = doc.y;
+
+    if (mainMatch) {
+      bullet = mainMatch[1];
+      content = mainMatch[2];
+      indent = 15;
+      
+      doc.text(bullet, startX, currentY); // Draw Bullet
+      doc.text(content, startX + indent, currentY, { width: fullWidth - indent, align: 'left', lineGap: 1 }); // Draw Text with Indent
+    } else if (subMatch) {
+      bullet = '•'; 
+      content = subMatch[2];
+      indent = 30; // Indent further
+      
+      doc.text(bullet, startX + 15, currentY); // Draw Bullet Indented
+      doc.text(content, startX + indent, currentY, { width: fullWidth - indent, align: 'left', lineGap: 1 });
+    } else {
+      // Fallback for lines without bullets (e.g. continuations if any, though not expected in current data)
+      // Or "   Such requests..."
+      if (text.trim().startsWith('Such requests')) {
+         indent = 15;
+         doc.text(text.trim(), startX + indent, doc.y, { width: fullWidth - indent, align: 'left', lineGap: 1 });
+      } else {
+         doc.text(text, startX, doc.y, { width: fullWidth, align: 'left', lineGap: 1 });
+      }
+    }
+    
+    doc.y += 3;
+  });
+  
+  const endY = doc.y + boxPadding;
+  
+  // Draw Box
+  doc.rect(50, startY, 495, endY - startY).strokeColor('#000000').stroke();
+  
+  doc.y = endY + 10;
+}
+
+/* ================= BIG WATERMARK ================= */
+
+function drawBigWatermark(doc: PDFKit.PDFDocument) {
+  const logoPath = path.join(process.cwd(), 'src/assets/logo.png')
+  if (!fs.existsSync(logoPath)) return
+
+  doc.save()
+  doc.opacity(0.05)
+
+  const size = 320
+  const x = doc.page.width / 2 - size / 2
+  const y = doc.page.height / 2 - size / 2
+
+  doc.image(logoPath, x, y, { width: size })
+  doc.restore()
 }

@@ -39,10 +39,12 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
             const pageWidth = 595.28; // A4 width in points
             const contentWidth = 555.28; // With 20px margin
             const startX = 20;
-            let currentY = 20;
+            let currentY = 25; // Brought up from 45
 
             // --- 1. Outer Border (Page Container) ---
-            doc.rect(startX, currentY, contentWidth, 780).stroke(); // Full page border
+            doc.rect(startX, currentY, contentWidth, 750).stroke(); // Full page border
+
+            currentY += 15; // Internal Padding
 
             // --- 2. Header ---
             // Logo
@@ -59,7 +61,7 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
             const logoPath = path.join(process.cwd(), 'src/assets/logo.png');
             const logoWidth = 80;
             const logoHeight = 80; // Assuming ~square aspect ratio for layout reservation
-            const logoY = currentY + 30;
+            const logoY = currentY + 10; // Align logo with header text top
 
             try {
                 // Logo top-left
@@ -70,8 +72,8 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
             }
 
             // Adjust Y to clear the header area
-            // We need space for text (20) + padding (10) + Logo (80) + padding (20)
-            currentY += 130;  
+            // Reduced gap to bring title closer (1 line gap approx)
+            currentY += 40;  
 
             // Hall Ticket Title
             doc.font('Helvetica-Bold').fontSize(14).text('Hall Ticket – Entrance Examination', 0, currentY, { align: 'center' });

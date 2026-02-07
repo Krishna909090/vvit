@@ -1,9 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
-import { Role, AdmissionStatus, RequestStatus } from '@prisma/client';
+import { AdmissionStatus, RequestStatus } from '@prisma/client';
+import { Role } from '../../constants/roles';
 import { v4 as uuidv4 } from 'uuid';
-import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService, updatePersonalDetails as updatePersonalDetailsService } from './student.service';
+import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService, updatePersonalDetails as updatePersonalDetailsService, changeServicePreferences } from './student.service';
 import { bookExamSlot } from '../exam/exam.service';
 import QRCode from 'qrcode';
 import { catchAsync } from '../../utils/catchAsync';
@@ -17,8 +18,50 @@ export const registerStudent = catchAsync(async (req: Request, res: Response, ne
     logger.debug && logger.debug(`[registerStudent] payload=${JSON.stringify(req.body)}`);
 
     const agentId = req.user?.role === Role.AGENT ? (req.user?.userId || null) : null;
-    const userId = req.user?.role === Role.STUDENT ? (req.user?.userId || null) : null;
+    let userId = req.user?.role === Role.STUDENT ? (req.user?.userId || null) : null;
     const currentUserId = req.user?.userId || null;
+
+    // Counter-Based Registration: If registered by Staff/Admin, map to Student User
+    if (req.user?.role !== Role.STUDENT && req.body.phone) {
+        const studentPhone = req.body.phone;
+        
+        // 1. Check if user exists
+        let studentUser = await prisma.user.findUnique({
+            where: { phone: studentPhone }
+        });
+
+        if (!studentUser) {
+            // 2. Create User if not exists
+            studentUser = await prisma.user.create({
+                data: {
+                    phone: studentPhone,
+                    role: Role.STUDENT
+                }
+            });
+
+            // 3. Assign to Student Group
+            const studentGroup = await prisma.group.findUnique({ where: { name: 'StudentGroup' } });
+            if (studentGroup) {
+                await prisma.userGroup.create({
+                    data: {
+                        userId: studentUser.id,
+                        groupId: studentGroup.id
+                    }
+                });
+            } else {
+                logger.error(`[registerStudent] CRITICAL: StudentGroup not found. User ${studentUser.id} created without group.`);
+            }
+
+            logger.info(`[registerStudent] Created new User for counter-registration: ${studentUser.id}`);
+        } else {
+             if (studentUser.role !== Role.STUDENT) {
+                 logger.warn(`[registerStudent] Existing user found for ${studentPhone} but has role ${studentUser.role}.`);
+             }
+        }
+
+        userId = studentUser.id;
+    }
+
     const student = await registerStudentService(req.body, agentId, userId, currentUserId);
 
     logger.info(`[registerStudent] success applicationId=${student.applicationId}`);
@@ -184,10 +227,12 @@ export const addAcademicDetails = catchAsync(async (req: Request, res: Response,
 
 // Get Student Details (Comprehensive)
 // Get Student Details (Logged-in User)
+// Get Student Details (Logged-in User or via Query Param)
 export const getStudentDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getStudentDetails] by=${req.user?.userId || 'anonymous'}`);
 
-    const userId = req.user?.userId;
+    const userId = (req.query.userId as string) || req.user?.userId;
+
     if (!userId) {
         throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
     }
@@ -223,6 +268,80 @@ export const updatePersonalDetails = catchAsync(async (req: Request, res: Respon
         statusCode: 200,
         success: true,
         message: result.message
+    });
+});
+
+export const getApplicationSummary = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+    const student = await prisma.student.findUnique({
+        where: { id: studentId },
+        include: {
+            academicQualifications: true,
+            pref1Course: true,
+            pref2Course: true,
+            pref3Course: true
+        }
+    });
+
+    if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+
+    // Permission check: Owner or Admin
+    if (req.user?.role === Role.STUDENT && student.userId !== req.user.userId) {
+        throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 403);
+    }
+
+    const { generateApplicationSummaryPDF } = await import('../../utils/applicationSummaryGenerator');
+
+    const summaryData = {
+        applicationId: student.applicationId || '',
+        studentName: student.name,
+        fatherName: student.fatherName,
+        motherName: student.motherName,
+        dob: student.dob,
+        gender: student.gender,
+        phone: student.phone,
+        email: student.email || '',
+        address: `${student.address}, ${student.city}, ${student.state} - ${student.pincode}`,
+        degreeType: student.degreeType || '',
+        courseType: student.courseType || '',
+        pref1: student.pref1Course?.name,
+        pref2: student.pref2Course?.name,
+        pref3: student.pref3Course?.name,
+        profilePhotoUrl: student.profilePhotoUrl || undefined,
+        qualifications: student.academicQualifications.map(q => ({
+            level: q.level || '',
+            institution: (q as any).institution || '',
+            board: q.board || '',
+            yearOfPassing: q.yearOfPassing?.toString() || '',
+            percentage: q.percentage?.toString() || ''
+        }))
+    };
+
+    const pdfBuffer = await generateApplicationSummaryPDF(summaryData);
+
+    res.set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `inline; filename="Application_Summary_${student.applicationId}.pdf"`
+    });
+
+    res.send(pdfBuffer);
+});
+
+export const requestServiceChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+    const currentUserId = req.user?.userId || null;
+    const result = await changeServicePreferences(studentId, req.body, currentUserId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.message,
+        data: result
     });
 });
 
