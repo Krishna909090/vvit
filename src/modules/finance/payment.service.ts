@@ -211,12 +211,13 @@ export const initiateMultiComponentPayment = async (
     const restrictedComponents: PaymentComponent[] = [
         PaymentComponent.HOSTEL,
         PaymentComponent.HOSTEL_ACCOMMODATION,
-        PaymentComponent.HOSTEL_MESS
+        PaymentComponent.HOSTEL_MESS,
+        PaymentComponent.TRANSPORT
     ];
 
     const hasRestricted = components.some(c => restrictedComponents.includes(c.component));
     if (hasRestricted) {
-        throw new AppError("Hostel and Mess fees cannot be bundled in multi-component payment. Please pay them separately.", 400);
+        throw new AppError("Hostel, Mess, and Transport fees cannot be bundled in multi-component payment. Please pay them separately.", 400);
     }
 
     // 2. Validate Fee Heads - Mandate Fee Head ID (Exempting specific types)
@@ -342,7 +343,7 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
         let clientToCheck = getPhonePeClient('ADMISSION'); 
         
         if (primaryPayment) {
-             if (primaryPayment.component === PaymentComponent.HOSTEL || primaryPayment.component === PaymentComponent.HOSTEL_ACCOMMODATION) {
+             if (primaryPayment.component === PaymentComponent.HOSTEL || primaryPayment.component === PaymentComponent.HOSTEL_ACCOMMODATION || primaryPayment.component === PaymentComponent.TRANSPORT) {
                  clientToCheck = getPhonePeClient('HOSTEL');
              } else if (primaryPayment.component === PaymentComponent.HOSTEL_MESS) {
                  clientToCheck = getPhonePeClient('MESS');
@@ -1357,7 +1358,7 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
     } else if (transportFee > 0) {
         amountToPay = transportFee;
         paymentComponent = PaymentComponent.TRANSPORT;
-        feeType = 'ADMISSION'; // Transport often goes to college account
+        feeType = 'HOSTEL';
     } else if (accommodationFee > 0) {
         amountToPay = accommodationFee;
         paymentComponent = PaymentComponent.HOSTEL_ACCOMMODATION;
@@ -2094,7 +2095,7 @@ export const processUnifiedPayment = async (data: any) => {
             
             // Unified API: Determine type
             let feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION';
-            if (component === PaymentComponent.HOSTEL || component === PaymentComponent.HOSTEL_ACCOMMODATION) {
+            if (component === PaymentComponent.HOSTEL || component === PaymentComponent.HOSTEL_ACCOMMODATION || component === PaymentComponent.TRANSPORT) {
                 feeType = 'HOSTEL';
             } else if (component === PaymentComponent.HOSTEL_MESS) {
                 feeType = 'MESS';
