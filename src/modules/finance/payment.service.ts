@@ -51,9 +51,23 @@ const PHONEPE_CREDENTIALS = {
     }
 };
 
+const clients: Record<string, any> = {};
+
 export const getPhonePeClient = (type: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION') => {
+    if (clients[type]) {
+        return clients[type];
+    }
+
     const creds = PHONEPE_CREDENTIALS[type] || PHONEPE_CREDENTIALS.ADMISSION;
-    return StandardCheckoutClient.getInstance(creds.MERCHANT_ID, creds.SALT_KEY, creds.SALT_INDEX as any, ENV);
+    logger.info(`[PhonePe] Initializing client for ${type} (Merchant: ${creds.MERCHANT_ID})`);
+    
+    // Using 'new' to create independent instances if supported, avoiding the global singleton issue of getInstance
+    // If 'new' is not available (protected constructor), we might have to fallback or rethink, 
+    // but usually Node SDKs allow new.
+    // @ts-ignore
+    clients[type] = new StandardCheckoutClient(creds.MERCHANT_ID, creds.SALT_KEY, creds.SALT_INDEX as any, ENV);
+    
+    return clients[type];
 };
 
 // Debug PhonePe Config
