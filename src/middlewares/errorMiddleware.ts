@@ -20,8 +20,7 @@ const handlePrismaError = (err: any) => {
     if (err.code === 'P2025') {
         return new AppError('Record not found', 404);
     }
-    // TEMPORARY DEBUG: Expose actual error in production
-    return new AppError(`Database Error: ${err.message}`, 500);
+    return new AppError('Database Error', 500);
 };
 
 const sendErrorDev = (err: any, res: Response) => {
