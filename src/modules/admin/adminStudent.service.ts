@@ -1303,6 +1303,13 @@ export const AdminStudentService = {
         // Group by degreeType and scholarshipPercentage
         const dbStats = await prisma.studentScholarship.groupBy({
             by: ['degreeType', 'scholarshipPercentage'],
+            where: {
+                student: {
+                    admissionDetails: {
+                        allottedCourseId: { not: null }
+                    }
+                }
+            },
             _count: {
                 studentId: true
             }
@@ -1775,7 +1782,11 @@ export const AdminStudentService = {
                  // Step 2: PhonePe Integration
                  logger.info(`[finalizeAdmission][Online] Step 2: Initiating PhonePe Request`);
 
-                 const client = StandardCheckoutClient.getInstance(PHONEPE_MERCHANT_ID, PHONEPE_SALT_KEY, PHONEPE_SALT_INDEX as any, PHONEPE_ENV);
+                 let clientType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION';
+                 if (targetComponent === PaymentComponent.HOSTEL || targetComponent === PaymentComponent.HOSTEL_ACCOMMODATION) clientType = 'HOSTEL';
+                 else if (targetComponent === PaymentComponent.HOSTEL_MESS) clientType = 'MESS';
+
+                 const client = getPhonePeClient(clientType);
  
                  const request = StandardCheckoutPayRequest.builder()
                      .merchantOrderId(merchantTransactionId)

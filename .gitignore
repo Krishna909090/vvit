@@ -55,7 +55,7 @@ docker-compose.override.yml
 deploy.zip
 
 
-*.md 
+*.md
 *.txt
 
 *.test.ts
