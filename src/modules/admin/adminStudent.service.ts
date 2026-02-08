@@ -1612,13 +1612,14 @@ export const AdminStudentService = {
         const { studentId, payment, scholarship, allocation, course } = payload;
         
         // 1. Validation Checks (Parallelized for Performance)
-        const [student, validCourse, validFeeHead] = await Promise.all([
+        const [student, validCourse, validFeeHead, validFeeStructure] = await Promise.all([
             prisma.student.findUnique({
                 where: { id: studentId },
                 include: { admissionDetails: true }
             }),
             prisma.course.findUnique({ where: { id: course.allottedCourseId } }),
-            payment.feeHeadId ? prisma.feeHead.findUnique({ where: { id: payment.feeHeadId } }) : Promise.resolve({ id: 'skip' })
+            payment.feeHeadId ? prisma.feeHead.findUnique({ where: { id: payment.feeHeadId } }) : Promise.resolve({ id: 'skip' }),
+            payment.feeStructureId ? prisma.feeStructure.findUnique({ where: { id: payment.feeStructureId } }) : Promise.resolve({ id: 'skip' })
         ]);
 
         if (!student) {
@@ -1674,8 +1675,24 @@ export const AdminStudentService = {
         // Validate Fee Structure ID if provided and resolve Demand
         let feeDemandId = null;
         if (payment.feeStructureId) {
-            const validStructure = await prisma.feeStructure.findUnique({ where: { id: payment.feeStructureId } });
-            if (!validStructure) {
+            if (!validFeeStructure || (validFeeStructure as any).id === 'skip') {
+                 // Check if it's 'skip' is not strictly necessary if we trust payment.feeStructureId is consistent, 
+                 // but 'skip' implies it wasn't fetched, which contradicts payment.feeStructureId being truthy here unless it changed (it didn't).
+                 // However, findUnique returns null if not found.
+                 // So if payment.feeStructureId is true, validFeeStructure is either Object or Null. It is NOT {id:'skip'}.
+                 // Wait, if I returned {id: 'skip'} in the else branch of Promise.all...
+                 // Correct logic:
+                 /*
+                   if (payment.feeStructureId) is TRUE:
+                      Promise went into `prisma.feeStructure...` branch.
+                      Result is `Structure` or `null`.
+                      It allows us to check `if (!validFeeStructure)`.
+                 */
+                 if (!validFeeStructure) {
+                    logger.warn(`[finalizeAdmission] Invalid Fee Structure ID: ${payment.feeStructureId}`);
+                    throw new AppError("Invalid Fee Structure ID", 400);
+                 }
+            } else if (!validFeeStructure) { // Should be covered above, but typescript might be confused by the union return type
                  logger.warn(`[finalizeAdmission] Invalid Fee Structure ID: ${payment.feeStructureId}`);
                  throw new AppError("Invalid Fee Structure ID", 400);
             }
