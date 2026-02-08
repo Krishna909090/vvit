@@ -122,7 +122,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
     });
 
     // Transaction to create Student and related tables
-    const student = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const student = await prisma.$transaction(async (tx) => {
         // Double-check uniqueness within transaction
         const existingInTx = await tx.student.findUnique({
             where: { applicationId }
@@ -160,9 +160,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
                 pref2: data.pref2 || undefined,
                 pref3: data.pref3 || undefined,
                 userId: userId,
-                isKycVerified: data.isKycVerified,
-                createdBy: currentUserId,
-                updatedBy: currentUserId
+                isKycVerified: data.isKycVerified
             }
         });
 
@@ -341,7 +339,7 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
     if (pref1 || pref2 || pref3) {
         await prisma.student.update({
             where: { id: studentId },
-            data: { pref1, pref2, pref3, updatedBy: currentUserId }
+            data: { pref1, pref2, pref3 }
         });
     }
 
@@ -361,7 +359,6 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
                     url: documentData[key],
                     status: StudentDocumentStatus.PENDING,
                     remarks: null,
-                    updatedBy: currentUserId,
                     isDeleted: false // Reactivate if it was soft deleted
                 },
                 create: {
@@ -369,8 +366,6 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
                     documentKey: key,
                     url: documentData[key],
                     status: StudentDocumentStatus.PENDING,
-                    createdBy: currentUserId,
-                    updatedBy: currentUserId,
                     isDeleted: false
                 }
             });
@@ -485,9 +480,7 @@ export const addAcademicDetails = async (studentId: string, details: any[], curr
                     board: detail.board,
                     yearOfPassing: detail.yearOfPassing.toString(),
                     hallTicketNumber: detail.hallTicketNumber,
-                    gpaOrMarks: detail.gpaOrMarks.toString(),
-                    createdBy: currentUserId,
-                    updatedBy: currentUserId
+                    gpaOrMarks: detail.gpaOrMarks.toString()
                 }
             })
         )
@@ -753,8 +746,7 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
         await tx.student.update({
             where: { id: studentId },
             data: {
-                ...updateData,
-                updatedBy: currentUserId
+                ...updateData
             }
         });
 

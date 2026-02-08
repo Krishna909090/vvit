@@ -252,7 +252,7 @@ export const AdminStudentService = {
 
         const status = approved ? CancellationStatus.APPROVED : CancellationStatus.REJECTED;
 
-        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await prisma.$transaction(async (tx) => {
             await tx.cancellationRequest.update({
                 where: { id: requestId },
                 data: { status, approvedBy: adminId }
@@ -296,7 +296,7 @@ export const AdminStudentService = {
         const course = await prisma.course.findUnique({ where: { id: allottedCourseId } });
         if (!course) throw new AppError("Course not found", 404);
 
-        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await prisma.$transaction(async (tx) => {
             await tx.studentAdmission.update({
                 where: { studentId },
                 data: {
@@ -453,7 +453,7 @@ export const AdminStudentService = {
 
         const status = approved ? RequestStatus.APPROVED : RequestStatus.REJECTED;
 
-        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await prisma.$transaction(async (tx) => {
             await tx.courseChangeRequest.update({
                 where: { id: requestId },
                 data: {
@@ -591,7 +591,7 @@ export const AdminStudentService = {
         // Initialize adjustment delta
         let feeAdjustment = 0;
 
-        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await prisma.$transaction(async (tx) => {
             // Release previous allocation and calculate subtraction from Total Fee
             if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelId) {
                 if (accommodationType !== AccommodationType.HOSTEL || hostelId !== admission.hostelId) {
@@ -1375,7 +1375,7 @@ export const AdminStudentService = {
 
 
     // --- HELPER: Propagate Scholarship Changes ---
-    propagateScholarshipUpdate: async (studentId: string, newPct: number, adminId: string | undefined, tx: Prisma.TransactionClient) => {
+    propagateScholarshipUpdate: async (studentId: string, newPct: number, adminId: string | undefined, tx: any) => {
         logger.info(`[propagateScholarshipUpdate] Updating demands to ${newPct}% for student ${studentId}`);
 
         // Fetch demands with their linked Fee Heads (Direct or via Structure)
@@ -1388,7 +1388,7 @@ export const AdminStudentService = {
         });
 
         // Filter for Tuition/College fees by checking the resolved Fee Head name
-        const tuitionDemands = demands.filter(d => {
+        const tuitionDemands = demands.filter((d: any) => {
             const head = d.feeHead || d.feeStructure?.feeHead;
             if (!head) return false;
             
@@ -1453,7 +1453,7 @@ export const AdminStudentService = {
         }
     },
 
-    async executeAdmissionUpdates(studentId: string, payload: any, paymentId: string, adminId: string, tx: Prisma.TransactionClient) {
+    async executeAdmissionUpdates(studentId: string, payload: any, paymentId: string, adminId: string, tx: any) {
         try {
             const { allocation, scholarship, course } = payload;
             logger.info(`[executeAdmissionUpdates] Allocation: ${allocation.type}, Scholarship: ${scholarship.percentage}%`);

@@ -1,8 +1,7 @@
 
-import { PrismaClient, EmailStatus } from '@prisma/client';
+import { EmailStatus } from '@prisma/client';
+import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
-
-const prisma = new PrismaClient();
 
 export const createEmailLog = async (data: {
     recipientEmail: string;

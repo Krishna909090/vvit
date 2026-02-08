@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { Role, RoleType } from '../constants/roles';
 import logger from '../utils/logger';
 import { AppError } from '../utils/AppError';
+import { setContextUser } from '../utils/requestContext';
 
 // JWT_SECRET is validated on startup by envValidator - no fallback needed
 const JWT_SECRET = process.env.JWT_SECRET!;
@@ -20,6 +21,7 @@ export const authenticate = (req: Request, res: Response, next: NextFunction) =>
     try {
         const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; role: RoleType };
         req.user = decoded;
+        setContextUser(decoded.userId);
         next();
     } catch (error) {
         logger.error(`Authentication failed: ${error}`);

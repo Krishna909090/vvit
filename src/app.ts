@@ -34,6 +34,8 @@ app.set('trust proxy', 1);
 // Security Middlewares (Order matters!)
 app.use(enhancedSecurityHeaders); // Enhanced Helmet configuration
 app.use(additionalSecurityHeaders); // Custom security headers
+import { requestContextMiddleware } from './utils/requestContext';
+app.use(requestContextMiddleware);
 app.use(cors({
     origin: process.env.CORS_ORIGIN === '*' ? true : (process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true), // Allow all if * or undefined (dev), else specific list
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
