@@ -794,7 +794,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         );
     }
 
-    const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const result = await prisma.$transaction(async (tx) => {
         const slot = await tx.examSlot.findUnique({
             where: { id: slotId },
             include: { examCenter: true },

@@ -66,6 +66,7 @@ router.post('/update-admission', authenticate, authorizePermission(['student.upd
 
 // Finalize Admission
 router.post('/finalize-admission', authenticate, authorizePermission(['student.update.all']), validateRequest(finalizeAdmissionSchema), finalizeAdmission);
+
 router.post('/verify-payment', authenticate, authorizePermission(['student.update.all']), validateRequest(verifyPaymentSchema), verifyPayment);
 
 // Admission Invoice

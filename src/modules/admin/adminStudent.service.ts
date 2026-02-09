@@ -252,7 +252,7 @@ export const AdminStudentService = {
 
         const status = approved ? CancellationStatus.APPROVED : CancellationStatus.REJECTED;
 
-        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await prisma.$transaction(async (tx) => {
             await tx.cancellationRequest.update({
                 where: { id: requestId },
                 data: { status, approvedBy: adminId }
@@ -296,7 +296,7 @@ export const AdminStudentService = {
         const course = await prisma.course.findUnique({ where: { id: allottedCourseId } });
         if (!course) throw new AppError("Course not found", 404);
 
-        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await prisma.$transaction(async (tx) => {
             await tx.studentAdmission.update({
                 where: { studentId },
                 data: {
@@ -453,7 +453,7 @@ export const AdminStudentService = {
 
         const status = approved ? RequestStatus.APPROVED : RequestStatus.REJECTED;
 
-        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await prisma.$transaction(async (tx) => {
             await tx.courseChangeRequest.update({
                 where: { id: requestId },
                 data: {
@@ -591,7 +591,7 @@ export const AdminStudentService = {
         // Initialize adjustment delta
         let feeAdjustment = 0;
 
-        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await prisma.$transaction(async (tx) => {
             // Release previous allocation and calculate subtraction from Total Fee
             if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelId) {
                 if (accommodationType !== AccommodationType.HOSTEL || hostelId !== admission.hostelId) {
@@ -1375,7 +1375,7 @@ export const AdminStudentService = {
 
 
     // --- HELPER: Propagate Scholarship Changes ---
-    propagateScholarshipUpdate: async (studentId: string, newPct: number, adminId: string | undefined, tx: Prisma.TransactionClient) => {
+    propagateScholarshipUpdate: async (studentId: string, newPct: number, adminId: string | undefined, tx: any) => {
         logger.info(`[propagateScholarshipUpdate] Updating demands to ${newPct}% for student ${studentId}`);
 
         // Fetch demands with their linked Fee Heads (Direct or via Structure)
@@ -1388,7 +1388,7 @@ export const AdminStudentService = {
         });
 
         // Filter for Tuition/College fees by checking the resolved Fee Head name
-        const tuitionDemands = demands.filter(d => {
+        const tuitionDemands = demands.filter((d: any) => {
             const head = d.feeHead || d.feeStructure?.feeHead;
             if (!head) return false;
             
@@ -1453,7 +1453,7 @@ export const AdminStudentService = {
         }
     },
 
-    async executeAdmissionUpdates(studentId: string, payload: any, paymentId: string, adminId: string, tx: Prisma.TransactionClient) {
+    async executeAdmissionUpdates(studentId: string, payload: any, paymentId: string, adminId: string, tx: any) {
         try {
             const { allocation, scholarship, course } = payload;
             logger.info(`[executeAdmissionUpdates] Allocation: ${allocation.type}, Scholarship: ${scholarship.percentage}%`);
@@ -1612,13 +1612,14 @@ export const AdminStudentService = {
         const { studentId, payment, scholarship, allocation, course } = payload;
         
         // 1. Validation Checks (Parallelized for Performance)
-        const [student, validCourse, validFeeHead] = await Promise.all([
+        const [student, validCourse, validFeeHead, validFeeStructure] = await Promise.all([
             prisma.student.findUnique({
                 where: { id: studentId },
                 include: { admissionDetails: true }
             }),
             prisma.course.findUnique({ where: { id: course.allottedCourseId } }),
-            payment.feeHeadId ? prisma.feeHead.findUnique({ where: { id: payment.feeHeadId } }) : Promise.resolve({ id: 'skip' })
+            payment.feeHeadId ? prisma.feeHead.findUnique({ where: { id: payment.feeHeadId } }) : Promise.resolve({ id: 'skip' }),
+            payment.feeStructureId ? prisma.feeStructure.findUnique({ where: { id: payment.feeStructureId } }) : Promise.resolve({ id: 'skip' })
         ]);
 
         if (!student) {
@@ -1674,8 +1675,24 @@ export const AdminStudentService = {
         // Validate Fee Structure ID if provided and resolve Demand
         let feeDemandId = null;
         if (payment.feeStructureId) {
-            const validStructure = await prisma.feeStructure.findUnique({ where: { id: payment.feeStructureId } });
-            if (!validStructure) {
+            if (!validFeeStructure || (validFeeStructure as any).id === 'skip') {
+                 // Check if it's 'skip' is not strictly necessary if we trust payment.feeStructureId is consistent, 
+                 // but 'skip' implies it wasn't fetched, which contradicts payment.feeStructureId being truthy here unless it changed (it didn't).
+                 // However, findUnique returns null if not found.
+                 // So if payment.feeStructureId is true, validFeeStructure is either Object or Null. It is NOT {id:'skip'}.
+                 // Wait, if I returned {id: 'skip'} in the else branch of Promise.all...
+                 // Correct logic:
+                 /*
+                   if (payment.feeStructureId) is TRUE:
+                      Promise went into `prisma.feeStructure...` branch.
+                      Result is `Structure` or `null`.
+                      It allows us to check `if (!validFeeStructure)`.
+                 */
+                 if (!validFeeStructure) {
+                    logger.warn(`[finalizeAdmission] Invalid Fee Structure ID: ${payment.feeStructureId}`);
+                    throw new AppError("Invalid Fee Structure ID", 400);
+                 }
+            } else if (!validFeeStructure) { // Should be covered above, but typescript might be confused by the union return type
                  logger.warn(`[finalizeAdmission] Invalid Fee Structure ID: ${payment.feeStructureId}`);
                  throw new AppError("Invalid Fee Structure ID", 400);
             }
