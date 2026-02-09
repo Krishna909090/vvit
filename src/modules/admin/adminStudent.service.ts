@@ -1241,8 +1241,27 @@ export const AdminStudentService = {
          });
 
          if (existing) {
-             // UPDATE Existing (Handled by edit logic to ensure propagation)
-             return await this.editStudentScholarship(existing.id, data, adminId);
+             // UPDATE Existing (Dynamic Update as requested)
+             // key fields to exclude from update
+             const { studentId, id, ...updateProps } = data;
+
+             // Apply conversions if specific fields are present
+             if (updateProps.score) updateProps.score = Number(updateProps.score);
+             if (updateProps.scholarshipPercentage) updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
+             
+             // Check qualification existence if updating it
+             if (updateProps.qualificationId) {
+                  const qual = await prisma.academicQualification.findUnique({ where: { id: updateProps.qualificationId } });
+                  if (!qual) throw new AppError('Qualification not found', 404);
+             }
+
+             return await prisma.studentScholarship.update({
+                 where: { id: existing.id },
+                 data: {
+                     ...updateProps,
+                     updatedBy: adminId
+                 }
+             });
          }
 
          // CREATE New
@@ -1288,7 +1307,7 @@ export const AdminStudentService = {
         const existing = await prisma.studentScholarship.findUnique({ where: { id: scholarshipId } });
         if (!existing) throw new AppError('Scholarship record not found', 404);
 
-        const { type, degreeType, score, remarks, scholarshipPercentage, qualificationId } = data;
+        const { type, degreeType, score, remarks, scholarshipPercentage, qualificationId, isEligible } = data;
 
         // Check qualification existence if updating it
         if (qualificationId) {
@@ -1307,6 +1326,7 @@ export const AdminStudentService = {
                     remarks,
                     scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
                     qualificationId,
+                    isEligible,
                     updatedBy: adminId
                 }
             });
