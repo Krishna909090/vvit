@@ -13,7 +13,7 @@ import { generateAllotmentOrderPDF } from '../../utils/allotmentGenerator';
 import { StudentDocumentStatus } from '@prisma/client';
 import { sendPaymentReceipt } from '../../utils/emailService';
 
-
+import { InvoiceService } from './invoice.service';
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
 
 const MERCHANT_ID_ADMISSION = (process.env.PHONEPE_MERCHANT_ID || '').trim();
@@ -27,8 +27,6 @@ const SALT_INDEX_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_INDEX || process.env.
 const MERCHANT_ID_MESS = (process.env.MESS_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID_MESS || process.env.HOSTEL_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID || '').trim();
 const SALT_KEY_MESS = (process.env.MESS_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY_MESS || process.env.HOSTEL_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY || '').trim();
 const SALT_INDEX_MESS = (process.env.MESS_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX_MESS || process.env.HOSTEL_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX || '1').trim();
-
-
 
 const CLIENT_VERSION = 1;
 const ENV = process.env.NODE_ENV === 'production' ? Env.PRODUCTION : Env.SANDBOX;
@@ -73,12 +71,6 @@ export const getPhonePeClient = (type: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISS
 // Debug PhonePe Config
 logger.info(`[PhonePe Config] Admission Merchant: ${MERCHANT_ID_ADMISSION}, Hostel Merchant: ${MERCHANT_ID_HOSTEL}, Mess Merchant: ${MERCHANT_ID_MESS}`);
 
-// Debug PhonePe Config
-// Debug PhonePe Config
-// logger.info('[PhonePe Config] Initialized');
-
-// ... (imports remain)
-
 // Reusable PhonePe Initialization
 const resolveComponent = async (componentName: string, feeHeadId?: string): Promise<{ component: PaymentComponent, feeHeadId?: string }> => {
     const normalize = (s: string) => s.toUpperCase().replace(/ /g, '_');
@@ -92,8 +84,6 @@ const resolveComponent = async (componentName: string, feeHeadId?: string): Prom
         'HOSTEL ACCOMMODATION FEE': PaymentComponent.HOSTEL_ACCOMMODATION,
         'MESS FEE': PaymentComponent.HOSTEL_MESS,
         'TRANSPORT FEE': PaymentComponent.TRANSPORT,
-        // 'ADMISSION FEE' removed to allow direct Enum 'ADMISSION' usage if preferred, or map to ADMISSION
-        // 'ADMISSION': PaymentComponent.SCHOLARSHIP_TOKEN, // Removed alias to distinguish from Token
         'TOKEN FEE': PaymentComponent.SCHOLARSHIP_TOKEN,
         'BOOK BANK FEE': PaymentComponent.BOOK_BANK,
         'SKILL DEVELOPMENT FEE': PaymentComponent.SKILL_DEVELOPMENT, 
@@ -126,7 +116,6 @@ const resolveComponent = async (componentName: string, feeHeadId?: string): Prom
 
     throw new AppError(`Invalid Payment Component or Fee Head Name: ${componentName}`, 400);
 };
-
 
 export const initiatePhonePePayment = async (studentId: string, amount: number, transactionId: string, redirectUrl: string, feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION') => {
     try {
@@ -166,7 +155,6 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
         throw new AppError('Student not found', 404);
     }
     
-    // Check if already paid
     const existingPayment = await prisma.payment.findFirst({
         where: { 
             studentId, 
@@ -203,7 +191,6 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     return { redirectUrl: result.redirectUrl, paymentId: createdPayment.id };
 };
 
-
 export const initiateMultiComponentPayment = async (
     studentId: string, 
     rawComponents: { component: string | PaymentComponent, amount: number, feeHeadId?: string }[], 
@@ -222,8 +209,6 @@ export const initiateMultiComponentPayment = async (
         const r = await resolveComponent(c.component as string, c.feeHeadId);
         components.push({ ...c, ...r });
     }
-    logger.info(`[initiateMultiComponentPayment] Resolved ${components.length} components: ${components.map(c => c.component).join(', ')}`);
-
 
     // 1. Validate: No Hostel/Mess allowed
     const restrictedComponents: PaymentComponent[] = [
@@ -261,31 +246,21 @@ export const initiateMultiComponentPayment = async (
 
     const student = await prisma.student.findUnique({ where: { id: studentId } });
     if (!student) {
-        logger.error(`[initiateMultiComponentPayment] Student not found: ${studentId}`);
         throw new AppError('Student not found', 404);
     }
-    logger.info(`[initiateMultiComponentPayment] Student found: ${student.name} (${student.applicationId})`);
 
     const totalAmount = components.reduce((sum, c) => sum + c.amount, 0);
-    logger.info(`[initiateMultiComponentPayment] Total amount calculated: ₹${totalAmount}`);
     if (totalAmount <= 0) throw new AppError('Total amount must be greater than zero', 400);
 
     const isOffline = [PaymentMethod.CASH, PaymentMethod.CHEQUE, PaymentMethod.DEMAND_DRAFT].includes(paymentMethod as any);
-    logger.info(`[initiateMultiComponentPayment] Payment mode determined: ${isOffline ? 'OFFLINE' : 'ONLINE'}`);
-
-
     const transactionId = isOffline 
         ? (referenceNumber || `OFFLINE_${Date.now()}_${studentId.substring(0, 8)}`)
         : `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
-    logger.info(`[initiateMultiComponentPayment] Transaction ID generated: ${transactionId}`);
-
+    
     const paymentStatus = isOffline ? PaymentStatus.SUCCESS : PaymentStatus.PENDING;
     const paymentMode = isOffline ? PaymentMode.OFFLINE : PaymentMode.ONLINE;
-    logger.info(`[initiateMultiComponentPayment] Payment will be created with status=${paymentStatus}, mode=${paymentMode}`);
-
 
     // 3. Create Payment Records
-    // We create multiple records sharing the same providerTxId
     const paymentIds: string[] = [];
     const createdPayments: any[] = [];
     
@@ -313,18 +288,8 @@ export const initiateMultiComponentPayment = async (
 
     // 4. Handle Payment Flow
     if (isOffline) {
-        // Immediate Success Processing
-        // We pass the list of payments (with student object attached if needed, but processPaymentSuccess usually refetches or we pass it)
-        // Let's attach student to first payment for processPaymentSuccess normalization
-        const primaryPayment = { ...createdPayments[0], student };
-        
-        // We need to pass ALL payments to processPaymentSuccess so it generates one invoice for all
-        // But processPaymentSuccess signature expects (paymentOrPayments, metadata). 
-        // We should prep the array with student data attached to at least one or all.
         const paymentsWithStudent = createdPayments.map(p => ({ ...p, student }));
-        
         const successResult = await processMultiPaymentSuccess(paymentsWithStudent, { remarks, mode: 'OFFLINE_ENTRY', collectedBy: userId });
-
         const presignedInvoiceUrl = successResult?.invoiceUrl ? await convertToPresignedUrl(successResult.invoiceUrl) : null;
 
         return { 
@@ -335,7 +300,6 @@ export const initiateMultiComponentPayment = async (
             invoiceUrl: presignedInvoiceUrl
         };
     } else {
-        // UPI / ONLINE -> Initiate PhonePe
         const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}/admin/fees/offlinepayments?appId=${student.applicationId}&paymentId=${paymentIds.join(',')}`;
         const result = await initiatePhonePePayment(studentId, totalAmount, transactionId, redirectUrl, 'ADMISSION');
         return { redirectUrl: result.redirectUrl, paymentIds };
@@ -345,7 +309,6 @@ export const initiateMultiComponentPayment = async (
 export const checkPaymentStatus = async (merchantTransactionId: string) => {
     logger.info(`[checkPaymentStatus] Request for MerchantTxId=${merchantTransactionId}`);
     try {
-        // Fetch ALL payments associated with this transaction ID
         const payments = await prisma.payment.findMany({ 
              where: { providerTxId: merchantTransactionId },
              include: { student: true }
@@ -355,9 +318,7 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
             logger.warn(`[checkPaymentStatus] No payment records found locally for ${merchantTransactionId}`);
         }
 
-        const primaryPayment = payments[0]; // Use first one for client determination
-
-        // Heuristic to determine which Client to use
+        const primaryPayment = payments[0]; 
         let clientToCheck = getPhonePeClient('ADMISSION'); 
         
         if (primaryPayment) {
@@ -368,37 +329,27 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
              }
         }
         
-        // Let's try with the determined client
         let response;
         try {
              response = await clientToCheck.getOrderStatus(merchantTransactionId);
         } catch (e) {
-             // If first try fails, maybe try the other one?
              logger.warn(`[checkPaymentStatus] Failed with first client, trying HOSTEL client...`);
-             clientToCheck = getPhonePeClient('HOSTEL'); // Try fallthrough
+             clientToCheck = getPhonePeClient('HOSTEL'); 
              response = await clientToCheck.getOrderStatus(merchantTransactionId);
         }
 
         logger.debug(`[checkPaymentStatus] PhonePe Response: ${JSON.stringify(response)}`);
         
         if (response.state === 'COMPLETED' || response.state === 'PAYMENT_SUCCESS') {
-             // Check if ANY payment in the group needs update
              const needsUpdate = payments.some(p => p.status !== PaymentStatus.SUCCESS);
-             
              if (needsUpdate) {
-                 logger.info(`[checkPaymentStatus] Payment successful at Gateway but Pending locally. Processing success...`);
-                 
-                 // Process Success for the whole group
                  await processMultiPaymentSuccess(payments, response);
-             } else {
-                 logger.debug(`[checkPaymentStatus] Payment already valid locally.`);
              }
              return { status: 'SUCCESS', data: response, paymentIds: payments.map(p => p.id) };
 
         } else if (response.state === 'FAILED') {
              const pendingPayments = payments.filter(p => p.status === PaymentStatus.PENDING);
              if (pendingPayments.length > 0) {
-                  logger.warn(`[checkPaymentStatus] Payment failed at Gateway. Updating local status for ${pendingPayments.length} records.`);
                   await prisma.payment.updateMany({
                         where: { providerTxId: merchantTransactionId },
                         data: { status: PaymentStatus.FAILED, metadata: response as any }
@@ -413,45 +364,29 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
     }
 };
 
-// --- 4. Success Handling (Split Flows) ---
-
 const processSinglePaymentSuccess = async (payment: any, metadata: any) => {
-    logger.info(`[processSinglePaymentSuccess] Processing Single Payment ${payment.id}`);
-    
-    // 1. Generate Invoice (Single)
-    const invoiceResult = await _generateAndUploadInvoice([payment], metadata);
-
-    // 2. Update Status
-    await prisma.payment.update({
-        where: { id: payment.id },
-        data: { status: PaymentStatus.SUCCESS, metadata, invoiceUrl: invoiceResult.invoiceUrl }
-    });
-
-    // 3. Process Logic
-    await _processComponentLogic(payment);
-    if (payment.component !== PaymentComponent.APPLICATION_FEE) {
-        await _settleFeeDemands(payment);
-    }
-    await _createPaymentLedger(payment);
-
-    // 4. Notifications
-    await _sendPaymentNotification(payment.student, [payment], invoiceResult);
-
-    // 5. Triggers
-    await _handleTriggers([payment]);
-
-    return { invoiceUrl: invoiceResult.invoiceUrl };
+    logger.info(`[processSinglePaymentSuccess] Delegating to processMultiPaymentSuccess for Payment ${payment.id}`);
+    return await processMultiPaymentSuccess([payment], metadata);
 };
 
 const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     if (!payments || payments.length === 0) return;
     logger.info(`[processMultiPaymentSuccess] Processing ${payments.length} payments. Ref=${payments[0].providerTxId}`);
 
-    // 1. Generate Invoice (Combined)
-    const invoiceResult = await _generateAndUploadInvoice(payments, metadata);
+    // 1. Update Status FIRST (So InvoiceService sees them as SUCCESS)
+    await prisma.payment.updateMany({
+        where: { id: { in: payments.map(p => p.id) } },
+        data: { status: PaymentStatus.SUCCESS, metadata }
+    });
 
-    // 2. Update Status
-    await _updatePaymentsStatus(payments, invoiceResult.invoiceUrl, metadata);
+    // 2. Generate Invoice (Unified) via InvoiceService
+    let invoiceUrl = null;
+    try {
+        const invoiceResult = await InvoiceService.generateInvoiceForPayment(payments[0].id);
+        invoiceUrl = invoiceResult.invoiceUrl;
+    } catch (e) {
+        logger.error(`[processMultiPaymentSuccess] Invoice Generation Failed: ${e}`);
+    }
 
     // 3. Process Logic (Iterate)
     for (const payment of payments) {
@@ -462,117 +397,14 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         await _createPaymentLedger(payment);
     }
 
-    // 4. Notifications (Consolidated)
-    const student = payments[0].student || (await prisma.student.findUnique({ where: { id: payments[0].studentId } }));
-    await _sendPaymentNotification(student, payments, invoiceResult);
-
-    // 5. Triggers
+    // 4. Triggers
     await _handleTriggers(payments);
 
-    return { invoiceUrl: invoiceResult.invoiceUrl };
-};
-
-// --- Helpers ---
-
-const _generateAndUploadInvoice = async (payments: any[], metadata: any) => {
-    const primaryPayment = payments[0];
-    const student = primaryPayment.student;
-    
-    // Generate Invoice Number
-    const feeHeader = 'VVIT'; 
-    const year = new Date().getFullYear();
-    const applicationNumber = student.applicationId; 
-    const paymentCount = await prisma.payment.count({
-        where: { studentId: student.id, status: PaymentStatus.SUCCESS }
-    });
-    const receiptNumber = (paymentCount + 1).toString().padStart(3, '0');
-    const invoiceNumber = `${feeHeader}/${year}/${applicationNumber}/${receiptNumber}`;
-
-    // Determine Transaction ID
-    let realTransactionId = primaryPayment.providerTxId;
-    if (metadata) {
-        if (metadata.providerReferenceId) realTransactionId = metadata.providerReferenceId;
-        else if (metadata.data?.providerReferenceId) realTransactionId = metadata.data.providerReferenceId;
-        else if (metadata.paymentDetails?.[0]?.transactionId) realTransactionId = metadata.paymentDetails[0].transactionId;
-        else if (metadata.data?.paymentDetails?.[0]?.transactionId) realTransactionId = metadata.data.paymentDetails[0].transactionId;
-        else if (metadata.transactionId) realTransactionId = metadata.transactionId;
-    }
-
-    // Generate Items
-    const totalAmount = payments.reduce((sum: number, p: any) => sum + p.amount, 0);
-    const invoiceItems = [];
-    
-    for (const p of payments) {
-         let description = '';
-         // 1. Priority: Fee Head Name (Strictly as per requirement)
-         if ((p as any).feeHead) description = (p as any).feeHead.name;
-         else if (p.feeHeadId) {
-             const fh = await prisma.feeHead.findUnique({ where: { id: p.feeHeadId }});
-             if (fh) description = fh.name;
-         }
-         
-         if (!description) {
-             switch(p.component) {
-                 case PaymentComponent.APPLICATION_FEE: description = 'Application Fee'; break;
-                 case PaymentComponent.TUITION: description = 'Tuition Fee'; break;
-                 case PaymentComponent.HOSTEL: description = 'Hostel Fee'; break;
-                 case PaymentComponent.HOSTEL_ACCOMMODATION: description = 'Hostel Accommodation Fee'; break;
-                 case PaymentComponent.HOSTEL_MESS: description = 'Mess Fee'; break;
-                 case PaymentComponent.TRANSPORT: description = 'Transport Fee'; break;
-                 case PaymentComponent.SCHOLARSHIP_TOKEN: description = 'Admission Fee (Token)'; break;
-                 case PaymentComponent.ADMISSION: description = 'Admission Fee'; break;
-                 case PaymentComponent.BOOK_BANK: description = 'Book Bank Fee'; break;
-                 case PaymentComponent.OTHER: description = 'Other Fee'; break;
-                 default: description = p.component.replace(/_/g, ' ');
-             }
-         }
-         invoiceItems.push({ description, amount: p.amount });
-    }
-
-    // Generate PDF
-    const invoiceData = {
-        invoiceNumber,
-        date: new Date(),
-        studentName: student.name,
-        studentId: student.applicationId, 
-        paymentMethod: primaryPayment.method || 'ONLINE',
-        transactionId: realTransactionId,
-        amount: totalAmount,
-        description: `Payment for ${invoiceItems.length} components`,
-        items: invoiceItems,
-        address: {
-            line1: student.address,
-            line2: student.address2 || '',
-            city: student.city,
-            state: student.state,
-            pincode: student.pincode
-        }
-    };
-
-    try {
-        const invoiceBuffer = await generateInvoicePDF(invoiceData);
-        const s3Key = `student/${student.applicationId}/invoices/${primaryPayment.providerTxId}.pdf`;
-        const invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
-        logger.info(`Invoice generated: ${invoiceUrl}`);
-        return { invoiceUrl, invoiceNumber, realTransactionId, invoiceItems, invoiceData };
-    } catch (err) {
-        logger.error(`Invoice Generation Failed: ${err}`);
-        return { invoiceUrl: null, invoiceNumber, realTransactionId, invoiceItems, invoiceData };
-    }
-};
-
-const _updatePaymentsStatus = async (payments: any[], invoiceUrl: string | null, metadata: any) => {
-    for (const p of payments) {
-        await prisma.payment.update({
-            where: { id: p.id },
-            data: { status: PaymentStatus.SUCCESS, metadata, invoiceUrl }
-        });
-    }
+    return { invoiceUrl };
 };
 
 const _processComponentLogic = async (payment: any) => {
     const { studentId, component } = payment;
-    
     const currentStatus = await prisma.studentAdmission.findUnique({
         where: { studentId },
         select: { status: true }
@@ -586,8 +418,6 @@ const _processComponentLogic = async (payment: any) => {
             });
          }
     } else if (component === PaymentComponent.TUITION || component === PaymentComponent.ADMISSION || component === PaymentComponent.SCHOLARSHIP_TOKEN) {
-        
-        // Token/Tuition Logic: Lock Allocation & Generate Ledger Debits (Only on First Payment/Confirmation)
         if ((component === PaymentComponent.SCHOLARSHIP_TOKEN || component === PaymentComponent.TUITION) && currentStatus?.status !== AdmissionStatus.ADMISSION_CONFIRMED && currentStatus?.status !== AdmissionStatus.ENROLLED) {
              await ScholarshipService.lockAllocation(studentId);
              const detailedStudent = await prisma.student.findUnique({ where: { id: studentId }, include: { admissionDetails: { include: { hostel: true, transportRoute: true } }, scholarshipAllocation: { include: { rule: true } } }});
@@ -601,16 +431,6 @@ const _processComponentLogic = async (payment: any) => {
                  if (ledgers.length > 0) await prisma.studentLedger.createMany({ data: ledgers });
              }
         }
-
-        // Status Update - Removed as per requirement (Finalize Admission API handles status change)
-        /* 
-        if (currentStatus?.status !== AdmissionStatus.ADMISSION_CONFIRMED && currentStatus?.status !== AdmissionStatus.ENROLLED) {
-             await prisma.studentAdmission.update({
-                where: { studentId },
-                data: { status: AdmissionStatus.ADMISSION_CONFIRMED, feeStatus: FeeStatus.PARTIAL }
-            });
-        }
-        */
         await prisma.studentAdmission.update({
             where: { studentId },
             data: { feeStatus: FeeStatus.PARTIAL }
@@ -1441,58 +1261,7 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
 
 };
 
-export const initiateAdminOnlinePayment = async (studentId: string, amount: number, component: PaymentComponent, adminId: string, feeHeadId?: string, feeDemandId?: string) => {
-    // 1. Verify Student
-    const student = await prisma.student.findUnique({ where: { id: studentId } });
-    if (!student) throw new AppError('Student not found', 404);
-
-    // 2. Create Transaction ID
-    const transactionId = `ADM_${Date.now()}_${studentId.substring(0, 8)}`;
-
-    // 3. Create Pending Payment Record
-    const payment = await prisma.payment.create({
-        data: {
-            studentId,
-            amount,
-            status: PaymentStatus.PENDING,
-            component,
-            providerTxId: transactionId,
-            method: PaymentMethod.UPI,
-            mode: PaymentMode.ONLINE, // Admin initiated online payment
-            collectedBy: adminId, // Track who initiated it
-            metadata: { initiatedBy: 'ADMIN' },
-            feeHeadId,
-            feeDemandId
-        } as any
-    });
-
-
-
-    // 5. Initiate PhonePe Payment
-    try {
-        const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
-
-        // Admin initiated - decide based on component
-        let feeType: 'ADMISSION' | 'HOSTEL' = 'ADMISSION';
-        if (component === PaymentComponent.HOSTEL) {
-            feeType = 'HOSTEL';
-        }
-
-        const client = getPhonePeClient(feeType);
-
-        const request = StandardCheckoutPayRequest.builder()
-            .merchantOrderId(transactionId)
-            .amount(amount * 100)
-            .redirectUrl(redirectUrl)
-            .build();
-
-        const response = await client.pay(request);
-        return { redirectUrl: response.redirectUrl, paymentId: payment.id };
-    } catch (error: any) {
-        logger.error(`PhonePe Payment Initiation Error (Admin): ${error.message}`, error);
-        throw new AppError('Failed to initiate payment gateway', 502);
-    }
-};
+// [Removed initiateAdminOnlinePayment] - Use processUnifiedPayment instead
 
 export const requestDiscount = async (studentId: string, reason: string, amount: number, documentUrl?: string, userId?: string | null) => {
      return prisma.discountRequest.create({
@@ -2101,15 +1870,13 @@ export const processUnifiedPayment = async (data: any) => {
     } else {
         // 6. Handle Online Initiation
         try {
-            // Bypass removed: Always initiate real payment
-
             const path = redirectUrl ?? '/admin/fees/offlinepayments';
             const queryParams = redirectUrl 
                 ? `studentId=${student.id}&paymentId=${payment.id}`
                 : `appId=${student.applicationId}&paymentId=${payment.id}`;
             const finalRedirectUrl = `${process.env.FRONTEND_URL_ADMISSION}${path}?${queryParams}`;
             
-            logger.info(`[processUnifiedPayment] Redirect Debug: inputRedirectUrl=${redirectUrl}, path=${path}, queryParams=${queryParams}, finalUrl=${finalRedirectUrl}`);
+            logger.info(`[processUnifiedPayment] Initiating online payment: Amount=₹${amount}, FinalUrl=${finalRedirectUrl}`);
             
             // Unified API: Determine type
             let feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION';
@@ -2118,11 +1885,8 @@ export const processUnifiedPayment = async (data: any) => {
             } else if (component === PaymentComponent.HOSTEL_MESS) {
                 feeType = 'MESS';
             }
-            logger.info(`[processUnifiedPayment] PhonePe client type selected: ${feeType} for component: ${component}`);
 
             const client = getPhonePeClient(feeType);
-            logger.debug(`[processUnifiedPayment] Building PhonePe payment request: Amount=₹${amount}, RedirectUrl=${finalRedirectUrl}`);
-
 
             const request = StandardCheckoutPayRequest.builder()
                 .merchantOrderId(providerTxId)
@@ -2131,6 +1895,7 @@ export const processUnifiedPayment = async (data: any) => {
                 .build();
 
             const response = await client.pay(request);
+
             return { 
                 message: "Payment Initiated", 
                 data: { 
@@ -2141,9 +1906,6 @@ export const processUnifiedPayment = async (data: any) => {
             };
         } catch (error: any) {
             logger.error(`Unified Payment Online Error: ${error.message}`);
-            // If failed to initiate payment gateway, but we created a Pending record, 
-            // we should probably just return the paymentId and let user retry.
-            // But usually 502 means something is wrong with config.
             throw new AppError('Failed to initiate online payment', 502);
         }
     }

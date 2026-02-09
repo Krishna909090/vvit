@@ -299,11 +299,21 @@ export const payOfflineApplicationFee = catchAsync(async (req: Request, res: Res
 
 export const initiateAdminPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[initiateAdminPayment] by=${req.user?.userId}`);
-    const { studentId, amount, component } = req.body;
+    const { studentId, amount, component, feeHeadId, remarks } = req.body;
 
     if (!studentId || !amount || !component) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
-    const result = await import('./payment.service').then(s => s.initiateAdminOnlinePayment(studentId, Number(amount), component, req.user!.userId));
+    // Use unified processor
+    const result = await import('./payment.service').then(s => s.processUnifiedPayment({
+        studentId,
+        amount: Number(amount),
+        component,
+        mode: 'ONLINE', // Admin initiated online payment
+        method: 'UPI',  // Default to UPI/Online
+        feeHeadId,
+        remarks,
+        initiatedBy: req.user!.userId
+    }));
 
     sendResponse({
         res,
