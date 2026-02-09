@@ -83,6 +83,18 @@ export const AdminStudentService = {
             };
         }
 
+        // Filter: Only return students who have paid the Application Fee
+        // Check if payments filter already exists (unlikely given previous logic), but safer to merge or add to AND if needed.
+        // Since where.payments is not used above, we can assign it.
+        // However, if we want to be safe in case future code adds it, we can use logical AND but Prisma `where` structure is specific.
+        // Direct assignment is compatible with current code structure.
+        where.payments = {
+            some: {
+                component: PaymentComponent.APPLICATION_FEE,
+                status: PaymentStatus.SUCCESS
+            }
+        };
+
         const [students, total] = await prisma.$transaction([
             prisma.student.findMany({
                 where,
@@ -1190,7 +1202,7 @@ export const AdminStudentService = {
         return { success: true, message: 'Qualification deleted successfully' };
     },
 
-    async validateAcademicQualification(qualificationId: string, status: string, adminId: string | undefined) {
+    async validateAcademicQualification(qualificationId: string, status: string, remarks: string | undefined, adminId: string | undefined) {
         if (!qualificationId || !status) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
         const qualification = await prisma.academicQualification.findUnique({
@@ -1204,6 +1216,7 @@ export const AdminStudentService = {
             where: { id: qualificationId },
             data: {
                 verificationStatus: status,
+                remarks: remarks,
                 updatedBy: adminId
             }
         });
@@ -1222,17 +1235,18 @@ export const AdminStudentService = {
              if (!qual) throw new AppError('Qualification not found', 404);
          }
 
-         // STRICT CREATE ONLY
          // Check if scholarship already exists for this student
          const existing = await prisma.studentScholarship.findFirst({
              where: { studentId }
          });
 
          if (existing) {
-             throw new AppError('Scholarship record already exists for this student. Use PUT endpoint to update.', 409);
+             // UPDATE Existing (Handled by edit logic to ensure propagation)
+             return await this.editStudentScholarship(existing.id, data, adminId);
          }
 
-         return await prisma.studentScholarship.create({
+         // CREATE New
+         const newScholarship = await prisma.studentScholarship.create({
              data: {
                  studentId,
                  type,
@@ -1246,6 +1260,16 @@ export const AdminStudentService = {
                  updatedBy: adminId
              }
          });
+         
+         // Propagate changes for NEW scholarship too (if fee demands exist)
+         const newPct = newScholarship.scholarshipPercentage || 0;
+         if (newPct > 0) {
+             await prisma.$transaction(async (tx) => {
+                  await this.propagateScholarshipUpdate(studentId, newPct, adminId, tx);
+             });
+         }
+         
+         return newScholarship;
     },
 
     async getStudentScholarships(studentId: string) {

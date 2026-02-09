@@ -12,6 +12,8 @@ const prismaClient = new PrismaClient();
 const modelsWithSoftDelete = new Set<string>();
 const modelsWithCreatedBy = new Set<string>();
 const modelsWithUpdatedBy = new Set<string>();
+const modelsWithCreatedAt = new Set<string>();
+const modelsWithUpdatedAt = new Set<string>();
 
 const dmmf = Prisma.dmmf;
 if (dmmf && dmmf.datamodel) {
@@ -27,6 +29,12 @@ if (dmmf && dmmf.datamodel) {
         if (fields.includes('updatedBy')) {
             modelsWithUpdatedBy.add(model.name);
         }
+        if (fields.includes('createdAt')) {
+            modelsWithCreatedAt.add(model.name);
+        }
+        if (fields.includes('updatedAt')) {
+            modelsWithUpdatedAt.add(model.name);
+        }
     });
 }
 
@@ -40,17 +48,15 @@ const prisma = prismaClient.$extends({
                 // Initialize args.data if undefined (rare but possible)
                 args.data = args.data || {};
 
-                // Always add timestamps if they exist (usually handled by @default(now()) or @updatedAt in schema, but we overwrite here?)
-                // The original code was overwriting. We should continue that pattern if desired, or let schema handle timestamps.
-                // However, schema @default(now()) implies DB handles it. Code sending explicit value overrides it.
-                // Original code sent new Date().
-                // Let's safe-guard timestamps too? No, usually OK to send unless explicitly excluded.
-                // But let's focus on createdBy/updatedBy which cause error.
-
+                // Shallow copy since we might modify it
                 const data: any = { ...args.data };
                 
-                data.createdAt = new Date();
-                data.updatedAt = new Date();
+                if (modelsWithCreatedAt.has(model)) {
+                    data.createdAt = new Date();
+                }
+                if (modelsWithUpdatedAt.has(model)) {
+                    data.updatedAt = new Date();
+                }
 
                 if (modelsWithCreatedBy.has(model)) {
                     data.createdBy = userId;
@@ -67,10 +73,15 @@ const prisma = prismaClient.$extends({
                 
                 const enhanceItem = (item: any) => {
                     const enhanced: any = { 
-                        ...item,
-                        createdAt: new Date(),
-                        updatedAt: new Date()
+                        ...item
                     };
+                    
+                    if (modelsWithCreatedAt.has(model)) {
+                        enhanced.createdAt = new Date();
+                    }
+                    if (modelsWithUpdatedAt.has(model)) {
+                        enhanced.updatedAt = new Date();
+                    }
                     
                      if (modelsWithCreatedBy.has(model)) {
                         enhanced.createdBy = userId;
@@ -95,7 +106,9 @@ const prisma = prismaClient.$extends({
                 args.data = args.data || {};
                 const data: any = { ...args.data };
 
-                data.updatedAt = new Date();
+                if (modelsWithUpdatedAt.has(model)) {
+                    data.updatedAt = new Date();
+                }
 
                 if (modelsWithUpdatedBy.has(model)) {
                     data.updatedBy = userId;
@@ -114,7 +127,9 @@ const prisma = prismaClient.$extends({
                 args.data = args.data || {};
                 const data: any = { ...args.data };
 
-                data.updatedAt = new Date();
+                if (modelsWithUpdatedAt.has(model)) {
+                    data.updatedAt = new Date();
+                }
                 
                 if (modelsWithUpdatedBy.has(model)) {
                     data.updatedBy = userId;
@@ -133,8 +148,13 @@ const prisma = prismaClient.$extends({
                 // Create part
                 args.create = args.create || {};
                 const createData: any = { ...args.create };
-                createData.createdAt = new Date();
-                createData.updatedAt = new Date();
+                
+                if (modelsWithCreatedAt.has(model)) {
+                    createData.createdAt = new Date();
+                }
+                if (modelsWithUpdatedAt.has(model)) {
+                    createData.updatedAt = new Date();
+                }
 
                 if (modelsWithCreatedBy.has(model)) {
                     createData.createdBy = userId;
@@ -147,7 +167,10 @@ const prisma = prismaClient.$extends({
                 // Update part
                 args.update = args.update || {};
                 const updateData: any = { ...args.update };
-                updateData.updatedAt = new Date();
+                
+                if (modelsWithUpdatedAt.has(model)) {
+                    updateData.updatedAt = new Date();
+                }
 
                 if (modelsWithUpdatedBy.has(model)) {
                     updateData.updatedBy = userId;
@@ -166,9 +189,12 @@ const prisma = prismaClient.$extends({
                     // Perform soft delete (update) using raw client to avoid circular hooks
                     
                     const updateData: any = {
-                        isDeleted: true,
-                        updatedAt: new Date()
+                        isDeleted: true
                     };
+
+                    if (modelsWithUpdatedAt.has(model)) {
+                        updateData.updatedAt = new Date();
+                    }
                     
                     if (modelsWithUpdatedBy.has(model)) {
                         updateData.updatedBy = userId;
@@ -186,9 +212,12 @@ const prisma = prismaClient.$extends({
                     const { userId } = getContext();
                     
                     const updateData: any = {
-                        isDeleted: true,
-                        updatedAt: new Date()
+                        isDeleted: true
                     };
+
+                    if (modelsWithUpdatedAt.has(model)) {
+                        updateData.updatedAt = new Date();
+                    }
                     
                     if (modelsWithUpdatedBy.has(model)) {
                         updateData.updatedBy = userId;

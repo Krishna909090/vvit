@@ -399,9 +399,9 @@ export const deleteAcademicQualification = catchAsync(async (req: Request, res: 
 export const validateAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[validateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, remarks } = req.body;
 
-    const result = await AdminStudentService.validateAcademicQualification(id, status, req.user?.userId);
+    const result = await AdminStudentService.validateAcademicQualification(id, status, remarks, req.user?.userId);
 
     sendResponse({
         res,
