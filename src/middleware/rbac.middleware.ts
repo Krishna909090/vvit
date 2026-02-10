@@ -7,6 +7,8 @@ import { RoleType } from '../constants/roles';
 
 
 
+import { setContextUser } from '../utils/requestContext';
+
 export const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const authHeader = req.headers.authorization;
@@ -16,7 +18,11 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 
     const token = authHeader.split(' ')[1];
     
+    // Explicitly verify and decode first
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string, role: RoleType };
+    
+    // Set Context First
+    setContextUser(decoded.userId);
     
     // Resolve permissions here for efficiency and attach to request
     // This makes 'authorizePermission' very fast (sync check)

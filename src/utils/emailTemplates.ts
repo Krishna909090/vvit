@@ -311,3 +311,158 @@ export const getHallTicketTemplate = (data: HallTicketEmailData) => {
 </html>
 `;
 };
+
+export interface StatusUpdateEmailData {
+    studentName: string;
+    applicationId: string;
+    updateType: 'QUALIFICATION_REJECTED' | 'DOCUMENT_REJECTED' | 'SEAT_ALLOTMENT_REJECTED' | 'EXAM_FAILED';
+    approvedItems?: { name: string; details?: string }[];
+    rejectedItems?: { name: string; reason?: string }[];
+    supportEmail?: string;
+}
+
+export const getStatusUpdateTemplate = (data: StatusUpdateEmailData) => {
+    const {
+        studentName,
+        applicationId,
+        updateType,
+        approvedItems = [],
+        rejectedItems = [],
+        supportEmail = "admissions@vvit.edu.in"
+    } = data;
+
+    let title = "Status Update";
+    let greeting = "Application Status Update";
+    let introText = "";
+    let nextSteps = "";
+
+    switch (updateType) {
+        case 'QUALIFICATION_REJECTED':
+            title = "Qualification Verification Status";
+            greeting = "Action Required: Qualification Issues Found";
+            introText = "During the verification of your academic qualifications, we found discrepancies that require your attention.";
+            nextSteps = "Please review the rejected qualifications and upload the correct documents or update the information in your student dashboard.";
+            break;
+        case 'DOCUMENT_REJECTED':
+            title = "Document Verification Status";
+            greeting = "Action Required: Document Issues Found";
+            introText = "We have reviewed your submitted documents. Some documents have been rejected due to quality issues or incorrect information.";
+            nextSteps = "Please re-upload the rejected documents through the student portal immediately to process your admission.";
+            break;
+        case 'SEAT_ALLOTMENT_REJECTED':
+            title = "Seat Allotment Status";
+            greeting = "Seat Allotment Update";
+            introText = "We regret to inform you that your seat allotment has been rejected/cancelled.";
+            nextSteps = "Please contact the admissions office for further clarification regarding your seat status.";
+            break;
+        case 'EXAM_FAILED':
+            title = "Entrance Exam Result";
+            greeting = "Entrance Exam Result Status";
+            introText = "We regret to inform you that you have not qualified in the recent entrance examination.";
+            nextSteps = "You may re-apply for the next phase or contact the helpdesk for other admission options.";
+            break;
+    }
+
+    const approvedListHtml = approvedItems.length > 0 ? `
+        <p><strong>Approved:</strong></p>
+        <ul style="list-style: none; padding: 0; margin-bottom: 20px;">
+            ${approvedItems.map(item => `
+                <li style="padding: 10px; margin-bottom: 8px; border-left: 4px solid #28a745; background-color: #f0fff4; border-radius: 4px;">
+                    <span style="display: block; font-weight: bold; color: #155724;">${item.name}</span>
+                    ${item.details ? `<span style="display: block; font-size: 13px; color: #28a745; margin-top: 4px;">${item.details}</span>` : ''}
+                </li>
+            `).join('')}
+        </ul>
+    ` : '';
+
+    const rejectedListHtml = rejectedItems.length > 0 ? `
+        <p><strong>Rejected:</strong></p>
+        <ul style="list-style: none; padding: 0; margin-bottom: 20px;">
+            ${rejectedItems.map(item => `
+                <li style="padding: 10px; margin-bottom: 8px; border-left: 4px solid #dc3545; background-color: #fff5f5; border-radius: 4px;">
+                    <span style="display: block; font-weight: bold; color: #721c24;">${item.name}</span>
+                    ${item.reason ? `<span style="display: block; font-size: 13px; color: #dc3545; margin-top: 4px;">Reason: ${item.reason}</span>` : ''}
+                </li>
+            `).join('')}
+        </ul>
+    ` : '';
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>${title}</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #FCFCFD; font-family: Arial, Helvetica, sans-serif; color: #6E6C78; }
+    .container { max-width: 600px; margin: 0 auto; background-color: #FCFCFD; }
+    .banner-table { width: 100%; border-collapse: collapse; border-radius: 12px 12px 0 0; overflow: hidden; }
+    .banner-bg { background-size: cover; background-position: center center; background-repeat: no-repeat; height: 220px; }
+    .logo-cell { text-align: right; vertical-align: top; padding: 20px; }
+    .content { padding: 32px 40px 10px 40px; font-size: 14px; line-height: 1.75; color: #6E6C78; }
+    .content p { margin: 0 0 14px 0; }
+    .content strong { color: #131010; }
+    .summary { margin: 10px 0 16px 18px; padding: 0; }
+    .summary li { margin-bottom: 6px; padding-left: 4px; color: #6E6C78; }
+    .signature { margin-top: 18px; }
+    .divider { border-top: 1px solid #DEDFE3; margin: 20px 0 10px; }
+    .cta { display: inline-block; margin-top: 12px; padding: 10px 18px; background-color: #E5776B; color: #FCFCFD !important; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 700; }
+    .watermark { text-align: center; font-size: 96px; font-weight: 800; color: #FFCC99; letter-spacing: 10px; margin: 8px 0 30px; line-height: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <table class="banner-table" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td class="banner-bg" background="cid:banner" style="background-image: url('cid:banner');">
+          <!--[if gte mso 9]>
+          <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:600px;height:220px;">
+            <v:fill type="tile" src="cid:banner" color="#333333" />
+            <v:textbox inset="0,0,0,0">
+          <![endif]-->
+          <div style="height: 220px;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" height="100%">
+              <tr>
+                <td class="logo-cell">
+                  <img src="cid:logo" alt="VVIT Logo" width="80" style="width:80px; height:auto;" />
+                </td>
+              </tr>
+            </table>
+          </div>
+          <!--[if gte mso 9]>
+            </v:textbox>
+          </v:rect>
+          <![endif]-->
+        </td>
+      </tr>
+    </table>
+
+    <div class="content">
+      <p><strong>Dear ${studentName},</strong></p>
+      
+      <p><strong>${greeting}</strong></p>
+
+      <p>${introText}</p>
+
+      ${rejectedListHtml}
+
+      ${approvedListHtml}
+
+      <p><strong>What to do next:</strong></p>
+      <p>${nextSteps}</p>
+
+      <p>For any queries, please contact us at <strong>${supportEmail}</strong>.</p>
+
+      <div class="signature">
+        <p>Best regards,<br><strong>Admissions Office, VVITU</strong></p>
+      </div>
+
+      <div class="divider"></div>
+       <div class="watermark">VVITU</div>
+    </div>
+  </div>
+</body>
+</html>
+`;
+};

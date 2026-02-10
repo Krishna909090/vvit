@@ -374,35 +374,35 @@ model HostelBlock {
 }
 
 model HostelRoom {
-  id        String      @id @default(dbgenerated("gen_random_uuid()"))
-  blockId   String
-  number    String
-  capacity  Int
-  type      String
-  cost      Float?      @default(0)
+  id                String      @id @default(dbgenerated("gen_random_uuid()"))
+  blockId           String
+  number            String
+  capacity          Int
+  type              String
+  cost              Float?      @default(0)
   accommodationCost Float?      @default(0)
   messCost          Float?      @default(0)
-  createdAt DateTime?   @default(now())
-  updatedAt DateTime    @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean?    @default(false)
-  beds      HostelBed[]
-  block     HostelBlock @relation(fields: [blockId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt         DateTime?   @default(now())
+  updatedAt         DateTime    @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  isDeleted         Boolean?    @default(false)
+  beds              HostelBed[]
+  block             HostelBlock @relation(fields: [blockId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model HostelPriceCategory {
-  id        String         @id @default(dbgenerated("gen_random_uuid()"))
-  sharing   Int
-  roomType  HostelRoomType
-  price     Float
-  accommodationPrice Float?    @default(0)
-  messPrice          Float?    @default(0)
-  createdAt DateTime?      @default(now())
-  updatedAt DateTime       @updatedAt
-  createdBy String?
-  updatedBy String?
-  metadata  Json?
+  id                 String         @id @default(dbgenerated("gen_random_uuid()"))
+  sharing            Int
+  roomType           HostelRoomType
+  price              Float
+  accommodationPrice Float?         @default(0)
+  messPrice          Float?         @default(0)
+  createdAt          DateTime?      @default(now())
+  updatedAt          DateTime       @updatedAt
+  createdBy          String?
+  updatedBy          String?
+  metadata           Json?
 
   @@unique([sharing, roomType])
 }
@@ -973,6 +973,7 @@ model AcademicQualification {
   schoolName          String?
   updatedBy           String?
   verificationStatus  String?              @default("PENDING")
+  remarks             String?
   student             Student              @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   studentScholarships StudentScholarship[]
 }
@@ -1263,22 +1264,22 @@ enum HostelPaymentMode {
 }
 
 model ServiceChangeRequest {
-  id          String              @id @default(dbgenerated("gen_random_uuid()"))
-  studentId   String
-  type        ServiceRequestType
-  fromValue   String?
-  toValue     String
-  reason      String?
-  status      RequestStatus       @default(REQUESTED)
-  remarks     String?             // Admin remarks
-  approvedBy  String?
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
-  
-  student     Student             @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id         String             @id @default(dbgenerated("gen_random_uuid()"))
+  studentId  String
+  type       ServiceRequestType
+  fromValue  String?
+  toValue    String
+  reason     String?
+  status     RequestStatus      @default(REQUESTED)
+  remarks    String? // Admin remarks
+  approvedBy String?
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 enum ServiceRequestType {
-  FACILITY          // Hostel <-> Transport
-  PAYMENT_MODE      // Semwise <-> Yearwise (Though yearwise is direct, good to have enum for history/logs if needed)
+  FACILITY // Hostel <-> Transport
+  PAYMENT_MODE // Semwise <-> Yearwise (Though yearwise is direct, good to have enum for history/logs if needed)
 }

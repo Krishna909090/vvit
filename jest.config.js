@@ -19,10 +19,12 @@ module.exports = {
     // Remove the aggressive relative catch-all
   },
   coverageDirectory: 'coverage',
+
   collectCoverageFrom: [
     'src/modules/**/*.ts',
     '!src/modules/**/*.routes.ts', 
     '!src/**/*.d.ts',
   ],
+  modulePathIgnorePatterns: ['<rootDir>/dist/'],
   rootDir: '.',
 };

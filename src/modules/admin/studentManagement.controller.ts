@@ -399,9 +399,9 @@ export const deleteAcademicQualification = catchAsync(async (req: Request, res: 
 export const validateAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[validateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, remarks } = req.body;
 
-    const result = await AdminStudentService.validateAcademicQualification(id, status, req.user?.userId);
+    const result = await AdminStudentService.validateAcademicQualification(id, status, remarks, req.user?.userId);
 
     sendResponse({
         res,
@@ -535,3 +535,17 @@ export const getAdmissionInvoice = catchAsync(async (req: Request, res: Response
 
 
 
+
+// Send Status Email (Manual Trigger)
+export const sendStatusEmail = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[sendStatusEmail] by=${req.user?.userId || 'anonymous'}`);
+
+    const result = await AdminStudentService.sendStatusEmail(req.body);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: result.success,
+        message: 'Email sent successfully'
+    });
+});

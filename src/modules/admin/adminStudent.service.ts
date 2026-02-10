@@ -83,6 +83,18 @@ export const AdminStudentService = {
             };
         }
 
+        // Filter: Only return students who have paid the Application Fee
+        // Check if payments filter already exists (unlikely given previous logic), but safer to merge or add to AND if needed.
+        // Since where.payments is not used above, we can assign it.
+        // However, if we want to be safe in case future code adds it, we can use logical AND but Prisma `where` structure is specific.
+        // Direct assignment is compatible with current code structure.
+        where.payments = {
+            some: {
+                component: PaymentComponent.APPLICATION_FEE,
+                status: PaymentStatus.SUCCESS
+            }
+        };
+
         const [students, total] = await prisma.$transaction([
             prisma.student.findMany({
                 where,
@@ -1190,7 +1202,7 @@ export const AdminStudentService = {
         return { success: true, message: 'Qualification deleted successfully' };
     },
 
-    async validateAcademicQualification(qualificationId: string, status: string, adminId: string | undefined) {
+    async validateAcademicQualification(qualificationId: string, status: string, remarks: string | undefined, adminId: string | undefined) {
         if (!qualificationId || !status) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
         const qualification = await prisma.academicQualification.findUnique({
@@ -1204,6 +1216,7 @@ export const AdminStudentService = {
             where: { id: qualificationId },
             data: {
                 verificationStatus: status,
+                remarks: remarks,
                 updatedBy: adminId
             }
         });
@@ -1222,17 +1235,37 @@ export const AdminStudentService = {
              if (!qual) throw new AppError('Qualification not found', 404);
          }
 
-         // STRICT CREATE ONLY
          // Check if scholarship already exists for this student
          const existing = await prisma.studentScholarship.findFirst({
              where: { studentId }
          });
 
          if (existing) {
-             throw new AppError('Scholarship record already exists for this student. Use PUT endpoint to update.', 409);
+             // UPDATE Existing (Dynamic Update as requested)
+             // key fields to exclude from update
+             const { studentId, id, ...updateProps } = data;
+
+             // Apply conversions if specific fields are present
+             if (updateProps.score) updateProps.score = Number(updateProps.score);
+             if (updateProps.scholarshipPercentage) updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
+             
+             // Check qualification existence if updating it
+             if (updateProps.qualificationId) {
+                  const qual = await prisma.academicQualification.findUnique({ where: { id: updateProps.qualificationId } });
+                  if (!qual) throw new AppError('Qualification not found', 404);
+             }
+
+             return await prisma.studentScholarship.update({
+                 where: { id: existing.id },
+                 data: {
+                     ...updateProps,
+                     updatedBy: adminId
+                 }
+             });
          }
 
-         return await prisma.studentScholarship.create({
+         // CREATE New
+         const newScholarship = await prisma.studentScholarship.create({
              data: {
                  studentId,
                  type,
@@ -1246,6 +1279,16 @@ export const AdminStudentService = {
                  updatedBy: adminId
              }
          });
+         
+         // Propagate changes for NEW scholarship too (if fee demands exist)
+         const newPct = newScholarship.scholarshipPercentage || 0;
+         if (newPct > 0) {
+             await prisma.$transaction(async (tx) => {
+                  await this.propagateScholarshipUpdate(studentId, newPct, adminId, tx);
+             });
+         }
+         
+         return newScholarship;
     },
 
     async getStudentScholarships(studentId: string) {
@@ -1264,7 +1307,7 @@ export const AdminStudentService = {
         const existing = await prisma.studentScholarship.findUnique({ where: { id: scholarshipId } });
         if (!existing) throw new AppError('Scholarship record not found', 404);
 
-        const { type, degreeType, score, remarks, scholarshipPercentage, qualificationId } = data;
+        const { type, degreeType, score, remarks, scholarshipPercentage, qualificationId, isEligible } = data;
 
         // Check qualification existence if updating it
         if (qualificationId) {
@@ -1283,6 +1326,7 @@ export const AdminStudentService = {
                     remarks,
                     scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
                     qualificationId,
+                    isEligible,
                     updatedBy: adminId
                 }
             });
@@ -1453,6 +1497,106 @@ export const AdminStudentService = {
         }
     },
 
+    /**
+     * Helper: Processes logic after a successful payment (Offline or Online Verification).
+     * Handles: Ledger Creation, Paid Fee Update, Demand Settlement, and Admission Updates.
+     */
+    async processPaymentSuccess(payment: any, adminId: string | undefined, tx: any) {
+        // 1. Create Ledger Entry
+        await tx.studentLedger.create({
+            data: {
+                studentId: payment.studentId,
+                type: LedgerTransactionType.CREDIT,
+                amount: payment.amount,
+                description: `Admission Payment (${payment.method || 'ONLINE'}) - ${payment.component || 'FEE'}`,
+                referenceId: payment.id,
+                referenceType: 'PAYMENT',
+                feeHeadId: payment.feeHeadId,
+                createdBy: adminId || 'SYSTEM'
+            }
+        });
+
+        // 2. Increment Paid Fee
+        await tx.studentAdmission.update({
+             where: { studentId: payment.studentId },
+             data: { paidFee: { increment: payment.amount } }
+        });
+
+        // 3. Settle Fee Demand (if linked)
+        if (payment.feeDemandId) {
+             const demand = await tx.studentFeeDemand.findUnique({ where: { id: payment.feeDemandId } });
+             if (demand) {
+                 // Check if fully paid (compare against netAmount if exists, else amount)
+                 const targetAmount = demand.netAmount ?? demand.amount;
+                 const newStatus = payment.amount >= targetAmount ? 'FULL' : 'PARTIAL';
+                 
+                 await tx.studentFeeDemand.update({
+                     where: { id: payment.feeDemandId },
+                     data: { status: newStatus }
+                 });
+             }
+        }
+
+        // 4. Execute Admission Updates (Allocation/Scholarship) if metadata dictates
+        const meta = payment.metadata as any;
+        if (meta && meta.targetAction === 'FINALIZE_ADMISSION') {
+             await this.executeAdmissionUpdates(payment.studentId, meta, payment.id, adminId || 'SYSTEM', tx);
+        }
+    },
+
+    async sendAdmissionSuccessEmail(paymentId: string) {
+         try {
+             const p = await prisma.payment.findUnique({ 
+                 where: { id: paymentId },
+                 include: { student: true }
+             });
+
+             if (p && p.student.email) {
+                let invoiceUrl = p.invoiceUrl;
+                if (invoiceUrl) {
+                    invoiceUrl = await convertToPresignedUrl(invoiceUrl);
+                }
+
+                // Derive Payment Name
+                let paymentTypeName = 'Admission Fee'; 
+                let emailPaymentType = 'ADMISSION_FEE';
+
+                if (p.component === PaymentComponent.TUITION) {
+                    paymentTypeName = 'Tuition Fee';
+                    emailPaymentType = 'TUITION_FEE';
+                } else if (p.component === PaymentComponent.APPLICATION_FEE) {
+                    paymentTypeName = 'Application Fee';
+                    emailPaymentType = 'APPLICATION_FEE';
+                } else if (p.component === PaymentComponent.SCHOLARSHIP_TOKEN) {
+                    paymentTypeName = 'Admission Fee';
+                     emailPaymentType = 'ADMISSION_FEE';
+                }
+
+                await sendPaymentReceipt(p.student.email, {
+                    studentName: p.student.name,
+                    invoiceNumber: p.referenceNumber || p.id, 
+                    applicationId: p.student.applicationId || 'N/A',
+                    transactionId: p.referenceNumber || p.providerTxId || 'N/A',
+                    amount: p.amount,
+                    date: new Date(),
+                    paymentType: emailPaymentType as any, 
+                    customFeeType: paymentTypeName, 
+                    invoiceUrl: invoiceUrl || undefined,
+                    address: {
+                        line1: p.student.address,
+                        line2: p.student.address2 || '',
+                        city: p.student.city,
+                        state: p.student.state,
+                        pincode: p.student.pincode
+                    }
+                });
+                logger.info(`[sendAdmissionSuccessEmail] Email receipt sent to ${p.student.email}`);
+             }
+         } catch(e) {
+             logger.error(`[sendAdmissionSuccessEmail] Failed to send email: ${e}`);
+         }
+    },
+
     async executeAdmissionUpdates(studentId: string, payload: any, paymentId: string, adminId: string, tx: any) {
         try {
             const { allocation, scholarship, course } = payload;
@@ -1534,6 +1678,28 @@ export const AdminStudentService = {
             
             logger.debug(`[executeAdmissionUpdates] Total Fee Adjustment: ${accCostDelta}`);
 
+            // --- Determine Base Tuition Fee (For New Admissions) ---
+            let baseTuition = 0;
+            const isNewAdmission = !oldAdmission || (oldAdmission.status !== AdmissionStatus.ADMISSION_CONFIRMED && oldAdmission.status !== AdmissionStatus.ENROLLED);
+            
+            if (isNewAdmission) {
+                baseTuition = 25000;
+                logger.info(`[executeAdmissionUpdates] New Admission Detected. Adding Base Tuition: ${baseTuition}`);
+                
+                // Generate Tuition DEBIT Ledger
+                await tx.studentLedger.create({
+                    data: {
+                        studentId,
+                        type: LedgerTransactionType.DEBIT,
+                        amount: baseTuition,
+                        description: 'Tuition Fee (Annual)',
+                        referenceType: 'FEE_GENERATION',
+                        referenceId: `ADMISSION_${Date.now()}`,
+                        createdBy: adminId
+                    }
+                });
+            }
+
             // --- 3. Update Admission Record ---
             logger.debug(`[executeAdmissionUpdates] Updating Student Admission record`);
             await tx.studentAdmission.upsert({
@@ -1546,7 +1712,7 @@ export const AdminStudentService = {
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
                     hostelPaymentMode: allocation.type === AccommodationType.HOSTEL ? allocation.hostelPaymentMode : null,
                     transportRouteId: allocation.type === AccommodationType.TRANSPORT ? allocation.transportRouteId : null,
-                    totalFee: { increment: accCostDelta }
+                    totalFee: { increment: (accCostDelta + baseTuition) }
                 },
                 create: {
                     studentId,
@@ -1557,7 +1723,7 @@ export const AdminStudentService = {
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
                     hostelPaymentMode: allocation.type === AccommodationType.HOSTEL ? allocation.hostelPaymentMode : null,
                     transportRouteId: allocation.type === AccommodationType.TRANSPORT ? allocation.transportRouteId : null,
-                    totalFee: accCostDelta > 0 ? accCostDelta : 0
+                    totalFee: (accCostDelta + baseTuition) > 0 ? (accCostDelta + baseTuition) : 0
                 }
             });
             
@@ -1866,118 +2032,35 @@ export const AdminStudentService = {
                             course,
                             feeComponent,
                             feeStructureId: payment.feeStructureId,
-                            notes: 'Offline Immediate Finalization' 
+                            notes: 'Offline Immediate Finalization',
+                            targetAction: 'FINALIZE_ADMISSION' // Ensure processPaymentSuccess runs updates
                          }
                     }
                 });
                 logger.debug(`[finalizeAdmission][Offline] Payment record created: ${newPayment.id}`);
 
-                // Step 2: Execute Updates (Allocation, Scholarship, etc.)
-                logger.info(`[finalizeAdmission][Offline] Step 2: Executing admission updates`);
-                await this.executeAdmissionUpdates(studentId, payload, newPayment.id, adminId, tx);
-
-                // Step 3: Update Ledger
-                logger.info(`[finalizeAdmission][Offline] Step 3: Updating Student Ledger`);
-                await tx.studentLedger.create({
-                    data: {
-                        studentId,
-                        type: LedgerTransactionType.CREDIT,
-                        amount: payment.amount,
-                        description: `Tution Payment (${payment.method}) - ${feeComponent}`,
-                        referenceId: newPayment.id,
-                        referenceType: 'PAYMENT',
-                        feeHeadId: payment.feeHeadId, 
-                        createdBy: adminId
-                    } as Prisma.StudentLedgerUncheckedCreateInput
-                });
-
-                // Step 4: Increment Paid Fee 
-                logger.info(`[finalizeAdmission][Offline] Step 4: Incrementing Paid Fee`);
-                await tx.studentAdmission.update({
-                    where: { studentId },
-                    data: { paidFee: { increment: payment.amount } }
-                });
-
-                // Step 5: Settle Fee Demand (Strict Link)
-                if (feeDemandId) {
-                    logger.info(`[finalizeAdmission][Offline] Step 5: Settling Demand ${feeDemandId}`);
-                    // Fetch demand to check amount (need to read from TX or use cached info? Safe to read)
-                    const demand = await tx.studentFeeDemand.findUnique({ where: { id: feeDemandId } });
-                    if (demand) {
-                        const newStatus = payment.amount >= (demand.netAmount || demand.amount) ? 'FULL' : 'PARTIAL'; // Use netAmount if exists
-                         await tx.studentFeeDemand.update({
-                            where: { id: feeDemandId },
-                            data: { status: newStatus as any }
-                        });
-                    }
-                }
+                // Step 2 & 3 & 4 & 5: Centralized Success Processing
+                logger.info(`[finalizeAdmission][Offline] Processing Post-Payment actions`);
+                await this.processPaymentSuccess(newPayment, adminId, tx);
 
                 logger.info(`[finalizeAdmission][Offline] Transaction committed successfully.`);
                 return { success: true, type: 'OFFLINE_COMPLETED', message: "Admission Finalized Successfully", paymentId: newPayment.id };
              });
 
+
              // Auto-generate invoice (Outside TX)
-             let generatedInvoiceUrl: string | null = null;
              try {
                 if (offlineResult.paymentId) {
-                    const invoiceResult = await InvoiceService.generateInvoiceForPayment(offlineResult.paymentId);
-                    generatedInvoiceUrl = invoiceResult.invoiceUrl;
+                    await InvoiceService.generateInvoiceForPayment(offlineResult.paymentId);
                 }
              } catch (err) {
                 logger.warn(`[finalizeAdmission] Failed to auto-generate invoice: ${err}`);
              }
 
-             // Send Email Notification (Offline)
-             try {
-                 const p = await prisma.payment.findUnique({ 
-                     where: { id: offlineResult.paymentId },
-                     include: { student: true }
-                 });
-
-                 if (p && p.student.email) {
-                    // Re-fetch formatted Invoice URL if needed or use what we got
-                    if (!generatedInvoiceUrl && p.invoiceUrl) {
-                        generatedInvoiceUrl = await convertToPresignedUrl(p.invoiceUrl);
-                    }
-
-                    // Derive Payment Name
-                    let paymentTypeName = 'Admission Fee'; // Default fallback
-                    let emailPaymentType = 'ADMISSION_FEE';
-
-                    if (p.component === PaymentComponent.TUITION) {
-                        paymentTypeName = 'Tuition Fee';
-                        emailPaymentType = 'TUITION_FEE';
-                    } else if (p.component === PaymentComponent.APPLICATION_FEE) {
-                        paymentTypeName = 'Application Fee';
-                        emailPaymentType = 'APPLICATION_FEE';
-                    } else if (p.component === PaymentComponent.SCHOLARSHIP_TOKEN) {
-                        paymentTypeName = 'Admission Fee'; // Token usually means Admission Fee
-                         emailPaymentType = 'ADMISSION_FEE';
-                    }
-
-                    await sendPaymentReceipt(p.student.email, {
-                        studentName: p.student.name,
-                        invoiceNumber: p.referenceNumber || p.id, 
-                        applicationId: p.student.applicationId || 'N/A',
-                        transactionId: p.referenceNumber || 'OFFLINE',
-                        amount: p.amount,
-                        date: new Date(),
-                        paymentType: emailPaymentType as any, 
-                        customFeeType: paymentTypeName, 
-                        invoiceUrl: generatedInvoiceUrl || undefined,
-                        address: {
-                            line1: p.student.address,
-                            line2: p.student.address2 || '',
-                            city: p.student.city,
-                            state: p.student.state,
-                            pincode: p.student.pincode
-                        }
-                    });
-                    logger.info(`[finalizeAdmission][Offline] Email receipt sent to ${p.student.email}`);
-                 }
-             } catch(e) {
-                 logger.error(`[finalizeAdmission][Offline] Failed to send email: ${e}`);
-             }
+             // Send Email Notification (Offline) - Handled by InvoiceService
+             // if (offlineResult.paymentId) {
+             //    await this.sendAdmissionSuccessEmail(offlineResult.paymentId);
+             // }
 
              // Fetch final details for response
              const finalPayment = await prisma.payment.findUnique({ where: { id: offlineResult.paymentId } });
@@ -2031,7 +2114,6 @@ export const AdminStudentService = {
 
         const isSuccess = payment.status === PaymentStatus.SUCCESS;
         if (isSuccess) {
-            // Already processed logic...
              logger.info(`[verifyAndCompletePayment] Payment ${paymentId} already processed.`);
              return { 
                 success: true, 
@@ -2041,7 +2123,8 @@ export const AdminStudentService = {
                     paymentId: payment.id,
                     invoiceUrl: await convertToPresignedUrl(payment.invoiceUrl),
                     amount: payment.amount,
-                    transactionId: payment.providerTxId
+                    transactionId: payment.providerTxId,
+                    payment: payment
                 }
              };
         }
@@ -2103,7 +2186,7 @@ export const AdminStudentService = {
         const primaryPayment = payments[0];
         logger.info(`[_completeAdmissionTransaction] Completing ${payments.length} payments. Primary=${primaryPayment.id}`);
 
-        const result = await prisma.$transaction(async (tx) => {
+        await prisma.$transaction(async (tx) => {
              // Filter out already processed
              const pendingPayments = payments.filter(p => p.status !== PaymentStatus.SUCCESS);
              if (pendingPayments.length === 0) return { success: true, status: PaymentStatus.SUCCESS };
@@ -2120,41 +2203,21 @@ export const AdminStudentService = {
                  }
              });
 
-             const promises: Promise<any>[] = [];
-
-             // Logic for Each Payment
+             // Logic for Each Payment (Sequential to avoid lock contention)
              for (const payment of pendingPayments) {
-                  const meta = payment.metadata as any;
-                  // Ledger
-                  promises.push(tx.studentLedger.create({
-                      data: {
-                        studentId: payment.studentId,
-                        type: LedgerTransactionType.CREDIT,
-                        amount: payment.amount,
-                        description: `Admission Payment (${payment.method || 'ONLINE'}) - ${payment.component || 'FEE'}`,
-                        referenceId: payment.id,
-                        referenceType: 'PAYMENT',
-                        feeHeadId: payment.feeHeadId, 
-                        createdBy: adminId || 'SYSTEM'
-                      } as any
-                  }));
-
-                  // Updates (Admission, etc)
-                  if (meta && meta.targetAction === 'FINALIZE_ADMISSION') {
-                       promises.push(this.executeAdmissionUpdates(payment.studentId, meta, payment.id, adminId || 'SYSTEM', tx));
-                  }
+                  await this.processPaymentSuccess(payment, adminId, tx);
              }
              
-             await Promise.all(promises);
              return { success: true, status: PaymentStatus.SUCCESS };
          });
 
          // Invoice (Unified) for Bundle
-         // We pass ALL payment IDs to Invoice Service (requires update to InvoiceService to handle bundle detection automatically or explicitly)
-         // For now, if we call generateInvoiceForPayment on the FIRST one, and update InvoiceService to check siblings, it works.
          try {
              await InvoiceService.generateInvoiceForPayment(primaryPayment.id);
          } catch (err) { logger.warn(`Failed to auto-generate invoice: ${err}`); }
+
+         // Send Email Notification - Handled by InvoiceService
+         // await this.sendAdmissionSuccessEmail(primaryPayment.id);
          
          // Final Return
          const finalPayment = await prisma.payment.findUnique({ where: { id: primaryPayment.id } });
@@ -2207,14 +2270,48 @@ export const AdminStudentService = {
         }
     },
 
-    async verifyPayment(paymentId: string) {
-         return this.verifyAndCompletePayment(paymentId, undefined);
+
+
+
+
+
+
+
+
+
+    async sendStatusEmail(data: { studentId: string; updateType: string; approvedItems?: any[]; rejectedItems?: any[] }) {
+        const { studentId, updateType, approvedItems, rejectedItems } = data;
+
+        if (!studentId || !updateType) {
+            throw new AppError('Student ID and Update Type are required', 400);
+        }
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId }
+        });
+
+        if (!student || !student.email) {
+            throw new AppError('Student not found or email missing', 404);
+        }
+
+        // Import locally to avoid circular dependencies if any (though utils should be fine)
+        const { sendStatusUpdateEmail } = require('../../utils/emailService');
+
+        const emailData = {
+            studentName: student.name,
+            applicationId: student.applicationId || studentId, // Fallback if no app ID
+            updateType: updateType as any,
+            approvedItems,
+            rejectedItems
+        };
+
+        const result = await sendStatusUpdateEmail(student.email, emailData);
+
+        if (!result.success) {
+            throw new AppError('Failed to send status email', 500);
+        }
+
+        return { success: true };
     }
-
-
-
-
-
-
-
 };
+

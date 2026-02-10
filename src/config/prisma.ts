@@ -8,14 +8,32 @@ console.log(`[Prisma Init] Connecting to Host: ${host}`);
 
 const prismaClient = new PrismaClient();
 
-// Identify models with Soft Delete (isDeleted column)
+// Identify models with specific fields
 const modelsWithSoftDelete = new Set<string>();
+const modelsWithCreatedBy = new Set<string>();
+const modelsWithUpdatedBy = new Set<string>();
+const modelsWithCreatedAt = new Set<string>();
+const modelsWithUpdatedAt = new Set<string>();
+
 const dmmf = Prisma.dmmf;
 if (dmmf && dmmf.datamodel) {
     dmmf.datamodel.models.forEach(model => {
-        const hasIsDeleted = model.fields.some(f => f.name === 'isDeleted');
-        if (hasIsDeleted) {
+        const fields = model.fields.map(f => f.name);
+        
+        if (fields.includes('isDeleted')) {
             modelsWithSoftDelete.add(model.name);
+        }
+        if (fields.includes('createdBy')) {
+            modelsWithCreatedBy.add(model.name);
+        }
+        if (fields.includes('updatedBy')) {
+            modelsWithUpdatedBy.add(model.name);
+        }
+        if (fields.includes('createdAt')) {
+            modelsWithCreatedAt.add(model.name);
+        }
+        if (fields.includes('updatedAt')) {
+            modelsWithUpdatedAt.add(model.name);
         }
     });
 }
@@ -26,99 +44,165 @@ const prisma = prismaClient.$extends({
         $allModels: {
             async create({ model, args, query }) {
                 const { userId } = getContext();
-                args.data = {
-                    ...args.data,
-                    createdAt: new Date(),
-                    createdBy: userId,
-                    updatedAt: new Date(),
-                    updatedBy: userId
-                };
+                
+                // Initialize args.data if undefined (rare but possible)
+                args.data = args.data || {};
+
+                // Shallow copy since we might modify it
+                const data: any = { ...args.data };
+                
+                if (modelsWithCreatedAt.has(model)) {
+                    data.createdAt = new Date();
+                }
+                if (modelsWithUpdatedAt.has(model)) {
+                    data.updatedAt = new Date();
+                }
+
+                if (modelsWithCreatedBy.has(model)) {
+                    data.createdBy = userId;
+                }
+                if (modelsWithUpdatedBy.has(model)) {
+                    data.updatedBy = userId;
+                }
+
+                args.data = data;
                 return query(args);
             },
             async createMany({ model, args, query }) {
                 const { userId } = getContext();
-                if (Array.isArray(args.data)) {
-                    args.data = args.data.map(item => ({
-                        ...item,
-                        createdAt: new Date(),
-                        createdBy: userId,
-                        updatedAt: new Date(),
-                        updatedBy: userId
-                    }));
-                } else {
-                    args.data = {
-                        ...args.data,
-                        createdAt: new Date(),
-                        createdBy: userId,
-                        updatedAt: new Date(),
-                        updatedBy: userId
+                
+                const enhanceItem = (item: any) => {
+                    const enhanced: any = { 
+                        ...item
                     };
+                    
+                    if (modelsWithCreatedAt.has(model)) {
+                        enhanced.createdAt = new Date();
+                    }
+                    if (modelsWithUpdatedAt.has(model)) {
+                        enhanced.updatedAt = new Date();
+                    }
+                    
+                     if (modelsWithCreatedBy.has(model)) {
+                        enhanced.createdBy = userId;
+                    }
+                    if (modelsWithUpdatedBy.has(model)) {
+                        enhanced.updatedBy = userId;
+                    }
+                    return enhanced;
+                };
+
+                if (Array.isArray(args.data)) {
+                    args.data = args.data.map(enhanceItem);
+                } else {
+                    args.data = enhanceItem(args.data);
                 }
+                
                 return query(args);
             },
             async update({ model, args, query }) {
                 const { userId } = getContext();
-                args.data = {
-                    ...args.data,
-                    updatedAt: new Date(),
-                    updatedBy: userId
-                };
                 
-                // Prevent modification of creation fields
-                if ((args.data as any).createdAt) delete (args.data as any).createdAt;
-                if ((args.data as any).createdBy) delete (args.data as any).createdBy;
+                args.data = args.data || {};
+                const data: any = { ...args.data };
+
+                if (modelsWithUpdatedAt.has(model)) {
+                    data.updatedAt = new Date();
+                }
+
+                if (modelsWithUpdatedBy.has(model)) {
+                    data.updatedBy = userId;
+                }
                 
+                // Prevent modification of creation fields if they exist in payload
+                if (data.createdAt) delete data.createdAt;
+                if (data.createdBy) delete data.createdBy;
+                
+                args.data = data;
                 return query(args);
             },
             async updateMany({ model, args, query }) {
                 const { userId } = getContext();
-                args.data = {
-                    ...args.data,
-                    updatedAt: new Date(),
-                    updatedBy: userId
-                };
-                 // Prevent modification of creation fields
-                if ((args.data as any).createdAt) delete (args.data as any).createdAt;
-                if ((args.data as any).createdBy) delete (args.data as any).createdBy;
                 
+                args.data = args.data || {};
+                const data: any = { ...args.data };
+
+                if (modelsWithUpdatedAt.has(model)) {
+                    data.updatedAt = new Date();
+                }
+                
+                if (modelsWithUpdatedBy.has(model)) {
+                    data.updatedBy = userId;
+                }
+
+                 // Prevent modification of creation fields
+                if (data.createdAt) delete data.createdAt;
+                if (data.createdBy) delete data.createdBy;
+                
+                args.data = data;
                 return query(args);
             },
             async upsert({ model, args, query }) {
                 const { userId } = getContext();
                 
                 // Create part
-                args.create = {
-                    ...args.create,
-                    createdAt: new Date(),
-                    createdBy: userId,
-                    updatedAt: new Date(),
-                    updatedBy: userId
-                };
+                args.create = args.create || {};
+                const createData: any = { ...args.create };
+                
+                if (modelsWithCreatedAt.has(model)) {
+                    createData.createdAt = new Date();
+                }
+                if (modelsWithUpdatedAt.has(model)) {
+                    createData.updatedAt = new Date();
+                }
+
+                if (modelsWithCreatedBy.has(model)) {
+                    createData.createdBy = userId;
+                }
+                if (modelsWithUpdatedBy.has(model)) {
+                    createData.updatedBy = userId;
+                }
+                args.create = createData;
 
                 // Update part
-                args.update = {
-                    ...args.update,
-                    updatedAt: new Date(),
-                    updatedBy: userId
-                };
+                args.update = args.update || {};
+                const updateData: any = { ...args.update };
                 
-                if ((args.update as any).createdAt) delete (args.update as any).createdAt;
-                if ((args.update as any).createdBy) delete (args.update as any).createdBy;
+                if (modelsWithUpdatedAt.has(model)) {
+                    updateData.updatedAt = new Date();
+                }
+
+                if (modelsWithUpdatedBy.has(model)) {
+                    updateData.updatedBy = userId;
+                }
+                
+                if (updateData.createdAt) delete updateData.createdAt;
+                if (updateData.createdBy) delete updateData.createdBy;
+                
+                args.update = updateData;
 
                 return query(args);
             },
             async delete({ model, args, query }) {
                 if (modelsWithSoftDelete.has(model)) {
                     const { userId } = getContext();
-                    // Perform soft delete (update) using raw client to avoid circular hooks if we were calling the extended one
-                    // We must cast keys to allow dynamic access
+                    // Perform soft delete (update) using raw client to avoid circular hooks
+                    
+                    const updateData: any = {
+                        isDeleted: true
+                    };
+
+                    if (modelsWithUpdatedAt.has(model)) {
+                        updateData.updatedAt = new Date();
+                    }
+                    
+                    if (modelsWithUpdatedBy.has(model)) {
+                        updateData.updatedBy = userId;
+                    }
+
                     return (prismaClient as any)[model].update({
                         where: args.where,
-                        data: {
-                            isDeleted: true,
-                            updatedAt: new Date(),
-                            updatedBy: userId
-                        }
+                        data: updateData
                     });
                 }
                 return query(args);
@@ -126,13 +210,22 @@ const prisma = prismaClient.$extends({
             async deleteMany({ model, args, query }) {
                 if (modelsWithSoftDelete.has(model)) {
                     const { userId } = getContext();
+                    
+                    const updateData: any = {
+                        isDeleted: true
+                    };
+
+                    if (modelsWithUpdatedAt.has(model)) {
+                        updateData.updatedAt = new Date();
+                    }
+                    
+                    if (modelsWithUpdatedBy.has(model)) {
+                        updateData.updatedBy = userId;
+                    }
+
                     return (prismaClient as any)[model].updateMany({
                         where: args.where,
-                        data: {
-                            isDeleted: true,
-                            updatedAt: new Date(),
-                            updatedBy: userId
-                        }
+                        data: updateData
                     });
                 }
                 return query(args);
