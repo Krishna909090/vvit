@@ -2278,4 +2278,40 @@ export const AdminStudentService = {
 
 
 
+
+    async sendStatusEmail(data: { studentId: string; updateType: string; approvedItems?: any[]; rejectedItems?: any[] }) {
+        const { studentId, updateType, approvedItems, rejectedItems } = data;
+
+        if (!studentId || !updateType) {
+            throw new AppError('Student ID and Update Type are required', 400);
+        }
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId }
+        });
+
+        if (!student || !student.email) {
+            throw new AppError('Student not found or email missing', 404);
+        }
+
+        // Import locally to avoid circular dependencies if any (though utils should be fine)
+        const { sendStatusUpdateEmail } = require('../../utils/emailService');
+
+        const emailData = {
+            studentName: student.name,
+            applicationId: student.applicationId || studentId, // Fallback if no app ID
+            updateType: updateType as any,
+            approvedItems,
+            rejectedItems
+        };
+
+        const result = await sendStatusUpdateEmail(student.email, emailData);
+
+        if (!result.success) {
+            throw new AppError('Failed to send status email', 500);
+        }
+
+        return { success: true };
+    }
 };
+

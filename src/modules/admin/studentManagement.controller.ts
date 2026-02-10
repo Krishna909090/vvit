@@ -535,3 +535,17 @@ export const getAdmissionInvoice = catchAsync(async (req: Request, res: Response
 
 
 
+
+// Send Status Email (Manual Trigger)
+export const sendStatusEmail = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[sendStatusEmail] by=${req.user?.userId || 'anonymous'}`);
+
+    const result = await AdminStudentService.sendStatusEmail(req.body);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: result.success,
+        message: 'Email sent successfully'
+    });
+});

@@ -19,7 +19,8 @@ import {
     downloadApplication,
     finalizeAdmission,
     verifyPayment,
-    getAdmissionInvoice
+    getAdmissionInvoice,
+    sendStatusEmail
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -117,5 +118,8 @@ router.post('/student-scholarship', authenticate, authorizePermission(['scholars
 router.put('/student-scholarship/:id', authenticate, authorizePermission(['scholarship.update.all']), editStudentScholarship);
 router.get('/scholarship-stats', authenticate, authorizePermission(['scholarship.read.all']), getScholarshipStats);
 router.get('/student-scholarship/:studentId', authenticate, authorizePermission(['scholarship.read.all']), getStudentScholarships);
+
+// Manual Status Update Email
+router.post('/send-status-email', authenticate, authorizePermission(['student.update.all']), sendStatusEmail);
 
 export default router;

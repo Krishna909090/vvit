@@ -1,6 +1,6 @@
 import axios from 'axios';
 import logger from './logger';
-import { getPaymentReceiptTemplate, PaymentEmailData, PaymentEmailType, HallTicketEmailData, getHallTicketTemplate } from './emailTemplates';
+import { getPaymentReceiptTemplate, PaymentEmailData, PaymentEmailType, HallTicketEmailData, getHallTicketTemplate, StatusUpdateEmailData, getStatusUpdateTemplate } from './emailTemplates';
 import fs from 'fs';
 import path from 'path';
 import { EmailStatus } from '@prisma/client';
@@ -317,5 +317,73 @@ export const retryEmail = async (logId: string) => {
         return sendPaymentReceipt(log.recipientEmail, emailData);
     }
     
+
     return { success: false, message: 'Unsupported template type or missing data' };
 };
+
+export const sendStatusUpdateEmail = async (
+    recipientEmail: string,
+    data: StatusUpdateEmailData
+): Promise<{ success: boolean }> => {
+    let emailLogId: string | undefined;
+
+    try {
+        logger.info(`[EMAIL SERVICE] Sending Status Update (${data.updateType}) to: ${recipientEmail}`);
+
+        const htmlContent = getStatusUpdateTemplate(data);
+        let subject = `Update on your Application - ${data.applicationId}`;
+        
+        if (data.updateType === 'QUALIFICATION_REJECTED') subject = `Action Required: Qualification Verification - ${data.applicationId}`;
+        else if (data.updateType === 'DOCUMENT_REJECTED') subject = `Action Required: Document Verification - ${data.applicationId}`;
+        else if (data.updateType === 'SEAT_ALLOTMENT_REJECTED') subject = `Seat Allotment Status - ${data.applicationId}`;
+        else if (data.updateType === 'EXAM_FAILED') subject = `Entrance Exam Result - ${data.applicationId}`;
+
+        // Create Log Entry
+        const logEntry = await createEmailLog({
+            recipientEmail,
+            subject,
+            content: htmlContent,
+            templateType: 'STATUS_UPDATE',
+            metadata: {
+                studentId: data.applicationId,
+                updateType: data.updateType
+            }
+        });
+        if (logEntry) emailLogId = logEntry.id;
+
+        // Prepare Images
+        const assetsDir = path.join(process.cwd(), 'src/assets');
+        let logoBase64 = '';
+        let bannerBase64 = '';
+
+        try {
+            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
+        } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
+
+        const inlineImages = [];
+        if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });
+        if (bannerBase64) inlineImages.push({ name: 'collegeBuilding.jpg', mime_type: 'image/jpeg', content: bannerBase64, cid: 'banner' });
+
+        const result = await sendZeptoEmail(recipientEmail, subject, htmlContent, [], inlineImages);
+
+        if (emailLogId) {
+            await updateEmailStatus(
+                emailLogId,
+                result.success ? EmailStatus.SENT : EmailStatus.FAILED,
+                result.messageId,
+                result.error
+            );
+        }
+
+        return { success: result.success };
+    } catch (error: any) {
+        logger.error('[EMAIL SERVICE] Send Status Update Failed', error);
+
+        if (emailLogId) {
+            await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
+        }
+        return { success: false };
+    }
+};
+
