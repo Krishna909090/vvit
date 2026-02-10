@@ -20,13 +20,13 @@ const MERCHANT_ID_ADMISSION = (process.env.PHONEPE_MERCHANT_ID || '').trim();
 const SALT_KEY_ADMISSION = (process.env.PHONEPE_SALT_KEY || '').trim();
 const SALT_INDEX_ADMISSION = (process.env.PHONEPE_SALT_INDEX || '1').trim();
 
-const MERCHANT_ID_HOSTEL = (process.env.HOSTEL_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID_HOSTEL || process.env.PHONEPE_MERCHANT_ID || '').trim();
-const SALT_KEY_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY_HOSTEL || process.env.PHONEPE_SALT_KEY || '').trim();
-const SALT_INDEX_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX_HOSTEL || process.env.PHONEPE_SALT_INDEX || '1').trim();
+const MERCHANT_ID_HOSTEL = (process.env.HOSTEL_PHONEPE_MERCHANT_ID || '').trim();
+const SALT_KEY_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_KEY || '').trim();
+const SALT_INDEX_HOSTEL = (process.env.HOSTEL_PHONEPE_SALT_INDEX || '1').trim();
 
-const MERCHANT_ID_MESS = (process.env.MESS_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID_MESS || process.env.HOSTEL_PHONEPE_MERCHANT_ID || process.env.PHONEPE_MERCHANT_ID || '').trim();
-const SALT_KEY_MESS = (process.env.MESS_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY_MESS || process.env.HOSTEL_PHONEPE_SALT_KEY || process.env.PHONEPE_SALT_KEY || '').trim();
-const SALT_INDEX_MESS = (process.env.MESS_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX_MESS || process.env.HOSTEL_PHONEPE_SALT_INDEX || process.env.PHONEPE_SALT_INDEX || '1').trim();
+const MERCHANT_ID_MESS = (process.env.MESS_PHONEPE_MERCHANT_ID || '').trim();
+const SALT_KEY_MESS = (process.env.MESS_PHONEPE_SALT_KEY || '').trim();
+const SALT_INDEX_MESS = (process.env.MESS_PHONEPE_SALT_INDEX || '1').trim();
 
 const CLIENT_VERSION = 1;
 const ENV = process.env.NODE_ENV === 'production' ? Env.PRODUCTION : Env.SANDBOX;
@@ -127,6 +127,21 @@ export const initiatePhonePePayment = async (studentId: string, amount: number, 
         // Log configuration for debugging (FULL SECRETS EXPOSED)
         const config = PHONEPE_CREDENTIALS[feeType];
         logger.info(`[initiatePhonePePayment] Config: Type=${feeType}, Env=${ENV === Env.PRODUCTION ? 'PROD' : 'SANDBOX'}, Merchant=${config.MERCHANT_ID}, SaltKey=${config.SALT_KEY}, Index=${config.SALT_INDEX}, RedirectUrl=${redirectUrl}`);
+
+        // EXPLICIT LOGGING FOR DEBUGGING
+        if (feeType === 'HOSTEL') {
+            logger.info(`[DEBUG-HOSTEL] Using Hostel Merchant ID: ${config.MERCHANT_ID}`);
+            logger.info(`[DEBUG-HOSTEL] ENV HOSTEL_PHONEPE_MERCHANT_ID: ${process.env.HOSTEL_PHONEPE_MERCHANT_ID}`);
+            logger.info(`[DEBUG-HOSTEL] ENV PHONEPE_MERCHANT_ID_HOSTEL: ${process.env.PHONEPE_MERCHANT_ID_HOSTEL}`);
+            logger.info(`[DEBUG-HOSTEL] ENV PHONEPE_MERCHANT_ID (Fallback): ${process.env.PHONEPE_MERCHANT_ID}`);
+        } else if (feeType === 'MESS') {
+             logger.info(`[DEBUG-MESS] Using Mess Merchant ID: ${config.MERCHANT_ID}`);
+             logger.info(`[DEBUG-MESS] ENV MESS_PHONEPE_MERCHANT_ID: ${process.env.MESS_PHONEPE_MERCHANT_ID}`);
+             logger.info(`[DEBUG-MESS] ENV PHONEPE_MERCHANT_ID_MESS: ${process.env.PHONEPE_MERCHANT_ID_MESS}`);
+        } else {
+             logger.info(`[DEBUG-ADMISSION] Using Admission Merchant ID: ${config.MERCHANT_ID}`);
+             logger.info(`[DEBUG-ADMISSION] ENV PHONEPE_MERCHANT_ID: ${process.env.PHONEPE_MERCHANT_ID}`);
+        }
 
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(transactionId)
@@ -1674,7 +1689,8 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                     } 
                 },
                 convenorDetails: true,
-                scholarshipAllocation: { include: { rule: true } }
+                scholarshipAllocation: { include: { rule: true } },
+                studentScholarship: true
             }
         });
 
@@ -1695,8 +1711,16 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
 
              // Extract Fee and Scholarship Details
              const tuitionFee = breakdown['TUITION']?.demanded || 0;
-             const scholarshipDiscount = breakdown['TUITION']?.discount || 0; // Discount applied to Tuition
-             const scholarshipPercentage = student.scholarshipAllocation?.rule?.discountPercentage || 0;
+             let scholarshipDiscount = breakdown['TUITION']?.discount || 0; // Discount applied to Tuition
+             
+             let scholarshipPercentage = student.scholarshipAllocation?.rule?.discountPercentage || 0;
+             if (student.studentScholarship?.scholarshipPercentage) {
+                scholarshipPercentage = student.studentScholarship.scholarshipPercentage;
+             }
+
+             if (scholarshipDiscount === 0 && scholarshipPercentage > 0 && tuitionFee > 0) {
+                scholarshipDiscount = (tuitionFee * scholarshipPercentage) / 100;
+             }
 
             const allotmentData = {
                 applicationId: student.applicationId ?? '',
