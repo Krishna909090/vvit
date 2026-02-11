@@ -77,18 +77,35 @@ export const InvoiceService = {
         const receiptNumberStr = receiptNo.toString().padStart(3, '0');
         const invoiceNumber = `${feeHeader}/${year}/${applicationNumber}/${receiptNumberStr}`;
 
-        // Real TX ID
-        let realTransactionId = primaryPayment.providerTxId || primaryPayment.referenceNumber || primaryPayment.id;
+        // Real TX ID (Internal)
+        const internalTxId = primaryPayment.providerTxId || primaryPayment.id;
+
+        // UTR / Reference ID (External)
+        let realTransactionId = primaryPayment.referenceNumber || 'N/A';
         
         // Check Metadata for Gateway Response ID (PhonePe)
-        // Similar to processPaymentSuccess logic in payment.service.ts
+
+        // Check Metadata for Gateway Response ID (PhonePe)
         const metadata: any = primaryPayment.metadata;
         if (metadata) {
-            if (metadata?.providerReferenceId) {
+            // Priority 1: Direct UTR from Rail (User Request Format)
+            if (metadata?.paymentDetails?.[0]?.splitInstruments?.[0]?.rail?.utr) {
+                realTransactionId = metadata.paymentDetails[0].splitInstruments[0].rail.utr;
+            } else if (metadata?.data?.paymentDetails?.[0]?.splitInstruments?.[0]?.rail?.utr) {
+                 realTransactionId = metadata.data.paymentDetails[0].splitInstruments[0].rail.utr;
+            } else if (metadata?.paymentDetails?.[0]?.rail?.utr) {
+                realTransactionId = metadata.paymentDetails[0].rail.utr;
+            } else if (metadata?.data?.paymentDetails?.[0]?.rail?.utr) {
+                 realTransactionId = metadata.data.paymentDetails[0].rail.utr;
+            }
+            // Priority 2: Provider Reference ID
+            else if (metadata?.providerReferenceId) {
                 realTransactionId = metadata.providerReferenceId;
             } else if (metadata?.data?.providerReferenceId) {
                 realTransactionId = metadata.data.providerReferenceId;
-            } else if (metadata?.paymentDetails?.[0]?.transactionId) {
+            } 
+            // Priority 3: Transaction ID from Details
+            else if (metadata?.paymentDetails?.[0]?.transactionId) {
                 realTransactionId = metadata.paymentDetails[0].transactionId;
             } else if (metadata?.data?.paymentDetails?.[0]?.transactionId) {
                 realTransactionId = metadata.data.paymentDetails[0].transactionId;
@@ -168,7 +185,8 @@ export const InvoiceService = {
             studentId: primaryPayment.student.applicationId || primaryPayment.studentId,
             applicationId: primaryPayment.student.applicationId || primaryPayment.studentId,
             paymentMethod: primaryPayment.method || 'ONLINE',
-            transactionId: realTransactionId,
+            transactionId: internalTxId,
+            referenceId: realTransactionId,
             amount: totalAmount,
             description: description,
             items: invoiceItems,
