@@ -399,7 +399,7 @@ export const updateAcademicQualificationSchema = z.object({
     }),
     body: z.object({
         level: z.string().min(1).optional(),
-        board: z.string().min(1).optional(),
+        board: z.string().optional(),
         yearOfPassing: z.string().min(1).optional(),
         hallTicketNumber: z.string().min(1).optional(),
         gpaOrMarks: z.string().min(1).optional(),

@@ -60,7 +60,7 @@ export const addAcademicDetailsSchema = z.object({
     body: z.object({
         details: z.array(z.object({
             level: z.string().min(1, "Level is required"), // e.g., "10th", "12th"
-            board: z.string().min(1, "Board is required"),
+            board: z.string().optional(),
             yearOfPassing: z.number().int().min(1900).max(new Date().getFullYear()),
             hallTicketNumber: z.string().min(1, "Hall ticket number is required"),
             gpaOrMarks: z.string().or(z.number()),

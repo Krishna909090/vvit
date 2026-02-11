@@ -477,7 +477,7 @@ export const addAcademicDetails = async (studentId: string, details: any[], curr
                 data: {
                     studentId,
                     level: detail.level,
-                    board: detail.board,
+                    board: detail.board || "",
                     yearOfPassing: detail.yearOfPassing.toString(),
                     hallTicketNumber: detail.hallTicketNumber,
                     gpaOrMarks: detail.gpaOrMarks.toString()
@@ -795,6 +795,7 @@ export const changeServicePreferences = async (studentId: string, data: any, cur
                 updatedAt: new Date()
             }
         });
+
 
         return { success: true, message: 'Payment mode updated successfully', status: 'UPDATED' };
 
