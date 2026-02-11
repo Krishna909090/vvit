@@ -17,6 +17,7 @@ export interface InvoiceData {
   studentId: string
   paymentMethod: string
   transactionId: string
+  referenceId?: string
   amount: number
   description: string
   items?: InvoiceItem[]
@@ -173,7 +174,11 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
   doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, y)
   doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y + 12)
   doc.text(`Txn ID: ${data.transactionId}`, rightX, y + 24)
-  doc.text(`Payment: ${data.paymentMethod}`, rightX, y + 36)
+  
+  const utrDisplay = (data.referenceId && data.referenceId !== data.transactionId) ? data.referenceId : 'N/A';
+  doc.text(`UTR: ${utrDisplay}`, rightX, y + 36)
+  
+  doc.text(`Payment: ${data.paymentMethod}`, rightX, y + 48)
 }
 
 /* ================= SUBJECT BAR ================= */
