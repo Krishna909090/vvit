@@ -455,4 +455,15 @@ export const verifyPaymentSchema = z.object({
     }),
 });
 
+export const assignRoleGroupSchema = z.object({
+    body: z.object({
+        userId: z.string().uuid("Invalid User ID"),
+        role: z.string().optional(),
+        // Refine for stricter strings if needed, but assuming any valid string for now
+        groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
+    }).refine((data: any) => data.role !== undefined || data.groupIds !== undefined, {
+        message: "Either role or groupIds must be provided",
+    }),
+});
+
 

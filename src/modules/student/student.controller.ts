@@ -346,5 +346,23 @@ export const requestServiceChange = catchAsync(async (req: Request, res: Respons
 });
 
 
+export const updateProfilePhoto = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { photoUrl } = req.body;
+
+    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+    if (!photoUrl) throw new AppError('Photo URL is required', 400);
+
+    const { updateProfilePhoto: updatePhotoService } = await import('./student.service');
+    const result = await updatePhotoService(studentId, photoUrl, req.user?.userId || null);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.message,
+        data: { url: result.url }
+    });
+});
 
 

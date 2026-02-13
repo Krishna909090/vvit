@@ -3,10 +3,10 @@ import { authenticate, authorizePermission } from '../../middleware/rbac.middlew
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     getDashboardStats, addAdmin, getAgentCommissions, getUserDetails, addInvigilator, getStaffUsers, updateStaffUser, deleteStaffUser,
-    getSystemSettings, updateSystemSetting, updateAgentCommissionStatus
+    getSystemSettings, updateSystemSetting, updateAgentCommissionStatus, assignUserRoleAndGroups
 } from './general.controller';
 import {
-    addAdminSchema, getAgentCommissionsSchema, addInvigilatorSchema, updateStaffUserSchema
+    addAdminSchema, getAgentCommissionsSchema, addInvigilatorSchema, updateStaffUserSchema, assignRoleGroupSchema
 } from '../../validators/adminValidators';
 
 const router = Router();
@@ -36,6 +36,9 @@ router.put('/staff-users/:userId', authenticate, authorizePermission('admin.upda
 // Delete Staff User
 
 router.delete('/staff-users/:userId', authenticate, authorizePermission('admin.delete.all'), deleteStaffUser);
+
+// Assign Role and Groups (New API)
+router.post('/assign-role-group', authenticate, authorizePermission('admin.update.all'), validateRequest(assignRoleGroupSchema), assignUserRoleAndGroups);
 
 // System Settings
 router.get('/settings', authenticate, authorizePermission('admin.read.all'), getSystemSettings);

@@ -181,3 +181,18 @@ export const updateAgentCommissionStatus = catchAsync(async (req: Request, res: 
 
     sendResponse({ res, statusCode: 200, success: true, message: 'Commission status updated', data: commission });
 });
+
+export const assignUserRoleAndGroups = catchAsync(async(req: Request, res: Response, next: NextFunction) => {
+    const { userId, role, groupIds } = req.body;
+    
+    // We assume validator has already checked presence of either role or groupIds
+    const result = await AdminService.assignUserRoleAndGroups({ userId, role, groupIds }, req.user?.userId || 'ADMIN');
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'User role and group assignment updated successfully',
+        data: result
+    });
+});

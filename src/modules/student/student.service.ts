@@ -761,6 +761,48 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
     return { message: 'Personal details updated successfully' };
 };
 
+export const updateProfilePhoto = async (studentId: string, newPhotoUrl: string, currentUserId: string | null) => {
+    // 1. Verify Student
+    const student = await prisma.student.findUnique({
+        where: { id: studentId }
+    });
+
+    if (!student) {
+        throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+    }
+    
+    // Ownership check
+    if (currentUserId && student.userId !== currentUserId) {
+         throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+    }
+
+    // 2. Delete Old Photo from S3 if exists
+    if (student.profilePhotoUrl) {
+        const urlParts = student.profilePhotoUrl.split('.com/');
+        if (urlParts.length >= 2) {
+            const key = urlParts[1];
+            try {
+                await deleteFileFromS3(key);
+                logger.info(`Deleted old profile photo for student ${studentId}: ${key}`);
+            } catch (err) {
+                logger.warn(`Failed to delete old profile photo from S3: ${err}`);
+                // Proceed anyway to update the record
+            }
+        }
+    }
+
+    // 3. Update DB
+    await prisma.student.update({
+        where: { id: studentId },
+        data: {
+            profilePhotoUrl: newPhotoUrl,
+            updatedAt: new Date()
+        }
+    });
+
+    return { message: 'Profile photo updated successfully', url: newPhotoUrl };
+};
+
 export const changeServicePreferences = async (studentId: string, data: any, currentUserId: string | null) => {
     const { type, value, reason } = data;
 

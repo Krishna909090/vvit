@@ -219,7 +219,17 @@ export const AdminService = {
                 email: true,
                 role: true,
                 createdAt: true,
-                updatedAt: true
+                updatedAt: true,
+                userGroups: {
+                    select: {
+                        group: {
+                            select: {
+                                id: true,
+                                name: true
+                            }
+                        }
+                    }
+                }
             },
             orderBy: [
                 { role: 'asc' },
@@ -228,7 +238,15 @@ export const AdminService = {
         });
 
         logger.info(`[getStaffUsers] Found ${users.length} staff users`);
-        return users;
+
+        return users.map((u: any) => ({
+            ...u,
+            groups: u.userGroups.map((ug: any) => ({
+                id: ug.group.id,
+                name: ug.group.name
+            })),
+            userGroups: undefined // Remove the nested prisma structure
+        }));
     },
 
     /**
@@ -372,6 +390,66 @@ export const AdminService = {
         return prisma.agentCommission.update({
             where: { id: commissionId },
             data: { status, updatedBy: userId }
+        });
+    },
+    
+    // Assign Role and Groups
+    async assignUserRoleAndGroups(data: { userId: string, role?: string, groupIds?: string[] }, executedBy?: string) {
+        const { userId, role, groupIds } = data;
+        
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        if (!user) throw new AppError('User not found', 404);
+
+        // Security Check: Cannot modify Super Admin unless executed by a Super Admin (though permission middleware usually handles this)
+        if (user.role === Role.SUPER_ADMIN) {
+             // Optional: strict check
+             // if (executedByRole !== Role.SUPER_ADMIN) throw new AppError('Cannot modify Super Admin', 403);
+        }
+
+        const updateData: any = { updatedBy: executedBy };
+        if (role) {
+            updateData.role = role;
+        }
+
+        return await prisma.$transaction(async (tx) => {
+            // 1. Update User Role
+            let updatedUser = user;
+            if (role && role !== user.role) {
+                updatedUser = await tx.user.update({
+                    where: { id: userId },
+                    data: updateData
+                });
+                logger.info(`[assignUserRoleAndGroups] User ${userId} role updated to ${role} by ${executedBy}`);
+            }
+
+            // 2. Update Groups (Replace Strategy)
+            if (groupIds) {
+                // Verify all groups exist
+                const groups = await tx.group.findMany({
+                    where: { id: { in: groupIds } }
+                });
+                if (groups.length !== groupIds.length) {
+                    throw new AppError('One or more Group IDs are invalid', 400);
+                }
+
+                // Delete existing mappings
+                await tx.userGroup.deleteMany({
+                    where: { userId }
+                });
+
+                // Create new mappings
+                if (groupIds.length > 0) {
+                    await tx.userGroup.createMany({
+                        data: groupIds.map(gid => ({
+                            userId,
+                            groupId: gid
+                        }))
+                    });
+                }
+                logger.info(`[assignUserRoleAndGroups] User ${userId} assigned to groups [${groupIds.join(', ')}] by ${executedBy}`);
+            }
+
+            return { user: updatedUser, groupIds };
         });
     }
 };
