@@ -355,7 +355,6 @@ export const DashboardService = {
      */
     async getSeatAllocationCounts(filter?: string) {
         const result: any = {};
-
         // 1. Not Allocated
         if (!filter || filter === 'not_allocated') {
             result.notAllocated = await prisma.student.count({
