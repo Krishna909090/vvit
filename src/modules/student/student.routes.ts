@@ -8,7 +8,8 @@ import {
     selectExam,
     updatePersonalDetails,
     getApplicationSummary,
-    requestServiceChange
+    requestServiceChange,
+    updateProfilePhoto
 } from './student.controller';
 import {
     payTestFee,
@@ -77,5 +78,8 @@ router.post('/:studentId/personal-details', authenticate, authorizePermission(['
 router.get('/:studentId/application-summary', authenticate, authorizePermission(['student.read.own', 'student.read.all']), validateRequest(studentIdParamSchema), getApplicationSummary);
 
 router.post('/:studentId/service-preferences', authenticate, authorizePermission(['student.update.own', 'student.update.all']), validateRequest(studentIdParamSchema), requestServiceChange);
+
+// Update Profile Photo
+router.post('/:studentId/update-photo', authenticate, authorizePermission(['student.update.own', 'student.update.all']), validateRequest(studentIdParamSchema), updateProfilePhoto);
 
 export default router;

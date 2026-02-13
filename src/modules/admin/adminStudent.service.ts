@@ -2279,8 +2279,8 @@ export const AdminStudentService = {
 
 
 
-    async sendStatusEmail(data: { studentId: string; updateType: string; approvedItems?: any[]; rejectedItems?: any[] }) {
-        const { studentId, updateType, approvedItems, rejectedItems } = data;
+    async sendStatusEmail(data: { studentId: string; updateType: string; approvedItems?: any[]; rejectedItems?: any[]; pendingItems?: any[] }) {
+        const { studentId, updateType, approvedItems, rejectedItems, pendingItems } = data;
 
         if (!studentId || !updateType) {
             throw new AppError('Student ID and Update Type are required', 400);
@@ -2302,8 +2302,10 @@ export const AdminStudentService = {
             applicationId: student.applicationId || studentId, // Fallback if no app ID
             updateType: updateType as any,
             approvedItems,
-            rejectedItems
+            rejectedItems,
+            pendingItems
         };
+
 
         const result = await sendStatusUpdateEmail(student.email, emailData);
 
@@ -2312,6 +2314,8 @@ export const AdminStudentService = {
         }
 
         return { success: true };
-    }
+    },
+
+
 };
 

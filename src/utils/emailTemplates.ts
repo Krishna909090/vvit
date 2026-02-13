@@ -315,9 +315,10 @@ export const getHallTicketTemplate = (data: HallTicketEmailData) => {
 export interface StatusUpdateEmailData {
     studentName: string;
     applicationId: string;
-    updateType: 'QUALIFICATION_REJECTED' | 'DOCUMENT_REJECTED' | 'SEAT_ALLOTMENT_REJECTED' | 'EXAM_FAILED';
+    updateType: 'QUALIFICATION_REJECTED' | 'DOCUMENT_REJECTED' | 'SEAT_ALLOTMENT_REJECTED' | 'EXAM_FAILED' | 'QUALIFICATION_PENDING' | 'DOCUMENT_PENDING' | 'QUALIFICATION_VERIFIED' | 'DOCUMENT_VERIFIED' | 'QUALIFICATION_STATUS' | 'DOCUMENT_STATUS';
     approvedItems?: { name: string; details?: string }[];
     rejectedItems?: { name: string; reason?: string }[];
+    pendingItems?: { name: string; reason?: string }[];
     supportEmail?: string;
 }
 
@@ -328,6 +329,7 @@ export const getStatusUpdateTemplate = (data: StatusUpdateEmailData) => {
         updateType,
         approvedItems = [],
         rejectedItems = [],
+        pendingItems = [],
         supportEmail = "admissions@vvit.edu.in"
     } = data;
 
@@ -361,6 +363,47 @@ export const getStatusUpdateTemplate = (data: StatusUpdateEmailData) => {
             introText = "We regret to inform you that you have not qualified in the recent entrance examination.";
             nextSteps = "You may re-apply for the next phase or contact the helpdesk for other admission options.";
             break;
+        case 'QUALIFICATION_PENDING':
+            title = "Qualification Verification Pending";
+            greeting = "Action Required: Qualification Information Needed";
+            introText = "Your academic qualification details are pending verification. It seems some information is missing or incomplete.";
+            nextSteps = "Please login to your dashboard and complete your qualification details to proceed.";
+            break;
+        case 'DOCUMENT_PENDING':
+            title = "Document Upload Pending";
+            greeting = "Action Required: Documents Pending";
+            introText = "Some of your required documents are pending upload or verification.";
+            nextSteps = "Please upload the pending documents as soon as possible to avoid admission delays.";
+            break;
+        case 'QUALIFICATION_VERIFIED':
+            title = "Qualification Verification Successful";
+            greeting = "Good News: Qualifications Verified";
+            introText = "We are pleased to inform you that your academic qualifications have been successfully verified.";
+            nextSteps = "You can now proceed to the next stage of the admission process. Check your dashboard for updates.";
+            break;
+        case 'DOCUMENT_VERIFIED':
+            title = "Documents Verification Successful";
+            greeting = "Good News: Documents Verified";
+            introText = "All your submitted documents have been successfully verified.";
+            nextSteps = "Your application is moving forward. Please keep checking your dashboard for allotment status.";
+            break;
+        case 'QUALIFICATION_STATUS':
+            title = "Qualification Verification Update";
+            greeting = "Update: Qualification Verification Status";
+            introText = "Here is the current status of your academic qualification verification.";
+            nextSteps = "Please review the status details below. If any items are rejected or pending, please take necessary action.";
+            break;
+        case 'DOCUMENT_STATUS':
+            title = "Document Verification Update";
+            greeting = "Update: Document Verification Status";
+            introText = "Here is the current status of your document verification.";
+            nextSteps = "Please review the status details below. If any items are rejected or pending, please take necessary action.";
+            break;
+        default:
+            title = "Status Update";
+            greeting = "Application Status Update";
+            introText = "There has been an update to your application status.";
+            nextSteps = "Please login to the portal to view the details.";
     }
 
     const approvedListHtml = approvedItems.length > 0 ? `
@@ -370,6 +413,18 @@ export const getStatusUpdateTemplate = (data: StatusUpdateEmailData) => {
                 <li style="padding: 10px; margin-bottom: 8px; border-left: 4px solid #28a745; background-color: #f0fff4; border-radius: 4px;">
                     <span style="display: block; font-weight: bold; color: #155724;">${item.name}</span>
                     ${item.details ? `<span style="display: block; font-size: 13px; color: #28a745; margin-top: 4px;">${item.details}</span>` : ''}
+                </li>
+            `).join('')}
+        </ul>
+    ` : '';
+
+    const pendingListHtml = pendingItems.length > 0 ? `
+        <p><strong>Pending / Action Required:</strong></p>
+        <ul style="list-style: none; padding: 0; margin-bottom: 20px;">
+            ${pendingItems.map(item => `
+                <li style="padding: 10px; margin-bottom: 8px; border-left: 4px solid #ffc107; background-color: #fffbf0; border-radius: 4px;">
+                    <span style="display: block; font-weight: bold; color: #856404;">${item.name}</span>
+                    ${item.reason ? `<span style="display: block; font-size: 13px; color: #856404; margin-top: 4px;">${item.reason}</span>` : ''}
                 </li>
             `).join('')}
         </ul>
@@ -446,6 +501,8 @@ export const getStatusUpdateTemplate = (data: StatusUpdateEmailData) => {
       <p>${introText}</p>
 
       ${rejectedListHtml}
+
+      ${pendingListHtml}
 
       ${approvedListHtml}
 

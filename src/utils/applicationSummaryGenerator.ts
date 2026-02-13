@@ -130,30 +130,50 @@ const headers = [
 
 function drawKeyValueTable(doc: PDFKit.PDFDocument, startY: number, rows: {key: string, value: string}[]) {
     let y = startY;
-    const col1X = 50;
+    const col1X = 45;
     const col2X = 200;
+    const cellPadding = 5;
+    const valueWidth = 340; // Width available for Value column
     
-    // Border Box
-    const rowHeight = 20;
-    const totalHeight = rows.length * rowHeight;
-    
-    // Draw Rows
-    doc.font('Helvetica').fontSize(10);
+    doc.font('Helvetica').fontSize(10); // Set font for measurement
+
     rows.forEach((row, i) => {
-        // Striping
-        if (i % 2 === 0) doc.fillColor('#f9f9f9').rect(40, y, 520, rowHeight).fill();
-        doc.fillColor('#000');
+        // Measure height of value text
+        const valueHeight = doc.heightOfString(row.value, { width: valueWidth });
+        // Use at least 20, but more if text wraps, plus padding
+        // If key is ADDRESS, force extra spacing if needed, but dynamic height is better
+        let rowHeight = Math.max(20, valueHeight + (cellPadding * 2));
         
-        // Key
-        doc.font('Helvetica-Bold').text(row.key, col1X, y + 5);
-        // Value
-        doc.font('Helvetica').text(row.value, col2X, y + 5);
+        // Specific tweak: if the Key is 'Address', ensure minimum 3 lines height (~45-60px) if user requested "3 line space" visually, 
+        // OR just let dynamic height handle it if the address IS long. 
+        // The user asked "at least 3 line space because address is bigger". 
+        if (row.key === 'Address') {
+           rowHeight = Math.max(rowHeight, 60); 
+        }
+
+        // Draw Background
+        if (i % 2 === 0) {
+            doc.fillColor('#f9f9f9').rect(40, y, 520, rowHeight).fill();
+        }
+        doc.fillColor('#000'); // Reset to black
+
+        // Draw Key
+        doc.font('Helvetica-Bold').text(row.key, col1X, y + cellPadding);
+
+        // Draw Value (Multiline supported with width)
+        doc.font('Helvetica').text(row.value, col2X, y + cellPadding, {
+            width: valueWidth,
+            align: 'left'
+        });
         
         y += rowHeight;
+        
+        // Draw bottom border for this row
+        doc.strokeColor('#e0e0e0').moveTo(40, y).lineTo(560, y).stroke();
     });
 
-    // Outer Border
-    doc.rect(40, startY, 520, totalHeight).strokeColor('#ccc').stroke();
+    // Outer Border for the whole table
+    doc.rect(40, startY, 520, y - startY).strokeColor('#ccc').stroke();
 
     return y;
 }
