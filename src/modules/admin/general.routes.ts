@@ -3,10 +3,10 @@ import { authenticate, authorizePermission } from '../../middleware/rbac.middlew
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     getDashboardStats, addAdmin, getAgentCommissions, getUserDetails, addInvigilator, getStaffUsers, updateStaffUser, deleteStaffUser,
-    getSystemSettings, updateSystemSetting, updateAgentCommissionStatus, assignUserRoleAndGroups
+    getSystemSettings, updateSystemSetting, updateAgentCommissionStatus, assignUserRoleAndGroups, updateFullStaffDetails
 } from './general.controller';
 import {
-    addAdminSchema, getAgentCommissionsSchema, addInvigilatorSchema, updateStaffUserSchema, assignRoleGroupSchema
+    addAdminSchema, getAgentCommissionsSchema, addInvigilatorSchema, updateStaffUserSchema, assignRoleGroupSchema, updateFullStaffDetailsSchema
 } from '../../validators/adminValidators';
 
 const router = Router();
@@ -32,6 +32,10 @@ router.get('/staff-users', authenticate, authorizePermission('admin.read.all'), 
 
 // Update Staff User
 router.put('/staff-users/:userId', authenticate, authorizePermission('admin.update.all'), validateRequest(updateStaffUserSchema), updateStaffUser);
+
+// Update Staff User (Full)
+router.put('/staff-users/:userId/full-update', authenticate, authorizePermission('admin.update.all'), validateRequest(updateFullStaffDetailsSchema), updateFullStaffDetails);
+
 
 // Delete Staff User
 

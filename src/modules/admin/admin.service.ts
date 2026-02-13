@@ -451,5 +451,77 @@ export const AdminService = {
 
             return { user: updatedUser, groupIds };
         });
+    },
+
+    // New API: Update Full Staff Details (Name, Email, Phone, Role, Groups) - REPLACEMENT STRATEGY for Groups
+    async updateFullStaffDetails(data: { userId: string, name?: string, email?: string, phone?: string, role?: string, groupIds?: string[] }, executedBy?: string) {
+        const { userId, name, email, phone, role, groupIds } = data;
+
+        const user = await prisma.user.findUnique({ 
+            where: { id: userId },
+            include: { userGroups: true }
+        });
+        
+        if (!user) throw new AppError('User not found', 404);
+
+        if (user.role === Role.STUDENT) {
+             throw new AppError('Cannot update student users via this API', 400);
+        }
+
+        const updateData: any = { updatedBy: executedBy };
+        if (name) updateData.name = name.trim();
+        if (email) updateData.email = email.trim().toLowerCase();
+        if (phone) updateData.phone = phone.trim();
+        if (role) {
+            if (role === Role.STUDENT) throw new AppError('Cannot set role to STUDENT', 400);
+            updateData.role = role;
+        }
+
+        return await prisma.$transaction(async (tx) => {
+            // 1. Update User Record
+            const updatedUser = await tx.user.update({
+                where: { id: userId },
+                data: updateData,
+                select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    phone: true,
+                    role: true
+                }
+            });
+
+            // 2. Update Groups (Replace Strategy)
+            let finalGroups = user.userGroups;
+            if (groupIds) {
+                 // Verify Groups
+                 const groups = await tx.group.findMany({ where: { id: { in: groupIds } } });
+                 if (groups.length !== groupIds.length) {
+                     throw new AppError('Invalid Group IDs provided', 400);
+                 }
+
+                 // Delete old
+                 await tx.userGroup.deleteMany({ where: { userId } });
+                 
+                 // Create new
+                 if (groupIds.length > 0) {
+                     await tx.userGroup.createMany({
+                         data: groupIds.map(gid => ({ userId, groupId: gid }))
+                     });
+                 }
+                 
+                 finalGroups = await tx.userGroup.findMany({ where: { userId }, include: { group: true } });
+            }
+
+            logger.info(`[updateFullStaffDetails] User ${userId} updated by ${executedBy}`);
+
+            return {
+                ...updatedUser,
+                groups: finalGroups.map((ug: any) => ({
+                    id: ug.groupId,
+                    name: ug.group?.name
+                }))
+            };
+        });
     }
 };

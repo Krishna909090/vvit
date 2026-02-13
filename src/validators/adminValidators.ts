@@ -466,4 +466,22 @@ export const assignRoleGroupSchema = z.object({
     }),
 });
 
+export const updateFullStaffDetailsSchema = z.object({
+    params: z.object({
+        userId: z.string().uuid('Invalid user ID'),
+    }),
+    body: z.object({
+        name: z.string().trim().min(1, 'Name cannot be empty').optional(),
+        email: z.string().email('Invalid email address').optional(),
+        phone: z.string().min(10, 'Phone number must be at least 10 digits').optional(),
+        role: z.string().refine(val => Object.values(Role).includes(val as any)).optional(),
+        groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
+    }).refine(
+        (data) => data.name !== undefined || data.email !== undefined || data.phone !== undefined || data.role !== undefined || data.groupIds !== undefined,
+        {
+            message: 'At least one field must be provided',
+        }
+    ),
+});
+
 
