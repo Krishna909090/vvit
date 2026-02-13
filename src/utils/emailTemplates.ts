@@ -315,7 +315,7 @@ export const getHallTicketTemplate = (data: HallTicketEmailData) => {
 export interface StatusUpdateEmailData {
     studentName: string;
     applicationId: string;
-    updateType: 'QUALIFICATION_REJECTED' | 'DOCUMENT_REJECTED' | 'SEAT_ALLOTMENT_REJECTED' | 'EXAM_FAILED' | 'QUALIFICATION_PENDING' | 'DOCUMENT_PENDING';
+    updateType: 'QUALIFICATION_REJECTED' | 'DOCUMENT_REJECTED' | 'SEAT_ALLOTMENT_REJECTED' | 'EXAM_FAILED' | 'QUALIFICATION_PENDING' | 'DOCUMENT_PENDING' | 'QUALIFICATION_VERIFIED' | 'DOCUMENT_VERIFIED' | 'QUALIFICATION_STATUS' | 'DOCUMENT_STATUS';
     approvedItems?: { name: string; details?: string }[];
     rejectedItems?: { name: string; reason?: string }[];
     pendingItems?: { name: string; reason?: string }[];
@@ -372,9 +372,38 @@ export const getStatusUpdateTemplate = (data: StatusUpdateEmailData) => {
         case 'DOCUMENT_PENDING':
             title = "Document Upload Pending";
             greeting = "Action Required: Documents Pending";
-            introText = "We noticed that some mandatory documents are pending upload or verification.";
-            nextSteps = "Please login to the student portal and upload the pending documents as soon as possible.";
+            introText = "Some of your required documents are pending upload or verification.";
+            nextSteps = "Please upload the pending documents as soon as possible to avoid admission delays.";
             break;
+        case 'QUALIFICATION_VERIFIED':
+            title = "Qualification Verification Successful";
+            greeting = "Good News: Qualifications Verified";
+            introText = "We are pleased to inform you that your academic qualifications have been successfully verified.";
+            nextSteps = "You can now proceed to the next stage of the admission process. Check your dashboard for updates.";
+            break;
+        case 'DOCUMENT_VERIFIED':
+            title = "Documents Verification Successful";
+            greeting = "Good News: Documents Verified";
+            introText = "All your submitted documents have been successfully verified.";
+            nextSteps = "Your application is moving forward. Please keep checking your dashboard for allotment status.";
+            break;
+        case 'QUALIFICATION_STATUS':
+            title = "Qualification Verification Update";
+            greeting = "Update: Qualification Verification Status";
+            introText = "Here is the current status of your academic qualification verification.";
+            nextSteps = "Please review the status details below. If any items are rejected or pending, please take necessary action.";
+            break;
+        case 'DOCUMENT_STATUS':
+            title = "Document Verification Update";
+            greeting = "Update: Document Verification Status";
+            introText = "Here is the current status of your document verification.";
+            nextSteps = "Please review the status details below. If any items are rejected or pending, please take necessary action.";
+            break;
+        default:
+            title = "Status Update";
+            greeting = "Application Status Update";
+            introText = "There has been an update to your application status.";
+            nextSteps = "Please login to the portal to view the details.";
     }
 
     const approvedListHtml = approvedItems.length > 0 ? `

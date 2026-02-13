@@ -339,6 +339,10 @@ export const sendStatusUpdateEmail = async (
         else if (data.updateType === 'EXAM_FAILED') subject = `Entrance Exam Result - ${data.applicationId}`;
         else if (data.updateType === 'QUALIFICATION_PENDING') subject = `Action Required: Complete Qualification Details - ${data.applicationId}`;
         else if (data.updateType === 'DOCUMENT_PENDING') subject = `Action Required: Pending Documents - ${data.applicationId}`;
+        else if (data.updateType === 'QUALIFICATION_VERIFIED') subject = `Qualification Verification Successful - ${data.applicationId}`;
+        else if (data.updateType === 'DOCUMENT_VERIFIED') subject = `Documents Verification Successful - ${data.applicationId}`;
+        else if (data.updateType === 'QUALIFICATION_STATUS') subject = `Update: Qualification Verification Status - ${data.applicationId}`;
+        else if (data.updateType === 'DOCUMENT_STATUS') subject = `Update: Document Verification Status - ${data.applicationId}`;
 
         // Create Log Entry
         const logEntry = await createEmailLog({
