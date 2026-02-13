@@ -337,6 +337,8 @@ export const sendStatusUpdateEmail = async (
         else if (data.updateType === 'DOCUMENT_REJECTED') subject = `Action Required: Document Verification - ${data.applicationId}`;
         else if (data.updateType === 'SEAT_ALLOTMENT_REJECTED') subject = `Seat Allotment Status - ${data.applicationId}`;
         else if (data.updateType === 'EXAM_FAILED') subject = `Entrance Exam Result - ${data.applicationId}`;
+        else if (data.updateType === 'QUALIFICATION_PENDING') subject = `Action Required: Complete Qualification Details - ${data.applicationId}`;
+        else if (data.updateType === 'DOCUMENT_PENDING') subject = `Action Required: Pending Documents - ${data.applicationId}`;
 
         // Create Log Entry
         const logEntry = await createEmailLog({
