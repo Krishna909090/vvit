@@ -271,14 +271,15 @@ export const DashboardService = {
                 }
             }),
 
-            // 2. Sum total seats from Courses (Total Capacity - Master Data, no date filter usually)
+            // 2. Sum total seats from Courses (Total Capacity - Master Data)
+            // Use isDeleted: { not: true } to include nulls if any, though default is false.
             prisma.course.groupBy({
                 by: ['degree'],
                 _sum: {
                     totalSeats: true
                 },
                 where: {
-                    isDeleted: false
+                    isDeleted: { not: true }
                 }
             })
         ]);
@@ -286,7 +287,7 @@ export const DashboardService = {
         // Merge results
         const stats: Record<string, { total: number, filled: number }> = {};
 
-        // Process Course Capacity first
+        // Process Course Capacity first - Ensure all available degrees are listed
         courseStats.forEach(c => {
             if (c.degree) {
                 stats[c.degree] = { 
@@ -300,6 +301,7 @@ export const DashboardService = {
         studentStats.forEach(s => {
             if (s.degreeType) {
                 if (!stats[s.degreeType]) {
+                    // This happens if a student has a degreeType that isn't in Courses (or mismatched spelling)
                     stats[s.degreeType] = { total: 0, filled: 0 };
                 }
                 stats[s.degreeType].filled = s._count.id;
