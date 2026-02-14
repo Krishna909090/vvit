@@ -267,7 +267,16 @@ export const initiateMultiComponentPayment = async (
     const totalAmount = components.reduce((sum, c) => sum + c.amount, 0);
     if (totalAmount <= 0) throw new AppError('Total amount must be greater than zero', 400);
 
-    const isOffline = [PaymentMethod.CASH, PaymentMethod.CHEQUE, PaymentMethod.DEMAND_DRAFT].includes(paymentMethod as any);
+    const isOffline = [
+        PaymentMethod.CASH, 
+        PaymentMethod.CHEQUE, 
+        PaymentMethod.DEMAND_DRAFT, 
+        PaymentMethod.NEFT_RTGS,
+        (PaymentMethod as any).IMPS,
+        (PaymentMethod as any).NEFT,
+        (PaymentMethod as any).RTGS
+    ].includes(paymentMethod as any);
+
     const transactionId = isOffline 
         ? (referenceNumber || `OFFLINE_${Date.now()}_${studentId.substring(0, 8)}`)
         : `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
@@ -290,6 +299,7 @@ export const initiateMultiComponentPayment = async (
                     providerTxId: transactionId,
                     method: paymentMethod,
                     mode: paymentMode,
+                    referenceNumber,
                     createdBy: userId,
                     collectedBy: paymentMethod === PaymentMethod.CASH ? userId : undefined,
                     metadata: remarks ? { remarks, mode: 'OFFLINE_ENTRY' } : undefined,
@@ -1861,6 +1871,7 @@ export const processUnifiedPayment = async (data: any) => {
             method: method || (mode === PaymentMode.ONLINE ? PaymentMethod.UPI : PaymentMethod.CASH),
             status: mode === PaymentMode.OFFLINE ? PaymentStatus.SUCCESS : PaymentStatus.PENDING,
             component,
+            referenceNumber,
             feeHeadId,
             providerTxId,
             collectedBy: initiatedBy,

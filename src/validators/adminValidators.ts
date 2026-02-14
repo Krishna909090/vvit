@@ -474,7 +474,7 @@ export const updateFullStaffDetailsSchema = z.object({
         name: z.string().trim().min(1, 'Name cannot be empty').optional(),
         email: z.string().email('Invalid email address').optional(),
         phone: z.string().min(10, 'Phone number must be at least 10 digits').optional(),
-        role: z.string().refine(val => Object.values(Role).includes(val as any)).optional(),
+        role: z.string().optional(),
         groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
     }).refine(
         (data) => data.name !== undefined || data.email !== undefined || data.phone !== undefined || data.role !== undefined || data.groupIds !== undefined,

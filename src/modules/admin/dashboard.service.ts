@@ -1,70 +1,344 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, Payment } from '@prisma/client';
+import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, Payment, ApplicationMode, QuotaType, AccommodationType } from '@prisma/client';
+
+const getDateCondition = (range?: string, startDate?: string, endDate?: string) => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+    let start: Date | undefined;
+    let end: Date | undefined;
+
+    if (range && range !== 'custom') {
+        switch (range) {
+            case 'today':
+                start = todayStart;
+                end = todayEnd;
+                break;
+            case 'yesterday':
+                const yesterday = new Date(todayStart);
+                yesterday.setDate(yesterday.getDate() - 1);
+                start = yesterday;
+                const yesterdayEnd = new Date(yesterday);
+                yesterdayEnd.setHours(23, 59, 59, 999);
+                end = yesterdayEnd;
+                break;
+            case '7d':
+            case '7days':
+                start = new Date(todayStart);
+                start.setDate(start.getDate() - 7);
+                end = todayEnd;
+                break;
+            case '15d':
+            case '15days':
+                start = new Date(todayStart);
+                start.setDate(start.getDate() - 15);
+                end = todayEnd;
+                break;
+            case '30d':
+            case '30days':
+                start = new Date(todayStart);
+                start.setDate(start.getDate() - 30);
+                end = todayEnd;
+                break;
+        }
+    } else {
+        // Custom dates or no range specified
+        if (startDate) start = new Date(startDate);
+        if (endDate) {
+            end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+        }
+    }
+
+    if (!start && !end) return undefined;
+
+    const dateQuery: any = {};
+    if (start) dateQuery.gte = start;
+    if (end) dateQuery.lte = end;
+    
+    return dateQuery;
+};
 
 export const DashboardService = {
     /**
-     * Get Comprehensive Dashboard Statistics
-     * Aggregates key metrics for the admin dashboard
+     * 1. Application Statistics
      */
-    async getGlobalStats() {
+    async getApplicationStats(range?: string, startDate?: string, endDate?: string) {
+        const dateFilter = getDateCondition(range, startDate, endDate);
+        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
+
         const [
             totalApplications,
-            totalAmountPaid,
-            pendingPaymentsCount,
-            totalEntranceFeeCollected,
-            totalSeatsAllotted,
-            totalDocumentsVerified,
-            totalDocumentsPending
+            totalPaidApplications,
+            totalOnlineApplications,
+            totalOfflineApplications
         ] = await Promise.all([
-            // 1. Total Applications
-            prisma.student.count(),
-            
-            // 2. Total Amount Paid (Sum of all successful payments)
-            prisma.payment.aggregate({
-                where: { status: PaymentStatus.SUCCESS },
-                _sum: { amount: true }
+            prisma.student.count({ where: whereDate }),
+            prisma.student.count({
+                where: {
+                    ...whereDate,
+                    payments: {
+                        some: {
+                            component: PaymentComponent.APPLICATION_FEE,
+                            status: PaymentStatus.SUCCESS
+                        }
+                    }
+                }
             }),
-
-            // 3. Pending Payments (Count of students registered but not yet paid entrance fee)
-            prisma.studentAdmission.count({
-                where: { status: AdmissionStatus.REGISTERED }
+            prisma.student.count({
+                where: {
+                    ...whereDate,
+                    applicationMode: ApplicationMode.ONLINE,
+                    isOffline: false
+                }
             }),
-
-            // 4. Total Entrance Fee Collected
-            prisma.payment.aggregate({
-                where: { 
-                    status: PaymentStatus.SUCCESS,
-                    component: PaymentComponent.APPLICATION_FEE
-                },
-                _sum: { amount: true }
-            }),
-
-            // 5. Total Seats Allotted
-            prisma.studentAdmission.count({
-                where: { status: AdmissionStatus.SEAT_ALLOTTED }
-            }),
-
-            // 6. Total Documents Verified (Students with ALL docs verified or Admission verified status)
-            // Simplified: Counting students in DOCUMENTS_VERIFIED status
-            prisma.studentAdmission.count({
-                where: { status: AdmissionStatus.DOCUMENTS_VERIFIED }
-            }),
-
-            // 7. Documents Pending (Students in DOCUMENTS_PENDING or SUBMITTED status)
-            prisma.studentAdmission.count({
-                where: { status: { in: [AdmissionStatus.DOCUMENTS_PENDING, AdmissionStatus.DOCUMENTS_SUBMITTED] } }
+            prisma.student.count({
+                where: {
+                    ...whereDate,
+                    OR: [
+                        { applicationMode: ApplicationMode.OFFLINE },
+                        { isOffline: true }
+                    ]
+                }
             })
         ]);
 
         return {
             totalApplications,
-            totalAmountPaid: totalAmountPaid._sum.amount || 0,
-            pendingPaymentsCount,
-            totalEntranceFeeCollected: totalEntranceFeeCollected._sum.amount || 0,
-            totalSeatsAllotted,
-            totalDocumentsVerified,
-            totalDocumentsPending
+            totalPaidApplications,
+            totalOnlineApplications,
+            totalOfflineApplications
         };
+    },
+
+    /**
+     * 2. Financial Statistics
+     */
+    async getFinancialStats(range?: string, startDate?: string, endDate?: string) {
+        const dateFilter = getDateCondition(range, startDate, endDate);
+        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
+
+        const [
+            totalApplicationFeeCollected,
+            totalCollegeAmountReceived,
+            totalScholarshipAmountGiven
+        ] = await Promise.all([
+            prisma.payment.aggregate({
+                where: { 
+                    ...whereDate,
+                    status: PaymentStatus.SUCCESS,
+                    component: PaymentComponent.APPLICATION_FEE
+                },
+                _sum: { amount: true }
+            }),
+            prisma.payment.aggregate({
+                where: {
+                    ...whereDate,
+                    status: PaymentStatus.SUCCESS,
+                    component: { not: PaymentComponent.APPLICATION_FEE }
+                },
+                _sum: { amount: true }
+            }),
+            prisma.studentFeeDemand.aggregate({
+                where: whereDate,
+                _sum: { scholarshipAmount: true }
+            })
+        ]);
+
+        return {
+            totalApplicationFeeCollected: totalApplicationFeeCollected._sum.amount || 0,
+            totalCollegeAmountReceived: totalCollegeAmountReceived._sum.amount || 0,
+            totalScholarshipAmountGiven: totalScholarshipAmountGiven._sum.scholarshipAmount || 0
+        };
+    },
+
+    /**
+     * 3. Admission & Infrastructure Statistics
+     */
+    async getAdmissionStats(range?: string, startDate?: string, endDate?: string) {
+        const dateFilter = getDateCondition(range, startDate, endDate);
+        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
+
+        const [
+            totalSeatAllocated,
+            totalManagementQuota,
+            totalConvenorQuota,
+            totalHostelSelected,
+            totalTransportSelected,
+            totalScholarshipEligible,
+            totalScholarshipNotEligible
+        ] = await Promise.all([
+            prisma.student.count({
+                where: { ...whereDate, admissionDetails: { allottedCourseId: { not: null } } }
+            }),
+            prisma.student.count({ where: { ...whereDate, quotaType: QuotaType.MANAGEMENT } }),
+            prisma.student.count({ where: { ...whereDate, quotaType: QuotaType.CONVENOR } }),
+            prisma.student.count({ where: { ...whereDate, admissionDetails: { accommodationType: AccommodationType.HOSTEL } } }),
+            prisma.student.count({ where: { ...whereDate, admissionDetails: { accommodationType: AccommodationType.TRANSPORT } } }),
+            prisma.student.count({ where: { ...whereDate, studentScholarship: { isEligible: 'YES' } } }),
+            prisma.student.count({ where: { ...whereDate, studentScholarship: { isEligible: 'NO' } } })
+        ]);
+
+        return {
+            totalSeatAllocated,
+            totalManagementQuota,
+            totalConvenorQuota,
+            totalHostelSelected,
+            totalTransportSelected,
+            totalScholarshipEligible,
+            totalScholarshipNotEligible
+        };
+    },
+
+    /**
+     * 4. Exam Statistics
+     */
+    async getExamStats(range?: string, startDate?: string, endDate?: string) {
+        const dateFilter = getDateCondition(range, startDate, endDate);
+        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
+
+        const [totalExamRegistered, totalExamAttended] = await Promise.all([
+            prisma.studentExam.count({ where: whereDate }),
+            prisma.studentExam.count({ where: { ...whereDate, examAttended: true } })
+        ]);
+
+        return {
+            totalExamRegistered,
+            totalExamAttended
+        };
+    },
+
+    /**
+     * Get Verification Statistics
+     * Counts unique students with at least one approved qualification/document.
+     */
+    async getVerificationStats(range?: string, startDate?: string, endDate?: string) {
+        const dateFilter = getDateCondition(range, startDate, endDate);
+        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
+
+        const [totalQualificationVerified, totalDocumentsVerified] = await Promise.all([
+            // Count students with ANY approved qualification
+            prisma.student.count({
+                where: {
+                    ...whereDate,
+                    academicQualifications: {
+                        some: {
+                            verificationStatus: 'APPROVED'
+                        }
+                    }
+                }
+            }),
+
+            // Count students with ANY approved document
+            prisma.student.count({
+                where: {
+                    ...whereDate,
+                    documents: {
+                        some: {
+                            status: StudentDocumentStatus.APPROVED
+                        }
+                    }
+                }
+            })
+        ]);
+
+        return {
+            totalQualificationVerified,
+            totalDocumentsVerified
+        };
+    },
+
+    /**
+     * Get Allocated Seats Count by Degree Type
+     */
+    async getDegreeSeatAllocatedStats(range?: string, startDate?: string, endDate?: string) {
+        const dateFilter = getDateCondition(range, startDate, endDate);
+        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
+
+        const [studentStats, courseStats] = await Promise.all([
+            // 1. Count actual students with allotted seats (Filled Count)
+            prisma.student.groupBy({
+                by: ['degreeType'],
+                where: {
+                    ...whereDate,
+                    admissionDetails: {
+                        allottedCourseId: { not: null }
+                    }
+                },
+                _count: {
+                    id: true
+                }
+            }),
+
+            // 2. Sum total seats from Courses (Total Capacity - Master Data)
+            // Use isDeleted: { not: true } to include nulls if any, though default is false.
+            prisma.course.groupBy({
+                by: ['degree'],
+                _sum: {
+                    totalSeats: true
+                },
+                where: {
+                    isDeleted: { not: true }
+                }
+            })
+        ]);
+
+        // Merge results
+        const stats: Record<string, { total: number, filled: number }> = {};
+
+        // Process Course Capacity first - Ensure all available degrees are listed
+        courseStats.forEach(c => {
+            if (c.degree) {
+                stats[c.degree] = { 
+                    total: c._sum.totalSeats || 0, 
+                    filled: 0 
+                };
+            }
+        });
+
+        // Overlay Student Filled Counts
+        studentStats.forEach(s => {
+            if (s.degreeType) {
+                if (!stats[s.degreeType]) {
+                    // This happens if a student has a degreeType that isn't in Courses (or mismatched spelling)
+                    stats[s.degreeType] = { total: 0, filled: 0 };
+                }
+                stats[s.degreeType].filled = s._count.id;
+            }
+        });
+
+        return stats;
+    },
+
+    /**
+     * Get Allocated Seats Count by Gender
+     */
+    async getGenderSeatAllocatedStats(range?: string, startDate?: string, endDate?: string) {
+        const dateFilter = getDateCondition(range, startDate, endDate);
+        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
+
+        const result = await prisma.student.groupBy({
+            by: ['gender'],
+            where: {
+                ...whereDate,
+                admissionDetails: {
+                    allottedCourseId: { not: null }
+                }
+            },
+            _count: {
+                id: true
+            }
+        });
+
+        const stats: Record<string, number> = {};
+        result.forEach(item => {
+            if (item.gender) {
+                stats[item.gender] = item._count.id;
+            }
+        });
+
+        return stats;
     },
 
     /**
@@ -355,7 +629,6 @@ export const DashboardService = {
      */
     async getSeatAllocationCounts(filter?: string) {
         const result: any = {};
-
         // 1. Not Allocated
         if (!filter || filter === 'not_allocated') {
             result.notAllocated = await prisma.student.count({
