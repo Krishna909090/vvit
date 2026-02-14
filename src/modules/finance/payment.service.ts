@@ -274,8 +274,7 @@ export const initiateMultiComponentPayment = async (
         PaymentMethod.NEFT_RTGS,
         (PaymentMethod as any).IMPS,
         (PaymentMethod as any).NEFT,
-        (PaymentMethod as any).RTGS,
-        (PaymentMethod as any).BANK_TRANSFER
+        (PaymentMethod as any).RTGS
     ].includes(paymentMethod as any);
 
     const transactionId = isOffline 

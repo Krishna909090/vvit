@@ -1233,7 +1233,6 @@ enum PaymentMethod {
   IMPS
   NEFT
   RTGS
-  BANK_TRANSFER
 }
 
 enum LedgerTransactionType {

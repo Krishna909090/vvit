@@ -184,7 +184,7 @@ export const InvoiceService = {
             studentName: primaryPayment.student.name,
             studentId: primaryPayment.student.applicationId || primaryPayment.studentId,
             applicationId: primaryPayment.student.applicationId || primaryPayment.studentId,
-            paymentMethod: primaryPayment.method === 'NEFT_RTGS' ? 'Bank Transfer' : (primaryPayment.method || 'ONLINE'),
+            paymentMethod: (primaryPayment.method === 'NEFT_RTGS') ? 'Bank Transfer' : (primaryPayment.method || 'ONLINE'),
             transactionId: internalTxId,
             referenceId: realTransactionId,
             amount: totalAmount,
