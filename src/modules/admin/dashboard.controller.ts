@@ -70,6 +70,17 @@ export const DashboardController = {
         });
     }),
 
+    getGenderSeatAllocatedStats: catchAsync(async (req: Request, res: Response) => {
+        const { range, startDate, endDate } = req.query;
+        const stats = await DashboardService.getGenderSeatAllocatedStats(range as string, startDate as string, endDate as string);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: stats
+        });
+    }),
+
     getRegistrationTrends: catchAsync(async (req: Request, res: Response) => {
         const { range } = req.query;
         const trends = await DashboardService.getRegistrationTrends(range as string || '7d');

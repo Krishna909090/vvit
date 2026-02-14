@@ -13,6 +13,7 @@ router.get('/admission-stats', DashboardController.getAdmissionStats);
 router.get('/exam-stats', DashboardController.getExamStats);
 router.get('/verification-stats', DashboardController.getVerificationStats);
 router.get('/degree-seat-stats', DashboardController.getDegreeSeatAllocatedStats);
+router.get('/gender-seat-stats', DashboardController.getGenderSeatAllocatedStats);
 router.get('/trends', DashboardController.getRegistrationTrends);
 router.get('/recent-students', DashboardController.getRecentStudents);
 router.get('/seat-allocation-stats', DashboardController.getSeatAllocationStats);

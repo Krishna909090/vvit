@@ -310,6 +310,36 @@ export const DashboardService = {
     },
 
     /**
+     * Get Allocated Seats Count by Gender
+     */
+    async getGenderSeatAllocatedStats(range?: string, startDate?: string, endDate?: string) {
+        const dateFilter = getDateCondition(range, startDate, endDate);
+        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
+
+        const result = await prisma.student.groupBy({
+            by: ['gender'],
+            where: {
+                ...whereDate,
+                admissionDetails: {
+                    allottedCourseId: { not: null }
+                }
+            },
+            _count: {
+                id: true
+            }
+        });
+
+        const stats: Record<string, number> = {};
+        result.forEach(item => {
+            if (item.gender) {
+                stats[item.gender] = item._count.id;
+            }
+        });
+
+        return stats;
+    },
+
+    /**
      * Get Student Trends for specific time ranges
      * @param rangeType '7d' | '10d' | '1m' | '3m'
      */
