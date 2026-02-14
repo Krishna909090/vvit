@@ -4,8 +4,64 @@ import { sendResponse } from '../../utils/response';
 import { DashboardService } from './dashboard.service';
 
 export const DashboardController = {
-    getGlobalStats: catchAsync(async (req: Request, res: Response) => {
-        const stats = await DashboardService.getGlobalStats();
+    getApplicationStats: catchAsync(async (req: Request, res: Response) => {
+        const { range, startDate, endDate } = req.query;
+        const stats = await DashboardService.getApplicationStats(range as string, startDate as string, endDate as string);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: stats
+        });
+    }),
+
+    getFinancialStats: catchAsync(async (req: Request, res: Response) => {
+        const { range, startDate, endDate } = req.query;
+        const stats = await DashboardService.getFinancialStats(range as string, startDate as string, endDate as string);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: stats
+        });
+    }),
+
+    getAdmissionStats: catchAsync(async (req: Request, res: Response) => {
+        const { range, startDate, endDate } = req.query;
+        const stats = await DashboardService.getAdmissionStats(range as string, startDate as string, endDate as string);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: stats
+        });
+    }),
+
+    getExamStats: catchAsync(async (req: Request, res: Response) => {
+        const { range, startDate, endDate } = req.query;
+        const stats = await DashboardService.getExamStats(range as string, startDate as string, endDate as string);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: stats
+        });
+    }),
+
+    getVerificationStats: catchAsync(async (req: Request, res: Response) => {
+        const { range, startDate, endDate } = req.query;
+        const stats = await DashboardService.getVerificationStats(range as string, startDate as string, endDate as string);
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: stats
+        });
+    }),
+
+    getDegreeSeatAllocatedStats: catchAsync(async (req: Request, res: Response) => {
+        const { range, startDate, endDate } = req.query;
+        const stats = await DashboardService.getDegreeSeatAllocatedStats(range as string, startDate as string, endDate as string);
         sendResponse({
             res,
             statusCode: 200,

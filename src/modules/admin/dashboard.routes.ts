@@ -7,7 +7,12 @@ const router = Router();
 // Dashboard routes - Admin/SuperAdmin only
 router.use(authenticate, authorizePermission('admin.read.all'));
 
-router.get('/stats', DashboardController.getGlobalStats);
+router.get('/application-stats', DashboardController.getApplicationStats);
+router.get('/financial-stats', DashboardController.getFinancialStats);
+router.get('/admission-stats', DashboardController.getAdmissionStats);
+router.get('/exam-stats', DashboardController.getExamStats);
+router.get('/verification-stats', DashboardController.getVerificationStats);
+router.get('/degree-seat-stats', DashboardController.getDegreeSeatAllocatedStats);
 router.get('/trends', DashboardController.getRegistrationTrends);
 router.get('/recent-students', DashboardController.getRecentStudents);
 router.get('/seat-allocation-stats', DashboardController.getSeatAllocationStats);
