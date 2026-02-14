@@ -1230,6 +1230,10 @@ enum PaymentMethod {
   CHEQUE
   DEMAND_DRAFT
   NEFT_RTGS
+  IMPS
+  NEFT
+  RTGS
+  BANK_TRANSFER
 }
 
 enum LedgerTransactionType {

@@ -6,7 +6,13 @@ export const payFeeComponentSchema = z.object({
         studentId: z.string().uuid("Invalid Student ID"),
         amount: z.number().positive("Amount must be positive"),
         mode: z.nativeEnum(PaymentMode),
-        method: z.nativeEnum(PaymentMethod).optional(),
+        method: z.union([
+            z.nativeEnum(PaymentMethod),
+            z.literal('IMPS'),
+            z.literal('NEFT'),
+            z.literal('RTGS'),
+            z.literal('BANK_TRANSFER')
+        ]).optional(),
         component: z.union([z.nativeEnum(PaymentComponent), z.string()]),
         feeHeadId: z.string().uuid().optional(),
         remarks: z.string().optional(),
