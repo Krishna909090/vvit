@@ -1361,13 +1361,17 @@ export const AdminStudentService = {
 
         // Define required combinations
         const manualDefaults = [
-            { degreeType: 'B.Tech', scholarshipPercentage: 50 },
-            { degreeType: 'B.Tech', scholarshipPercentage: 25 },
-            { degreeType: 'B.Tech', scholarshipPercentage: 15 },
-            { degreeType: 'BBA', scholarshipPercentage: 50 },
-            { degreeType: 'BBA', scholarshipPercentage: 30 },
-            { degreeType: 'M.Tech', scholarshipPercentage: 50 },
-            { degreeType: 'M.Tech', scholarshipPercentage: 25 }
+            { degreeType: 'B.Tech', scholarshipPercentage: 50, total: 400 },
+            { degreeType: 'B.Tech', scholarshipPercentage: 25, total: 200 },
+            { degreeType: 'B.Tech', scholarshipPercentage: 15, total: 400 },
+            { degreeType: 'BBA', scholarshipPercentage: 50, total: 0 },
+            { degreeType: 'BBA', scholarshipPercentage: 30, total: 0 },
+            { degreeType: 'M.Tech', scholarshipPercentage: 50, total: 0 },
+            { degreeType: 'M.Tech', scholarshipPercentage: 25, total: 0 },
+            { degreeType: 'MCA', scholarshipPercentage: 50, total: 0 },
+            { degreeType: 'MCA', scholarshipPercentage: 25, total: 0 },
+            { degreeType: 'MBA', scholarshipPercentage: 50, total: 0 },
+            { degreeType: 'MBA', scholarshipPercentage: 25, total: 0 }
         ];
 
         // Create a map of existing stats
@@ -1378,7 +1382,7 @@ export const AdminStudentService = {
             statsMap.set(key, item._count.studentId);
         });
 
-        const finalStats: { degreeType: string; scholarshipPercentage: number | null; count: number }[] = [];
+        const finalStats: { degreeType: string; scholarshipPercentage: number | null; count: number; total: number }[] = [];
 
         // 1. Add required defaults (overwriting with actuals if present)
         manualDefaults.forEach(def => {
@@ -1387,27 +1391,22 @@ export const AdminStudentService = {
             finalStats.push({
                 degreeType: def.degreeType,
                 scholarshipPercentage: def.scholarshipPercentage,
-                count: count
+                count: count,
+                total: def.total
             });
             // Mark as processed so we don't duplicate if we want to show "others"
             statsMap.delete(key);
         });
 
         // 2. Add any other combinations found in DB that were not in manual defaults
-        statsMap.forEach((count, key) => {
-             // We need to parse the key back, or better yet, loop through original dbStats and check if processed.
-             // But map key iteration is string based. 
-             // Let's loop dbStats again simply.
-        });
-        
-        // Simpler approach for step 2:
         dbStats.forEach(item => {
              const isDefault = manualDefaults.some(d => d.degreeType === item.degreeType && d.scholarshipPercentage === item.scholarshipPercentage);
              if (!isDefault) {
                  finalStats.push({
                      degreeType: item.degreeType || 'Unknown',
                      scholarshipPercentage: item.scholarshipPercentage,
-                     count: item._count.studentId
+                     count: item._count.studentId,
+                     total: 0
                  });
              }
         });
