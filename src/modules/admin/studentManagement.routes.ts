@@ -3,7 +3,7 @@ import { authenticate, authorizePermission } from '../../middleware/rbac.middlew
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     getAllApplications, uploadBulkApplications, requestCancellation, approveCancellation,
-    verifyAndAllotSeat, verifyStudentDocument, requestCourseChange, approveCourseChange,
+    verifyAndAllotSeat, verifyStudentDocument, requestCourseChange, approveCourseChange, getCourseChangeRequests,
     updateAdmissionDetails, getStudentCertificates, downloadStudentDocuments, updateRollNumber,
     updateStudentStatus,
     setScholarshipEligibility,
@@ -62,6 +62,8 @@ router.post('/approve-cancellation', authenticate, authorizePermission(['student
 router.post('/verify-allot', authenticate, authorizePermission(['student.update.all']), validateRequest(verifyAndAllotSeatSchema), verifyAndAllotSeat);
 
 router.post('/change-course', authenticate, authorizePermission(['student.update.all']), validateRequest(changeCourseSchema), requestCourseChange);
+
+router.get('/course-change-requests', authenticate, authorizePermission(['student.read.all']), getCourseChangeRequests);
 
 router.post('/approve-course-change', authenticate, authorizePermission(['student.update.all']), validateRequest(approveCourseChangeSchema), approveCourseChange);
 

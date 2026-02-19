@@ -757,6 +757,33 @@ export const FeeService = {
              breakdown[key].paid += p.amount;
         });
 
+        // Map Ledger Adjustments (Fee Transfers/Deductions like Course Change Fees)
+        const adjustmentLedgers = await prisma.studentLedger.findMany({
+            where: { 
+                studentId, 
+                referenceType: 'COURSE_CHANGE' 
+            }
+        });
+
+        adjustmentLedgers.forEach(a => {
+            if (!a.feeHeadId) return;
+            
+            // Find head name from demands or fetch if needed. 
+            // Since we already have demands with heads, find the head name there.
+            const head = demands.find(d => (d.feeStructure?.feeHeadId === a.feeHeadId || d.feeHeadId === a.feeHeadId))?.feeHead || 
+                         demands.find(d => (d.feeStructure?.feeHeadId === a.feeHeadId || d.feeHeadId === a.feeHeadId))?.feeStructure?.feeHead;
+            
+            const name = (head?.name || '').toUpperCase();
+            
+            let key = 'OTHER';
+            if (name.includes('TUITION') || name.includes('COLLEGE')) key = 'TUITION';
+            else if (name.includes('HOSTEL')) key = 'HOSTEL';
+            else if (name.includes('TRANSPORT') || name.includes('BUS')) key = 'TRANSPORT';
+
+            if (a.type === 'CREDIT') breakdown[key].paid += a.amount;
+            else breakdown[key].paid -= a.amount;
+        });
+
         // Calc Balance
         Object.keys(breakdown).forEach(key => {
             breakdown[key].balance = breakdown[key].demand - breakdown[key].paid;

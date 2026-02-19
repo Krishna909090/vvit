@@ -9,8 +9,10 @@ import {
     updatePersonalDetails,
     getApplicationSummary,
     requestServiceChange,
-    updateProfilePhoto
+    updateProfilePhoto,
+    requestCourseChange
 } from './student.controller';
+import { changeCourseSchema } from '../../validators/adminValidators';
 import {
     payTestFee,
     payCollegeFee,
@@ -81,5 +83,8 @@ router.post('/:studentId/service-preferences', authenticate, authorizePermission
 
 // Update Profile Photo
 router.post('/:studentId/update-photo', authenticate, authorizePermission(['student.update.own', 'student.update.all']), validateRequest(studentIdParamSchema), updateProfilePhoto);
+
+// Course Change Request
+router.post('/:studentId/course-change', authenticate, authorizePermission(['student.update.own', 'student.update.all']), validateRequest(changeCourseSchema), requestCourseChange);
 
 export default router;

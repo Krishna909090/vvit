@@ -135,8 +135,8 @@ model AcademicYear {
   updatedBy         String?
   isDeleted         Boolean?            @default(false)
   feeStructures     FeeStructure[]
-  enrollments       StudentEnrollment[]
   studentAdmissions StudentAdmission[]
+  enrollments       StudentEnrollment[]
   studentFeeDemands StudentFeeDemand[]
 }
 
@@ -212,6 +212,7 @@ model Student {
   payments                  Payment[]
   scholarshipAllocation     ScholarshipAllocation?
   seatAllocations           SeatAllocation[]
+  serviceChangeRequests     ServiceChangeRequest[]
   agent                     User?                   @relation("AgentStudents", fields: [agentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   eligibleScholarshipRule   ScholarshipRule?        @relation(fields: [eligibleScholarshipRuleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   pref1Course               Course?                 @relation("Pref1", fields: [pref1], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -226,7 +227,6 @@ model Student {
   ledgerEntries             StudentLedger[]
   studentScholarship        StudentScholarship?
   transportAllocation       TransportAllocation?
-  serviceChangeRequests     ServiceChangeRequest[]
 }
 
 model ConvenorAdmission {
@@ -291,18 +291,17 @@ model StudentAdmission {
   hostelType        HostelType?
   hostelId          String?
   transportRouteId  String?
-  academicYearId    String?
-
   roomNumber        String?
   allottedCourseId  String?
   createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
   hostelPaymentMode HostelPaymentMode? @default(YEARWISE)
+  academicYearId    String?
+  academicYear      AcademicYear?      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   allottedCourse    Course?            @relation("AllottedCourse", fields: [allottedCourseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   hostel            Hostel?            @relation(fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student           Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   transportRoute    TransportRoute?    @relation(fields: [transportRouteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  academicYear      AcademicYear?      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model StudentDocument {
@@ -349,12 +348,12 @@ model Hostel {
   roomNumber        String?
   isDeleted         Boolean?           @default(false)
   cost              Float?             @default(0)
-  accommodationCost Float?             @default(0)
-  messCost          Float?             @default(0)
   createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
   createdBy         String?
   updatedBy         String?
+  accommodationCost Float?             @default(0)
+  messCost          Float?             @default(0)
   blocks            HostelBlock[]
   studentAdmissions StudentAdmission[]
 }
@@ -380,13 +379,13 @@ model HostelRoom {
   capacity          Int
   type              String
   cost              Float?      @default(0)
-  accommodationCost Float?      @default(0)
-  messCost          Float?      @default(0)
   createdAt         DateTime?   @default(now())
   updatedAt         DateTime    @updatedAt
   createdBy         String?
   updatedBy         String?
   isDeleted         Boolean?    @default(false)
+  accommodationCost Float?      @default(0)
+  messCost          Float?      @default(0)
   beds              HostelBed[]
   block             HostelBlock @relation(fields: [blockId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
@@ -396,13 +395,13 @@ model HostelPriceCategory {
   sharing            Int
   roomType           HostelRoomType
   price              Float
-  accommodationPrice Float?         @default(0)
-  messPrice          Float?         @default(0)
   createdAt          DateTime?      @default(now())
   updatedAt          DateTime       @updatedAt
   createdBy          String?
   updatedBy          String?
   metadata           Json?
+  accommodationPrice Float?         @default(0)
+  messPrice          Float?         @default(0)
 
   @@unique([sharing, roomType])
 }
@@ -540,29 +539,28 @@ model FeeStructure {
 }
 
 model StudentFeeDemand {
-  id                String    @id @default(dbgenerated("gen_random_uuid()"))
+  id                String        @id @default(dbgenerated("gen_random_uuid()"))
   studentId         String
   feeStructureId    String?
   amount            Float
   dueDate           DateTime
   status            FeeStatus
-  createdAt         DateTime? @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt         DateTime?     @default(now())
+  updatedAt         DateTime      @updatedAt
   createdBy         String?
   updatedBy         String?
-  discountAmount    Float     @default(0)
-  scholarshipAmount Float     @default(0)
-  netAmount         Float? // Stores Final Payable (Amount + Fine - Discount - Scholarship)
-
-  fineAmount     Float         @default(0)
-  remarks        String?
-  payments       Payment[]
-  feeStructure   FeeStructure? @relation(fields: [feeStructureId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  student        Student       @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  feeHeadId      String?
-  feeHead        FeeHead?      @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  academicYearId String?
-  academicYear   AcademicYear? @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  discountAmount    Float         @default(0)
+  fineAmount        Float         @default(0)
+  remarks           String?
+  netAmount         Float?
+  scholarshipAmount Float         @default(0)
+  academicYearId    String?
+  feeHeadId         String?
+  payments          Payment[]
+  academicYear      AcademicYear? @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeHead           FeeHead?      @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeStructure      FeeStructure? @relation(fields: [feeStructureId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student           Student       @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model Payment {
@@ -591,8 +589,8 @@ model Payment {
   updatedBy       String?
   method          PaymentMethod?
   feeHeadId       String?
-  feeHead         FeeHead?          @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeDemand       StudentFeeDemand? @relation(fields: [feeDemandId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeHead         FeeHead?          @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student         Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
@@ -601,6 +599,8 @@ model CourseChangeLog {
   studentId  String
   oldCourse  String
   newCourse  String
+  oldDegree  String?
+  newDegree  String?
   approvedBy String
   date       DateTime? @default(now())
   createdBy  String?
@@ -610,21 +610,21 @@ model CourseChangeLog {
 
 model DiscountRequest {
   id              String          @id @default(dbgenerated("gen_random_uuid()"))
-  items           Json?           // Stores array of { component, requestedAmount, approvedAmount }
-  requestedAmount Float?          @default(0) // Total Requested
-  approvedAmount  Float?          // Total Approved
+  studentId       String
+  reason          String
+  documentUrl     String?
+  status          DiscountStatus? @default(REQUESTED)
+  remarks         String?
+  requestedAmount Float?          @default(0)
+  approvedAmount  Float?
   approvedAt      DateTime?
   approvedBy      String?
-  status          DiscountStatus? @default(REQUESTED)
-  component       String?         // Deprecated or Primary Component for reference
-  documentUrl     String?
-  reason          String
-  remarks         String?
+  component       String?
   createdAt       DateTime?       @default(now())
   updatedAt       DateTime        @updatedAt
   createdBy       String?
   updatedBy       String?
-  studentId       String
+  items           Json?
   student         Student         @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
@@ -782,6 +782,8 @@ model CourseChangeRequest {
   studentId   String
   fromCourse  String
   toCourse    String
+  fromDegree  String?
+  toDegree    String?
   reason      String
   status      RequestStatus? @default(REQUESTED)
   forwardedTo String?
@@ -982,7 +984,6 @@ model AcademicQualification {
 model StudentScholarship {
   id                    String                 @id @default(dbgenerated("gen_random_uuid()"))
   studentId             String                 @unique
-  student               Student                @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   type                  String
   score                 Float?
   remarks               String?
@@ -995,6 +996,7 @@ model StudentScholarship {
   degreeType            String?
   isEligible            String?
   qualification         AcademicQualification? @relation(fields: [qualificationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student               Student                @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model EmailLog {
@@ -1053,6 +1055,21 @@ model Configuration {
   updatedAt DateTime @updatedAt
 }
 
+model ServiceChangeRequest {
+  id         String             @id @default(dbgenerated("gen_random_uuid()"))
+  studentId  String
+  type       ServiceRequestType
+  fromValue  String?
+  toValue    String
+  reason     String?
+  status     RequestStatus      @default(REQUESTED)
+  remarks    String?
+  approvedBy String?
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  student    Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
 enum AdmissionStatus {
   REGISTERED
   ENTRANCE_FEE_PAID
@@ -1107,14 +1124,14 @@ enum PaymentComponent {
   APPLICATION_FEE
   TUITION
   HOSTEL
-  HOSTEL_ACCOMMODATION
-  HOSTEL_MESS
   TRANSPORT
   OTHER
   SCHOLARSHIP_TOKEN
   BOOK_BANK
   ADMISSION
   SKILL_DEVELOPMENT
+  HOSTEL_ACCOMMODATION
+  HOSTEL_MESS
 }
 
 enum AccommodationType {
@@ -1267,23 +1284,7 @@ enum HostelPaymentMode {
   YEARWISE
 }
 
-model ServiceChangeRequest {
-  id         String             @id @default(dbgenerated("gen_random_uuid()"))
-  studentId  String
-  type       ServiceRequestType
-  fromValue  String?
-  toValue    String
-  reason     String?
-  status     RequestStatus      @default(REQUESTED)
-  remarks    String? // Admin remarks
-  approvedBy String?
-  createdAt  DateTime           @default(now())
-  updatedAt  DateTime           @updatedAt
-
-  student Student @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-}
-
 enum ServiceRequestType {
-  FACILITY // Hostel <-> Transport
-  PAYMENT_MODE // Semwise <-> Yearwise (Though yearwise is direct, good to have enum for history/logs if needed)
+  FACILITY
+  PAYMENT_MODE
 }

@@ -172,6 +172,21 @@ export const approveCourseChange = catchAsync(async (req: Request, res: Response
     });
 });
 
+// Get Course Change Requests
+export const getCourseChangeRequests = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getCourseChangeRequests] by=${req.user?.userId || 'anonymous'}`);
+
+    const result = await AdminStudentService.getCourseChangeRequests(req.query);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
 // Update Admission Details
 export const updateAdmissionDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateAdmissionDetails] by=${req.user?.userId || 'anonymous'}`);
