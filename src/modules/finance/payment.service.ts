@@ -2002,7 +2002,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     logger.info(`[FinancialHistory] Data Fetched. Ledgers: ${ledgers.length}, Payments: ${payments.length}, Demands: ${feeDemands.length}`);
 
     // 2. Initialize Breakdown
-    const categories = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'SKILL_DEVELOPMENT', 'OTHER'];
+    const categories = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'OTHER'];
     const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number, feeHeadId: string }> = {};
     categories.forEach(cat => {
         breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0, feeHeadId: '' };
@@ -2016,7 +2016,6 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         if (headName.includes('TRANSPORT') || headName.includes('BUS')) return 'TRANSPORT';
         if (headName.includes('TUITION') || headName.includes('SEMESTER') || headName.includes('COLLEGE')) return 'TUITION';
         if (headName.includes('BOOK') || headName.includes('LIBRARY')) return 'BOOK_BANK';
-        if (headName.includes('SKILL') || headName.includes('TRAINING')) return 'SKILL_DEVELOPMENT';
         if (headName.includes('ADMISSION') || headName.includes('ENTRANCE')) return 'ADMISSION';
         return 'OTHER';
     };
