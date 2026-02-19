@@ -149,13 +149,16 @@ export const generateFeeDemands = catchAsync(async (req: Request, res: Response,
     });
 });
 
-// Create Discount Request
+// Create DiscountRequest
 export const createDiscountRequest = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[createDiscountRequest] by=${req.user?.userId || 'anonymous'}`);
 
-    const { studentId, reason, documentUrl } = req.body;
+    const { studentId, reason, documentUrl, items } = req.body;
     
-    const discountRequest = await FeeService.createDiscountRequest(studentId, reason, documentUrl);
+    // Calculate total requested amount for aggregate
+    const requestedAmount = items.reduce((sum: number, item: any) => sum + item.amount, 0);
+
+    const discountRequest = await FeeService.createDiscountRequest(studentId, reason, documentUrl, items, requestedAmount);
 
     sendResponse({
         res,
@@ -186,15 +189,38 @@ export const reviewDiscountRequest = catchAsync(async (req: Request, res: Respon
 export const approveDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[approveDiscount] by=${req.user?.userId || 'anonymous'}`);
 
-    const { requestId, approved } = req.body;
+    const { requestId, approved, approvedItems } = req.body;
+    const adminId = req.user!.userId;
     
-    await FeeService.approveDiscount(requestId, approved, req.user!.role as RoleType);
+    await FeeService.approveDiscount(requestId, approved, req.user!.role as RoleType, adminId, approvedItems);
 
     sendResponse({
         res,
         statusCode: 200,
         success: true,
         message: MESSAGES.SUCCESS.DISCOUNT_PROCESSED
+    });
+});
+
+// Get All Discount Requests
+export const getDiscountRequests = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getDiscountRequests] by=${req.user?.userId || 'anonymous'}`);
+
+    const { status, studentId, applicationId } = req.query;
+    const filters = {
+        status: status as any, // Enum validation handled by service if strict or Prisma throws
+        studentId: studentId as string,
+        applicationId: applicationId as string
+    };
+
+    const requests = await FeeService.getAllDiscountRequests(filters);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Discount requests fetched successfully",
+        data: requests
     });
 });
 

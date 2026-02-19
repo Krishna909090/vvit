@@ -27,6 +27,19 @@ export const getAllApplications = catchAsync(async (req: Request, res: Response,
     });
 });
 
+// Get Expanded Applications (with filters)
+export const getApplicationsExtended = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getApplicationsExtended] by=${req.user?.userId || 'anonymous'}`);
+    const result = await AdminStudentService.getApplicationsExtended(req.query);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
 // Upload Bulk Applications
 export const uploadBulkApplications = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[uploadBulkApplications] by=${req.user?.userId || 'anonymous'}`);

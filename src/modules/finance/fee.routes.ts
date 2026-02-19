@@ -8,7 +8,8 @@ import {
     createDiscountRequest, reviewDiscountRequest, approveDiscount,
     getApplicationFee, updateApplicationFee,
     collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands, getPaymentHistory,
-    addStudentDiscount
+    addStudentDiscount,
+    getDiscountRequests
 } from './fee.controller';
 
 import {
@@ -40,6 +41,8 @@ router.post('/generate-demands', authenticate, authorizePermission('finance.crea
 router.get('/fee-stats', authenticate, authorizePermission('finance.read.all'), getFeeStatistics);
 
 // Discounts
+router.get('/discounts', authenticate, authorizePermission('finance.read.all'), getDiscountRequests);
+
 router.post('/create-discount', authenticate, authorizePermission(['finance.create.all', 'finance.create.own']), validateRequest(createDiscountRequestSchema), createDiscountRequest);
 
 router.post('/review-discount', authenticate, authorizePermission('finance.update.all'), validateRequest(reviewDiscountRequestSchema), reviewDiscountRequest);

@@ -174,6 +174,178 @@ export const AdminStudentService = {
         };
     },
 
+    async getApplicationsExtended(query: any) {
+        const { page = 1, limit = 10, search, status, quotaType, courseType, degree, applicationId, isScholarshipEligible, gender, preference, paymentStatus } = query;
+        const skip = (Number(page) - 1) * Number(limit);
+
+        const where: any = {};
+        const andConditions: any[] = [];
+
+        // Search Condition
+        if (search) {
+             andConditions.push({
+                applicationId: { contains: String(search), mode: 'insensitive' }
+            });
+        }
+        
+        // Preference Condition
+        if (preference) {
+            andConditions.push({
+                OR: [
+                    { pref1Course: { name: { contains: String(preference), mode: 'insensitive' } } },
+                    { pref2Course: { name: { contains: String(preference), mode: 'insensitive' } } },
+                    { pref3Course: { name: { contains: String(preference), mode: 'insensitive' } } }
+                ]
+            });
+        }
+        
+        if (andConditions.length > 0) {
+            where.AND = andConditions;
+        }
+
+        if (applicationId) {
+            where.applicationId = String(applicationId);
+        }
+
+        if (status) {
+            where.admissionDetails = {
+                status: status
+            };
+        }
+
+        if (quotaType) {
+            where.quotaType = quotaType;
+        }
+
+        if (courseType || degree) {
+            where.degreeType = courseType || degree;
+        }
+        
+        if (gender) {
+            where.gender = { equals: gender, mode: 'insensitive' };
+        }
+        
+        if (isScholarshipEligible) {
+            if (String(isScholarshipEligible).toUpperCase() === 'NULL') {
+                where.studentScholarship = null;
+            } else if (String(isScholarshipEligible).toUpperCase() === 'NOT_NULL') {
+                where.studentScholarship = { isNot: null };
+            } else {
+                where.studentScholarship = {
+                    isEligible: String(isScholarshipEligible)
+                };
+            }
+        }
+
+        if (query.hasDocuments === 'true') {
+            where.documents = {
+                some: {} 
+            };
+        } else if (query.hasDocuments === 'false') {
+             where.documents = {
+                none: {} 
+            };
+        }
+
+        // Payment Status Filter (Default: PAID)
+        const pStatus = paymentStatus ? String(paymentStatus).toUpperCase() : 'PAID';
+
+        if (pStatus === 'PAID') {
+            where.payments = {
+                some: {
+                    component: PaymentComponent.APPLICATION_FEE,
+                    status: PaymentStatus.SUCCESS
+                }
+            };
+        } else if (pStatus === 'PENDING' || pStatus === 'UNPAID') {
+             where.payments = {
+                none: {
+                    component: PaymentComponent.APPLICATION_FEE,
+                    status: PaymentStatus.SUCCESS
+                }
+            };
+        }
+        // IF 'ALL', do nothing
+
+        const [students, total] = await prisma.$transaction([
+            prisma.student.findMany({
+                where,
+                skip,
+                take: Number(limit),
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    admissionDetails: {
+                        include: {
+                            allottedCourse: true,
+                            hostel: true,
+                            transportRoute: true
+                        }
+                    },
+                    examDetails: true,
+                    documents: true,
+                    academicQualifications: true,
+                    eligibleScholarshipRule: true,
+                    scholarshipAllocation: { include: { rule: true } },
+                    pref1Course: true,
+                    pref2Course: true,
+                    pref3Course: true,
+                    feeDemands: {
+                        include: {
+                            feeStructure: {
+                                include: {
+                                    feeHead: true
+                                }
+                            },
+                            payments: true
+                        }
+                    },
+                    studentScholarship: true,
+                    payments: true,
+                    ledgerEntries: true,
+                    courseChangeLogs: true,
+                    discountRequests: true,
+                    user: true,
+                    enrollment: true,
+                    hostelAllocation: true,
+                    transportAllocation: true,
+                    convenorDetails: true
+                }
+            }),
+            prisma.student.count({ where })
+        ]);
+
+        const enhancedStudents = await Promise.all(students.map(async (student: any) => {
+            // Convert document URLs to presigned URLs
+            const documentsWithPresignedUrls = await Promise.all(student.documents.map(async (doc: any) => ({
+                ...doc,
+                url: await convertToPresignedUrl(doc.url)
+            })));
+
+            // Convert profile photo URL
+            const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
+
+            return {
+                ...student,
+                aadharNumber: maskAadhaar(student.aadharNumber),
+                profilePhotoUrl,
+                documents: documentsWithPresignedUrls,
+                pref1CourseName: student.pref1Course?.name || null,
+                pref2CourseName: student.pref2Course?.name || null,
+                pref3CourseName: student.pref3Course?.name || null,
+            };
+        }));
+
+        return {
+            students: enhancedStudents,
+            pagination: {
+                total,
+                page: Number(page),
+                limit: Number(limit),
+                totalPages: Math.ceil(total / Number(limit))
+            }
+        };
+    },
+
     async processBulkApplications(fileContent: string, currentUserId: string | undefined) {
         const { data, errors } = Papa.parse(fileContent, {
             header: true,

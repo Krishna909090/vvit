@@ -201,15 +201,73 @@ export const FeeService = {
     },
 
     // Discounts
-    createDiscountRequest: async (studentId: string, reason: string, documentUrl?: string) => {
+    createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number) => {
         return prisma.discountRequest.create({
             data: {
                 studentId,
                 reason,
                 documentUrl,
+                items: items as any, // Json
+                requestedAmount,
                 status: DiscountStatus.REQUESTED
-            }
+            } as any
         });
+    },
+
+    getAllDiscountRequests: async (filters?: { status?: DiscountStatus, studentId?: string, applicationId?: string }) => {
+        const where: any = {};
+        if (filters?.status) where.status = filters.status;
+        if (filters?.studentId) where.studentId = filters.studentId;
+        if (filters?.applicationId) {
+            where.student = {
+                applicationId: { contains: filters.applicationId, mode: 'insensitive' }
+            };
+        }
+
+        const requests = await prisma.discountRequest.findMany({
+            where,
+            include: {
+                student: {
+                    select: {
+                        id: true,
+                        name: true,
+                        applicationId: true,
+                        courseType: true,
+                        degreeType: true,
+                        phone: true,
+                        email: true
+                    }
+                }
+            },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        // Enrich with Fee Details (Balance, Demands)
+        // Note: Ideally use Promise.all for parallelism
+        const enrichedRequests = await Promise.all(requests.map(async (req) => {
+            // We need to call getStudentFeeDetails. Since it's in the same object, we use 'this' or reference FeeService if exported.
+            // But FeeService is the object we are in. 'this' context might work if called via FeeService.
+            // Alternatively, extract logic or use the function if defined outside. 
+            // getStudentFeeDetails is defined later in the object. 
+            // To be safe, we can import FeeService (checking circular dep) or just define a helper. 
+            // Or access via 'FeeService.getStudentFeeDetails' since it's an exported const object.
+
+            const feeDetails = await FeeService.getStudentFeeDetails(req.studentId);
+            const details = feeDetails as any;
+            
+            return {
+                ...req,
+                feeDetails: {
+                    totalDemand: details.totalDemand || details.summary?.totalDemand || 0,
+                    totalPaid: details.totalPaid || details.summary?.totalPaid || 0,
+                    totalDiscount: details.discounts?.total || details.summary?.totalDiscount || 0,
+                    balance: details.pendingAmount || details.summary?.netPending || 0,
+                    demands: details.demands
+                }
+            };
+        }));
+
+        return enrichedRequests;
     },
 
     reviewDiscountRequest: async (requestId: string, remarks?: string) => {
@@ -222,15 +280,122 @@ export const FeeService = {
         });
     },
 
-    approveDiscount: async (requestId: string, approved: boolean, role: RoleType) => {
+    approveDiscount: async (requestId: string, approved: boolean, role: RoleType, adminId: string, approvedItems?: { component: string, approvedAmount: number }[]) => {
          if (role !== Role.SUPER_ADMIN) {
              throw new AppError("Only Super Admin can approve discounts", 403);
          }
-         return prisma.discountRequest.update({
-            where: { id: requestId },
-            data: {
-                status: approved ? DiscountStatus.APPROVED : DiscountStatus.REJECTED
-            }
+
+         const request = await prisma.discountRequest.findUnique({
+             where: { id: requestId }
+         });
+
+         if (!request) {
+             throw new AppError("Discount request not found", 404);
+         }
+
+         let finalApprovedAmount = 0;
+         let finalItems: any[] = [];
+
+         if (approved) {
+             if (approvedItems && approvedItems.length > 0) {
+                 finalItems = approvedItems;
+                 finalApprovedAmount = approvedItems.reduce((sum, item) => sum + item.approvedAmount, 0);
+             } else if ((request as any).items && Array.isArray((request as any).items)) {
+                 // Use requested items as approved default
+                 finalItems = ((request as any).items as any[]).map((item: any) => ({
+                     component: item.component,
+                     approvedAmount: item.amount || item.requestedAmount
+                 }));
+                 finalApprovedAmount = finalItems.reduce((sum, item) => sum + item.approvedAmount, 0);
+             } else {
+                 // Legacy fallback? Or unexpected data
+                 finalItems = [{ component: request.component || 'TUITION', approvedAmount: request.requestedAmount || 0 }];
+                 finalApprovedAmount = request.requestedAmount || 0;
+             }
+         }
+
+         return prisma.$transaction(async (tx) => {
+             const updatedRequest = await tx.discountRequest.update({
+                where: { id: requestId },
+                data: {
+                    status: approved ? DiscountStatus.APPROVED : DiscountStatus.REJECTED,
+                    approvedAmount: approved ? finalApprovedAmount : 0,
+                    items: approved ? finalItems : (request as any).items, // Update items with approved logic if needed or keep? Better to store approved breakdown separately? Schema has only one `items`.
+                    // Let's assume we update `items` with approved structure or add `approvedItems` field to schema. Schema has `items` which we reused. 
+                    // Wait, schema comment said "Stores array of { component, requestedAmount, approvedAmount }".
+                    // So we should Update the existing items to include `approvedAmount` property.
+                    approvedBy: adminId,
+                    approvedAt: new Date(),
+                    updatedBy: adminId
+                } as any
+             });
+
+             if (approved && finalApprovedAmount > 0) {
+                 
+                 for (const item of finalItems) {
+                     const amt = item.approvedAmount;
+                     if (amt <= 0) continue;
+
+                     const compName = item.component || 'TUITION';
+
+                     // Logic to find demand
+                     let targetDemand = await tx.studentFeeDemand.findFirst({
+                         where: {
+                             studentId: request.studentId,
+                             OR: [
+                                 { feeHead: { name: { contains: compName, mode: 'insensitive' } } },
+                                 { feeStructure: { feeHead: { name: { contains: compName, mode: 'insensitive' } } } }
+                             ]
+                         },
+                         orderBy: { createdAt: 'desc' }
+                     });
+
+                     // Fallback for generic 'TUITION' or 'COLLEGE' if component is vaguely named 
+                     if (!targetDemand && (compName.toUpperCase().includes('TUITION') || compName.toUpperCase().includes('COLLEGE'))) {
+                          targetDemand = await tx.studentFeeDemand.findFirst({
+                             where: {
+                                 studentId: request.studentId,
+                                 OR: [
+                                      { feeHead: { name: { contains: 'Tuition', mode: 'insensitive' } } },
+                                      { feeHead: { name: { contains: 'College', mode: 'insensitive' } } }
+                                 ]
+                             },
+                             orderBy: { createdAt: 'desc' }
+                         });
+                     }
+
+                     // Ultimate fallback: latest demand (Use with caution, maybe skip?)
+                     // Skipping to ensure we don't discount wrong fee. 
+                     // Or check if 'OTHER'?
+                     
+                     if (targetDemand) {
+                         await tx.studentFeeDemand.update({
+                             where: { id: targetDemand.id },
+                             data: {
+                                 discountAmount: { increment: amt },
+                                 netAmount: { decrement: amt }
+                             }
+                         });
+                     }
+
+                     // Always create Ledger Entry
+                     await tx.studentLedger.create({
+                         data: {
+                             studentId: request.studentId,
+                             type: 'CREDIT',
+                             amount: amt,
+                             description: `Approved Discount: ${request.reason} (${compName})`,
+                             referenceId: requestId,
+                             referenceType: 'DISCOUNT',
+                             feeHeadId: targetDemand?.feeHeadId,
+                             createdBy: adminId,
+                             date: new Date()
+                         }
+                     });
+                 }
+             }
+
+             return updatedRequest;
          });
     },
 

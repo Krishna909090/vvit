@@ -610,20 +610,21 @@ model CourseChangeLog {
 
 model DiscountRequest {
   id              String          @id @default(dbgenerated("gen_random_uuid()"))
-  studentId       String
-  reason          String
-  documentUrl     String?
-  status          DiscountStatus? @default(REQUESTED)
-  remarks         String?
-  requestedAmount Float?          @default(0)
-  approvedAmount  Float?
+  items           Json?           // Stores array of { component, requestedAmount, approvedAmount }
+  requestedAmount Float?          @default(0) // Total Requested
+  approvedAmount  Float?          // Total Approved
   approvedAt      DateTime?
   approvedBy      String?
-  component       String?
+  status          DiscountStatus? @default(REQUESTED)
+  component       String?         // Deprecated or Primary Component for reference
+  documentUrl     String?
+  reason          String
+  remarks         String?
   createdAt       DateTime?       @default(now())
   updatedAt       DateTime        @updatedAt
   createdBy       String?
   updatedBy       String?
+  studentId       String
   student         Student         @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 

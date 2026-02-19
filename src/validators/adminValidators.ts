@@ -48,6 +48,10 @@ export const createDiscountRequestSchema = z.object({
         studentId: z.string().uuid(),
         reason: z.string().min(1, "Reason is required"),
         documentUrl: z.string().url("Invalid URL").optional(),
+        items: z.array(z.object({
+            component: z.string().min(1, "Component is required"),
+            amount: z.number().positive("Amount must be positive")
+        })).min(1, "At least one component is required"),
     }),
 });
 
@@ -62,6 +66,11 @@ export const approveDiscountSchema = z.object({
     body: z.object({
         requestId: z.string().uuid(),
         approved: z.boolean(),
+        approvedItems: z.array(z.object({
+            component: z.string().min(1),
+            approvedAmount: z.number().min(0)
+        })).optional(),
+        remarks: z.string().optional(),
     }),
 });
 
@@ -135,6 +144,24 @@ export const getAllApplicationsSchema = z.object({
         status: z.string().optional(),
         quotaType: z.string().optional(),
         courseType: z.string().optional(),
+        applicationId: z.string().optional(),
+        isScholarshipEligible: z.string().optional(),
+        hasDocuments: z.string().optional(),
+    }),
+});
+
+export const getApplicationsExtendedSchema = z.object({
+    query: z.object({
+        page: z.string().transform(val => Number(val)).optional(),
+        limit: z.string().transform(val => Number(val)).optional(),
+        search: z.string().optional(),
+        status: z.string().optional(),
+        quotaType: z.string().optional(),
+        courseType: z.string().optional(),
+        degree: z.string().optional(),
+        gender: z.string().optional(),
+        preference: z.string().optional(),
+        paymentStatus: z.string().optional(),
         applicationId: z.string().optional(),
         isScholarshipEligible: z.string().optional(),
         hasDocuments: z.string().optional(),

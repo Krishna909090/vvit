@@ -20,7 +20,8 @@ import {
     finalizeAdmission,
     verifyPayment,
     getAdmissionInvoice,
-    sendStatusEmail
+    sendStatusEmail,
+    getApplicationsExtended
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -31,7 +32,8 @@ import {
     updateAcademicQualificationSchema,
     deleteAcademicQualificationSchema,
     finalizeAdmissionSchema,
-    verifyPaymentSchema
+    verifyPaymentSchema,
+    getApplicationsExtendedSchema
 } from '../../validators/adminValidators';
 
 import upload from '../../config/multer';
@@ -47,6 +49,7 @@ const router = Router();
 // Applications
 // Applications
 router.get('/applications', authenticate, authorizePermission(['student.read.all']), validateRequest(getAllApplicationsSchema), getAllApplications);
+router.get('/applications-extended', authenticate, authorizePermission(['student.read.all']), validateRequest(getApplicationsExtendedSchema), getApplicationsExtended);
 
 router.post('/upload-applications', authenticate, authorizePermission(['student.create.all']), upload.single('file'), uploadBulkApplications);
 
