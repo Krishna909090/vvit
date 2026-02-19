@@ -295,6 +295,93 @@ export const ScholarshipService = {
                 }
             });
         });
+    },
+
+    async updateStudentScholarship(studentId: string, newPercentage: number, adminId: string, feeHeadId?: string) {
+        logger.info(`Updating scholarship for student ${studentId} to ${newPercentage}% (FeeHead: ${feeHeadId || 'AUTO-DETECT'})`);
+
+        return await prisma.$transaction(async (tx) => {
+            // 1. Update/Create StudentScholarship record
+            const studentScholarship = await tx.studentScholarship.upsert({
+                where: { studentId },
+                update: { 
+                    scholarshipPercentage: newPercentage,
+                    updatedBy: adminId
+                },
+                create: {
+                    studentId,
+                    type: 'MANUAL',
+                    scholarshipPercentage: newPercentage,
+                    createdBy: adminId,
+                    isEligible: 'true'
+                }
+            });
+
+            // 2. Financial Reconciliation - Update existing Demands
+            const demands = await tx.studentFeeDemand.findMany({
+                where: { 
+                    studentId,
+                    ...(feeHeadId ? { feeHeadId } : {})
+                },
+                include: { 
+                    feeHead: true,
+                    payments: { where: { status: 'SUCCESS' } }
+                }
+            });
+
+            for (const demand of demands) {
+                // If feeHeadId was not provided, we keep the safety check for Tuition
+                const feeName = (demand.feeHead?.name || '').toLowerCase();
+                const isTuition = feeHeadId ? true : (feeName.includes('tuition') || feeName.includes('tution'));
+
+                if (isTuition) {
+                    const oldScholarshipAmt = demand.scholarshipAmount || 0;
+                    const newScholarshipAmt = (demand.amount * newPercentage) / 100;
+                    const scholarshipDiff = newScholarshipAmt - oldScholarshipAmt;
+
+                    if (scholarshipDiff !== 0) {
+                        const paidAmount = demand.payments.reduce((sum, p) => sum + p.amount, 0);
+                        const currentDiscount = demand.discountAmount || 0;
+                        
+                        // New Discount = (Current Discount - Old Scholarship) + New Scholarship
+                        const newDiscountTotal = (currentDiscount - oldScholarshipAmt) + newScholarshipAmt;
+                        const newNetAmount = demand.amount + (demand.fineAmount || 0) - newDiscountTotal;
+                        
+                        let newStatus: any = 'PENDING';
+                        if (paidAmount >= newNetAmount) newStatus = 'FULL';
+                        else if (paidAmount > 0) newStatus = 'PARTIAL';
+
+                        await tx.studentFeeDemand.update({
+                            where: { id: demand.id },
+                            data: {
+                                scholarshipAmount: newScholarshipAmt,
+                                discountAmount: newDiscountTotal,
+                                netAmount: newNetAmount,
+                                status: newStatus,
+                                remarks: (demand.remarks || '') + ` | Scholarship updated to ${newPercentage}% (Old Pct Amt: ${oldScholarshipAmt}, New Pct Amt: ${newScholarshipAmt})`
+                            } as any
+                        });
+
+                        // 3. Ledger Entry for the Adjustment
+                        await tx.studentLedger.create({
+                            data: {
+                                studentId,
+                                type: scholarshipDiff > 0 ? 'CREDIT' : 'DEBIT',
+                                amount: Math.abs(scholarshipDiff),
+                                description: `Scholarship Adjusted: ${scholarshipDiff > 0 ? 'Increased' : 'Reduced'} from ₹${oldScholarshipAmt} to ₹${newScholarshipAmt} (${newPercentage}%)`,
+                                referenceType: 'SCHOLARSHIP',
+                                referenceId: demand.id,
+                                feeHeadId: demand.feeHeadId,
+                                createdBy: adminId,
+                                date: new Date()
+                            }
+                        });
+                    }
+                }
+            }
+
+            return { success: true, studentScholarship };
+        });
     }
 };
 

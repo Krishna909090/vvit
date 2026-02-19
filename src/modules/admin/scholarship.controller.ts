@@ -113,3 +113,21 @@ export const allocateScholarship = catchAsync(async (req: Request, res: Response
         data: result
     });
 });
+
+export const updateStudentScholarship = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId, scholarshipPercentage, feeHeadId } = req.body;
+    
+    if (!studentId || scholarshipPercentage === undefined) {
+        throw new AppError("Student ID and Scholarship Percentage required", 400);
+    }
+    
+    const result = await ScholarshipService.updateStudentScholarship(studentId, Number(scholarshipPercentage), req.user!.userId, feeHeadId);
+    
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Scholarship Updated and Fees Reconciled",
+        data: result
+    });
+});

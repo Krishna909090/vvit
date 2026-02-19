@@ -567,9 +567,9 @@ export const FeeService = {
                     continue; // Skip
                 }
 
-                // Check if this fee is Tuition/College Fee for Scholarship
+                // Check if this fee is Tuition fee for Scholarship (strictly Tuition/Tution)
                 const feeName = fee.feeHead.name.toLowerCase();
-                const isTuition = ['tuition', 'college', 'academic'].some(key => feeName.includes(key));
+                const isTuition = feeName.includes('Tuition') || feeName.includes('Tution');
                 
                 let scholarshipAmt = 0;
                 if (isTuition && discountPct > 0) {
@@ -666,18 +666,17 @@ export const FeeService = {
         
         logger.debug(`[getStudentFeeDetails] Found ${demands.length} demands and ${payments.length} successful payments.`);
 
-        // Fetch Discounts/Scholarships from Ledger
-        const creditLedgers = await prisma.studentLedger.findMany({
+        // Fetch Discounts/Scholarships from Ledger (Net of Credits and Debits)
+        const scholarshipLedgers = await prisma.studentLedger.findMany({
             where: { 
                 studentId, 
-                type: 'CREDIT',
                 referenceType: { in: ['SCHOLARSHIP', 'DISCOUNT'] }
             }
         });
 
-        let scholarshipAmount = creditLedgers
+        let scholarshipAmount = scholarshipLedgers
             .filter(l => l.referenceType === 'SCHOLARSHIP')
-            .reduce((sum, l) => sum + l.amount, 0);
+            .reduce((sum, l) => sum + (l.type === 'CREDIT' ? l.amount : -l.amount), 0);
 
         // Check for Locked Allocation (Pre-Payment View)
         if (scholarshipAmount === 0) {
@@ -694,8 +693,8 @@ export const FeeService = {
                  // Get actual tuition fee from demands, fallback to admission total fee, then fallback to default
                  // Strategy 1: Precise Name Match (Check both structure and direct head)
                  let tuitionDemand = demands.find(d => {
-                    const name = d.feeStructure?.feeHead?.name || d.feeHead?.name || '';
-                    return ['tuition', 'college', 'academic'].some(key => name.toLowerCase().includes(key));
+                    const name = (d.feeStructure?.feeHead?.name || d.feeHead?.name || '').toLowerCase();
+                    return name.includes('tuition') || name.includes('tution');
                  });
 
                  // Strategy 2: Highest Amount Heuristic (Tuition is usually the largest fee)
@@ -713,9 +712,9 @@ export const FeeService = {
             }
         }
 
-        const manualDiscountAmount = creditLedgers
+        const manualDiscountAmount = scholarshipLedgers
             .filter(l => l.referenceType === 'DISCOUNT')
-            .reduce((sum, l) => sum + l.amount, 0);
+            .reduce((sum, l) => sum + (l.type === 'CREDIT' ? l.amount : -l.amount), 0);
 
         const totalDemand = demands.reduce((sum, d) => sum + d.amount, 0);
         const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
@@ -813,11 +812,10 @@ export const FeeService = {
             orderBy: { createdAt: 'asc' }
         });
 
-        // 3. Fetch Discounts (Ledger)
-        const creditLedgers = await prisma.studentLedger.findMany({
+        // 3. Fetch Discounts (Ledger adjustments: Credits are additions, Debits are reductions)
+        const scholarshipLedgers = await prisma.studentLedger.findMany({
             where: { 
                 studentId, 
-                type: 'CREDIT',
                 referenceType: { in: ['SCHOLARSHIP', 'DISCOUNT'] }
             }
         });
@@ -914,20 +912,25 @@ export const FeeService = {
             }
         });
 
-        // --- Process Discounts ---
-        creditLedgers.forEach(l => {
-             // ... same logic ...
+        // --- Process Discounts / Scholarship Adjustments ---
+        scholarshipLedgers.forEach(l => {
              let matched = false;
+             const isCredit = l.type === 'CREDIT';
+             // Determine if this is a scholarship or a standard discount based on referenceType
+             const recordType = l.referenceType === 'SCHOLARSHIP' ? 'SCHOLARSHIP' : 'DISCOUNT';
+             
              for (const [id, group] of feeHeadMap.entries()) {
                  const headName = group.feeHeadName.toUpperCase();
                  const desc = l.description?.toUpperCase() || '';
                  
+                 // Logic for Scholarship (Tuition only)
                  if (desc.includes('SCHOLARSHIP') && headName.includes('TUITION')) {
-                     group.discountAmount += l.amount;
+                     // CREDIT adds to pool, DEBIT subtracts from it (reduction)
+                     group.discountAmount += isCredit ? l.amount : -l.amount;
                      group.history.push({
-                         type: 'DISCOUNT',
+                         type: recordType,
                          date: l.date,
-                         amount: l.amount,
+                         amount: isCredit ? l.amount : -l.amount, // Show negative in history for reductions
                          id: l.id,
                          description: l.description
                      });
@@ -935,12 +938,13 @@ export const FeeService = {
                      break;
                  }
                  
+                 // Logic for Manual Discounts
                  if (desc.includes('DISCOUNT') && (headName.includes('TUITION') || headName.includes('COLLEGE'))) {
-                     group.discountAmount += l.amount;
+                     group.discountAmount += isCredit ? l.amount : -l.amount;
                      group.history.push({
-                         type: 'DISCOUNT',
+                         type: recordType,
                          date: l.date,
-                         amount: l.amount,
+                         amount: isCredit ? l.amount : -l.amount,
                          id: l.id,
                          description: l.description
                      });
@@ -949,15 +953,15 @@ export const FeeService = {
                  }
              }
              
-              if (!matched) {
+             if (!matched) {
                 const group = getGroup('GENERAL_DISCOUNTS', 'General Discounts');
-                group.discountAmount += l.amount;
+                group.discountAmount += isCredit ? l.amount : -l.amount;
                 group.history.push({
-                     type: 'DISCOUNT',
+                     type: recordType,
                      date: l.date,
-                     amount: l.amount,
+                     amount: isCredit ? l.amount : -l.amount,
                      id: l.id,
-                     description: l.description || 'Discount'
+                     description: l.description || 'Adjustment'
                 });
             }
         });
