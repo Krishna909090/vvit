@@ -2048,7 +2048,15 @@ export const AdminStudentService = {
         }
 
         // 2. Identify Flow
-        const isOnline = !([PaymentMethod.CASH, PaymentMethod.CHEQUE, PaymentMethod.DEMAND_DRAFT].includes(payment.method));
+        const isOnline = !([
+            PaymentMethod.CASH, 
+            PaymentMethod.CHEQUE, 
+            PaymentMethod.DEMAND_DRAFT,
+            PaymentMethod.NEFT,
+            PaymentMethod.RTGS,
+            PaymentMethod.IMPS,
+            PaymentMethod.NEFT_RTGS
+        ].includes(payment.method));
         logger.info(`[finalizeAdmission] Flow Type detected: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
 
             if (isOnline) {
