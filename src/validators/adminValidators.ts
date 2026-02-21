@@ -50,8 +50,9 @@ export const createDiscountRequestSchema = z.object({
         documentUrl: z.string().url("Invalid URL").optional(),
         referredBy: z.string().optional(),
         items: z.array(z.object({
+            feeHeadId: z.string().optional().nullable(),
             component: z.string().min(1, "Component is required"),
-            amount: z.number().positive("Amount must be positive")
+            amount: z.number().min(0, "Amount must be non-negative")
         })).min(1, "At least one component is required"),
     }),
 });

@@ -305,7 +305,7 @@ export const FeeService = {
                  // Use requested items as approved default
                  finalItems = ((request as any).items as any[]).map((item: any) => ({
                      component: item.component,
-                     approvedAmount: item.amount || item.requestedAmount
+                     approvedAmount: item.amount !== undefined ? item.amount : (item.requestedAmount || 0)
                  }));
                  finalApprovedAmount = finalItems.reduce((sum, item) => sum + item.approvedAmount, 0);
              } else {
