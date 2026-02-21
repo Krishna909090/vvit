@@ -619,7 +619,7 @@ model DiscountRequest {
   approvedAmount  Float?
   approvedAt      DateTime?
   approvedBy      String?
-  component       String?
+  referredBy      String?
   createdAt       DateTime?       @default(now())
   updatedAt       DateTime        @updatedAt
   createdBy       String?
