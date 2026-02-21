@@ -76,6 +76,10 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
       throw new AppError(MESSAGES.ERROR.USER_NOT_FOUND, 404);
     }
   } else {
+    if (user.isDeleted) {
+      throw new AppError("Admin blocked you", 403);
+    }
+
     logger.info(
       `[sendOtp] Existing user: id=${user.id}, role=${user.role}, phone=${maskPhone(
         user.phone
@@ -301,6 +305,8 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
   }
 
   if (!user) throw new AppError("Invalid credentials", 400);
+
+  if (user.isDeleted) throw new AppError("Admin blocked you", 403);
 
   // Students use OTP
   if (user?.role === Role.STUDENT) throw new AppError("Students must login via OTP", 400);

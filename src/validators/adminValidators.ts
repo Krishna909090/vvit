@@ -369,8 +369,9 @@ export const updateStaffUserSchema = z.object({
         name: z.string().trim().min(1, 'Name cannot be empty').optional(),
         email: z.string().email('Invalid email address').optional(),
         role: z.string().refine(val => Object.values(Role).includes(val as any)).optional(),
+        isDeleted: z.boolean().optional(),
     }).refine(
-        (data) => data.name !== undefined || data.email !== undefined || data.role !== undefined,
+        (data) => data.name !== undefined || data.email !== undefined || data.role !== undefined || data.isDeleted !== undefined,
         {
             message: 'At least one field (name, email, or role) must be provided',
         }
@@ -514,8 +515,9 @@ export const updateFullStaffDetailsSchema = z.object({
         phone: z.string().min(10, 'Phone number must be at least 10 digits').optional(),
         role: z.string().optional(),
         groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
+        isDeleted: z.boolean().optional(),
     }).refine(
-        (data) => data.name !== undefined || data.email !== undefined || data.phone !== undefined || data.role !== undefined || data.groupIds !== undefined,
+        (data) => data.name !== undefined || data.email !== undefined || data.phone !== undefined || data.role !== undefined || data.groupIds !== undefined || data.isDeleted !== undefined,
         {
             message: 'At least one field must be provided',
         }

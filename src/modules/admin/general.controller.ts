@@ -117,11 +117,11 @@ export const updateStaffUser = catchAsync(async (req: Request, res: Response, ne
     logger.info(`[updateStaffUser] by=${req.user?.userId || 'anonymous'}`);
     
     const { userId } = req.params;
-    const { name, email, role } = req.body;
+    const { name, email, role, isDeleted } = req.body;
     
     const updatedUser = await AdminService.updateStaffUser(
         userId,
-        { name, email, role },
+        { name, email, role, isDeleted },
         req.user?.userId
     );
 
@@ -197,11 +197,11 @@ export const assignUserRoleAndGroups = catchAsync(async(req: Request, res: Respo
 
 export const updateFullStaffDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { userId } = req.params;
-    const { name, email, phone, role, groupIds } = req.body;
+    const { name, email, phone, role, groupIds, isDeleted } = req.body;
 
     // Call the NEW service method
     const updatedUser = await AdminService.updateFullStaffDetails(
-        { userId, name, email, phone, role, groupIds },
+        { userId, name, email, phone, role, groupIds, isDeleted },
         req.user?.userId || 'ADMIN'
     );
 

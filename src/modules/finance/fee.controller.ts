@@ -225,11 +225,13 @@ export const approveDiscount = catchAsync(async (req: Request, res: Response, ne
 export const getDiscountRequests = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getDiscountRequests] by=${req.user?.userId || 'anonymous'}`);
 
-    const { status, studentId, applicationId } = req.query;
+    const { status, studentId, applicationId, degree, allottedCourseId } = req.query;
     const filters = {
         status: status as any, // Enum validation handled by service if strict or Prisma throws
         studentId: studentId as string,
-        applicationId: applicationId as string
+        applicationId: applicationId as string,
+        degree: degree as string,
+        allottedCourseId: allottedCourseId as string
     };
 
     const requests = await FeeService.getAllDiscountRequests(filters);

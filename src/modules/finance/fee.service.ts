@@ -232,14 +232,25 @@ export const FeeService = {
         });
     },
 
-    getAllDiscountRequests: async (filters?: { status?: DiscountStatus, studentId?: string, applicationId?: string }) => {
+    getAllDiscountRequests: async (filters?: { status?: DiscountStatus, studentId?: string, applicationId?: string, degree?: string, allottedCourseId?: string }) => {
         const where: any = {};
         if (filters?.status) where.status = filters.status;
         if (filters?.studentId) where.studentId = filters.studentId;
-        if (filters?.applicationId) {
-            where.student = {
-                applicationId: { contains: filters.applicationId, mode: 'insensitive' }
-            };
+        
+        if (filters?.applicationId || filters?.degree || filters?.allottedCourseId) {
+            where.student = {};
+            
+            if (filters?.applicationId) {
+                where.student.applicationId = { contains: filters.applicationId, mode: 'insensitive' };
+            }
+            if (filters?.degree) {
+                where.student.degreeType = filters.degree;
+            }
+            if (filters?.allottedCourseId) {
+                where.student.admissionDetails = {
+                    allottedCourseId: filters.allottedCourseId
+                };
+            }
         }
 
         const requests = await prisma.discountRequest.findMany({

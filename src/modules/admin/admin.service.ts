@@ -253,7 +253,7 @@ export const AdminService = {
      * Update staff user details
      * Can update name, email, and role (excluding STUDENT role)
      */
-    async updateStaffUser(userId: string, data: { name?: string; email?: string; role?: RoleType }, currentUserId?: string) {
+    async updateStaffUser(userId: string, data: { name?: string; email?: string; role?: RoleType, isDeleted?: boolean }, currentUserId?: string) {
         if (!userId) {
             throw new AppError('User ID is required', 400);
         }
@@ -307,6 +307,10 @@ export const AdminService = {
 
         if (data.role !== undefined) {
             updateData.role = data.role;
+        }
+
+        if (data.isDeleted !== undefined) {
+            updateData.isDeleted = data.isDeleted;
         }
 
         // Update user
@@ -454,8 +458,8 @@ export const AdminService = {
     },
 
     // New API: Update Full Staff Details (Name, Email, Phone, Role, Groups) - REPLACEMENT STRATEGY for Groups
-    async updateFullStaffDetails(data: { userId: string, name?: string, email?: string, phone?: string, role?: string, groupIds?: string[] }, executedBy?: string) {
-        const { userId, name, email, phone, role, groupIds } = data;
+    async updateFullStaffDetails(data: { userId: string, name?: string, email?: string, phone?: string, role?: string, groupIds?: string[], isDeleted?: boolean }, executedBy?: string) {
+        const { userId, name, email, phone, role, groupIds, isDeleted } = data;
 
         const user = await prisma.user.findUnique({ 
             where: { id: userId },
@@ -475,6 +479,9 @@ export const AdminService = {
         if (role) {
             if (role === Role.STUDENT) throw new AppError('Cannot set role to STUDENT', 400);
             updateData.role = role;
+        }
+        if (isDeleted !== undefined) {
+            updateData.isDeleted = isDeleted;
         }
 
         return await prisma.$transaction(async (tx) => {
