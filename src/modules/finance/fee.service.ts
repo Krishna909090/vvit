@@ -253,7 +253,18 @@ export const FeeService = {
                         courseType: true,
                         degreeType: true,
                         phone: true,
-                        email: true
+                        email: true,
+                        admissionDetails: {
+                            select: {
+                                accommodationType: true,
+                                allottedCourse: {
+                                    select: {
+                                        id: true,
+                                        name: true
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             },
