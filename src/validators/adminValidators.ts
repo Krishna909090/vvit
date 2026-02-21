@@ -69,6 +69,22 @@ export const approveDiscountSchema = z.object({
     }),
 });
 
+export const updateDiscountRequestSchema = z.object({
+    params: z.object({
+        id: z.string().uuid("Invalid Request ID"),
+    }),
+    body: z.object({
+        reason: z.string().min(1, "Reason is required"),
+        documentUrl: z.string().url("Invalid URL").optional(),
+        referredBy: z.string().optional(),
+        items: z.array(z.object({
+            feeHeadId: z.string().optional().nullable(),
+            component: z.string().min(1, "Component is required"),
+            amount: z.number().min(0, "Amount must be non-negative")
+        })).min(1, "At least one component is required"),
+    }),
+});
+
 export const requestCancellationSchema = z.object({
     body: z.object({
         studentId: z.string().uuid(),

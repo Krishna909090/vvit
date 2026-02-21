@@ -5,7 +5,7 @@ import {
     createFeeHead, getFeeHeads, updateFeeHead, deleteFeeHead,
     createFeeStructure, createBulkFeeStructure, getFeeStructures, updateFeeStructure, deleteFeeStructure,
     getFeeStatistics,
-    createDiscountRequest, approveDiscount,
+    createDiscountRequest, updateDiscountRequest, deleteDiscountRequest, approveDiscount,
     getApplicationFee, updateApplicationFee,
     collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands, getPaymentHistory,
     addStudentDiscount,
@@ -14,7 +14,7 @@ import {
 
 import {
     createFeeHeadSchema, createFeeStructureSchema, createBulkFeeStructureSchema,
-    createDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema
+    createDiscountRequestSchema, updateDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema
 } from '../../validators/adminValidators';
 
 const router = Router();
@@ -45,6 +45,8 @@ router.get('/discounts', authenticate, authorizePermission('finance.read.all'), 
 
 router.post('/create-discount', authenticate, authorizePermission(['finance.create.all', 'finance.create.own']), validateRequest(createDiscountRequestSchema), createDiscountRequest);
 
+router.put('/update-discount/:id', authenticate, authorizePermission(['finance.update.all', 'finance.update.own']), validateRequest(updateDiscountRequestSchema), updateDiscountRequest);
+router.delete('/delete-discount/:id', authenticate, authorizePermission(['finance.delete.all', 'finance.delete.own']), deleteDiscountRequest);
 
 router.post('/approve-discount', authenticate, authorizePermission('finance.update.all'), validateRequest(approveDiscountSchema), approveDiscount);
 

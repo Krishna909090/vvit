@@ -201,6 +201,24 @@ export const FeeService = {
     },
 
     createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string) => {
+        
+        // Ensure no pending/approved duplicate requests exist for this student
+        const existingActiveRequest = await prisma.discountRequest.findFirst({
+             where: {
+                 studentId,
+                 status: { not: DiscountStatus.REJECTED }
+             },
+             include: {
+                 student: true
+             }
+        });
+
+        if (existingActiveRequest) {
+             const createdByUser = await prisma.user.findUnique({ where: { id: existingActiveRequest.createdBy as string }, select: { name: true } });
+             const creatorName = createdByUser?.name || 'an Admin';
+             throw new AppError(`A discount request was already raised for this student by ${creatorName} and is not in rejected state.`, 409);
+        }
+
         return prisma.discountRequest.create({
             data: {
                 studentId,
@@ -279,6 +297,46 @@ export const FeeService = {
         }));
 
         return enrichedRequests;
+    },
+
+    updateDiscountRequest: async (id: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string, adminId?: string) => {
+         const request = await prisma.discountRequest.findUnique({ where: { id } });
+         
+         if (!request) {
+             throw new AppError("Discount request not found", 404);
+         }
+
+         if (request.status !== DiscountStatus.FORWARDED_TO_SUPER_ADMIN && request.status !== DiscountStatus.REQUESTED) {
+              throw new AppError(`Cannot update request that is already ${request.status}`, 400);
+         }
+
+         return prisma.discountRequest.update({
+             where: { id },
+             data: {
+                 reason,
+                 documentUrl,
+                 items: items as any,
+                 requestedAmount,
+                 referredBy,
+                 updatedBy: adminId
+             }
+         });
+    },
+
+    deleteDiscountRequest: async (id: string) => {
+         const request = await prisma.discountRequest.findUnique({ where: { id } });
+         
+         if (!request) {
+             throw new AppError("Discount request not found", 404);
+         }
+
+         if (request.status !== DiscountStatus.FORWARDED_TO_SUPER_ADMIN) {
+              throw new AppError(`Cannot delete an already ${request.status} request`, 400);
+         }
+
+         return prisma.discountRequest.delete({
+             where: { id }
+         });
     },
 
     approveDiscount: async (requestId: string, approved: boolean, role: RoleType, adminId: string, approvedItems?: { component: string, approvedAmount: number }[]) => {

@@ -169,6 +169,41 @@ export const createDiscountRequest = catchAsync(async (req: Request, res: Respon
     });
 });
 
+export const updateDiscountRequest = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[updateDiscountRequest] by=${req.user?.userId || 'anonymous'}`);
+
+    const { id } = req.params;
+    const { reason, documentUrl, items, referredBy } = req.body;
+    const adminId = req.user!.userId;
+    
+    const requestedAmount = items.reduce((sum: number, item: any) => sum + item.amount, 0);
+
+    const updatedRequest = await FeeService.updateDiscountRequest(id, reason, documentUrl, items, requestedAmount, referredBy, adminId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Discount request updated successfully",
+        data: updatedRequest
+    });
+});
+
+export const deleteDiscountRequest = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[deleteDiscountRequest] by=${req.user?.userId || 'anonymous'}`);
+
+    const { id } = req.params;
+    
+    await FeeService.deleteDiscountRequest(id);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: "Discount request deleted successfully"
+    });
+});
+
 // Approve Discount
 export const approveDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[approveDiscount] by=${req.user?.userId || 'anonymous'}`);
