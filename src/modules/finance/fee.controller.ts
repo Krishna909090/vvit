@@ -156,7 +156,6 @@ export const createDiscountRequest = catchAsync(async (req: Request, res: Respon
 
     const { studentId, reason, documentUrl, items, referredBy } = req.body;
     
-    // Calculate total requested amount for aggregate
     const requestedAmount = items.reduce((sum: number, item: any) => sum + item.amount, 0);
 
     const discountRequest = await FeeService.createDiscountRequest(studentId, reason, documentUrl, items, requestedAmount, referredBy);
@@ -167,22 +166,6 @@ export const createDiscountRequest = catchAsync(async (req: Request, res: Respon
         success: true,
         message: MESSAGES.SUCCESS.DISCOUNT_REQUESTED,
         data: discountRequest
-    });
-});
-
-// Review Discount Request
-export const reviewDiscountRequest = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[reviewDiscountRequest] by=${req.user?.userId || 'anonymous'}`);
-
-    const { requestId, remarks } = req.body;
-    
-    await FeeService.reviewDiscountRequest(requestId, remarks);
-
-    sendResponse({
-        res,
-        statusCode: 200,
-        success: true,
-        message: MESSAGES.SUCCESS.DISCOUNT_FORWARDED
     });
 });
 

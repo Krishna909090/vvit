@@ -200,7 +200,6 @@ export const FeeService = {
         };
     },
 
-    // Discounts
     createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string) => {
         return prisma.discountRequest.create({
             data: {
@@ -210,7 +209,7 @@ export const FeeService = {
                 items: items as any, // Json
                 requestedAmount,
                 referredBy,
-                status: DiscountStatus.REQUESTED
+                status: DiscountStatus.FORWARDED_TO_SUPER_ADMIN
             } as any
         });
     },
@@ -243,6 +242,16 @@ export const FeeService = {
             orderBy: { createdAt: 'desc' }
         });
 
+        const userIds = [...new Set(requests.map(req => req.createdBy).filter(Boolean))] as string[];
+        let usersMap = new Map();
+        if (userIds.length > 0) {
+             const users = await prisma.user.findMany({
+                 where: { id: { in: userIds } },
+                 select: { id: true, name: true, phone: true }
+             });
+             usersMap = new Map(users.map(u => [u.id, u]));
+        }
+
         // Enrich with Fee Details (Balance, Demands)
         // Note: Ideally use Promise.all for parallelism
         const enrichedRequests = await Promise.all(requests.map(async (req) => {
@@ -258,6 +267,7 @@ export const FeeService = {
             
             return {
                 ...req,
+                createdByUser: req.createdBy ? (usersMap.get(req.createdBy) || null) : null,
                 feeDetails: {
                     totalDemand: details.totalDemand || details.summary?.totalDemand || 0,
                     totalPaid: details.totalPaid || details.summary?.totalPaid || 0,
@@ -269,16 +279,6 @@ export const FeeService = {
         }));
 
         return enrichedRequests;
-    },
-
-    reviewDiscountRequest: async (requestId: string, remarks?: string) => {
-        return prisma.discountRequest.update({
-            where: { id: requestId },
-            data: {
-                status: DiscountStatus.FORWARDED_TO_SUPER_ADMIN,
-                remarks
-            }
-        });
     },
 
     approveDiscount: async (requestId: string, approved: boolean, role: RoleType, adminId: string, approvedItems?: { component: string, approvedAmount: number }[]) => {

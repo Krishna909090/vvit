@@ -57,13 +57,6 @@ export const createDiscountRequestSchema = z.object({
     }),
 });
 
-export const reviewDiscountRequestSchema = z.object({
-    body: z.object({
-        requestId: z.string().uuid(),
-        remarks: z.string().optional(),
-    }),
-});
-
 export const approveDiscountSchema = z.object({
     body: z.object({
         requestId: z.string().uuid(),
