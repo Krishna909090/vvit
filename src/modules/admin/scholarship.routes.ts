@@ -20,4 +20,7 @@ router.post('/verify-eligibility', authenticate, authorizePermission('scholarshi
 // 3. Allocate (Admin)
 router.post('/allocate', authenticate, authorizePermission('scholarship.create.all'), scholarshipController.allocateScholarship);
 
+// 4. Update (Admin) - Reconciliation
+router.post('/update-student-scholarship', authenticate, authorizePermission('scholarship.update.all'), scholarshipController.updateStudentScholarship);
+
 export default router;

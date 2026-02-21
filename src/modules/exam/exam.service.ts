@@ -916,7 +916,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             endTime: formatTime(result.slot.endTime) || '',
             profilePhotoUrl: profilePhotoUrl,
             qrCodeBuffer: qrCodeBuffer,
-            session: 'Entrance Exam 2024', // Static or dynamic based on config
+            session: 'Entrance Exam 2026', // Static or dynamic based on config
             program: student.degreeType || 'B.Tech'
         });
         

@@ -174,10 +174,43 @@ export const DashboardService = {
             }),
             prisma.student.count({ where: { ...whereDate, quotaType: QuotaType.MANAGEMENT } }),
             prisma.student.count({ where: { ...whereDate, quotaType: QuotaType.CONVENOR } }),
-            prisma.student.count({ where: { ...whereDate, admissionDetails: { accommodationType: AccommodationType.HOSTEL } } }),
-            prisma.student.count({ where: { ...whereDate, admissionDetails: { accommodationType: AccommodationType.TRANSPORT } } }),
-            prisma.student.count({ where: { ...whereDate, studentScholarship: { isEligible: 'YES' } } }),
-            prisma.student.count({ where: { ...whereDate, studentScholarship: { isEligible: 'NO' } } })
+            prisma.student.count({ 
+            where: { 
+                ...whereDate, 
+                admissionDetails: { accommodationType: AccommodationType.HOSTEL },
+                payments: {
+                    some: {
+                        component: { in: ['HOSTEL', 'HOSTEL_ACCOMMODATION', 'HOSTEL_MESS'] },
+                        status: 'SUCCESS'
+                    }
+                }
+            } 
+        }),
+        prisma.student.count({ 
+            where: { 
+                ...whereDate, 
+                admissionDetails: { accommodationType: AccommodationType.TRANSPORT },
+                payments: {
+                    some: {
+                        component: 'TRANSPORT',
+                        status: 'SUCCESS'
+                    }
+                }
+            } 
+        }),
+            prisma.student.count({ 
+                where: { 
+                    ...whereDate, 
+                    studentScholarship: { isEligible: 'YES' },
+                    admissionDetails: { allottedCourseId: { not: null } }
+                } 
+            }),
+            prisma.student.count({ 
+                where: { 
+                    ...whereDate, 
+                    studentScholarship: { isEligible: 'NO' } 
+                } 
+            })
         ]);
 
         return {

@@ -174,6 +174,178 @@ export const AdminStudentService = {
         };
     },
 
+    async getApplicationsExtended(query: any) {
+        const { page = 1, limit = 10, search, status, quotaType, courseType, degree, applicationId, isScholarshipEligible, gender, preference, paymentStatus } = query;
+        const skip = (Number(page) - 1) * Number(limit);
+
+        const where: any = {};
+        const andConditions: any[] = [];
+
+        // Search Condition
+        if (search) {
+             andConditions.push({
+                applicationId: { contains: String(search), mode: 'insensitive' }
+            });
+        }
+        
+        // Preference Condition
+        if (preference) {
+            andConditions.push({
+                OR: [
+                    { pref1Course: { name: { contains: String(preference), mode: 'insensitive' } } },
+                    { pref2Course: { name: { contains: String(preference), mode: 'insensitive' } } },
+                    { pref3Course: { name: { contains: String(preference), mode: 'insensitive' } } }
+                ]
+            });
+        }
+        
+        if (andConditions.length > 0) {
+            where.AND = andConditions;
+        }
+
+        if (applicationId) {
+            where.applicationId = String(applicationId);
+        }
+
+        if (status) {
+            where.admissionDetails = {
+                status: status
+            };
+        }
+
+        if (quotaType) {
+            where.quotaType = quotaType;
+        }
+
+        if (courseType || degree) {
+            where.degreeType = courseType || degree;
+        }
+        
+        if (gender) {
+            where.gender = { equals: gender, mode: 'insensitive' };
+        }
+        
+        if (isScholarshipEligible) {
+            if (String(isScholarshipEligible).toUpperCase() === 'NULL') {
+                where.studentScholarship = null;
+            } else if (String(isScholarshipEligible).toUpperCase() === 'NOT_NULL') {
+                where.studentScholarship = { isNot: null };
+            } else {
+                where.studentScholarship = {
+                    isEligible: String(isScholarshipEligible)
+                };
+            }
+        }
+
+        if (query.hasDocuments === 'true') {
+            where.documents = {
+                some: {} 
+            };
+        } else if (query.hasDocuments === 'false') {
+             where.documents = {
+                none: {} 
+            };
+        }
+
+        // Payment Status Filter (Default: PAID)
+        const pStatus = paymentStatus ? String(paymentStatus).toUpperCase() : 'PAID';
+
+        if (pStatus === 'PAID') {
+            where.payments = {
+                some: {
+                    component: PaymentComponent.APPLICATION_FEE,
+                    status: PaymentStatus.SUCCESS
+                }
+            };
+        } else if (pStatus === 'PENDING' || pStatus === 'UNPAID') {
+             where.payments = {
+                none: {
+                    component: PaymentComponent.APPLICATION_FEE,
+                    status: PaymentStatus.SUCCESS
+                }
+            };
+        }
+        // IF 'ALL', do nothing
+
+        const [students, total] = await prisma.$transaction([
+            prisma.student.findMany({
+                where,
+                skip,
+                take: Number(limit),
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    admissionDetails: {
+                        include: {
+                            allottedCourse: true,
+                            hostel: true,
+                            transportRoute: true
+                        }
+                    },
+                    examDetails: true,
+                    documents: true,
+                    academicQualifications: true,
+                    eligibleScholarshipRule: true,
+                    scholarshipAllocation: { include: { rule: true } },
+                    pref1Course: true,
+                    pref2Course: true,
+                    pref3Course: true,
+                    feeDemands: {
+                        include: {
+                            feeStructure: {
+                                include: {
+                                    feeHead: true
+                                }
+                            },
+                            payments: true
+                        }
+                    },
+                    studentScholarship: true,
+                    payments: true,
+                    ledgerEntries: true,
+                    courseChangeLogs: true,
+                    discountRequests: true,
+                    user: true,
+                    enrollment: true,
+                    hostelAllocation: true,
+                    transportAllocation: true,
+                    convenorDetails: true
+                }
+            }),
+            prisma.student.count({ where })
+        ]);
+
+        const enhancedStudents = await Promise.all(students.map(async (student: any) => {
+            // Convert document URLs to presigned URLs
+            const documentsWithPresignedUrls = await Promise.all(student.documents.map(async (doc: any) => ({
+                ...doc,
+                url: await convertToPresignedUrl(doc.url)
+            })));
+
+            // Convert profile photo URL
+            const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
+
+            return {
+                ...student,
+                aadharNumber: maskAadhaar(student.aadharNumber),
+                profilePhotoUrl,
+                documents: documentsWithPresignedUrls,
+                pref1CourseName: student.pref1Course?.name || null,
+                pref2CourseName: student.pref2Course?.name || null,
+                pref3CourseName: student.pref3Course?.name || null,
+            };
+        }));
+
+        return {
+            students: enhancedStudents,
+            pagination: {
+                total,
+                page: Number(page),
+                limit: Number(limit),
+                totalPages: Math.ceil(total / Number(limit))
+            }
+        };
+    },
+
     async processBulkApplications(fileContent: string, currentUserId: string | undefined) {
         const { data, errors } = Papa.parse(fileContent, {
             header: true,
@@ -432,24 +604,29 @@ export const AdminStudentService = {
 
         const student = await prisma.student.findUnique({
             where: { id: studentId },
-            include: { admissionDetails: true }
+            include: { admissionDetails: { include: { allottedCourse: true } } }
         });
 
         if (!student || !student.admissionDetails?.allottedCourseId) {
             throw new AppError(MESSAGES.ERROR.STUDENT_NO_ALLOTTED_COURSE, 400);
         }
 
-        const oldCourseId = student.admissionDetails.allottedCourseId;
+        const newCourse = await prisma.course.findUnique({ where: { id: newCourseId } });
+        if (!newCourse) throw new AppError('New course not found', 404);
+
+        const oldCourse = student.admissionDetails.allottedCourse;
 
         return await prisma.courseChangeRequest.create({
             data: {
                 studentId,
-                fromCourse: oldCourseId,
+                fromCourse: oldCourse!.id,
                 toCourse: newCourseId,
+                fromDegree: oldCourse?.degree,
+                toDegree: newCourse.degree,
                 reason,
                 status: RequestStatus.FORWARDED,
                 forwardedTo: 'SUPER_ADMIN'
-            }
+            } as any
         });
     },
 
@@ -482,6 +659,14 @@ export const AdminStudentService = {
                     data: { allottedCourseId: request.toCourse }
                 });
 
+                // Update Degree if changed
+                if ((request as any).fromDegree !== (request as any).toDegree) {
+                    await tx.student.update({
+                        where: { id: request.studentId },
+                        data: { degreeType: (request as any).toDegree }
+                    });
+                }
+
                 await tx.course.update({
                     where: { id: request.fromCourse },
                     data: { filledSeats: { decrement: 1 } }
@@ -496,92 +681,169 @@ export const AdminStudentService = {
                         studentId: request.studentId,
                         oldCourse: request.fromCourse,
                         newCourse: request.toCourse,
+                        oldDegree: (request as any).fromDegree,
+                        newDegree: (request as any).toDegree,
                         approvedBy: adminId || 'SUPER_ADMIN'
-                    }
+                    } as any
                 });
 
                 // 2. FINANCIAL RECONCILIATION
                 const student = await tx.student.findUnique({
                     where: { id: request.studentId },
+                    include: { admissionDetails: true }
                 });
                 
                 if (!student) return;
 
-                // Find Existing Tuition Demand
-                // We need to fetch payments to calculate paid amount since it's not stored on demand (it seems)
-                const existingDemand = await tx.studentFeeDemand.findFirst({
-                    where: {
-                        studentId: request.studentId,
-                        feeHead: {
-                            name: { contains: 'Tuition', mode: 'insensitive' }
-                        }
-                    },
-                    orderBy: { createdAt: 'desc' },
+                // Find ALL demands for this student and their successful payments
+                const studentDemands = await tx.studentFeeDemand.findMany({
+                    where: { studentId: request.studentId },
                     include: { 
-                        academicYear: true,
-                        payments: {
-                            where: { status: 'SUCCESS' }
-                        }
-                    } 
+                        feeHead: true,
+                        payments: { where: { status: 'SUCCESS' } }
+                    }
                 });
 
-                if (existingDemand && existingDemand.academicYearId) {
-                    // Find NEW Fee Structure matching existing parameters but New Course
-                    const newFeeStructure = await tx.feeStructure.findFirst({
-                        where: {
-                            courseId: request.toCourse,
-                            academicYearId: existingDemand.academicYearId,
-                            feeHeadId: existingDemand.feeHeadId!, 
-                            // quotaType check removed due to lint error, likely matches by logic/seed or field mismatch on structure
-                        }
-                    });
+                // Determine Academic Year for reconciliation
+                const academicYearId = studentDemands.find(d => (d.feeHead?.name || '').toLowerCase().includes('tuition'))?.academicYearId 
+                                        || student.admissionDetails?.academicYearId;
 
-                    if (newFeeStructure) {
+                if (!academicYearId) {
+                    logger.warn(`[approveCourseChange] No academic year found for student ${request.studentId}. Skipping financial reconciliation.`);
+                    return;
+                }
+
+                // Find New Course Fee Structure
+                const newCourseStructures = await tx.feeStructure.findMany({
+                    where: {
+                        courseId: request.toCourse,
+                        academicYearId
+                    },
+                    include: { feeHead: true }
+                });
+
+                let tuitionHeadId: string | null = null;
+                const totalPaidAcrossAll = studentDemands.reduce((sum, d) => sum + d.payments.reduce((ps, p) => ps + p.amount, 0), 0);
+
+                // Process each structure in the NEW course
+                for (const struct of newCourseStructures) {
+                    const existingDemand = studentDemands.find(d => d.feeHeadId === struct.feeHeadId);
+                    const isTuition = (struct.feeHead?.name || '').toLowerCase().includes('tuition');
+
+                    if (isTuition) tuitionHeadId = struct.feeHeadId;
+
+                    if (existingDemand) {
                         const oldFee = existingDemand.amount;
-                        const newFee = newFeeStructure.amount;
-                        
-                        // Calculate Paid Amount
-                        const paidAmount = existingDemand.payments.reduce((sum, p) => sum + p.amount, 0);
+                        const newFee = struct.amount;
+                        const currentPaid = existingDemand.payments.reduce((sum, p) => sum + p.amount, 0);
 
-                        const discount = existingDemand.discountAmount || 0;
-                        const scholarship = existingDemand.scholarshipAmount || 0;
-                        const totalDeduction = discount + scholarship;
+                        // Proportional Scholarship Recalibration for Tuition
+                        let newScholarshipAmt = 0;
+                        let newDiscountTotal = existingDemand.discountAmount || 0;
+                        if (isTuition) {
+                            const studentScholarship = await tx.studentScholarship.findUnique({ where: { studentId: request.studentId } });
+                            const scholarshipPct = studentScholarship?.scholarshipPercentage || 0;
+                            const oldScholarship = existingDemand.scholarshipAmount || 0;
+                            const manualDiscount = Math.max(0, (existingDemand.discountAmount || 0) - oldScholarship);
+                            newScholarshipAmt = scholarshipPct > 0 ? (newFee * scholarshipPct / 100) : oldScholarship;
+                            newDiscountTotal = manualDiscount + newScholarshipAmt;
+                        }
 
-                        const newNetAmount = newFee - totalDeduction; 
-                        const pendingAmount = newNetAmount - paidAmount;
+                        const newNetAmount = newFee - newDiscountTotal;
+                        const pending = newNetAmount - currentPaid;
 
-                        let newStatus: FeeStatus = FeeStatus.PENDING;
-                        if (pendingAmount <= 0) newStatus = FeeStatus.FULL; 
-                        else if (paidAmount > 0) newStatus = FeeStatus.PARTIAL;
-
-                        // Update Demand
                         await tx.studentFeeDemand.update({
                             where: { id: existingDemand.id },
                             data: {
                                 amount: newFee,
+                                scholarshipAmount: isTuition ? newScholarshipAmt : undefined,
+                                discountAmount: isTuition ? newDiscountTotal : undefined,
                                 netAmount: newNetAmount,
-                                status: newStatus,
+                                status: pending <= 0 ? FeeStatus.FULL : (currentPaid > 0 ? FeeStatus.PARTIAL : FeeStatus.PENDING),
                                 remarks: (existingDemand.remarks || '') + ` | Course Change: Fee updated from ${oldFee} to ${newFee}`
                             }
                         });
+                    } else {
+                        // Create New Demand for missing heads in the new course
+                        await tx.studentFeeDemand.create({
+                            data: {
+                                studentId: request.studentId,
+                                feeHeadId: struct.feeHeadId,
+                                amount: struct.amount,
+                                netAmount: struct.amount,
+                                academicYearId,
+                                dueDate: new Date(),
+                                status: FeeStatus.PENDING,
+                                remarks: `Added during course change to new course structure`
+                            }
+                        });
+                    }
+                }
 
+                // 3. COURSE CHANGE PROCESSING FEE (10,000 DEDUCTION FROM PAID)
+                const DEDUCTION_AMOUNT = 10000;
+                const actualDeduction = Math.min(totalPaidAcrossAll, DEDUCTION_AMOUNT);
 
-                        // Create Ledger Entry
+                let courseChangeHead = await tx.feeHead.findFirst({
+                    where: { name: { contains: 'Course Change', mode: 'insensitive' } }
+                });
+
+                if (!courseChangeHead) {
+                    courseChangeHead = await tx.feeHead.create({
+                        data: { name: 'Course Change Fee', description: 'Fee for course/branch change processing' }
+                    });
+                }
+
+                // Create Course Change Fee Demand
+                const courseChangeDemand = await tx.studentFeeDemand.create({
+                    data: {
+                        studentId: request.studentId,
+                        feeHeadId: courseChangeHead.id,
+                        amount: DEDUCTION_AMOUNT,
+                        netAmount: DEDUCTION_AMOUNT,
+                        academicYearId,
+                        dueDate: new Date(),
+                        status: (actualDeduction >= DEDUCTION_AMOUNT) ? FeeStatus.FULL : (actualDeduction > 0 ? FeeStatus.PARTIAL : FeeStatus.PENDING),
+                        remarks: `Branch change processing fee`
+                    }
+                });
+
+                if (actualDeduction > 0) {
+                    // Decide where to pull the deduction from (prefer Tuition)
+                    const sourceHeadId = tuitionHeadId || studentDemands[0]?.feeHeadId;
+                    
+                    if (sourceHeadId) {
+                        // Debit Source (e.g., Tuition)
                         await tx.studentLedger.create({
                             data: {
                                 studentId: request.studentId,
-                                type: 'DEBIT', // Using String as fallback if Enum import fails, usually works
-                                amount: 0,
-                                description: `Course Change Fee Adjustment (${oldFee} -> ${newFee}). Paid: ${paidAmount}. New Pending: ${pendingAmount}`,
-                                referenceType: 'OTHER',
+                                feeHeadId: sourceHeadId,
+                                type: LedgerTransactionType.DEBIT,
+                                amount: actualDeduction,
+                                description: `Internal transfer: Course change fee deduction`,
+                                referenceType: 'COURSE_CHANGE',
                                 referenceId: request.id,
                                 createdBy: adminId
-                            } as any
+                            }
                         });
 
-                        logger.info(`[approveCourseChange] Fee updated for Student ${student.id}: ${oldFee} -> ${newFee}`);
+                        // Credit Target (Course Change Fee)
+                        await tx.studentLedger.create({
+                            data: {
+                                studentId: request.studentId,
+                                feeHeadId: courseChangeHead.id,
+                                type: LedgerTransactionType.CREDIT,
+                                amount: actualDeduction,
+                                description: `Course change fee paid via internal transfer`,
+                                referenceType: 'COURSE_CHANGE',
+                                referenceId: request.id,
+                                createdBy: adminId
+                            }
+                        });
                     }
                 }
+
+                logger.info(`[approveCourseChange] Full reconciliation for Student ${student.id} to Course ${request.toCourse}. Deduction: ${actualDeduction} from paid: ${totalPaidAcrossAll}`);
             }
         });
     },
@@ -1876,7 +2138,15 @@ export const AdminStudentService = {
         }
 
         // 2. Identify Flow
-        const isOnline = !([PaymentMethod.CASH, PaymentMethod.CHEQUE, PaymentMethod.DEMAND_DRAFT].includes(payment.method));
+        const isOnline = !([
+            PaymentMethod.CASH, 
+            PaymentMethod.CHEQUE, 
+            PaymentMethod.DEMAND_DRAFT,
+            PaymentMethod.NEFT,
+            PaymentMethod.RTGS,
+            PaymentMethod.IMPS,
+            PaymentMethod.NEFT_RTGS
+        ].includes(payment.method));
         logger.info(`[finalizeAdmission] Flow Type detected: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
 
             if (isOnline) {
@@ -2315,6 +2585,18 @@ export const AdminStudentService = {
         return { success: true };
     },
 
-
+    async getCourseChangeRequests(filters: any) {
+        const { status, studentId } = filters;
+        return await prisma.courseChangeRequest.findMany({
+            where: {
+                ...(status ? { status } : {}),
+                ...(studentId ? { studentId } : {})
+            } as any,
+            include: {
+                student: true
+            } as any,
+            orderBy: { createdAt: 'desc' }
+        });
+    }
 };
 

@@ -48,13 +48,12 @@ export const createDiscountRequestSchema = z.object({
         studentId: z.string().uuid(),
         reason: z.string().min(1, "Reason is required"),
         documentUrl: z.string().url("Invalid URL").optional(),
-    }),
-});
-
-export const reviewDiscountRequestSchema = z.object({
-    body: z.object({
-        requestId: z.string().uuid(),
-        remarks: z.string().optional(),
+        referredBy: z.string().optional(),
+        items: z.array(z.object({
+            feeHeadId: z.string().optional().nullable(),
+            component: z.string().min(1, "Component is required"),
+            amount: z.number().min(0, "Amount must be non-negative")
+        })).min(1, "At least one component is required"),
     }),
 });
 
@@ -62,6 +61,27 @@ export const approveDiscountSchema = z.object({
     body: z.object({
         requestId: z.string().uuid(),
         approved: z.boolean(),
+        approvedItems: z.array(z.object({
+            component: z.string().min(1),
+            approvedAmount: z.number().min(0)
+        })).optional(),
+        remarks: z.string().optional(),
+    }),
+});
+
+export const updateDiscountRequestSchema = z.object({
+    params: z.object({
+        id: z.string().uuid("Invalid Request ID"),
+    }),
+    body: z.object({
+        reason: z.string().min(1, "Reason is required"),
+        documentUrl: z.string().url("Invalid URL").optional(),
+        referredBy: z.string().optional(),
+        items: z.array(z.object({
+            feeHeadId: z.string().optional().nullable(),
+            component: z.string().min(1, "Component is required"),
+            amount: z.number().min(0, "Amount must be non-negative")
+        })).min(1, "At least one component is required"),
     }),
 });
 
@@ -135,6 +155,24 @@ export const getAllApplicationsSchema = z.object({
         status: z.string().optional(),
         quotaType: z.string().optional(),
         courseType: z.string().optional(),
+        applicationId: z.string().optional(),
+        isScholarshipEligible: z.string().optional(),
+        hasDocuments: z.string().optional(),
+    }),
+});
+
+export const getApplicationsExtendedSchema = z.object({
+    query: z.object({
+        page: z.string().transform(val => Number(val)).optional(),
+        limit: z.string().transform(val => Number(val)).optional(),
+        search: z.string().optional(),
+        status: z.string().optional(),
+        quotaType: z.string().optional(),
+        courseType: z.string().optional(),
+        degree: z.string().optional(),
+        gender: z.string().optional(),
+        preference: z.string().optional(),
+        paymentStatus: z.string().optional(),
         applicationId: z.string().optional(),
         isScholarshipEligible: z.string().optional(),
         hasDocuments: z.string().optional(),
@@ -331,8 +369,9 @@ export const updateStaffUserSchema = z.object({
         name: z.string().trim().min(1, 'Name cannot be empty').optional(),
         email: z.string().email('Invalid email address').optional(),
         role: z.string().refine(val => Object.values(Role).includes(val as any)).optional(),
+        isDeleted: z.boolean().optional(),
     }).refine(
-        (data) => data.name !== undefined || data.email !== undefined || data.role !== undefined,
+        (data) => data.name !== undefined || data.email !== undefined || data.role !== undefined || data.isDeleted !== undefined,
         {
             message: 'At least one field (name, email, or role) must be provided',
         }
@@ -476,8 +515,9 @@ export const updateFullStaffDetailsSchema = z.object({
         phone: z.string().min(10, 'Phone number must be at least 10 digits').optional(),
         role: z.string().optional(),
         groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
+        isDeleted: z.boolean().optional(),
     }).refine(
-        (data) => data.name !== undefined || data.email !== undefined || data.phone !== undefined || data.role !== undefined || data.groupIds !== undefined,
+        (data) => data.name !== undefined || data.email !== undefined || data.phone !== undefined || data.role !== undefined || data.groupIds !== undefined || data.isDeleted !== undefined,
         {
             message: 'At least one field must be provided',
         }

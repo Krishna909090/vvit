@@ -5,15 +5,16 @@ import {
     createFeeHead, getFeeHeads, updateFeeHead, deleteFeeHead,
     createFeeStructure, createBulkFeeStructure, getFeeStructures, updateFeeStructure, deleteFeeStructure,
     getFeeStatistics,
-    createDiscountRequest, reviewDiscountRequest, approveDiscount,
+    createDiscountRequest, updateDiscountRequest, deleteDiscountRequest, approveDiscount,
     getApplicationFee, updateApplicationFee,
     collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands, getPaymentHistory,
-    addStudentDiscount
+    addStudentDiscount,
+    getDiscountRequests
 } from './fee.controller';
 
 import {
     createFeeHeadSchema, createFeeStructureSchema, createBulkFeeStructureSchema,
-    createDiscountRequestSchema, reviewDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema
+    createDiscountRequestSchema, updateDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema
 } from '../../validators/adminValidators';
 
 const router = Router();
@@ -40,9 +41,12 @@ router.post('/generate-demands', authenticate, authorizePermission('finance.crea
 router.get('/fee-stats', authenticate, authorizePermission('finance.read.all'), getFeeStatistics);
 
 // Discounts
+router.get('/discounts', authenticate, authorizePermission('finance.read.all'), getDiscountRequests);
+
 router.post('/create-discount', authenticate, authorizePermission(['finance.create.all', 'finance.create.own']), validateRequest(createDiscountRequestSchema), createDiscountRequest);
 
-router.post('/review-discount', authenticate, authorizePermission('finance.update.all'), validateRequest(reviewDiscountRequestSchema), reviewDiscountRequest);
+router.put('/update-discount/:id', authenticate, authorizePermission(['finance.update.all', 'finance.update.own']), validateRequest(updateDiscountRequestSchema), updateDiscountRequest);
+router.delete('/delete-discount/:id', authenticate, authorizePermission(['finance.delete.all', 'finance.delete.own']), deleteDiscountRequest);
 
 router.post('/approve-discount', authenticate, authorizePermission('finance.update.all'), validateRequest(approveDiscountSchema), approveDiscount);
 

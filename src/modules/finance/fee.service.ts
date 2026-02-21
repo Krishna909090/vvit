@@ -200,37 +200,283 @@ export const FeeService = {
         };
     },
 
-    // Discounts
-    createDiscountRequest: async (studentId: string, reason: string, documentUrl?: string) => {
+    createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string) => {
+        
+        // Ensure no pending/approved duplicate requests exist for this student
+        const existingActiveRequest = await prisma.discountRequest.findFirst({
+             where: {
+                 studentId,
+                 status: { not: DiscountStatus.REJECTED }
+             },
+             include: {
+                 student: true
+             }
+        });
+
+        if (existingActiveRequest) {
+             const createdByUser = await prisma.user.findUnique({ where: { id: existingActiveRequest.createdBy as string }, select: { name: true } });
+             const creatorName = createdByUser?.name || 'an Admin';
+             throw new AppError(`A discount request was already raised for this student by ${creatorName} and is not in rejected state.`, 409);
+        }
+
         return prisma.discountRequest.create({
             data: {
                 studentId,
                 reason,
                 documentUrl,
-                status: DiscountStatus.REQUESTED
-            }
+                items: items as any, // Json
+                requestedAmount,
+                referredBy,
+                status: DiscountStatus.FORWARDED_TO_SUPER_ADMIN
+            } as any
         });
     },
 
-    reviewDiscountRequest: async (requestId: string, remarks?: string) => {
-        return prisma.discountRequest.update({
-            where: { id: requestId },
-            data: {
-                status: DiscountStatus.FORWARDED_TO_SUPER_ADMIN,
-                remarks
+    getAllDiscountRequests: async (filters?: { status?: DiscountStatus, studentId?: string, applicationId?: string, degree?: string, allottedCourseId?: string }) => {
+        const where: any = {};
+        if (filters?.status) where.status = filters.status;
+        if (filters?.studentId) where.studentId = filters.studentId;
+        
+        if (filters?.applicationId || filters?.degree || filters?.allottedCourseId) {
+            where.student = {};
+            
+            if (filters?.applicationId) {
+                where.student.applicationId = { contains: filters.applicationId, mode: 'insensitive' };
             }
+            if (filters?.degree) {
+                where.student.degreeType = filters.degree;
+            }
+            if (filters?.allottedCourseId) {
+                where.student.admissionDetails = {
+                    allottedCourseId: filters.allottedCourseId
+                };
+            }
+        }
+
+        const requests = await prisma.discountRequest.findMany({
+            where,
+            include: {
+                student: {
+                    select: {
+                        id: true,
+                        name: true,
+                        applicationId: true,
+                        courseType: true,
+                        degreeType: true,
+                        phone: true,
+                        email: true,
+                        admissionDetails: {
+                            select: {
+                                accommodationType: true,
+                                allottedCourse: {
+                                    select: {
+                                        id: true,
+                                        name: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            orderBy: { createdAt: 'desc' }
         });
+
+        const userIds = [...new Set(requests.map(req => req.createdBy).filter(Boolean))] as string[];
+        let usersMap = new Map();
+        if (userIds.length > 0) {
+             const users = await prisma.user.findMany({
+                 where: { id: { in: userIds } },
+                 select: { id: true, name: true, phone: true }
+             });
+             usersMap = new Map(users.map(u => [u.id, u]));
+        }
+
+        // Enrich with Fee Details (Balance, Demands)
+        // Note: Ideally use Promise.all for parallelism
+        const enrichedRequests = await Promise.all(requests.map(async (req) => {
+            // We need to call getStudentFeeDetails. Since it's in the same object, we use 'this' or reference FeeService if exported.
+            // But FeeService is the object we are in. 'this' context might work if called via FeeService.
+            // Alternatively, extract logic or use the function if defined outside. 
+            // getStudentFeeDetails is defined later in the object. 
+            // To be safe, we can import FeeService (checking circular dep) or just define a helper. 
+            // Or access via 'FeeService.getStudentFeeDetails' since it's an exported const object.
+
+            const feeDetails = await FeeService.getStudentFeeDetails(req.studentId);
+            const details = feeDetails as any;
+            
+            return {
+                ...req,
+                createdByUser: req.createdBy ? (usersMap.get(req.createdBy) || null) : null,
+                feeDetails: {
+                    totalDemand: details.totalDemand || details.summary?.totalDemand || 0,
+                    totalPaid: details.totalPaid || details.summary?.totalPaid || 0,
+                    totalDiscount: details.discounts?.total || details.summary?.totalDiscount || 0,
+                    balance: details.pendingAmount || details.summary?.netPending || 0,
+                    demands: details.demands
+                }
+            };
+        }));
+
+        return enrichedRequests;
     },
 
-    approveDiscount: async (requestId: string, approved: boolean, role: RoleType) => {
+    updateDiscountRequest: async (id: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string, adminId?: string) => {
+         const request = await prisma.discountRequest.findUnique({ where: { id } });
+         
+         if (!request) {
+             throw new AppError("Discount request not found", 404);
+         }
+
+         if (request.status !== DiscountStatus.FORWARDED_TO_SUPER_ADMIN && request.status !== DiscountStatus.REQUESTED) {
+              throw new AppError(`Cannot update request that is already ${request.status}`, 400);
+         }
+
+         return prisma.discountRequest.update({
+             where: { id },
+             data: {
+                 reason,
+                 documentUrl,
+                 items: items as any,
+                 requestedAmount,
+                 referredBy,
+                 updatedBy: adminId
+             }
+         });
+    },
+
+    deleteDiscountRequest: async (id: string) => {
+         const request = await prisma.discountRequest.findUnique({ where: { id } });
+         
+         if (!request) {
+             throw new AppError("Discount request not found", 404);
+         }
+
+         if (request.status !== DiscountStatus.FORWARDED_TO_SUPER_ADMIN) {
+              throw new AppError(`Cannot delete an already ${request.status} request`, 400);
+         }
+
+         return prisma.discountRequest.delete({
+             where: { id }
+         });
+    },
+
+    approveDiscount: async (requestId: string, approved: boolean, role: RoleType, adminId: string, approvedItems?: { component: string, approvedAmount: number }[]) => {
          if (role !== Role.SUPER_ADMIN) {
              throw new AppError("Only Super Admin can approve discounts", 403);
          }
-         return prisma.discountRequest.update({
-            where: { id: requestId },
-            data: {
-                status: approved ? DiscountStatus.APPROVED : DiscountStatus.REJECTED
-            }
+
+         const request = await prisma.discountRequest.findUnique({
+             where: { id: requestId }
+         });
+
+         if (!request) {
+             throw new AppError("Discount request not found", 404);
+         }
+
+         let finalApprovedAmount = 0;
+         let finalItems: any[] = [];
+
+         if (approved) {
+             if (approvedItems && approvedItems.length > 0) {
+                 finalItems = approvedItems;
+                 finalApprovedAmount = approvedItems.reduce((sum, item) => sum + item.approvedAmount, 0);
+             } else if ((request as any).items && Array.isArray((request as any).items)) {
+                 // Use requested items as approved default
+                 finalItems = ((request as any).items as any[]).map((item: any) => ({
+                     component: item.component,
+                     approvedAmount: item.amount !== undefined ? item.amount : (item.requestedAmount || 0)
+                 }));
+                 finalApprovedAmount = finalItems.reduce((sum, item) => sum + item.approvedAmount, 0);
+             } else {
+                 // Legacy fallback? Or unexpected data
+                 finalItems = [{ component: 'TUITION', approvedAmount: request.requestedAmount || 0 }];
+                 finalApprovedAmount = request.requestedAmount || 0;
+             }
+         }
+
+         return prisma.$transaction(async (tx) => {
+             const updatedRequest = await tx.discountRequest.update({
+                where: { id: requestId },
+                data: {
+                    status: approved ? DiscountStatus.APPROVED : DiscountStatus.REJECTED,
+                    approvedAmount: approved ? finalApprovedAmount : 0,
+                    items: approved ? finalItems : (request as any).items, // Update items with approved logic if needed or keep? Better to store approved breakdown separately? Schema has only one `items`.
+                    // Let's assume we update `items` with approved structure or add `approvedItems` field to schema. Schema has `items` which we reused. 
+                    // Wait, schema comment said "Stores array of { component, requestedAmount, approvedAmount }".
+                    // So we should Update the existing items to include `approvedAmount` property.
+                    approvedBy: adminId,
+                    approvedAt: new Date(),
+                    updatedBy: adminId
+                } as any
+             });
+
+             if (approved && finalApprovedAmount > 0) {
+                 
+                 for (const item of finalItems) {
+                     const amt = item.approvedAmount;
+                     if (amt <= 0) continue;
+
+                     const compName = item.component || 'TUITION';
+
+                     // Logic to find demand
+                     let targetDemand = await tx.studentFeeDemand.findFirst({
+                         where: {
+                             studentId: request.studentId,
+                             OR: [
+                                 { feeHead: { name: { contains: compName, mode: 'insensitive' } } },
+                                 { feeStructure: { feeHead: { name: { contains: compName, mode: 'insensitive' } } } }
+                             ]
+                         },
+                         orderBy: { createdAt: 'desc' }
+                     });
+
+                     // Fallback for generic 'TUITION' or 'COLLEGE' if component is vaguely named 
+                     if (!targetDemand && (compName.toUpperCase().includes('TUITION') || compName.toUpperCase().includes('COLLEGE'))) {
+                          targetDemand = await tx.studentFeeDemand.findFirst({
+                             where: {
+                                 studentId: request.studentId,
+                                 OR: [
+                                      { feeHead: { name: { contains: 'Tuition', mode: 'insensitive' } } },
+                                      { feeHead: { name: { contains: 'College', mode: 'insensitive' } } }
+                                 ]
+                             },
+                             orderBy: { createdAt: 'desc' }
+                         });
+                     }
+
+                     // Ultimate fallback: latest demand (Use with caution, maybe skip?)
+                     // Skipping to ensure we don't discount wrong fee. 
+                     // Or check if 'OTHER'?
+                     
+                     if (targetDemand) {
+                         await tx.studentFeeDemand.update({
+                             where: { id: targetDemand.id },
+                             data: {
+                                 discountAmount: { increment: amt },
+                                 netAmount: { decrement: amt }
+                             }
+                         });
+                     }
+
+                     // Always create Ledger Entry
+                     await tx.studentLedger.create({
+                         data: {
+                             studentId: request.studentId,
+                             type: 'CREDIT',
+                             amount: amt,
+                             description: `Approved Discount: ${request.reason} (${compName})`,
+                             referenceId: requestId,
+                             referenceType: 'DISCOUNT',
+                             feeHeadId: targetDemand?.feeHeadId,
+                             createdBy: adminId,
+                             date: new Date()
+                         }
+                     });
+                 }
+             }
+
+             return updatedRequest;
          });
     },
 
@@ -402,9 +648,9 @@ export const FeeService = {
                     continue; // Skip
                 }
 
-                // Check if this fee is Tuition/College Fee for Scholarship
+                // Check if this fee is Tuition fee for Scholarship (strictly Tuition/Tution)
                 const feeName = fee.feeHead.name.toLowerCase();
-                const isTuition = ['tuition', 'college', 'academic'].some(key => feeName.includes(key));
+                const isTuition = feeName.includes('Tuition') || feeName.includes('Tution');
                 
                 let scholarshipAmt = 0;
                 if (isTuition && discountPct > 0) {
@@ -501,18 +747,17 @@ export const FeeService = {
         
         logger.debug(`[getStudentFeeDetails] Found ${demands.length} demands and ${payments.length} successful payments.`);
 
-        // Fetch Discounts/Scholarships from Ledger
-        const creditLedgers = await prisma.studentLedger.findMany({
+        // Fetch Discounts/Scholarships from Ledger (Net of Credits and Debits)
+        const scholarshipLedgers = await prisma.studentLedger.findMany({
             where: { 
                 studentId, 
-                type: 'CREDIT',
                 referenceType: { in: ['SCHOLARSHIP', 'DISCOUNT'] }
             }
         });
 
-        let scholarshipAmount = creditLedgers
+        let scholarshipAmount = scholarshipLedgers
             .filter(l => l.referenceType === 'SCHOLARSHIP')
-            .reduce((sum, l) => sum + l.amount, 0);
+            .reduce((sum, l) => sum + (l.type === 'CREDIT' ? l.amount : -l.amount), 0);
 
         // Check for Locked Allocation (Pre-Payment View)
         if (scholarshipAmount === 0) {
@@ -529,8 +774,8 @@ export const FeeService = {
                  // Get actual tuition fee from demands, fallback to admission total fee, then fallback to default
                  // Strategy 1: Precise Name Match (Check both structure and direct head)
                  let tuitionDemand = demands.find(d => {
-                    const name = d.feeStructure?.feeHead?.name || d.feeHead?.name || '';
-                    return ['tuition', 'college', 'academic'].some(key => name.toLowerCase().includes(key));
+                    const name = (d.feeStructure?.feeHead?.name || d.feeHead?.name || '').toLowerCase();
+                    return name.includes('tuition') || name.includes('tution');
                  });
 
                  // Strategy 2: Highest Amount Heuristic (Tuition is usually the largest fee)
@@ -548,9 +793,9 @@ export const FeeService = {
             }
         }
 
-        const manualDiscountAmount = creditLedgers
+        const manualDiscountAmount = scholarshipLedgers
             .filter(l => l.referenceType === 'DISCOUNT')
-            .reduce((sum, l) => sum + l.amount, 0);
+            .reduce((sum, l) => sum + (l.type === 'CREDIT' ? l.amount : -l.amount), 0);
 
         const totalDemand = demands.reduce((sum, d) => sum + d.amount, 0);
         const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
@@ -591,6 +836,33 @@ export const FeeService = {
              else if (comp === 'TRANSPORT') key = 'TRANSPORT';
              
              breakdown[key].paid += p.amount;
+        });
+
+        // Map Ledger Adjustments (Fee Transfers/Deductions like Course Change Fees)
+        const adjustmentLedgers = await prisma.studentLedger.findMany({
+            where: { 
+                studentId, 
+                referenceType: 'COURSE_CHANGE' 
+            }
+        });
+
+        adjustmentLedgers.forEach(a => {
+            if (!a.feeHeadId) return;
+            
+            // Find head name from demands or fetch if needed. 
+            // Since we already have demands with heads, find the head name there.
+            const head = demands.find(d => (d.feeStructure?.feeHeadId === a.feeHeadId || d.feeHeadId === a.feeHeadId))?.feeHead || 
+                         demands.find(d => (d.feeStructure?.feeHeadId === a.feeHeadId || d.feeHeadId === a.feeHeadId))?.feeStructure?.feeHead;
+            
+            const name = (head?.name || '').toUpperCase();
+            
+            let key = 'OTHER';
+            if (name.includes('TUITION') || name.includes('COLLEGE')) key = 'TUITION';
+            else if (name.includes('HOSTEL')) key = 'HOSTEL';
+            else if (name.includes('TRANSPORT') || name.includes('BUS')) key = 'TRANSPORT';
+
+            if (a.type === 'CREDIT') breakdown[key].paid += a.amount;
+            else breakdown[key].paid -= a.amount;
         });
 
         // Calc Balance
@@ -648,11 +920,10 @@ export const FeeService = {
             orderBy: { createdAt: 'asc' }
         });
 
-        // 3. Fetch Discounts (Ledger)
-        const creditLedgers = await prisma.studentLedger.findMany({
+        // 3. Fetch Discounts (Ledger adjustments: Credits are additions, Debits are reductions)
+        const scholarshipLedgers = await prisma.studentLedger.findMany({
             where: { 
                 studentId, 
-                type: 'CREDIT',
                 referenceType: { in: ['SCHOLARSHIP', 'DISCOUNT'] }
             }
         });
@@ -749,20 +1020,25 @@ export const FeeService = {
             }
         });
 
-        // --- Process Discounts ---
-        creditLedgers.forEach(l => {
-             // ... same logic ...
+        // --- Process Discounts / Scholarship Adjustments ---
+        scholarshipLedgers.forEach(l => {
              let matched = false;
+             const isCredit = l.type === 'CREDIT';
+             // Determine if this is a scholarship or a standard discount based on referenceType
+             const recordType = l.referenceType === 'SCHOLARSHIP' ? 'SCHOLARSHIP' : 'DISCOUNT';
+             
              for (const [id, group] of feeHeadMap.entries()) {
                  const headName = group.feeHeadName.toUpperCase();
                  const desc = l.description?.toUpperCase() || '';
                  
+                 // Logic for Scholarship (Tuition only)
                  if (desc.includes('SCHOLARSHIP') && headName.includes('TUITION')) {
-                     group.discountAmount += l.amount;
+                     // CREDIT adds to pool, DEBIT subtracts from it (reduction)
+                     group.discountAmount += isCredit ? l.amount : -l.amount;
                      group.history.push({
-                         type: 'DISCOUNT',
+                         type: recordType,
                          date: l.date,
-                         amount: l.amount,
+                         amount: isCredit ? l.amount : -l.amount, // Show negative in history for reductions
                          id: l.id,
                          description: l.description
                      });
@@ -770,12 +1046,13 @@ export const FeeService = {
                      break;
                  }
                  
+                 // Logic for Manual Discounts
                  if (desc.includes('DISCOUNT') && (headName.includes('TUITION') || headName.includes('COLLEGE'))) {
-                     group.discountAmount += l.amount;
+                     group.discountAmount += isCredit ? l.amount : -l.amount;
                      group.history.push({
-                         type: 'DISCOUNT',
+                         type: recordType,
                          date: l.date,
-                         amount: l.amount,
+                         amount: isCredit ? l.amount : -l.amount,
                          id: l.id,
                          description: l.description
                      });
@@ -784,15 +1061,15 @@ export const FeeService = {
                  }
              }
              
-              if (!matched) {
+             if (!matched) {
                 const group = getGroup('GENERAL_DISCOUNTS', 'General Discounts');
-                group.discountAmount += l.amount;
+                group.discountAmount += isCredit ? l.amount : -l.amount;
                 group.history.push({
-                     type: 'DISCOUNT',
+                     type: recordType,
                      date: l.date,
-                     amount: l.amount,
+                     amount: isCredit ? l.amount : -l.amount,
                      id: l.id,
-                     description: l.description || 'Discount'
+                     description: l.description || 'Adjustment'
                 });
             }
         });
