@@ -201,7 +201,7 @@ export const FeeService = {
     },
 
     // Discounts
-    createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number) => {
+    createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string) => {
         return prisma.discountRequest.create({
             data: {
                 studentId,
@@ -209,6 +209,7 @@ export const FeeService = {
                 documentUrl,
                 items: items as any, // Json
                 requestedAmount,
+                referredBy,
                 status: DiscountStatus.REQUESTED
             } as any
         });
@@ -309,7 +310,7 @@ export const FeeService = {
                  finalApprovedAmount = finalItems.reduce((sum, item) => sum + item.approvedAmount, 0);
              } else {
                  // Legacy fallback? Or unexpected data
-                 finalItems = [{ component: request.component || 'TUITION', approvedAmount: request.requestedAmount || 0 }];
+                 finalItems = [{ component: 'TUITION', approvedAmount: request.requestedAmount || 0 }];
                  finalApprovedAmount = request.requestedAmount || 0;
              }
          }

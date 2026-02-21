@@ -48,6 +48,7 @@ export const createDiscountRequestSchema = z.object({
         studentId: z.string().uuid(),
         reason: z.string().min(1, "Reason is required"),
         documentUrl: z.string().url("Invalid URL").optional(),
+        referredBy: z.string().optional(),
         items: z.array(z.object({
             component: z.string().min(1, "Component is required"),
             amount: z.number().positive("Amount must be positive")
