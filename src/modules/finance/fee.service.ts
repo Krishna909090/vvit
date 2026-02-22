@@ -4,6 +4,7 @@ import { FeeStructure, SystemSetting, FeeHead, DiscountStatus, PaymentMethod, Pa
 import { Role, RoleType } from '../../constants/roles';
 import { MESSAGES } from '../../constants/messages';
 import logger from '../../utils/logger';
+import { convertToPresignedUrl } from '../../utils/s3Utils';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';
@@ -307,6 +308,7 @@ export const FeeService = {
             
             return {
                 ...req,
+                documentUrl: req.documentUrl ? await convertToPresignedUrl(req.documentUrl) : null,
                 createdByUser: req.createdBy ? (usersMap.get(req.createdBy) || null) : null,
                 feeDetails: {
                     totalDemand: details.totalDemand || details.summary?.totalDemand || 0,
