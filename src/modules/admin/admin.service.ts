@@ -218,6 +218,7 @@ export const AdminService = {
                 name: true,
                 email: true,
                 role: true,
+                isDeleted: true,
                 createdAt: true,
                 updatedAt: true,
                 userGroups: {
@@ -323,6 +324,7 @@ export const AdminService = {
                 name: true,
                 email: true,
                 role: true,
+                isDeleted: true,
                 createdAt: true,
                 updatedAt: true
             }
@@ -494,7 +496,8 @@ export const AdminService = {
                     name: true,
                     email: true,
                     phone: true,
-                    role: true
+                    role: true,
+                    isDeleted: true
                 }
             });
 
