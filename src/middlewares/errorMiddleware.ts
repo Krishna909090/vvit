@@ -10,6 +10,13 @@ const handleZodError = (err: ZodError) => {
 };
 
 const handlePrismaError = (err: any) => {
+    logger.error(`[Prisma Error] code: ${err.code}`, { 
+        code: err.code,
+        message: err.message,
+        meta: err.meta,
+        clientVersion: err.clientVersion 
+    });
+
     // Handle specific Prisma errors if needed
     // P2002: Unique constraint failed
     if (err.code === 'P2002') {
@@ -20,7 +27,9 @@ const handlePrismaError = (err: any) => {
     if (err.code === 'P2025') {
         return new AppError('Record not found', 404);
     }
-    return new AppError('Database Error', 500);
+    const code = err.code || 'UNKNOWN';
+    const message = err.message || 'Database Error';
+    return new AppError(`Database Error (${code}): ${message}`, 500, err);
 };
 
 const sendErrorDev = (err: any, res: Response) => {
