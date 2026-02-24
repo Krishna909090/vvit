@@ -27,9 +27,8 @@ const handlePrismaError = (err: any) => {
     if (err.code === 'P2025') {
         return new AppError('Record not found', 404);
     }
-    const code = err.code || 'UNKNOWN';
-    const message = err.message || 'Database Error';
-    return new AppError(`Database Error (${code}): ${message}`, 500, err);
+    
+    return new AppError('Database Error', 500);
 };
 
 const sendErrorDev = (err: any, res: Response) => {
@@ -64,6 +63,23 @@ const sendErrorProd = (err: any, res: Response) => {
 export const globalErrorHandler = (err: any, req: Request, res: Response, next: NextFunction) => {
     err.statusCode = err.statusCode || 500;
     err.status = err.status || 'error';
+
+    // Log the error with request context for PM2/CloudWatch
+    logger.error(`[Global Error Handler] ${req.method} ${req.url}`, {
+        status: err.status,
+        statusCode: err.statusCode,
+        message: err.message,
+        stack: err.stack,
+        request: {
+            method: req.method,
+            url: req.url,
+            body: req.body,
+            query: req.query,
+            params: req.params,
+            // @ts-ignore
+            userId: req.user?.id
+        }
+    });
 
     if (process.env.NODE_ENV === 'development') {
         sendErrorDev(err, res);

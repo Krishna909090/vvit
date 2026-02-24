@@ -227,6 +227,10 @@ model Student {
   ledgerEntries             StudentLedger[]
   studentScholarship        StudentScholarship?
   transportAllocation       TransportAllocation?
+
+  proId                     String?
+  proCommissionAmount       Float?                  @default(0)
+  pro                       PRO?                    @relation(fields: [proId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model ConvenorAdmission {
@@ -1287,4 +1291,16 @@ enum HostelPaymentMode {
 enum ServiceRequestType {
   FACILITY
   PAYMENT_MODE
+}
+
+model PRO {
+  id        String @id @default(dbgenerated("gen_random_uuid()"))
+  proNumber String @unique
+
+  createdAt DateTime? @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  updatedBy String?
+
+  students Student[]
 }
