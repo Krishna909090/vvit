@@ -121,6 +121,19 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
         where: { isActive: true, isDeleted: false }
     });
 
+    // Handle PRO Number mapping
+    let proIdToStore: string | null = null;
+    const incomingPro = data.proNumber || data.pro;
+    if (incomingPro) {
+        const proRecord = await prisma.pRO.findUnique({
+            where: { proNumber: incomingPro }
+        });
+        if (!proRecord) {
+            throw new AppError('Invalid PRO number provided', 400);
+        }
+        proIdToStore = proRecord.id;
+    }
+
     // Transaction to create Student and related tables
     const student = await prisma.$transaction(async (tx) => {
         // Double-check uniqueness within transaction
@@ -160,7 +173,8 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
                 pref2: data.pref2 || undefined,
                 pref3: data.pref3 || undefined,
                 userId: userId,
-                isKycVerified: data.isKycVerified
+                isKycVerified: data.isKycVerified,
+                proId: proIdToStore
             }
         });
 
@@ -714,14 +728,15 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
     }
 
     // 2. Filter forbidden fields (just in case validator missed something or direct call)
-    const { phone, aadharNumber, phoneNumber, aadhar, applicationId, proNumber, ...updateData } = data;
+    const { phone, aadharNumber, phoneNumber, aadhar, applicationId, proNumber, pro, ...updateData } = data;
 
     // 3. Handle PRO Number mapping
     let proIdToUpdate: string | null = null;
-    if (proNumber) {
+    const finalProNum = proNumber || pro;
+    if (finalProNum) {
         // Just verify it exists
         const proRecord = await prisma.pRO.findUnique({
-            where: { proNumber }
+            where: { proNumber: finalProNum }
         });
         if (!proRecord) {
             throw new AppError('Invalid PRO number provided', 400);

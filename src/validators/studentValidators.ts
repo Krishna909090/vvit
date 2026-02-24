@@ -23,6 +23,7 @@ export const registerStudentSchema = z.object({
         pref3: z.string().optional(),
         profilePhotoUrl: z.string().url("Profile Photo must be a valid URL"),
         isOffline: z.boolean().optional(),
+        pro: z.string().optional(),
     }),
 });
 
@@ -95,6 +96,8 @@ export const updatePersonalDetailsSchema = z.object({
         pincode: z.string().min(1).optional(),
         country: z.string().min(1).optional(),
         profilePhotoUrl: z.string().url().optional(),
+        pro: z.string().optional(),
+        proNumber: z.string().optional(),
     }).refine(data => {
         const forbiddenKeys = ['phone', 'phoneNumber', 'aadharNumber', 'aadhar'];
         const keys = Object.keys(data);
