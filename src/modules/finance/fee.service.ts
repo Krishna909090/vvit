@@ -201,23 +201,33 @@ export const FeeService = {
         };
     },
 
-    createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string) => {
-        
-        // Ensure no pending/approved duplicate requests exist for this student
-        const existingActiveRequest = await prisma.discountRequest.findFirst({
-             where: {
-                 studentId,
-                 status: { not: DiscountStatus.REJECTED }
-             },
-             include: {
-                 student: true
-             }
-        });
+    createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string, forceCreate: boolean = false) => {
 
-        if (existingActiveRequest) {
-             const createdByUser = await prisma.user.findUnique({ where: { id: existingActiveRequest.createdBy as string }, select: { name: true } });
-             const creatorName = createdByUser?.name || 'an Admin';
-             throw new AppError(`A discount request was already raised for this student by ${creatorName} and is not in rejected state.`, 409);
+        if (!forceCreate) {
+            // Check if any existing discount request (any status) has the same component
+            const incomingComponents = items.map(i => i.component.toUpperCase());
+
+            const existingRequests = await prisma.discountRequest.findMany({
+                where: { studentId }
+            });
+
+            for (const existing of existingRequests) {
+                const existingItems = (existing.items as any[]) || [];
+                const conflictingComponent = existingItems.find((ei: any) =>
+                    incomingComponents.includes((ei.component || '').toUpperCase())
+                );
+
+                if (conflictingComponent) {
+                    const createdByUser = existing.createdBy
+                        ? await prisma.user.findUnique({ where: { id: existing.createdBy }, select: { name: true } })
+                        : null;
+                    const creatorName = createdByUser?.name || 'an Admin';
+                    throw new AppError(
+                        `A discount request for component "${conflictingComponent.component}" already exists (status: ${existing.status}, raised by ${creatorName}). Pass forceCreate=true to override and create a new request anyway.`,
+                        409
+                    );
+                }
+            }
         }
 
         return prisma.discountRequest.create({
