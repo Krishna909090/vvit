@@ -373,7 +373,7 @@ export const FeeService = {
          });
     },
 
-    approveDiscount: async (requestId: string, approved: boolean, role: RoleType, adminId: string, approvedItems?: { component: string, approvedAmount: number }[]) => {
+    approveDiscount: async (requestId: string, approved: boolean, role: RoleType, adminId: string, approvedItems?: { component: string, approvedAmount: number }[], forceApprove: boolean = false) => {
          if (role !== Role.SUPER_ADMIN) {
              throw new AppError("Only Super Admin can approve discounts", 403);
          }
@@ -384,6 +384,38 @@ export const FeeService = {
 
          if (!request) {
              throw new AppError("Discount request not found", 404);
+         }
+
+         // Warn Super Admin if the same components exist in other discount requests
+         if (approved && !forceApprove) {
+             const requestComponents = ((request as any).items as any[] || []).map((i: any) => (i.component || '').toUpperCase());
+
+             if (requestComponents.length > 0) {
+                 const otherRequests = await prisma.discountRequest.findMany({
+                     where: {
+                         studentId: request.studentId,
+                         id: { not: requestId }
+                     }
+                 });
+
+                 for (const other of otherRequests) {
+                     const otherItems = (other.items as any[]) || [];
+                     const conflict = otherItems.find((oi: any) =>
+                         requestComponents.includes((oi.component || '').toUpperCase())
+                     );
+
+                     if (conflict) {
+                         const createdByUser = other.createdBy
+                             ? await prisma.user.findUnique({ where: { id: other.createdBy }, select: { name: true } })
+                             : null;
+                         const creatorName = createdByUser?.name || 'an Admin';
+                         throw new AppError(
+                             `Another discount request (ID: ${other.id}, status: ${other.status}, raised by ${creatorName}) also contains component "${conflict.component}" for this student. Pass forceApprove=true to proceed with approval anyway.`,
+                             409
+                         );
+                     }
+                 }
+             }
          }
 
          let finalApprovedAmount = 0;

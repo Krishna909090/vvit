@@ -208,10 +208,10 @@ export const deleteDiscountRequest = catchAsync(async (req: Request, res: Respon
 export const approveDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[approveDiscount] by=${req.user?.userId || 'anonymous'}`);
 
-    const { requestId, approved, approvedItems } = req.body;
+    const { requestId, approved, approvedItems, forceApprove } = req.body;
     const adminId = req.user!.userId;
     
-    await FeeService.approveDiscount(requestId, approved, req.user!.role as RoleType, adminId, approvedItems);
+    await FeeService.approveDiscount(requestId, approved, req.user!.role as RoleType, adminId, approvedItems, forceApprove === true);
 
     sendResponse({
         res,
