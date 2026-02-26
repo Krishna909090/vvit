@@ -204,29 +204,34 @@ export const FeeService = {
     createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string, forceCreate: boolean = false) => {
 
         if (!forceCreate) {
-            // Check if any existing discount request (any status) has the same component
-            const incomingComponents = items.map(i => i.component.toUpperCase());
-
-            const existingRequests = await prisma.discountRequest.findMany({
-                where: { studentId }
+            // Check if any non-rejected request exists for this student
+            const existingActiveRequest = await prisma.discountRequest.findFirst({
+                where: {
+                    studentId,
+                    status: { not: DiscountStatus.REJECTED }
+                }
             });
 
-            for (const existing of existingRequests) {
-                const existingItems = (existing.items as any[]) || [];
-                const conflictingComponent = existingItems.find((ei: any) =>
-                    incomingComponents.includes((ei.component || '').toUpperCase())
-                );
+            if (existingActiveRequest) {
+                const createdByUser = existingActiveRequest.createdBy
+                    ? await prisma.user.findUnique({ where: { id: existingActiveRequest.createdBy }, select: { name: true } })
+                    : null;
+                const creatorName = createdByUser?.name || 'an Admin';
 
-                if (conflictingComponent) {
-                    const createdByUser = existing.createdBy
-                        ? await prisma.user.findUnique({ where: { id: existing.createdBy }, select: { name: true } })
-                        : null;
-                    const creatorName = createdByUser?.name || 'an Admin';
-                    throw new AppError(
-                        `A discount request for component "${conflictingComponent.component}" already exists (status: ${existing.status}, raised by ${creatorName}). Pass forceCreate=true to override and create a new request anyway.`,
-                        409
-                    );
-                }
+                const incomingComponents = items.map(i => i.component.toUpperCase());
+                const existingItems = (existingActiveRequest.items as any[]) || [];
+                const conflictingComponents = existingItems
+                    .filter((ei: any) => incomingComponents.includes((ei.component || '').toUpperCase()))
+                    .map((ei: any) => ei.component);
+
+                const componentMsg = conflictingComponents.length > 0
+                    ? ` A pending request for ${conflictingComponents.join(', ')} already exists.`
+                    : '';
+
+                throw new AppError(
+                    `A discount request has already been raised for this student by ${creatorName}.${componentMsg} Please reject the existing request before creating a new one.`,
+                    409
+                );
             }
         }
 
@@ -235,7 +240,7 @@ export const FeeService = {
                 studentId,
                 reason,
                 documentUrl,
-                items: items as any, // Json
+                items: items as any,
                 requestedAmount,
                 referredBy,
                 status: DiscountStatus.FORWARDED_TO_SUPER_ADMIN
@@ -373,7 +378,7 @@ export const FeeService = {
          });
     },
 
-    approveDiscount: async (requestId: string, approved: boolean, role: RoleType, adminId: string, approvedItems?: { component: string, approvedAmount: number }[], forceApprove: boolean = false) => {
+    approveDiscount: async (requestId: string, approved: boolean, role: RoleType, adminId: string, approvedItems?: { component: string, approvedAmount: number }[]) => {
          if (role !== Role.SUPER_ADMIN) {
              throw new AppError("Only Super Admin can approve discounts", 403);
          }
@@ -384,38 +389,6 @@ export const FeeService = {
 
          if (!request) {
              throw new AppError("Discount request not found", 404);
-         }
-
-         // Warn Super Admin if the same components exist in other discount requests
-         if (approved && !forceApprove) {
-             const requestComponents = ((request as any).items as any[] || []).map((i: any) => (i.component || '').toUpperCase());
-
-             if (requestComponents.length > 0) {
-                 const otherRequests = await prisma.discountRequest.findMany({
-                     where: {
-                         studentId: request.studentId,
-                         id: { not: requestId }
-                     }
-                 });
-
-                 for (const other of otherRequests) {
-                     const otherItems = (other.items as any[]) || [];
-                     const conflict = otherItems.find((oi: any) =>
-                         requestComponents.includes((oi.component || '').toUpperCase())
-                     );
-
-                     if (conflict) {
-                         const createdByUser = other.createdBy
-                             ? await prisma.user.findUnique({ where: { id: other.createdBy }, select: { name: true } })
-                             : null;
-                         const creatorName = createdByUser?.name || 'an Admin';
-                         throw new AppError(
-                             `Another discount request (ID: ${other.id}, status: ${other.status}, raised by ${creatorName}) also contains component "${conflict.component}" for this student. Pass forceApprove=true to proceed with approval anyway.`,
-                             409
-                         );
-                     }
-                 }
-             }
          }
 
          let finalApprovedAmount = 0;
