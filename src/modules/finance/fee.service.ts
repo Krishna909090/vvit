@@ -202,8 +202,10 @@ export const FeeService = {
     },
 
     createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string, forceCreate: boolean = false) => {
-
-        if (!forceCreate) {
+        // Ensure we treat any truthy value (including undefined, null, or string "true") as a boolean
+        const effectiveForceCreate = Boolean(forceCreate);
+        console.log('forceCreate received in service:', forceCreate, '=> effectiveForceCreate:', effectiveForceCreate);
+        if (!effectiveForceCreate) {
             // Check if any non-rejected request exists for this student
             const existingActiveRequest = await prisma.discountRequest.findFirst({
                 where: {
