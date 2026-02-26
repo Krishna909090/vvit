@@ -228,8 +228,9 @@ export const FeeService = {
                     ? ` A pending request for ${conflictingComponents.join(', ')} already exists.`
                     : '';
 
-                throw new AppError(
-                    `A discount request has already been raised for this student by ${creatorName}.${componentMsg} Please reject the existing request before creating a new one.`,
+        
+                    throw new AppError(
+                    `A discount request has already been raised for this student by ${creatorName}. ${componentMsg} Do you want to proceed with creating a new request?`,
                     409
                 );
             }
