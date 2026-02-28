@@ -40,14 +40,6 @@ const startServer = async () => {
             }
         }
         
-        // Start Schedulers
-        // Start Schedulers: Only if explicitly enabled (default false in prod, true in dev/local recommended)
-        if (process.env.ENABLE_SCHEDULER === 'true') {
-            const { startScholarshipExpiryJob } = require('./jobs/scheduler');
-            startScholarshipExpiryJob();
-            logger.info('🕒 Job Scheduler started');
-        }
-
         // Start Web Server: Only if NOT disabled (enabled by default)
         if (process.env.DISABLE_WEB_SERVER !== 'true') {
             app.listen(PORT, () => {

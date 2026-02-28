@@ -321,6 +321,295 @@ export const retryEmail = async (logId: string) => {
     return { success: false, message: 'Unsupported template type or missing data' };
 };
 
+/**
+ * Send Cancellation Receipt Email
+ * Uses the pre-generated PDF buffer directly — no PDF regeneration.
+ */
+export const sendCancellationReceipt = async (
+    recipientEmail: string,
+    data: {
+        studentName: string;
+        applicationId: string;
+        conditionType: string;
+        amount: number;
+        date: Date;
+    },
+    pdfBuffer: Buffer
+): Promise<{ success: boolean }> => {
+    let emailLogId: string | undefined;
+
+    try {
+        const subject = `Cancellation Receipt - ${data.applicationId}`;
+        const conditionLabel = data.conditionType?.replace(/_/g, ' ') ?? 'Cancellation';
+
+        const dateObj = data.date ? new Date(data.date) : new Date();
+        const formattedDate = dateObj.toLocaleString('en-IN', {
+            day: '2-digit', month: 'short', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', hour12: true,
+            timeZone: 'Asia/Kolkata',
+        });
+
+        const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Cancellation Receipt</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #FCFCFD; font-family: Arial, Helvetica, sans-serif; color: #6E6C78; }
+    .container { max-width: 600px; margin: 0 auto; background-color: #FCFCFD; }
+    .banner-table { width: 100%; border-collapse: collapse; border-radius: 12px 12px 0 0; overflow: hidden; }
+    .banner-bg { background-size: cover; background-position: center center; background-repeat: no-repeat; height: 220px; }
+    .logo-cell { text-align: right; vertical-align: top; padding: 20px; }
+    .content { padding: 32px 40px 10px 40px; font-size: 14px; line-height: 1.75; color: #6E6C78; }
+    .content p { margin: 0 0 14px 0; }
+    .content strong { color: #131010; }
+    .summary { margin: 10px 0 16px 18px; padding: 0; }
+    .summary li { margin-bottom: 6px; padding-left: 4px; color: #6E6C78; }
+    .signature { margin-top: 18px; }
+    .divider { border-top: 1px solid #DEDFE3; margin: 20px 0 10px; }
+    .watermark { text-align: center; font-size: 96px; font-weight: 800; color: #FFCC99; letter-spacing: 10px; margin: 8px 0 30px; line-height: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <table class="banner-table" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td class="banner-bg" background="cid:banner" style="background-image: url('cid:banner');">
+          <div style="height: 220px;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" height="100%">
+              <tr>
+                <td class="logo-cell">
+                  <img src="cid:logo" alt="VVIT Logo" width="80" style="width:80px; height:auto;" />
+                </td>
+              </tr>
+            </table>
+          </div>
+        </td>
+      </tr>
+    </table>
+
+    <div class="content">
+      <p><strong>Dear ${data.studentName},</strong></p>
+
+      <p><strong>Seat Cancellation Processed</strong></p>
+
+      <p>Your seat cancellation request at <strong>Vasireddy Venkatadri International Technological University</strong> has been approved and processed.</p>
+
+      <p>Please find the cancellation receipt attached to this email for your records.</p>
+
+      <ul class="summary">
+        <li><strong>Student Name:</strong> ${data.studentName}</li>
+        <li><strong>Reference ID:</strong> ${data.applicationId}</li>
+        <li><strong>Cancellation Type:</strong> ${conditionLabel}</li>
+        <li><strong>Date:</strong> ${formattedDate}</li>
+        <li><strong>Amount:</strong> ₹${data.amount}</li>
+      </ul>
+
+      <p>If you have any questions regarding the refund or cancellation process, please contact us at <strong>admissions@vvit.edu.in</strong>.</p>
+
+      <div class="signature">
+        <p>Yours sincerely,<br><strong>Admissions Office</strong></p>
+      </div>
+
+      <div class="divider"></div>
+      <div class="watermark">VVITU</div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+        // Create Log Entry
+        const logEntry = await createEmailLog({
+            recipientEmail,
+            subject,
+            content: htmlContent,
+            templateType: 'CANCELLATION_RECEIPT' as any,
+            metadata: {
+                studentId: data.applicationId,
+                conditionType: data.conditionType,
+                amount: data.amount,
+            },
+        });
+        if (logEntry) emailLogId = logEntry.id;
+
+        // Prepare Images
+        const assetsDir = path.join(process.cwd(), 'src/assets');
+        let logoBase64 = '';
+        let bannerBase64 = '';
+
+        try {
+            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
+        } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
+
+        const base64Pdf = pdfBuffer.toString('base64');
+        const attachments = [{ name: 'CancellationReceipt.pdf', mime_type: 'application/pdf', content: base64Pdf }];
+
+        const inlineImages = [];
+        if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });
+        if (bannerBase64) inlineImages.push({ name: 'collegeBuilding.jpg', mime_type: 'image/jpeg', content: bannerBase64, cid: 'banner' });
+
+        const result = await sendZeptoEmail(recipientEmail, subject, htmlContent, attachments, inlineImages);
+
+        if (emailLogId) {
+            await updateEmailStatus(
+                emailLogId,
+                result.success ? EmailStatus.SENT : EmailStatus.FAILED,
+                result.messageId,
+                result.error,
+            );
+        }
+
+        return { success: result.success };
+    } catch (error: any) {
+        logger.error('[EMAIL SERVICE] Send Cancellation Receipt Failed', error);
+        if (emailLogId) {
+            await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
+        }
+        return { success: false };
+    }
+};
+
+/**
+ * Send Scholarship Update Notification Email
+ */
+export const sendScholarshipUpdateEmail = async (
+    recipientEmail: string,
+    data: {
+        studentName: string;
+        applicationId: string;
+        oldPercentage: number;
+        newPercentage: number;
+        supportEmail?: string;
+    }
+): Promise<{ success: boolean }> => {
+    let emailLogId: string | undefined;
+
+    try {
+        const subject = `Scholarship Update - ${data.applicationId}`;
+        const supportEmail = data.supportEmail || 'admissions@vvit.edu.in';
+
+        const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Scholarship Update</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #FCFCFD; font-family: Arial, Helvetica, sans-serif; color: #6E6C78; }
+    .container { max-width: 600px; margin: 0 auto; background-color: #FCFCFD; }
+    .banner-table { width: 100%; border-collapse: collapse; border-radius: 12px 12px 0 0; overflow: hidden; }
+    .banner-bg { background-size: cover; background-position: center center; background-repeat: no-repeat; height: 220px; }
+    .logo-cell { text-align: right; vertical-align: top; padding: 20px; }
+    .content { padding: 32px 40px 10px 40px; font-size: 14px; line-height: 1.75; color: #6E6C78; }
+    .content p { margin: 0 0 14px 0; }
+    .content strong { color: #131010; }
+    .summary { margin: 10px 0 16px 18px; padding: 0; }
+    .summary li { margin-bottom: 6px; padding-left: 4px; color: #6E6C78; }
+    .signature { margin-top: 18px; }
+    .divider { border-top: 1px solid #DEDFE3; margin: 20px 0 10px; }
+    .watermark { text-align: center; font-size: 96px; font-weight: 800; color: #FFCC99; letter-spacing: 10px; margin: 8px 0 30px; line-height: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <table class="banner-table" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td class="banner-bg" background="cid:banner" style="background-image: url('cid:banner');">
+          <div style="height: 220px;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" height="100%">
+              <tr>
+                <td class="logo-cell">
+                  <img src="cid:logo" alt="VVIT Logo" width="80" style="width:80px; height:auto;" />
+                </td>
+              </tr>
+            </table>
+          </div>
+        </td>
+      </tr>
+    </table>
+
+    <div class="content">
+      <p><strong>Dear ${data.studentName},</strong></p>
+
+      <p><strong>Scholarship Percentage Updated</strong></p>
+
+      <p>We would like to inform you that your scholarship percentage at <strong>Vasireddy Venkatadri International Technological University</strong> has been revised.</p>
+
+      <ul class="summary">
+        <li><strong>Student Name:</strong> ${data.studentName}</li>
+        <li><strong>Reference ID:</strong> ${data.applicationId}</li>
+        <li><strong>Previous Scholarship:</strong> ${data.oldPercentage}%</li>
+        <li><strong>Updated Scholarship:</strong> ${data.newPercentage}%</li>
+      </ul>
+
+      <p>Your fee demands have been updated to reflect this change. Please check the student portal for the revised fee details.</p>
+
+      <p>For any queries, please contact us at <strong>${supportEmail}</strong>.</p>
+
+      <div class="signature">
+        <p>Yours sincerely,<br><strong>Admissions Office</strong></p>
+      </div>
+
+      <div class="divider"></div>
+      <div class="watermark">VVITU</div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+        // Create Log Entry
+        const logEntry = await createEmailLog({
+            recipientEmail,
+            subject,
+            content: htmlContent,
+            templateType: 'SCHOLARSHIP_UPDATE' as any,
+            metadata: {
+                studentId: data.applicationId,
+                oldPercentage: data.oldPercentage,
+                newPercentage: data.newPercentage,
+            },
+        });
+        if (logEntry) emailLogId = logEntry.id;
+
+        // Prepare Images
+        const assetsDir = path.join(process.cwd(), 'src/assets');
+        let logoBase64 = '';
+        let bannerBase64 = '';
+
+        try {
+            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
+        } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
+
+        const inlineImages = [];
+        if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });
+        if (bannerBase64) inlineImages.push({ name: 'collegeBuilding.jpg', mime_type: 'image/jpeg', content: bannerBase64, cid: 'banner' });
+
+        const result = await sendZeptoEmail(recipientEmail, subject, htmlContent, [], inlineImages);
+
+        if (emailLogId) {
+            await updateEmailStatus(
+                emailLogId,
+                result.success ? EmailStatus.SENT : EmailStatus.FAILED,
+                result.messageId,
+                result.error,
+            );
+        }
+
+        return { success: result.success };
+    } catch (error: any) {
+        logger.error('[EMAIL SERVICE] Send Scholarship Update Failed', error);
+        if (emailLogId) {
+            await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
+        }
+        return { success: false };
+    }
+};
+
 export const sendStatusUpdateEmail = async (
     recipientEmail: string,
     data: StatusUpdateEmailData

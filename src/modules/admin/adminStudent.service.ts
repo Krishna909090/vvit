@@ -15,7 +15,7 @@ import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { maskAadhaar } from '../../utils/mask';
 import { generateApplicationPDF } from '../../utils/applicationPdfGenerator';
 import { getEnv } from '../../config/envValidator';
-import { sendAdmissionFeeReceipt, sendPaymentReceipt } from '../../utils/emailService';
+import { sendAdmissionFeeReceipt, sendPaymentReceipt, sendScholarshipUpdateEmail } from '../../utils/emailService';
 // @ts-ignore
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
 import { InvoiceService } from '../finance/invoice.service';
@@ -1505,25 +1505,54 @@ export const AdminStudentService = {
          if (existing) {
              // UPDATE Existing (Dynamic Update as requested)
              // key fields to exclude from update
-             const { studentId, id, ...updateProps } = data;
+             const { studentId: _sid, id: _id, ...updateProps } = data;
 
              // Apply conversions if specific fields are present
              if (updateProps.score) updateProps.score = Number(updateProps.score);
              if (updateProps.scholarshipPercentage) updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
-             
+
              // Check qualification existence if updating it
              if (updateProps.qualificationId) {
                   const qual = await prisma.academicQualification.findUnique({ where: { id: updateProps.qualificationId } });
                   if (!qual) throw new AppError('Qualification not found', 404);
              }
 
-             return await prisma.studentScholarship.update({
-                 where: { id: existing.id },
-                 data: {
-                     ...updateProps,
-                     updatedBy: adminId
-                 }
+             const oldPct = existing.scholarshipPercentage || 0;
+
+             const updated = await prisma.$transaction(async (tx) => {
+                 const result = await tx.studentScholarship.update({
+                     where: { id: existing.id },
+                     data: {
+                         ...updateProps,
+                         updatedBy: adminId
+                     }
+                 });
+
+                 // Propagate fee changes when scholarship percentage is updated
+                 const newPct = result.scholarshipPercentage || 0;
+                 await this.propagateScholarshipUpdate(studentId, newPct, adminId, tx);
+
+                 return result;
              });
+
+             // Send email notification if percentage changed
+             const newPct = updated.scholarshipPercentage || 0;
+             if (oldPct !== newPct) {
+                 const student = await prisma.student.findUnique({
+                     where: { id: studentId },
+                     select: { name: true, email: true, applicationId: true },
+                 });
+                 if (student?.email) {
+                     sendScholarshipUpdateEmail(student.email, {
+                         studentName: student.name,
+                         applicationId: student.applicationId || studentId.substring(0, 8).toUpperCase(),
+                         oldPercentage: oldPct,
+                         newPercentage: newPct,
+                     }).catch(err => logger.warn(`[updateStudentScholarship] Email failed (non-fatal): ${err}`));
+                 }
+             }
+
+             return updated;
          }
 
          // CREATE New
@@ -1548,8 +1577,22 @@ export const AdminStudentService = {
              await prisma.$transaction(async (tx) => {
                   await this.propagateScholarshipUpdate(studentId, newPct, adminId, tx);
              });
+
+             // Send email notification for new scholarship
+             const student = await prisma.student.findUnique({
+                 where: { id: studentId },
+                 select: { name: true, email: true, applicationId: true },
+             });
+             if (student?.email) {
+                 sendScholarshipUpdateEmail(student.email, {
+                     studentName: student.name,
+                     applicationId: student.applicationId || studentId.substring(0, 8).toUpperCase(),
+                     oldPercentage: 0,
+                     newPercentage: newPct,
+                 }).catch(err => logger.warn(`[updateStudentScholarship] Email failed (non-fatal): ${err}`));
+             }
          }
-         
+
          return newScholarship;
     },
 
@@ -1577,9 +1620,11 @@ export const AdminStudentService = {
              if (!qual) throw new AppError('Qualification not found', 404);
         }
 
-        return await prisma.$transaction(async (tx) => {
+        const oldPct = existing.scholarshipPercentage || 0;
+
+        const updatedScholarship = await prisma.$transaction(async (tx) => {
             // 1. Update the Scholarship Record
-            const updatedScholarship = await tx.studentScholarship.update({
+            const result = await tx.studentScholarship.update({
                 where: { id: scholarshipId },
                 data: {
                     type,
@@ -1594,15 +1639,34 @@ export const AdminStudentService = {
             });
 
             // 2. Propagate Changes to Demands & Ledger (Using Helper)
-            const newPct = updatedScholarship.scholarshipPercentage || 0;
-            const studentId = updatedScholarship.studentId;
+            const newPct = result.scholarshipPercentage || 0;
+            const sid = result.studentId;
 
-            logger.info(`[editStudentScholarship] Propagating update to ${newPct}% for student ${studentId}`);
+            logger.info(`[editStudentScholarship] Propagating update to ${newPct}% for student ${sid}`);
 
-            await this.propagateScholarshipUpdate(studentId, newPct, adminId, tx);
+            await this.propagateScholarshipUpdate(sid, newPct, adminId, tx);
 
-            return updatedScholarship;
+            return result;
         });
+
+        // Send email notification if percentage changed
+        const newPct = updatedScholarship.scholarshipPercentage || 0;
+        if (oldPct !== newPct) {
+            const student = await prisma.student.findUnique({
+                where: { id: updatedScholarship.studentId },
+                select: { name: true, email: true, applicationId: true },
+            });
+            if (student?.email) {
+                sendScholarshipUpdateEmail(student.email, {
+                    studentName: student.name,
+                    applicationId: student.applicationId || updatedScholarship.studentId.substring(0, 8).toUpperCase(),
+                    oldPercentage: oldPct,
+                    newPercentage: newPct,
+                }).catch(err => logger.warn(`[editStudentScholarship] Email failed (non-fatal): ${err}`));
+            }
+        }
+
+        return updatedScholarship;
     },
 
     async getScholarshipStats() {
@@ -1897,6 +1961,11 @@ export const AdminStudentService = {
             // --- 2. Course Allocation ---
             if (!oldAdmission?.allottedCourseId || oldAdmission.allottedCourseId !== course.allottedCourseId) {
                 logger.debug(`[executeAdmissionUpdates] Assigning new course seat: ${course.allottedCourseId}`);
+                const courseRecord = await tx.course.findUnique({ where: { id: course.allottedCourseId } });
+                if (!courseRecord || courseRecord.filledSeats >= courseRecord.totalSeats) {
+                    logger.warn(`[executeAdmissionUpdates] Course ${course.allottedCourseId} is fully booked (${courseRecord?.filledSeats}/${courseRecord?.totalSeats})`);
+                    throw new AppError("Course is fully booked. No seats available.", 400);
+                }
                 await tx.course.update({
                      where: { id: course.allottedCourseId },
                      data: { filledSeats: { increment: 1 } }
@@ -1942,9 +2011,9 @@ export const AdminStudentService = {
             // --- Determine Base Tuition Fee (For New Admissions) ---
             let baseTuition = 0;
             const isNewAdmission = !oldAdmission || (oldAdmission.status !== AdmissionStatus.ADMISSION_CONFIRMED && oldAdmission.status !== AdmissionStatus.ENROLLED);
-            
+
             if (isNewAdmission) {
-                baseTuition = 25000;
+                baseTuition = payload.amount ?? 0;
                 logger.info(`[executeAdmissionUpdates] New Admission Detected. Adding Base Tuition: ${baseTuition}`);
                 
                 // Generate Tuition DEBIT Ledger
@@ -1995,9 +2064,15 @@ export const AdminStudentService = {
             if (!currentScholarship || currentScholarship.scholarshipPercentage !== scholarship.percentage) {
                  logger.debug(`[executeAdmissionUpdates] Updating Scholarship: ${scholarship.percentage}% (Old: ${currentScholarship?.scholarshipPercentage}%)`);
                  
-                 await tx.studentScholarship.update({
+                 await tx.studentScholarship.upsert({
                     where: { studentId },
-                    data: {
+                    update: {
+                        scholarshipPercentage: scholarship.percentage,
+                        updatedBy: adminId,
+                        isEligible: 'YES'
+                    },
+                    create: {
+                        studentId,
                         scholarshipPercentage: scholarship.percentage,
                         updatedBy: adminId,
                         isEligible: 'YES'
@@ -2054,14 +2129,20 @@ export const AdminStudentService = {
             throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         }
 
-        if (student.admissionDetails?.status === AdmissionStatus.ADMISSION_CONFIRMED || student.admissionDetails?.status === AdmissionStatus.ENROLLED) {
-             logger.info(`[finalizeAdmission] Student ${studentId} seat already confirmed (Status: ${student.admissionDetails.status})`);
-             throw new AppError("Student seat is already confirmed. Cannot re-finalize.", 400);
+        const blockedStatuses: AdmissionStatus[] = [AdmissionStatus.ADMISSION_CONFIRMED, AdmissionStatus.ENROLLED, AdmissionStatus.CANCELLED];
+        if (student.admissionDetails?.status && blockedStatuses.includes(student.admissionDetails.status)) {
+             logger.info(`[finalizeAdmission] Student ${studentId} cannot be finalized (Status: ${student.admissionDetails?.status})`);
+             throw new AppError("Student admission cannot be finalized in its current status.", 400);
         }
 
         if (!validCourse) {
             logger.warn(`[finalizeAdmission] Invalid Course ID: ${course.allottedCourseId}`);
             throw new AppError("Invalid Course ID" , 400);
+        }
+
+        if (!payment.amount || payment.amount <= 0) {
+            logger.warn(`[finalizeAdmission] Invalid payment amount: ${payment.amount}`);
+            throw new AppError("Payment amount must be greater than zero", 400);
         }
 
         // Check Mandatory Fee Head ID (Exempting specific types)
@@ -2209,13 +2290,14 @@ export const AdminStudentService = {
                              feeDemandId: feeDemandId || undefined,
                              collectedBy: adminId,
                              createdBy: adminId, // Strict data
-                             metadata: { 
-                                scholarship, 
-                                allocation, 
+                             metadata: {
+                                scholarship,
+                                allocation,
                                 course,
                                 feeComponent,
+                                amount: payment.amount,
                                 feeStructureId: payment.feeStructureId,
-                                targetAction: 'FINALIZE_ADMISSION' 
+                                targetAction: 'FINALIZE_ADMISSION'
                              }
                          }
                      });
@@ -2272,10 +2354,19 @@ export const AdminStudentService = {
 
              const offlineResult = await prisma.$transaction(async (tx) => {
                  logger.info(`[finalizeAdmission][Offline] Starting transaction for student=${studentId}`);
-                 
+
                  // Determine Payment Name based on Component
                  const feeComponent = payment.component || PaymentComponent.TUITION;
-                 
+
+                 // Idempotency: reject if a SUCCESS payment already exists for this student + component
+                 const existingSuccess = await tx.payment.findFirst({
+                     where: { studentId, component: feeComponent, status: PaymentStatus.SUCCESS }
+                 });
+                 if (existingSuccess) {
+                     logger.warn(`[finalizeAdmission][Offline] Duplicate payment detected for student=${studentId} component=${feeComponent}`);
+                     throw new AppError("Payment for this component has already been completed.", 409);
+                 }
+
                  // ------------------------------------------------------------------
                  // SUB-BLOCK 6.1: RECORD PAYMENT
                  // Create a payment record with status SUCCESS.
@@ -2295,15 +2386,16 @@ export const AdminStudentService = {
                         instrumentDate: payment.date ? new Date(payment.date) : new Date(),
                         collectedBy: adminId,
                         createdBy: adminId, // Strict data
-                        metadata: { 
-                            scholarship, 
-                            allocation, 
+                        metadata: {
+                            scholarship,
+                            allocation,
                             course,
                             feeComponent,
+                            amount: payment.amount,
                             feeStructureId: payment.feeStructureId,
                             notes: 'Offline Immediate Finalization',
-                            targetAction: 'FINALIZE_ADMISSION' // Ensure processPaymentSuccess runs updates
-                         }
+                            targetAction: 'FINALIZE_ADMISSION'
+                        }
                     }
                 });
                 logger.debug(`[finalizeAdmission][Offline] Payment record created: ${newPayment.id}`);

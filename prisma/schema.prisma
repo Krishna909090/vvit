@@ -655,17 +655,35 @@ model AuditLog {
 }
 
 model CancellationRequest {
-  id           String              @id @default(dbgenerated("gen_random_uuid()"))
-  studentId    String
-  reason       String
-  refundAmount Float?
-  status       CancellationStatus? @default(REQUESTED)
-  approvedBy   String?
-  createdAt    DateTime?           @default(now())
-  updatedAt    DateTime            @updatedAt
-  createdBy    String?
-  updatedBy    String?
-  student      Student             @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id               String                     @id @default(dbgenerated("gen_random_uuid()"))
+  studentId        String
+  reason           String
+  status           CancellationStatus?        @default(REQUESTED)
+  approvedBy       String?
+  createdAt        DateTime?                  @default(now())
+  updatedAt        DateTime                   @updatedAt
+  createdBy        String?
+  updatedBy        String?
+  // Condition & quota inputs
+  conditionType    CancellationConditionType?
+  oldQuotaFee      Float?
+  newQuotaFee      Float?
+  totalPaid        Float?
+  componentPaid    Json?
+  // Computed adjustment fields
+  deductionAmount  Float?
+  refundAmount     Float?
+  transferAmount   Float?
+  balanceDue       Float?
+  finalStatus      String?
+  conditionRemarks String?
+  remarks          String?
+  // Invoice
+  invoiceUrl       String?
+  // Timestamps
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  student          Student                    @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model FileUpload {
@@ -1160,6 +1178,15 @@ enum CancellationStatus {
   REQUESTED
   APPROVED
   REJECTED
+}
+
+enum CancellationConditionType {
+  OTHER_COLLEGE_CANCEL
+  INTERNAL_BRANCH_TRANSFER
+  QUOTA_MGMT_TO_CONVENOR
+  QUOTA_CONVENOR_TO_MGMT
+  NORMAL_SEAT_CANCEL
+  MANAGEMENT_CANCEL_FULL_REFUND
 }
 
 enum FileKind {
