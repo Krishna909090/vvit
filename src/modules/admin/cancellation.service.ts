@@ -541,6 +541,7 @@ export const CancellationService = {
     async listCancellationRequests(filters: {
         status?: CancellationStatus;
         conditionType?: string;
+        applicationId?: string;
         page?: number;
         limit?: number;
     } = {}) {
@@ -551,6 +552,11 @@ export const CancellationService = {
         const where: any = {};
         if (filters.status)        where.status        = filters.status;
         if (filters.conditionType) where.conditionType = filters.conditionType;
+        if (filters.applicationId) {
+            where.student = {
+                applicationId: { contains: filters.applicationId, mode: 'insensitive' }
+            };
+        }
 
         const [data, total] = await Promise.all([
             prisma.cancellationRequest.findMany({

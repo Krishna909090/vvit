@@ -95,11 +95,13 @@ export const approveCancellation = catchAsync(async (req: Request, res: Response
 export const listCancellationRequests = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[listCancellationRequests] by=${req.user?.userId || 'anonymous'}`);
 
-    const { status, conditionType, page, limit } = req.query;
+    const { status, conditionType, page, limit, applicationid, applicationId } = req.query;
+    const searchAppId = (applicationid || applicationId) as string | undefined;
 
     const result = await CancellationService.listCancellationRequests({
         status:        status as CancellationStatus | undefined,
         conditionType: conditionType as string | undefined,
+        applicationId: searchAppId,
         page:          page  ? parseInt(page  as string, 10) : 1,
         limit:         limit ? parseInt(limit as string, 10) : 20,
     });
