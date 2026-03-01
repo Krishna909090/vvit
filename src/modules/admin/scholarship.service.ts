@@ -341,11 +341,10 @@ export const ScholarshipService = {
 
                     if (scholarshipDiff !== 0) {
                         const paidAmount = demand.payments.reduce((sum, p) => sum + p.amount, 0);
-                        const currentDiscount = demand.discountAmount || 0;
-                        
-                        // New Discount = (Current Discount - Old Scholarship) + New Scholarship
-                        const newDiscountTotal = (currentDiscount - oldScholarshipAmt) + newScholarshipAmt;
-                        const newNetAmount = demand.amount + (demand.fineAmount || 0) - newDiscountTotal;
+
+                        // Only adjust netAmount by the scholarship difference
+                        // discountAmount is left untouched as it represents manual discounts only
+                        const newNetAmount = (demand.netAmount || 0) - scholarshipDiff;
                         
                         let newStatus: any = 'PENDING';
                         if (paidAmount >= newNetAmount) newStatus = 'FULL';
@@ -355,7 +354,6 @@ export const ScholarshipService = {
                             where: { id: demand.id },
                             data: {
                                 scholarshipAmount: newScholarshipAmt,
-                                discountAmount: newDiscountTotal,
                                 netAmount: newNetAmount,
                                 status: newStatus,
                                 remarks: (demand.remarks || '') + ` | Scholarship updated to ${newPercentage}% (Old Pct Amt: ${oldScholarshipAmt}, New Pct Amt: ${newScholarshipAmt})`
