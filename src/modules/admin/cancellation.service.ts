@@ -567,7 +567,10 @@ export const CancellationService = {
                             email: true,
                             degreeType: true,
                             admissionDetails: {
-                                select: { allottedCourseId: true }
+                                select: { 
+                                    allottedCourseId: true,
+                                    allottedCourse: { select: { name: true } }
+                                }
                             }
                         },
                     },
@@ -583,6 +586,7 @@ export const CancellationService = {
                 student: {
                     ...studentRest,
                     allottedCourseId: admissionDetails?.allottedCourseId || null,
+                    allottedCourseName: admissionDetails?.allottedCourse?.name || null,
                 }
             };
         });
@@ -602,7 +606,10 @@ export const CancellationService = {
                         email: true,
                         degreeType: true,
                         admissionDetails: {
-                            select: { allottedCourseId: true }
+                            select: { 
+                                allottedCourseId: true,
+                                allottedCourse: { select: { name: true } }
+                            }
                         }
                     },
                 },
@@ -616,6 +623,7 @@ export const CancellationService = {
             student: {
                 ...studentRest,
                 allottedCourseId: admissionDetails?.allottedCourseId || null,
+                allottedCourseName: admissionDetails?.allottedCourse?.name || null,
             }
         };
     },
