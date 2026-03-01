@@ -560,14 +560,34 @@ export const CancellationService = {
                 orderBy: { createdAt: 'desc' },
                 include: {
                     student: {
-                        select: { name: true, applicationId: true, phone: true, email: true },
+                        select: { 
+                            name: true, 
+                            applicationId: true, 
+                            phone: true, 
+                            email: true,
+                            degreeType: true,
+                            admissionDetails: {
+                                select: { allottedCourseId: true }
+                            }
+                        },
                     },
                 },
             }),
             prisma.cancellationRequest.count({ where }),
         ]);
 
-        return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+        const mappedData = data.map(req => {
+            const { admissionDetails, ...studentRest } = req.student;
+            return {
+                ...req,
+                student: {
+                    ...studentRest,
+                    allottedCourseId: admissionDetails?.allottedCourseId || null,
+                }
+            };
+        });
+
+        return { data: mappedData, total, page, limit, totalPages: Math.ceil(total / limit) };
     },
 
     async getCancellationById(id: string) {
@@ -575,12 +595,29 @@ export const CancellationService = {
             where: { id },
             include: {
                 student: {
-                    select: { name: true, applicationId: true, phone: true, email: true },
+                    select: { 
+                        name: true, 
+                        applicationId: true, 
+                        phone: true, 
+                        email: true,
+                        degreeType: true,
+                        admissionDetails: {
+                            select: { allottedCourseId: true }
+                        }
+                    },
                 },
             },
         });
         if (!request) throw new AppError('Cancellation request not found', 404);
-        return request;
+
+        const { admissionDetails, ...studentRest } = request.student;
+        return {
+            ...request,
+            student: {
+                ...studentRest,
+                allottedCourseId: admissionDetails?.allottedCourseId || null,
+            }
+        };
     },
 
     async getInvoiceUrl(id: string): Promise<string> {
