@@ -629,7 +629,9 @@ export const DashboardService = {
                                 }
                             }
                         }
-                    }
+                    },
+                    proId: true,
+                    pro: { select: { proNumber: true } }
                 },
                 orderBy: { createdAt: 'desc' }
             })

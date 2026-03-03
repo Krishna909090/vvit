@@ -136,7 +136,8 @@ export const AdminStudentService = {
                     enrollment: true,
                     hostelAllocation: true,
                     transportAllocation: true,
-                    convenorDetails: true
+                    convenorDetails: true,
+                    pro: true
                 }
             }),
             prisma.student.count({ where })
@@ -308,7 +309,8 @@ export const AdminStudentService = {
                     enrollment: true,
                     hostelAllocation: true,
                     transportAllocation: true,
-                    convenorDetails: true
+                    convenorDetails: true,
+                    pro: true
                 }
             }),
             prisma.student.count({ where })
@@ -1325,6 +1327,7 @@ export const AdminStudentService = {
                 hostelAllocation: { include: { bed: { include: { room: { include: { block: { include: { hostel: true } } } } } } } },
                 transportAllocation: { include: { route: true, stop: true } },
                 convenorDetails: true,
+                pro: true,
                 user: { select: { id: true, email: true, phone: true, role: true, isDeleted: true } }
             }
         });
@@ -1399,6 +1402,7 @@ export const AdminStudentService = {
                 hostelAllocation: { include: { bed: { include: { room: { include: { block: { include: { hostel: true } } } } } } } },
                 transportAllocation: { include: { route: true, stop: true } },
                 convenorDetails: true,
+                pro: true,
                 user: { select: { id: true, email: true, phone: true, role: true, isDeleted: true } }
             }
         });

@@ -223,7 +223,9 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
             pref3: true,
             degreeType: true,
             userId: true,
-            applicationId: true // Needed for logger and likely client
+            applicationId: true, // Needed for logger and likely client
+            proId: true,
+            pro: true
         }
     });
 
@@ -541,6 +543,8 @@ export const getStudentByUserId = async (userId: string) => {
             },
             degreeType: true,
             applicationId: true, // Generally useful
+            proId: true,
+            pro: true,
             examDetails: {
                 select: {
                     isQualified: true,

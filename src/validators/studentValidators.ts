@@ -21,9 +21,14 @@ export const registerStudentSchema = z.object({
         pref1: z.string().optional(),
         pref2: z.string().optional(),
         pref3: z.string().optional(),
-        profilePhotoUrl: z.string().url("Profile Photo must be a valid URL"),
+        profilePhotoUrl: z.string().url("Profile Photo must be a valid URL").optional().or(z.literal('')),
         isOffline: z.boolean().optional(),
         pro: z.string().optional(),
+        proNumber: z.string().optional(),
+        proId: z.string().optional(),
+        isKycVerified: z.boolean().optional(),
+        applicationMode: z.string().optional(),
+        courseCount: z.number().int().optional(),
     }),
 });
 
