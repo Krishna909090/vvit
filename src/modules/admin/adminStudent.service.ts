@@ -601,6 +601,126 @@ export const AdminStudentService = {
         return updatedDoc;
     },
 
+    /**
+     * Request a BRANCH change — same degree program, different branch/specialization.
+     * e.g. B.Tech CSE → B.Tech ECE
+     */
+    async requestBranchChange(studentId: string, newCourseId: string, reason: string) {
+        if (!studentId || !newCourseId || !reason) {
+            throw new AppError('studentId, newCourseId and reason are required', 400);
+        }
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: { admissionDetails: { include: { allottedCourse: true } } }
+        });
+
+        if (!student || !student.admissionDetails?.allottedCourseId) {
+            throw new AppError(MESSAGES.ERROR.STUDENT_NO_ALLOTTED_COURSE, 400);
+        }
+
+        const oldCourse = student.admissionDetails.allottedCourse;
+        const newCourse = await prisma.course.findUnique({ where: { id: newCourseId } });
+        if (!newCourse) throw new AppError('Target course not found', 404);
+
+        // Validate: must be the SAME degree program
+        if (oldCourse?.degree !== newCourse.degree) {
+            throw new AppError(
+                `Branch change requires the same degree program. Old: "${oldCourse?.degree}", New: "${newCourse.degree}". Use Program Change for cross-program transfers.`,
+                400
+            );
+        }
+
+        // Must not be the same course
+        if (oldCourse?.id === newCourseId) {
+            throw new AppError('The new branch must be different from the current branch.', 400);
+        }
+
+        return await prisma.courseChangeRequest.create({
+            data: {
+                studentId,
+                fromCourse: oldCourse!.id,
+                toCourse: newCourseId,
+                fromDegree: oldCourse?.degree,
+                toDegree: newCourse.degree,
+                reason,
+                status: RequestStatus.FORWARDED,
+                forwardedTo: 'SUPER_ADMIN'
+            } as any
+        });
+    },
+
+    /**
+     * Request a PROGRAM change — cross-program transfer.
+     * Allowed combinations:
+     * B.Tech ↔ BBA | M.Tech ↔ MBA | M.Tech ↔ MCA | MBA ↔ MCA
+     */
+    async requestProgramChange(studentId: string, newCourseId: string, reason: string) {
+        if (!studentId || !newCourseId || !reason) {
+            throw new AppError('studentId, newCourseId and reason are required', 400);
+        }
+
+        // Allowed cross-program transfers (bidirectional)
+        const ALLOWED_PROGRAM_CHANGES: [string, string][] = [
+            ['B.TECH', 'BBA'],
+            ['BBA', 'B.TECH'],
+            ['M.TECH', 'MBA'],
+            ['MBA', 'M.TECH'],
+            ['M.TECH', 'MCA'],
+            ['MCA', 'M.TECH'],
+            ['MBA', 'MCA'],
+            ['MCA', 'MBA'],
+        ];
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: { admissionDetails: { include: { allottedCourse: true } } }
+        });
+
+        if (!student || !student.admissionDetails?.allottedCourseId) {
+            throw new AppError(MESSAGES.ERROR.STUDENT_NO_ALLOTTED_COURSE, 400);
+        }
+
+        const oldCourse = student.admissionDetails.allottedCourse;
+        const newCourse = await prisma.course.findUnique({ where: { id: newCourseId } });
+        if (!newCourse) throw new AppError('Target course not found', 404);
+
+        const fromDegree = (oldCourse?.degree || '').toUpperCase().trim();
+        const toDegree   = (newCourse.degree || '').toUpperCase().trim();
+
+        // Validate: must be a DIFFERENT degree
+        if (fromDegree === toDegree) {
+            throw new AppError(
+                `Program change requires different degree programs. Both are "${oldCourse?.degree}". Use Branch Change instead.`,
+                400
+            );
+        }
+
+        // Validate: combination must be in the allowed list
+        const isAllowed = ALLOWED_PROGRAM_CHANGES.some(
+            ([f, t]) => f === fromDegree && t === toDegree
+        );
+        if (!isAllowed) {
+            throw new AppError(
+                `Program change from "${oldCourse?.degree}" to "${newCourse.degree}" is not allowed. Allowed transfers: B.Tech↔BBA, M.Tech↔MBA, M.Tech↔MCA, MBA↔MCA.`,
+                400
+            );
+        }
+
+        return await prisma.courseChangeRequest.create({
+            data: {
+                studentId,
+                fromCourse: oldCourse!.id,
+                toCourse: newCourseId,
+                fromDegree: oldCourse?.degree,
+                toDegree: newCourse.degree,
+                reason,
+                status: RequestStatus.FORWARDED,
+                forwardedTo: 'SUPER_ADMIN'
+            } as any
+        });
+    },
+
     async requestCourseChange(studentId: string, newCourseId: string, reason: string) {
         if (!studentId || !newCourseId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_NEWCOURSE_REASON_REQUIRED, 400);
 
@@ -631,6 +751,7 @@ export const AdminStudentService = {
             } as any
         });
     },
+
 
     async approveCourseChange(requestId: string, approved: boolean, adminRole: string | undefined, adminId: string | undefined) {
         if (adminRole !== Role.SUPER_ADMIN) {

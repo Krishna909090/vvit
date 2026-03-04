@@ -139,7 +139,7 @@ export const verifyStudentDocument = catchAsync(async (req: Request, res: Respon
     });
 });
 
-// Request Course Change
+// Request Course Change (generic)
 export const requestCourseChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestCourseChange] by=${req.user?.userId || 'anonymous'}`);
 
@@ -152,6 +152,40 @@ export const requestCourseChange = catchAsync(async (req: Request, res: Response
         statusCode: 200,
         success: true,
         message: MESSAGES.SUCCESS.COURSE_CHANGE_FORWARDED,
+        data: request
+    });
+});
+
+// Request Branch Change (same program, different branch)
+export const requestBranchChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[requestBranchChange] by=${req.user?.userId || 'anonymous'}`);
+
+    const { studentId, newCourseId, reason } = req.body;
+
+    const request = await AdminStudentService.requestBranchChange(studentId, newCourseId, reason);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Branch change request forwarded for approval',
+        data: request
+    });
+});
+
+// Request Program Change (cross-program transfer, e.g. B.Tech → BBA)
+export const requestProgramChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[requestProgramChange] by=${req.user?.userId || 'anonymous'}`);
+
+    const { studentId, newCourseId, reason } = req.body;
+
+    const request = await AdminStudentService.requestProgramChange(studentId, newCourseId, reason);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Program change request forwarded for approval',
         data: request
     });
 });
@@ -575,6 +609,31 @@ export const sendStatusEmail = catchAsync(async (req: Request, res: Response, ne
         statusCode: 200,
         success: result.success,
         message: 'Email sent successfully'
+    });
+});
+
+// Reverse Admission Payment (Delete mistaken bank-transfer / offline payment and undo all side-effects)
+export const reverseAdmissionPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[reverseAdmissionPayment] by=${req.user?.userId || 'anonymous'}`);
+
+    const { paymentId, reason } = req.body;
+
+    if (!paymentId) {
+        throw new AppError('paymentId is required', 400);
+    }
+
+    const result = await AdminStudentService.reverseAdmissionPayment(
+        paymentId,
+        req.user?.userId!,
+        reason
+    );
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: result.message,
+        data: result.reversed
     });
 });
 
