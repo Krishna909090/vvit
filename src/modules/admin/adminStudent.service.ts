@@ -2062,32 +2062,23 @@ export const AdminStudentService = {
             });
             
              // --- 4. Scholarship Update ---
-            const currentScholarship = await tx.studentScholarship.findUnique({ where: { studentId } });
-            
-            // Only update if percentage changed or didn't exist
-            if (!currentScholarship || currentScholarship.scholarshipPercentage !== scholarship.percentage) {
-                 logger.debug(`[executeAdmissionUpdates] Updating Scholarship: ${scholarship.percentage}% (Old: ${currentScholarship?.scholarshipPercentage}%)`);
-                 
-                 await tx.studentScholarship.upsert({
-                    where: { studentId },
-                    update: {
-                        scholarshipPercentage: scholarship.percentage,
-                        updatedBy: adminId,
-                        isEligible: 'YES'
-                    },
-                    create: {
-                        studentId,
-                        scholarshipPercentage: scholarship.percentage,
-                        updatedBy: adminId,
-                        isEligible: 'YES'
-                    }
-                });
-                
-                // Propagate
-                await this.propagateScholarshipUpdate(studentId, scholarship.percentage, adminId, tx);
-            } else {
-                logger.info(`[executeAdmissionUpdates] Scholarship percentage unchanged (${scholarship.percentage}%). Skipping update.`);
+            // null → save as 0 | positive number → update percentage + flip isEligible to YES
+            const scholarshipPct = scholarship.percentage ?? 0;
+            await tx.studentScholarship.update({
+                where: { studentId },
+                data: {
+                    scholarshipPercentage: scholarshipPct,
+                    ...(scholarshipPct > 0 ? { isEligible: 'YES' } : {}),
+                    updatedBy: adminId
+                }
+            });
+            logger.debug(`[executeAdmissionUpdates] Scholarship updated: percentage=${scholarshipPct}`);
+
+            // Propagate discount to fee demands only when percentage is set
+            if (scholarshipPct > 0) {
+                await this.propagateScholarshipUpdate(studentId, scholarshipPct, adminId, tx);
             }
+
 
             logger.info(`[executeAdmissionUpdates] Successfully completed all updates for student=${studentId}`);
         } catch (error) {
@@ -2693,6 +2684,171 @@ export const AdminStudentService = {
             } as any,
             orderBy: { createdAt: 'desc' }
         });
+    },
+
+    /**
+     * Reverses a mistakenly recorded offline/bank-transfer admission payment.
+     *
+     * Atomically:
+     * 1. Validates the payment exists and is an offline SUCCESS payment.
+     * 2. Deletes all StudentLedger entries linked to this payment (referenceId = payment.id).
+     * 3. Deletes the Payment record itself.
+     * 4. Resets StudentAdmission:
+     *    - paidFee decremented by payment.amount
+     *    - totalFee decremented by the same amount
+     *    - status reverted to SEAT_ALLOTTED
+     *    - allottedCourseId cleared, accommodationType reset to NONE
+     * 5. Decrements Course.filledSeats (if course was allotted).
+     * 6. Decrements Hostel.filled / TransportRoute.filled if accommodation was set.
+     * 7. Resets linked StudentFeeDemand status back to PENDING (if any demand was settled).
+     *
+     * Only OFFLINE (NEFT, RTGS, IMPS, Cheque, DD, Cash) SUCCESS payments
+     * whose metadata.targetAction === 'FINALIZE_ADMISSION' can be reversed here.
+     */
+    async reverseAdmissionPayment(paymentId: string, adminId: string, reason?: string) {
+        logger.info(`[reverseAdmissionPayment] paymentId=${paymentId} adminId=${adminId}`);
+
+        // 1. Fetch payment with related data
+        const payment = await prisma.payment.findUnique({
+            where: { id: paymentId },
+            include: {
+                student: { include: { admissionDetails: true } }
+            }
+        });
+
+        if (!payment) {
+            throw new AppError('Payment not found', 404);
+        }
+
+        // Guard: only OFFLINE mode
+        if (payment.mode !== PaymentMode.OFFLINE) {
+            throw new AppError(
+                'Only offline/bank-transfer payments can be reversed via this endpoint. ' +
+                'For online payments, use the payment gateway refund flow.',
+                400
+            );
+        }
+
+        // Guard: only SUCCESS payments
+        if (payment.status !== PaymentStatus.SUCCESS) {
+            throw new AppError(
+                `Payment cannot be reversed — current status is "${payment.status}". Only SUCCESS payments can be reversed.`,
+                400
+            );
+        }
+
+        // Guard: must be an admission finalization payment
+        const meta = payment.metadata as any;
+        if (meta?.targetAction !== 'FINALIZE_ADMISSION') {
+            throw new AppError(
+                'This payment is not linked to an admission finalization. Only payments recorded via the Finalize Admission flow can be reversed here.',
+                400
+            );
+        }
+
+        const admission = payment.student?.admissionDetails;
+        const studentId = payment.studentId;
+        const paidAmount = payment.amount;
+        const allottedCourseId = admission?.allottedCourseId ?? meta?.course?.allottedCourseId;
+        const accommodationType = admission?.accommodationType;
+        const hostelId = admission?.hostelId;
+        const transportRouteId = admission?.transportRouteId;
+
+        // 2. Atomic rollback transaction
+        await prisma.$transaction(async (tx) => {
+
+            // 2a. Delete StudentLedger entries referencing this payment
+            await (tx.studentLedger as any).deleteMany({
+                where: { referenceId: paymentId, referenceType: 'PAYMENT' }
+            });
+            logger.info(`[reverseAdmissionPayment] Deleted payment ledger entries`);
+
+            // 2b. Delete tuition FEE_GENERATION DEBIT ledger created during executeAdmissionUpdates
+            //     (These use referenceType='FEE_GENERATION' and a referenceId like 'ADMISSION_<timestamp>')
+            await (tx.studentLedger as any).deleteMany({
+                where: {
+                    studentId,
+                    referenceType: 'FEE_GENERATION'
+                }
+            });
+            logger.info(`[reverseAdmissionPayment] Deleted fee-generation ledger entries for student=${studentId}`);
+
+            // 2c. Reset linked fee demand back to PENDING
+            if (payment.feeDemandId) {
+                try {
+                    await tx.studentFeeDemand.update({
+                        where: { id: payment.feeDemandId },
+                        data: { status: FeeStatus.PENDING }
+                    });
+                } catch {
+                    logger.warn(`[reverseAdmissionPayment] Could not reset fee demand ${payment.feeDemandId}`);
+                }
+            }
+
+            // 2d. Delete the Payment record
+            await tx.payment.delete({ where: { id: paymentId } });
+            logger.info(`[reverseAdmissionPayment] Deleted payment record ${paymentId}`);
+
+            // 2e. Decrement course filledSeats
+            if (allottedCourseId) {
+                await tx.course.update({
+                    where: { id: allottedCourseId },
+                    data: { filledSeats: { decrement: 1 } }
+                });
+                logger.info(`[reverseAdmissionPayment] Decremented filledSeats for course=${allottedCourseId}`);
+            }
+
+            // 2f. Release hostel / transport seat
+            if (accommodationType === AccommodationType.HOSTEL && hostelId) {
+                await tx.hostel.update({
+                    where: { id: hostelId },
+                    data: { filled: { decrement: 1 } }
+                });
+            } else if (accommodationType === AccommodationType.TRANSPORT && transportRouteId) {
+                await tx.transportRoute.update({
+                    where: { id: transportRouteId },
+                    data: { filled: { decrement: 1 } }
+                });
+            }
+
+            // 2g. Reset StudentAdmission
+            if (admission) {
+                const newPaidFee = Math.max(0, (admission.paidFee ?? 0) - paidAmount);
+                const newTotalFee = Math.max(0, (admission.totalFee ?? 0) - paidAmount);
+
+                await tx.studentAdmission.update({
+                    where: { studentId },
+                    data: {
+                        status: AdmissionStatus.SEAT_ALLOTTED,
+                        paidFee: newPaidFee,
+                        totalFee: newTotalFee,
+                        feeStatus: FeeStatus.PENDING,
+                        allottedCourseId: null,
+                        accommodationType: AccommodationType.NONE,
+                        hostelId: null,
+                        hostelType: null,
+                        hostelPaymentMode: null,
+                        transportRouteId: null,
+                        roomNumber: null
+                    }
+                });
+                logger.info(`[reverseAdmissionPayment] Reset StudentAdmission for student=${studentId} → SEAT_ALLOTTED`);
+            }
+        });
+
+        logger.info(`[reverseAdmissionPayment] Completed reversal. paymentId=${paymentId} student=${studentId} admin=${adminId} reason="${reason ?? 'none'}"`);
+
+        return {
+            success: true,
+            message: 'Admission payment reversed successfully. The seat has been released and student status reset to SEAT_ALLOTTED.',
+            reversed: {
+                paymentId,
+                studentId,
+                amount: paidAmount,
+                allottedCourseId,
+                adminId,
+                reason
+            }
+        };
     }
 };
-
