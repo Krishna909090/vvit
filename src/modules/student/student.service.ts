@@ -121,6 +121,19 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
         where: { isActive: true, isDeleted: false }
     });
 
+    // Handle PRO Number mapping
+    let proIdToStore: string | null = null;
+    const incomingPro = data.proNumber || data.pro;
+    if (incomingPro) {
+        const proRecord = await prisma.pRO.findUnique({
+            where: { proNumber: incomingPro }
+        });
+        if (!proRecord) {
+            throw new AppError('Invalid PRO number provided', 400);
+        }
+        proIdToStore = proRecord.id;
+    }
+
     // Transaction to create Student and related tables
     const student = await prisma.$transaction(async (tx) => {
         // Double-check uniqueness within transaction
@@ -160,7 +173,8 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
                 pref2: data.pref2 || undefined,
                 pref3: data.pref3 || undefined,
                 userId: userId,
-                isKycVerified: data.isKycVerified
+                isKycVerified: data.isKycVerified,
+                proId: proIdToStore
             }
         });
 
@@ -209,7 +223,9 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
             pref3: true,
             degreeType: true,
             userId: true,
-            applicationId: true // Needed for logger and likely client
+            applicationId: true, // Needed for logger and likely client
+            proId: true,
+            pro: true
         }
     });
 
@@ -527,6 +543,8 @@ export const getStudentByUserId = async (userId: string) => {
             },
             degreeType: true,
             applicationId: true, // Generally useful
+            proId: true,
+            pro: true,
             examDetails: {
                 select: {
                     isQualified: true,
@@ -714,9 +732,23 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
     }
 
     // 2. Filter forbidden fields (just in case validator missed something or direct call)
-    const { phone, aadharNumber, phoneNumber, aadhar, applicationId, ...updateData } = data;
+    const { phone, aadharNumber, phoneNumber, aadhar, applicationId, proNumber, pro, ...updateData } = data;
 
-    // 3. Check Email Uniqueness if changing
+    // 3. Handle PRO Number mapping
+    let proIdToUpdate: string | null = null;
+    const finalProNum = proNumber || pro;
+    if (finalProNum) {
+        // Just verify it exists
+        const proRecord = await prisma.pRO.findUnique({
+            where: { proNumber: finalProNum }
+        });
+        if (!proRecord) {
+            throw new AppError('Invalid PRO number provided', 400);
+        }
+        proIdToUpdate = proRecord.id;
+    }
+
+    // 4. Check Email Uniqueness if changing
     if (updateData.email && updateData.email !== student.email) {
         // Check Student table
         const existingStudentEmail = await prisma.student.findFirst({
@@ -741,13 +773,16 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
         }
     }
 
-    // 4. Update
+    // 5. Update
     await prisma.$transaction(async (tx) => {
+        const finalUpdateData: any = { ...updateData };
+        if (proIdToUpdate) {
+            finalUpdateData.proId = proIdToUpdate;
+        }
+
         await tx.student.update({
             where: { id: studentId },
-            data: {
-                ...updateData
-            }
+            data: finalUpdateData
         });
 
         if (currentUserId && updateData.email && updateData.email !== student.email) {

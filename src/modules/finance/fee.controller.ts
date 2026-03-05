@@ -154,11 +154,11 @@ export const createDiscountRequest = catchAsync(async (req: Request, res: Respon
     logger.info(`[createDiscountRequest] by=${req.user?.userId || 'anonymous'}`);
     logger.info(`[createDiscountRequest] payload: ${JSON.stringify(req.body)}`);
 
-    const { studentId, reason, documentUrl, items, referredBy } = req.body;
+    const { studentId, reason, documentUrl, items, referredBy, forceCreate } = req.body;
     
     const requestedAmount = items.reduce((sum: number, item: any) => sum + item.amount, 0);
 
-    const discountRequest = await FeeService.createDiscountRequest(studentId, reason, documentUrl, items, requestedAmount, referredBy);
+    const discountRequest = await FeeService.createDiscountRequest(studentId, reason, documentUrl, items, requestedAmount, referredBy, forceCreate);
 
     sendResponse({
         res,

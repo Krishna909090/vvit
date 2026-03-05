@@ -49,6 +49,8 @@ export const createDiscountRequestSchema = z.object({
         reason: z.string().min(1, "Reason is required"),
         documentUrl: z.string().url("Invalid URL").optional(),
         referredBy: z.string().optional(),
+        // New optional flag to bypass duplicate‑request check
+        forceCreate: z.boolean().optional(),
         items: z.array(z.object({
             feeHeadId: z.string().optional().nullable(),
             component: z.string().min(1, "Component is required"),
@@ -66,6 +68,8 @@ export const approveDiscountSchema = z.object({
             approvedAmount: z.number().min(0)
         })).optional(),
         remarks: z.string().optional(),
+        // New optional flag to bypass conflict check
+        forceApprove: z.boolean().optional(),
     }),
 });
 

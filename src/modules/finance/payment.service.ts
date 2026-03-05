@@ -28,7 +28,6 @@ const MERCHANT_ID_MESS = (process.env.MESS_PHONEPE_MERCHANT_ID || '').trim();
 const SALT_KEY_MESS = (process.env.MESS_PHONEPE_SALT_KEY || '').trim();
 const SALT_INDEX_MESS = (process.env.MESS_PHONEPE_SALT_INDEX || '1').trim();
 
-const CLIENT_VERSION = 1;
 const ENV = process.env.NODE_ENV === 'production' ? Env.PRODUCTION : Env.SANDBOX;
 
 const PHONEPE_CREDENTIALS = {
@@ -67,9 +66,6 @@ export const getPhonePeClient = (type: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISS
     
     return clients[type];
 };
-
-// Debug PhonePe Config
-logger.info(`[PhonePe Config] Admission Merchant: ${MERCHANT_ID_ADMISSION}, Hostel Merchant: ${MERCHANT_ID_HOSTEL}, Mess Merchant: ${MERCHANT_ID_MESS}`);
 
 // Reusable PhonePe Initialization
 const resolveComponent = async (componentName: string, feeHeadId?: string): Promise<{ component: PaymentComponent, feeHeadId?: string }> => {
@@ -124,24 +120,8 @@ export const initiatePhonePePayment = async (studentId: string, amount: number, 
 
         const client = getPhonePeClient(feeType);
 
-        // Log configuration for debugging (FULL SECRETS EXPOSED)
         const config = PHONEPE_CREDENTIALS[feeType];
-        logger.info(`[initiatePhonePePayment] Config: Type=${feeType}, Env=${ENV === Env.PRODUCTION ? 'PROD' : 'SANDBOX'}, Merchant=${config.MERCHANT_ID}, SaltKey=${config.SALT_KEY}, Index=${config.SALT_INDEX}, RedirectUrl=${redirectUrl}`);
-
-        // EXPLICIT LOGGING FOR DEBUGGING
-        if (feeType === 'HOSTEL') {
-            logger.info(`[DEBUG-HOSTEL] Using Hostel Merchant ID: ${config.MERCHANT_ID}`);
-            logger.info(`[DEBUG-HOSTEL] ENV HOSTEL_PHONEPE_MERCHANT_ID: ${process.env.HOSTEL_PHONEPE_MERCHANT_ID}`);
-            logger.info(`[DEBUG-HOSTEL] ENV PHONEPE_MERCHANT_ID_HOSTEL: ${process.env.PHONEPE_MERCHANT_ID_HOSTEL}`);
-            logger.info(`[DEBUG-HOSTEL] ENV PHONEPE_MERCHANT_ID (Fallback): ${process.env.PHONEPE_MERCHANT_ID}`);
-        } else if (feeType === 'MESS') {
-             logger.info(`[DEBUG-MESS] Using Mess Merchant ID: ${config.MERCHANT_ID}`);
-             logger.info(`[DEBUG-MESS] ENV MESS_PHONEPE_MERCHANT_ID: ${process.env.MESS_PHONEPE_MERCHANT_ID}`);
-             logger.info(`[DEBUG-MESS] ENV PHONEPE_MERCHANT_ID_MESS: ${process.env.PHONEPE_MERCHANT_ID_MESS}`);
-        } else {
-             logger.info(`[DEBUG-ADMISSION] Using Admission Merchant ID: ${config.MERCHANT_ID}`);
-             logger.info(`[DEBUG-ADMISSION] ENV PHONEPE_MERCHANT_ID: ${process.env.PHONEPE_MERCHANT_ID}`);
-        }
+        logger.info(`[initiatePhonePePayment] Type=${feeType}, Env=${ENV === Env.PRODUCTION ? 'PROD' : 'SANDBOX'}, Merchant=${config.MERCHANT_ID}, SaltIndex=${config.SALT_INDEX}, RedirectUrl=${redirectUrl}`);
 
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(transactionId)
@@ -182,23 +162,75 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
         throw new AppError('Application fee already paid', 400);
     }
 
-    // Step 2: Create a pending payment record
-    logger.info(`[initiateApplicationFeePayment] Step 2: Creating PENDING payment record`);
-    const transactionId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
-    
-    const createdPayment = await prisma.payment.create({
-        data: {
-            studentId,
-            amount,
-            status: PaymentStatus.PENDING,
-            component: PaymentComponent.APPLICATION_FEE,
-            providerTxId: transactionId,
-            method: PaymentMethod.UPI
-        }
-    });
+    // Step 2: Reuse existing PENDING payment only if it is still fresh (within PhonePe's
+    // ~20-minute order expiry window). If stale, mark it FAILED and create a fresh one.
+    // This prevents sending expired merchantOrderIds to PhonePe → INVALID_TRANSACTION_ID.
+    // Entire block runs inside a serializable transaction to prevent race conditions where
+    // two simultaneous requests create duplicate PENDING records for the same student.
+    const PHONEPE_ORDER_EXPIRY_MS = 20 * 60 * 1000; // 20 minutes
+    logger.info(`[initiateApplicationFeePayment] Step 2: Checking for existing PENDING payment`);
 
-    // Step 3: Initiate PhonePe Request (Reusable)
-    logger.info(`[initiateApplicationFeePayment] Step 3: Initiating Payment with PhonePe`);
+    let transactionId: string = '';
+    let createdPayment: any = null;
+
+    await prisma.$transaction(async (tx) => {
+        const existingPending = await tx.payment.findFirst({
+            where: {
+                studentId,
+                component: PaymentComponent.APPLICATION_FEE,
+                status: PaymentStatus.PENDING
+            },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        if (existingPending) {
+            const ageMs = Date.now() - new Date(existingPending.createdAt ?? Date.now()).getTime();
+            const isFresh = ageMs <= PHONEPE_ORDER_EXPIRY_MS;
+
+            if (isFresh && existingPending.providerTxId) {
+                // Fresh PENDING (< 20 min) — reuse same transaction ID, PhonePe order is still alive
+                transactionId = existingPending.providerTxId;
+                createdPayment = existingPending;
+                logger.info(`[initiateApplicationFeePayment] Reusing fresh PENDING payment ${existingPending.id} (age: ${Math.round(ageMs / 1000)}s) txnId=${transactionId}`);
+            } else {
+                // Stale PENDING (> 20 min) — PhonePe order has expired, mark FAILED and create fresh
+                logger.warn(`[initiateApplicationFeePayment] Stale PENDING payment found (age: ${Math.round(ageMs / 60000)} mins). Marking FAILED and creating fresh payment.`);
+                await tx.payment.update({
+                    where: { id: existingPending.id },
+                    data: { status: PaymentStatus.FAILED, metadata: { reason: 'EXPIRED_ORDER_RECREATED' } as any }
+                });
+                transactionId = `TXN_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
+                createdPayment = await tx.payment.create({
+                    data: {
+                        studentId,
+                        amount,
+                        status: PaymentStatus.PENDING,
+                        component: PaymentComponent.APPLICATION_FEE,
+                        providerTxId: transactionId,
+                        method: PaymentMethod.UPI
+                    }
+                });
+                logger.info(`[initiateApplicationFeePayment] Created fresh payment ${createdPayment.id} txnId=${transactionId}`);
+            }
+        } else {
+            // No existing PENDING — create brand new payment
+            transactionId = `TXN_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
+            createdPayment = await tx.payment.create({
+                data: {
+                    studentId,
+                    amount,
+                    status: PaymentStatus.PENDING,
+                    component: PaymentComponent.APPLICATION_FEE,
+                    providerTxId: transactionId,
+                    method: PaymentMethod.UPI
+                }
+            });
+            logger.info(`[initiateApplicationFeePayment] Created new PENDING payment ${createdPayment.id} txnId=${transactionId}`);
+        }
+    }, { isolationLevel: 'Serializable' });
+
+    // Step 3: Initiate PhonePe Request
+    logger.info(`[initiateApplicationFeePayment] Step 3: Initiating Payment with PhonePe txnId=${transactionId}`);
     const redirectUrl = `${process.env.FRONTEND_URL}/student/payment?txnId=${transactionId}`;
     
     // Explicitly use 'ADMISSION' credentials for Application Fee
@@ -278,8 +310,8 @@ export const initiateMultiComponentPayment = async (
     ].includes(paymentMethod as any);
 
     const transactionId = isOffline 
-        ? (referenceNumber || `OFFLINE_${Date.now()}_${studentId.substring(0, 8)}`)
-        : `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
+        ? (referenceNumber || `OFFLINE_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`)
+        : `TXN_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
     
     const paymentStatus = isOffline ? PaymentStatus.SUCCESS : PaymentStatus.PENDING;
     const paymentMode = isOffline ? PaymentMode.OFFLINE : PaymentMode.ONLINE;
@@ -354,14 +386,8 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
              }
         }
         
-        let response;
-        try {
-             response = await clientToCheck.getOrderStatus(merchantTransactionId);
-        } catch (e) {
-             logger.warn(`[checkPaymentStatus] Failed with first client, trying HOSTEL client...`);
-             clientToCheck = getPhonePeClient('HOSTEL'); 
-             response = await clientToCheck.getOrderStatus(merchantTransactionId);
-        }
+        logger.info(`[checkPaymentStatus] Querying PhonePe with component-resolved client for txnId=${merchantTransactionId}`);
+        const response = await clientToCheck.getOrderStatus(merchantTransactionId);
 
         logger.debug(`[checkPaymentStatus] PhonePe Response: ${JSON.stringify(response)}`);
         
@@ -383,9 +409,9 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
              return { status: 'FAILED', data: response, paymentIds: payments.map(p => p.id) };
         }
         return { status: response.state, data: response, paymentIds: payments.map(p => p.id) };
-    } catch (error) {
-        logger.error("Error Checking Payment Status", error);
-        return null;
+    } catch (error: any) {
+        logger.error(`[checkPaymentStatus] Failed for txnId=${merchantTransactionId}: ${error?.message}`);
+        throw new AppError('Failed to check payment status with PhonePe', 502);
     }
 };
 
@@ -398,9 +424,20 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     if (!payments || payments.length === 0) return;
     logger.info(`[processMultiPaymentSuccess] Processing ${payments.length} payments. Ref=${payments[0].providerTxId}`);
 
+    // Idempotency guard — skip payments already marked SUCCESS to prevent
+    // double ledger entries and double fee settlement on duplicate callbacks
+    const pendingPayments = payments.filter(p => p.status !== PaymentStatus.SUCCESS);
+    if (pendingPayments.length === 0) {
+        logger.info(`[processMultiPaymentSuccess] All payments already SUCCESS — skipping duplicate processing. Ref=${payments[0].providerTxId}`);
+        return;
+    }
+    if (pendingPayments.length < payments.length) {
+        logger.warn(`[processMultiPaymentSuccess] ${payments.length - pendingPayments.length} payment(s) already SUCCESS, processing remaining ${pendingPayments.length}. Ref=${payments[0].providerTxId}`);
+    }
+
     // 1. Update Status FIRST (So InvoiceService sees them as SUCCESS)
     await prisma.payment.updateMany({
-        where: { id: { in: payments.map(p => p.id) } },
+        where: { id: { in: pendingPayments.map((p: any) => p.id) } },
         data: { status: PaymentStatus.SUCCESS, metadata }
     });
 
@@ -449,8 +486,11 @@ const _processComponentLogic = async (payment: any) => {
              if (detailedStudent?.admissionDetails) {
                  const ledgers: any[] = [];
                  const admission = detailedStudent.admissionDetails;
-                 const tuitionFee = (admission.totalFee ?? 0) > 0 ? (admission.totalFee ?? 0) : 25000;
-                 ledgers.push({ studentId, type: 'DEBIT', amount: tuitionFee, description: 'Tuition Fee (Annual)', referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() });
+                 const tuitionFee = admission.totalFee ?? 0;
+                 if (tuitionFee <= 0) {
+                     logger.warn(`[_processComponentLogic] totalFee is ${tuitionFee} for student=${studentId} — skipping tuition ledger entry`);
+                 }
+                 if (tuitionFee > 0) ledgers.push({ studentId, type: 'DEBIT', amount: tuitionFee, description: 'Tuition Fee (Annual)', referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() });
                  if (admission.transportRouteId && admission.transportRoute) { ledgers.push({ studentId, type: 'DEBIT', amount: admission.transportRoute.cost, description: `Transport Fee - ${admission.transportRoute.name}`, referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() }); }
                  if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) { const rule = detailedStudent.scholarshipAllocation.rule; const discount = (tuitionFee * rule.discountPercentage) / 100; if (discount > 0) { ledgers.push({ studentId, type: 'CREDIT', amount: discount, description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`, referenceId: detailedStudent.scholarshipAllocation.id, referenceType: 'SCHOLARSHIP', date: new Date() }); } }
                  if (ledgers.length > 0) await prisma.studentLedger.createMany({ data: ledgers });
@@ -1123,7 +1163,7 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
     }
 
     // 2. Determine Transaction ID
-    const transactionId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
+    const transactionId = `TXN_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
 
     // 3. Calculate Dynamic Fees (Logic Updated for Split)
     const pendingDemands = await prisma.studentFeeDemand.findMany({
@@ -1480,7 +1520,7 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
         });
     }
 
-    const transactionId = `TOK_${Date.now()}_${studentId.substring(0, 8)}`;
+    const transactionId = `TOK_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
 
     const createdPayment = await prisma.payment.create({
         data: {

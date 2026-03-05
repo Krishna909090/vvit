@@ -1,10 +1,11 @@
 
 import { PrismaClient, Prisma } from '@prisma/client';
 import { getContext } from '../utils/requestContext';
+import logger from '../utils/logger';
 
 const url = process.env.DATABASE_URL || '';
 const host = url.split('@')[1]?.split('/')[0] || 'Unknown';
-console.log(`[Prisma Init] Connecting to Host: ${host}`);
+logger.info(`[Prisma Init] Connecting to Host: ${host}`);
 
 const prismaClient = new PrismaClient();
 

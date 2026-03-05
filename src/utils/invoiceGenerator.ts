@@ -21,6 +21,9 @@ export interface InvoiceData {
   amount: number
   description: string
   items?: InvoiceItem[]
+  hideTxnId?: boolean
+  isCancellation?: boolean
+  reason?: string
   address: {
     line1: string
     line2?: string
@@ -151,7 +154,7 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
 
   doc.font('Helvetica-Bold').fontSize(8).fillColor('#7f8c8d')
   doc.text('BILLED TO', leftX, y)
-  doc.text('INVOICE DETAILS', rightX, y)
+  doc.text(data.isCancellation ? 'DETAILS' : 'INVOICE DETAILS', rightX, y)
 
   y += 12
 
@@ -171,14 +174,24 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
     y + 36
   )
 
-  doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, y)
-  doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y + 12)
-  doc.text(`Txn ID: ${data.transactionId}`, rightX, y + 24)
-  
-  const utrDisplay = (data.referenceId && data.referenceId !== data.transactionId) ? data.referenceId : 'N/A';
-  doc.text(`UTR: ${utrDisplay}`, rightX, y + 36)
-  
-  doc.text(`Payment: ${data.paymentMethod}`, rightX, y + 48)
+  if (data.isCancellation) {
+    doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y)
+    doc.text(`Reason: ${data.reason ?? ''}`, rightX, y + 12)
+  } else {
+    doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, y)
+    doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y + 12)
+
+    if (!data.hideTxnId) {
+      doc.text(`Txn ID: ${data.transactionId}`, rightX, y + 24)
+    }
+
+    const utrOffset = data.hideTxnId ? 24 : 36
+    const payOffset = data.hideTxnId ? 36 : 48
+    const utrDisplay = (data.referenceId && data.referenceId !== data.transactionId) ? data.referenceId : 'N/A';
+    doc.text(`UTR: ${utrDisplay}`, rightX, y + utrOffset)
+
+    doc.text(`Payment: ${data.paymentMethod}`, rightX, y + payOffset)
+  }
 }
 
 /* ================= SUBJECT BAR ================= */

@@ -21,10 +21,12 @@ import qualificationRequirementRoutes from './modules/qualification/qualificatio
 import emailLogRoutes from './modules/system/emailLog.routes';
 import rbacRoutes from './modules/rbac/routes/rbac.routes';
 import invoiceRoutes from './modules/finance/invoice.routes';
+import cancellationRoutes from './modules/admin/cancellation.routes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
 import { generalRateLimiter } from './middlewares/rateLimitMiddleware';
 import { enhancedSecurityHeaders, additionalSecurityHeaders } from './middlewares/securityHeaders';
+import { requestContextMiddleware } from './utils/requestContext';
 
 const app = express();
 
@@ -34,8 +36,7 @@ app.set('trust proxy', 1);
 // Security Middlewares (Order matters!)
 app.use(enhancedSecurityHeaders); // Enhanced Helmet configuration
 app.use(additionalSecurityHeaders); // Custom security headers
-import { requestContextMiddleware } from './utils/requestContext';
-app.use(requestContextMiddleware);
+app.use(requestContextMiddleware); // Attach correlation ID to every request
 app.use(cors({
     origin: process.env.CORS_ORIGIN === '*' ? true : (process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true), // Allow all if * or undefined (dev), else specific list
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
@@ -108,6 +109,7 @@ app.use('/qualification-requirements', qualificationRequirementRoutes);
 app.use('/admin/email-logs', emailLogRoutes);
 app.use('/rbac', rbacRoutes);
 app.use('/admin/finance', invoiceRoutes);
+app.use('/admin/cancellation', cancellationRoutes);
 
 
 

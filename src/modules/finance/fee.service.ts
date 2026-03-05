@@ -201,23 +201,41 @@ export const FeeService = {
         };
     },
 
-    createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string) => {
-        
-        // Ensure no pending/approved duplicate requests exist for this student
-        const existingActiveRequest = await prisma.discountRequest.findFirst({
-             where: {
-                 studentId,
-                 status: { not: DiscountStatus.REJECTED }
-             },
-             include: {
-                 student: true
-             }
-        });
+    createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string, forceCreate: boolean = false) => {
+        // Ensure we treat any truthy value (including undefined, null, or string "true") as a boolean
+        const effectiveForceCreate = Boolean(forceCreate);
+        console.log('forceCreate received in service:', forceCreate, '=> effectiveForceCreate:', effectiveForceCreate);
+        if (!effectiveForceCreate) {
+            // Check if any non-rejected request exists for this student
+            const existingActiveRequest = await prisma.discountRequest.findFirst({
+                where: {
+                    studentId,
+                    status: { not: DiscountStatus.REJECTED }
+                }
+            });
 
-        if (existingActiveRequest) {
-             const createdByUser = await prisma.user.findUnique({ where: { id: existingActiveRequest.createdBy as string }, select: { name: true } });
-             const creatorName = createdByUser?.name || 'an Admin';
-             throw new AppError(`A discount request was already raised for this student by ${creatorName} and is not in rejected state.`, 409);
+            if (existingActiveRequest) {
+                const createdByUser = existingActiveRequest.createdBy
+                    ? await prisma.user.findUnique({ where: { id: existingActiveRequest.createdBy }, select: { name: true } })
+                    : null;
+                const creatorName = createdByUser?.name || 'an Admin';
+
+                const incomingComponents = items.map(i => i.component.toUpperCase());
+                const existingItems = (existingActiveRequest.items as any[]) || [];
+                const conflictingComponents = existingItems
+                    .filter((ei: any) => incomingComponents.includes((ei.component || '').toUpperCase()))
+                    .map((ei: any) => ei.component);
+
+                const componentMsg = conflictingComponents.length > 0
+                    ? ` A pending request for ${conflictingComponents.join(', ')} already exists.`
+                    : '';
+
+        
+                    throw new AppError(
+                    `A discount request has already been raised for this student by ${creatorName}. ${componentMsg} Do you want to proceed with creating a new request?`,
+                    409
+                );
+            }
         }
 
         return prisma.discountRequest.create({
@@ -225,7 +243,7 @@ export const FeeService = {
                 studentId,
                 reason,
                 documentUrl,
-                items: items as any, // Json
+                items: items as any,
                 requestedAmount,
                 referredBy,
                 status: DiscountStatus.FORWARDED_TO_SUPER_ADMIN

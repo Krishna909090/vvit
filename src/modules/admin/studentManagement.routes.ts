@@ -21,7 +21,10 @@ import {
     verifyPayment,
     getAdmissionInvoice,
     sendStatusEmail,
-    getApplicationsExtended
+    getApplicationsExtended,
+    reverseAdmissionPayment,
+    requestBranchChange,
+    requestProgramChange
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -62,6 +65,12 @@ router.post('/approve-cancellation', authenticate, authorizePermission(['student
 router.post('/verify-allot', authenticate, authorizePermission(['student.update.all']), validateRequest(verifyAndAllotSeatSchema), verifyAndAllotSeat);
 
 router.post('/change-course', authenticate, authorizePermission(['student.update.all']), validateRequest(changeCourseSchema), requestCourseChange);
+
+// Branch Change (same program, different branch e.g. B.Tech CSE → B.Tech ECE)
+router.post('/change-branch', authenticate, authorizePermission(['student.update.all']), validateRequest(changeCourseSchema), requestBranchChange);
+
+// Program Change (cross-program e.g. B.Tech → BBA, M.Tech → MBA)
+router.post('/change-program', authenticate, authorizePermission(['student.update.all']), validateRequest(changeCourseSchema), requestProgramChange);
 
 router.get('/course-change-requests', authenticate, authorizePermission(['student.read.all']), getCourseChangeRequests);
 
@@ -126,5 +135,9 @@ router.get('/student-scholarship/:studentId', authenticate, authorizePermission(
 
 // Manual Status Update Email
 router.post('/send-status-email', authenticate, authorizePermission(['student.update.all']), sendStatusEmail);
+
+// Reverse Admission Payment (Undo a mistaken offline/bank-transfer payment & release seat)
+// Restricted to super-admins only (student.delete.all)
+router.post('/reverse-admission-payment', authenticate, authorizePermission(['student.delete.all']), reverseAdmissionPayment);
 
 export default router;

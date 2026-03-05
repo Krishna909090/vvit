@@ -15,7 +15,7 @@ import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { maskAadhaar } from '../../utils/mask';
 import { generateApplicationPDF } from '../../utils/applicationPdfGenerator';
 import { getEnv } from '../../config/envValidator';
-import { sendAdmissionFeeReceipt, sendPaymentReceipt } from '../../utils/emailService';
+import { sendAdmissionFeeReceipt, sendPaymentReceipt, sendScholarshipUpdateEmail } from '../../utils/emailService';
 // @ts-ignore
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
 import { InvoiceService } from '../finance/invoice.service';
@@ -136,7 +136,8 @@ export const AdminStudentService = {
                     enrollment: true,
                     hostelAllocation: true,
                     transportAllocation: true,
-                    convenorDetails: true
+                    convenorDetails: true,
+                    pro: true
                 }
             }),
             prisma.student.count({ where })
@@ -308,7 +309,8 @@ export const AdminStudentService = {
                     enrollment: true,
                     hostelAllocation: true,
                     transportAllocation: true,
-                    convenorDetails: true
+                    convenorDetails: true,
+                    pro: true
                 }
             }),
             prisma.student.count({ where })
@@ -599,6 +601,126 @@ export const AdminStudentService = {
         return updatedDoc;
     },
 
+    /**
+     * Request a BRANCH change — same degree program, different branch/specialization.
+     * e.g. B.Tech CSE → B.Tech ECE
+     */
+    async requestBranchChange(studentId: string, newCourseId: string, reason: string) {
+        if (!studentId || !newCourseId || !reason) {
+            throw new AppError('studentId, newCourseId and reason are required', 400);
+        }
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: { admissionDetails: { include: { allottedCourse: true } } }
+        });
+
+        if (!student || !student.admissionDetails?.allottedCourseId) {
+            throw new AppError(MESSAGES.ERROR.STUDENT_NO_ALLOTTED_COURSE, 400);
+        }
+
+        const oldCourse = student.admissionDetails.allottedCourse;
+        const newCourse = await prisma.course.findUnique({ where: { id: newCourseId } });
+        if (!newCourse) throw new AppError('Target course not found', 404);
+
+        // Validate: must be the SAME degree program
+        if (oldCourse?.degree !== newCourse.degree) {
+            throw new AppError(
+                `Branch change requires the same degree program. Old: "${oldCourse?.degree}", New: "${newCourse.degree}". Use Program Change for cross-program transfers.`,
+                400
+            );
+        }
+
+        // Must not be the same course
+        if (oldCourse?.id === newCourseId) {
+            throw new AppError('The new branch must be different from the current branch.', 400);
+        }
+
+        return await prisma.courseChangeRequest.create({
+            data: {
+                studentId,
+                fromCourse: oldCourse!.id,
+                toCourse: newCourseId,
+                fromDegree: oldCourse?.degree,
+                toDegree: newCourse.degree,
+                reason,
+                status: RequestStatus.FORWARDED,
+                forwardedTo: 'SUPER_ADMIN'
+            } as any
+        });
+    },
+
+    /**
+     * Request a PROGRAM change — cross-program transfer.
+     * Allowed combinations:
+     * B.Tech ↔ BBA | M.Tech ↔ MBA | M.Tech ↔ MCA | MBA ↔ MCA
+     */
+    async requestProgramChange(studentId: string, newCourseId: string, reason: string) {
+        if (!studentId || !newCourseId || !reason) {
+            throw new AppError('studentId, newCourseId and reason are required', 400);
+        }
+
+        // Allowed cross-program transfers (bidirectional)
+        const ALLOWED_PROGRAM_CHANGES: [string, string][] = [
+            ['B.TECH', 'BBA'],
+            ['BBA', 'B.TECH'],
+            ['M.TECH', 'MBA'],
+            ['MBA', 'M.TECH'],
+            ['M.TECH', 'MCA'],
+            ['MCA', 'M.TECH'],
+            ['MBA', 'MCA'],
+            ['MCA', 'MBA'],
+        ];
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: { admissionDetails: { include: { allottedCourse: true } } }
+        });
+
+        if (!student || !student.admissionDetails?.allottedCourseId) {
+            throw new AppError(MESSAGES.ERROR.STUDENT_NO_ALLOTTED_COURSE, 400);
+        }
+
+        const oldCourse = student.admissionDetails.allottedCourse;
+        const newCourse = await prisma.course.findUnique({ where: { id: newCourseId } });
+        if (!newCourse) throw new AppError('Target course not found', 404);
+
+        const fromDegree = (oldCourse?.degree || '').toUpperCase().trim();
+        const toDegree   = (newCourse.degree || '').toUpperCase().trim();
+
+        // Validate: must be a DIFFERENT degree
+        if (fromDegree === toDegree) {
+            throw new AppError(
+                `Program change requires different degree programs. Both are "${oldCourse?.degree}". Use Branch Change instead.`,
+                400
+            );
+        }
+
+        // Validate: combination must be in the allowed list
+        const isAllowed = ALLOWED_PROGRAM_CHANGES.some(
+            ([f, t]) => f === fromDegree && t === toDegree
+        );
+        if (!isAllowed) {
+            throw new AppError(
+                `Program change from "${oldCourse?.degree}" to "${newCourse.degree}" is not allowed. Allowed transfers: B.Tech↔BBA, M.Tech↔MBA, M.Tech↔MCA, MBA↔MCA.`,
+                400
+            );
+        }
+
+        return await prisma.courseChangeRequest.create({
+            data: {
+                studentId,
+                fromCourse: oldCourse!.id,
+                toCourse: newCourseId,
+                fromDegree: oldCourse?.degree,
+                toDegree: newCourse.degree,
+                reason,
+                status: RequestStatus.FORWARDED,
+                forwardedTo: 'SUPER_ADMIN'
+            } as any
+        });
+    },
+
     async requestCourseChange(studentId: string, newCourseId: string, reason: string) {
         if (!studentId || !newCourseId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_NEWCOURSE_REASON_REQUIRED, 400);
 
@@ -629,6 +751,7 @@ export const AdminStudentService = {
             } as any
         });
     },
+
 
     async approveCourseChange(requestId: string, approved: boolean, adminRole: string | undefined, adminId: string | undefined) {
         if (adminRole !== Role.SUPER_ADMIN) {
@@ -1325,6 +1448,7 @@ export const AdminStudentService = {
                 hostelAllocation: { include: { bed: { include: { room: { include: { block: { include: { hostel: true } } } } } } } },
                 transportAllocation: { include: { route: true, stop: true } },
                 convenorDetails: true,
+                pro: true,
                 user: { select: { id: true, email: true, phone: true, role: true, isDeleted: true } }
             }
         });
@@ -1399,6 +1523,7 @@ export const AdminStudentService = {
                 hostelAllocation: { include: { bed: { include: { room: { include: { block: { include: { hostel: true } } } } } } } },
                 transportAllocation: { include: { route: true, stop: true } },
                 convenorDetails: true,
+                pro: true,
                 user: { select: { id: true, email: true, phone: true, role: true, isDeleted: true } }
             }
         });
@@ -1505,25 +1630,54 @@ export const AdminStudentService = {
          if (existing) {
              // UPDATE Existing (Dynamic Update as requested)
              // key fields to exclude from update
-             const { studentId, id, ...updateProps } = data;
+             const { studentId: _sid, id: _id, ...updateProps } = data;
 
              // Apply conversions if specific fields are present
              if (updateProps.score) updateProps.score = Number(updateProps.score);
              if (updateProps.scholarshipPercentage) updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
-             
+
              // Check qualification existence if updating it
              if (updateProps.qualificationId) {
                   const qual = await prisma.academicQualification.findUnique({ where: { id: updateProps.qualificationId } });
                   if (!qual) throw new AppError('Qualification not found', 404);
              }
 
-             return await prisma.studentScholarship.update({
-                 where: { id: existing.id },
-                 data: {
-                     ...updateProps,
-                     updatedBy: adminId
-                 }
+             const oldPct = existing.scholarshipPercentage || 0;
+
+             const updated = await prisma.$transaction(async (tx) => {
+                 const result = await tx.studentScholarship.update({
+                     where: { id: existing.id },
+                     data: {
+                         ...updateProps,
+                         updatedBy: adminId
+                     }
+                 });
+
+                 // Propagate fee changes when scholarship percentage is updated
+                 const newPct = result.scholarshipPercentage || 0;
+                 await this.propagateScholarshipUpdate(studentId, newPct, adminId, tx);
+
+                 return result;
              });
+
+             // Send email notification if percentage changed
+             const newPct = updated.scholarshipPercentage || 0;
+             if (oldPct !== newPct) {
+                 const student = await prisma.student.findUnique({
+                     where: { id: studentId },
+                     select: { name: true, email: true, applicationId: true },
+                 });
+                 if (student?.email) {
+                     sendScholarshipUpdateEmail(student.email, {
+                         studentName: student.name,
+                         applicationId: student.applicationId || studentId.substring(0, 8).toUpperCase(),
+                         oldPercentage: oldPct,
+                         newPercentage: newPct,
+                     }).catch(err => logger.warn(`[updateStudentScholarship] Email failed (non-fatal): ${err}`));
+                 }
+             }
+
+             return updated;
          }
 
          // CREATE New
@@ -1548,8 +1702,22 @@ export const AdminStudentService = {
              await prisma.$transaction(async (tx) => {
                   await this.propagateScholarshipUpdate(studentId, newPct, adminId, tx);
              });
+
+             // Send email notification for new scholarship
+             const student = await prisma.student.findUnique({
+                 where: { id: studentId },
+                 select: { name: true, email: true, applicationId: true },
+             });
+             if (student?.email) {
+                 sendScholarshipUpdateEmail(student.email, {
+                     studentName: student.name,
+                     applicationId: student.applicationId || studentId.substring(0, 8).toUpperCase(),
+                     oldPercentage: 0,
+                     newPercentage: newPct,
+                 }).catch(err => logger.warn(`[updateStudentScholarship] Email failed (non-fatal): ${err}`));
+             }
          }
-         
+
          return newScholarship;
     },
 
@@ -1577,9 +1745,11 @@ export const AdminStudentService = {
              if (!qual) throw new AppError('Qualification not found', 404);
         }
 
-        return await prisma.$transaction(async (tx) => {
+        const oldPct = existing.scholarshipPercentage || 0;
+
+        const updatedScholarship = await prisma.$transaction(async (tx) => {
             // 1. Update the Scholarship Record
-            const updatedScholarship = await tx.studentScholarship.update({
+            const result = await tx.studentScholarship.update({
                 where: { id: scholarshipId },
                 data: {
                     type,
@@ -1594,15 +1764,34 @@ export const AdminStudentService = {
             });
 
             // 2. Propagate Changes to Demands & Ledger (Using Helper)
-            const newPct = updatedScholarship.scholarshipPercentage || 0;
-            const studentId = updatedScholarship.studentId;
+            const newPct = result.scholarshipPercentage || 0;
+            const sid = result.studentId;
 
-            logger.info(`[editStudentScholarship] Propagating update to ${newPct}% for student ${studentId}`);
+            logger.info(`[editStudentScholarship] Propagating update to ${newPct}% for student ${sid}`);
 
-            await this.propagateScholarshipUpdate(studentId, newPct, adminId, tx);
+            await this.propagateScholarshipUpdate(sid, newPct, adminId, tx);
 
-            return updatedScholarship;
+            return result;
         });
+
+        // Send email notification if percentage changed
+        const newPct = updatedScholarship.scholarshipPercentage || 0;
+        if (oldPct !== newPct) {
+            const student = await prisma.student.findUnique({
+                where: { id: updatedScholarship.studentId },
+                select: { name: true, email: true, applicationId: true },
+            });
+            if (student?.email) {
+                sendScholarshipUpdateEmail(student.email, {
+                    studentName: student.name,
+                    applicationId: student.applicationId || updatedScholarship.studentId.substring(0, 8).toUpperCase(),
+                    oldPercentage: oldPct,
+                    newPercentage: newPct,
+                }).catch(err => logger.warn(`[editStudentScholarship] Email failed (non-fatal): ${err}`));
+            }
+        }
+
+        return updatedScholarship;
     },
 
     async getScholarshipStats() {
@@ -1897,6 +2086,11 @@ export const AdminStudentService = {
             // --- 2. Course Allocation ---
             if (!oldAdmission?.allottedCourseId || oldAdmission.allottedCourseId !== course.allottedCourseId) {
                 logger.debug(`[executeAdmissionUpdates] Assigning new course seat: ${course.allottedCourseId}`);
+                const courseRecord = await tx.course.findUnique({ where: { id: course.allottedCourseId } });
+                if (!courseRecord || courseRecord.filledSeats >= courseRecord.totalSeats) {
+                    logger.warn(`[executeAdmissionUpdates] Course ${course.allottedCourseId} is fully booked (${courseRecord?.filledSeats}/${courseRecord?.totalSeats})`);
+                    throw new AppError("Course is fully booked. No seats available.", 400);
+                }
                 await tx.course.update({
                      where: { id: course.allottedCourseId },
                      data: { filledSeats: { increment: 1 } }
@@ -1942,9 +2136,9 @@ export const AdminStudentService = {
             // --- Determine Base Tuition Fee (For New Admissions) ---
             let baseTuition = 0;
             const isNewAdmission = !oldAdmission || (oldAdmission.status !== AdmissionStatus.ADMISSION_CONFIRMED && oldAdmission.status !== AdmissionStatus.ENROLLED);
-            
+
             if (isNewAdmission) {
-                baseTuition = 25000;
+                baseTuition = payload.amount ?? 0;
                 logger.info(`[executeAdmissionUpdates] New Admission Detected. Adding Base Tuition: ${baseTuition}`);
                 
                 // Generate Tuition DEBIT Ledger
@@ -1989,26 +2183,23 @@ export const AdminStudentService = {
             });
             
              // --- 4. Scholarship Update ---
-            const currentScholarship = await tx.studentScholarship.findUnique({ where: { studentId } });
-            
-            // Only update if percentage changed or didn't exist
-            if (!currentScholarship || currentScholarship.scholarshipPercentage !== scholarship.percentage) {
-                 logger.debug(`[executeAdmissionUpdates] Updating Scholarship: ${scholarship.percentage}% (Old: ${currentScholarship?.scholarshipPercentage}%)`);
-                 
-                 await tx.studentScholarship.update({
-                    where: { studentId },
-                    data: {
-                        scholarshipPercentage: scholarship.percentage,
-                        updatedBy: adminId,
-                        isEligible: 'YES'
-                    }
-                });
-                
-                // Propagate
-                await this.propagateScholarshipUpdate(studentId, scholarship.percentage, adminId, tx);
-            } else {
-                logger.info(`[executeAdmissionUpdates] Scholarship percentage unchanged (${scholarship.percentage}%). Skipping update.`);
+            // null → save as 0 | positive number → update percentage + flip isEligible to YES
+            const scholarshipPct = scholarship.percentage ?? 0;
+            await tx.studentScholarship.update({
+                where: { studentId },
+                data: {
+                    scholarshipPercentage: scholarshipPct,
+                    ...(scholarshipPct > 0 ? { isEligible: 'YES' } : {}),
+                    updatedBy: adminId
+                }
+            });
+            logger.debug(`[executeAdmissionUpdates] Scholarship updated: percentage=${scholarshipPct}`);
+
+            // Propagate discount to fee demands only when percentage is set
+            if (scholarshipPct > 0) {
+                await this.propagateScholarshipUpdate(studentId, scholarshipPct, adminId, tx);
             }
+
 
             logger.info(`[executeAdmissionUpdates] Successfully completed all updates for student=${studentId}`);
         } catch (error) {
@@ -2054,14 +2245,20 @@ export const AdminStudentService = {
             throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         }
 
-        if (student.admissionDetails?.status === AdmissionStatus.ADMISSION_CONFIRMED || student.admissionDetails?.status === AdmissionStatus.ENROLLED) {
-             logger.info(`[finalizeAdmission] Student ${studentId} seat already confirmed (Status: ${student.admissionDetails.status})`);
-             throw new AppError("Student seat is already confirmed. Cannot re-finalize.", 400);
+        const blockedStatuses: AdmissionStatus[] = [AdmissionStatus.ADMISSION_CONFIRMED, AdmissionStatus.ENROLLED, AdmissionStatus.CANCELLED];
+        if (student.admissionDetails?.status && blockedStatuses.includes(student.admissionDetails.status)) {
+             logger.info(`[finalizeAdmission] Student ${studentId} cannot be finalized (Status: ${student.admissionDetails?.status})`);
+             throw new AppError("Student admission cannot be finalized in its current status.", 400);
         }
 
         if (!validCourse) {
             logger.warn(`[finalizeAdmission] Invalid Course ID: ${course.allottedCourseId}`);
             throw new AppError("Invalid Course ID" , 400);
+        }
+
+        if (!payment.amount || payment.amount <= 0) {
+            logger.warn(`[finalizeAdmission] Invalid payment amount: ${payment.amount}`);
+            throw new AppError("Payment amount must be greater than zero", 400);
         }
 
         // Check Mandatory Fee Head ID (Exempting specific types)
@@ -2209,13 +2406,14 @@ export const AdminStudentService = {
                              feeDemandId: feeDemandId || undefined,
                              collectedBy: adminId,
                              createdBy: adminId, // Strict data
-                             metadata: { 
-                                scholarship, 
-                                allocation, 
+                             metadata: {
+                                scholarship,
+                                allocation,
                                 course,
                                 feeComponent,
+                                amount: payment.amount,
                                 feeStructureId: payment.feeStructureId,
-                                targetAction: 'FINALIZE_ADMISSION' 
+                                targetAction: 'FINALIZE_ADMISSION'
                              }
                          }
                      });
@@ -2272,10 +2470,19 @@ export const AdminStudentService = {
 
              const offlineResult = await prisma.$transaction(async (tx) => {
                  logger.info(`[finalizeAdmission][Offline] Starting transaction for student=${studentId}`);
-                 
+
                  // Determine Payment Name based on Component
                  const feeComponent = payment.component || PaymentComponent.TUITION;
-                 
+
+                 // Idempotency: reject if a SUCCESS payment already exists for this student + component
+                 const existingSuccess = await tx.payment.findFirst({
+                     where: { studentId, component: feeComponent, status: PaymentStatus.SUCCESS }
+                 });
+                 if (existingSuccess) {
+                     logger.warn(`[finalizeAdmission][Offline] Duplicate payment detected for student=${studentId} component=${feeComponent}`);
+                     throw new AppError("Payment for this component has already been completed.", 409);
+                 }
+
                  // ------------------------------------------------------------------
                  // SUB-BLOCK 6.1: RECORD PAYMENT
                  // Create a payment record with status SUCCESS.
@@ -2295,15 +2502,16 @@ export const AdminStudentService = {
                         instrumentDate: payment.date ? new Date(payment.date) : new Date(),
                         collectedBy: adminId,
                         createdBy: adminId, // Strict data
-                        metadata: { 
-                            scholarship, 
-                            allocation, 
+                        metadata: {
+                            scholarship,
+                            allocation,
                             course,
                             feeComponent,
+                            amount: payment.amount,
                             feeStructureId: payment.feeStructureId,
                             notes: 'Offline Immediate Finalization',
-                            targetAction: 'FINALIZE_ADMISSION' // Ensure processPaymentSuccess runs updates
-                         }
+                            targetAction: 'FINALIZE_ADMISSION'
+                        }
                     }
                 });
                 logger.debug(`[finalizeAdmission][Offline] Payment record created: ${newPayment.id}`);
@@ -2597,6 +2805,171 @@ export const AdminStudentService = {
             } as any,
             orderBy: { createdAt: 'desc' }
         });
+    },
+
+    /**
+     * Reverses a mistakenly recorded offline/bank-transfer admission payment.
+     *
+     * Atomically:
+     * 1. Validates the payment exists and is an offline SUCCESS payment.
+     * 2. Deletes all StudentLedger entries linked to this payment (referenceId = payment.id).
+     * 3. Deletes the Payment record itself.
+     * 4. Resets StudentAdmission:
+     *    - paidFee decremented by payment.amount
+     *    - totalFee decremented by the same amount
+     *    - status reverted to SEAT_ALLOTTED
+     *    - allottedCourseId cleared, accommodationType reset to NONE
+     * 5. Decrements Course.filledSeats (if course was allotted).
+     * 6. Decrements Hostel.filled / TransportRoute.filled if accommodation was set.
+     * 7. Resets linked StudentFeeDemand status back to PENDING (if any demand was settled).
+     *
+     * Only OFFLINE (NEFT, RTGS, IMPS, Cheque, DD, Cash) SUCCESS payments
+     * whose metadata.targetAction === 'FINALIZE_ADMISSION' can be reversed here.
+     */
+    async reverseAdmissionPayment(paymentId: string, adminId: string, reason?: string) {
+        logger.info(`[reverseAdmissionPayment] paymentId=${paymentId} adminId=${adminId}`);
+
+        // 1. Fetch payment with related data
+        const payment = await prisma.payment.findUnique({
+            where: { id: paymentId },
+            include: {
+                student: { include: { admissionDetails: true } }
+            }
+        });
+
+        if (!payment) {
+            throw new AppError('Payment not found', 404);
+        }
+
+        // Guard: only OFFLINE mode
+        if (payment.mode !== PaymentMode.OFFLINE) {
+            throw new AppError(
+                'Only offline/bank-transfer payments can be reversed via this endpoint. ' +
+                'For online payments, use the payment gateway refund flow.',
+                400
+            );
+        }
+
+        // Guard: only SUCCESS payments
+        if (payment.status !== PaymentStatus.SUCCESS) {
+            throw new AppError(
+                `Payment cannot be reversed — current status is "${payment.status}". Only SUCCESS payments can be reversed.`,
+                400
+            );
+        }
+
+        // Guard: must be an admission finalization payment
+        const meta = payment.metadata as any;
+        if (meta?.targetAction !== 'FINALIZE_ADMISSION') {
+            throw new AppError(
+                'This payment is not linked to an admission finalization. Only payments recorded via the Finalize Admission flow can be reversed here.',
+                400
+            );
+        }
+
+        const admission = payment.student?.admissionDetails;
+        const studentId = payment.studentId;
+        const paidAmount = payment.amount;
+        const allottedCourseId = admission?.allottedCourseId ?? meta?.course?.allottedCourseId;
+        const accommodationType = admission?.accommodationType;
+        const hostelId = admission?.hostelId;
+        const transportRouteId = admission?.transportRouteId;
+
+        // 2. Atomic rollback transaction
+        await prisma.$transaction(async (tx) => {
+
+            // 2a. Delete StudentLedger entries referencing this payment
+            await (tx.studentLedger as any).deleteMany({
+                where: { referenceId: paymentId, referenceType: 'PAYMENT' }
+            });
+            logger.info(`[reverseAdmissionPayment] Deleted payment ledger entries`);
+
+            // 2b. Delete tuition FEE_GENERATION DEBIT ledger created during executeAdmissionUpdates
+            //     (These use referenceType='FEE_GENERATION' and a referenceId like 'ADMISSION_<timestamp>')
+            await (tx.studentLedger as any).deleteMany({
+                where: {
+                    studentId,
+                    referenceType: 'FEE_GENERATION'
+                }
+            });
+            logger.info(`[reverseAdmissionPayment] Deleted fee-generation ledger entries for student=${studentId}`);
+
+            // 2c. Reset linked fee demand back to PENDING
+            if (payment.feeDemandId) {
+                try {
+                    await tx.studentFeeDemand.update({
+                        where: { id: payment.feeDemandId },
+                        data: { status: FeeStatus.PENDING }
+                    });
+                } catch {
+                    logger.warn(`[reverseAdmissionPayment] Could not reset fee demand ${payment.feeDemandId}`);
+                }
+            }
+
+            // 2d. Delete the Payment record
+            await tx.payment.delete({ where: { id: paymentId } });
+            logger.info(`[reverseAdmissionPayment] Deleted payment record ${paymentId}`);
+
+            // 2e. Decrement course filledSeats
+            if (allottedCourseId) {
+                await tx.course.update({
+                    where: { id: allottedCourseId },
+                    data: { filledSeats: { decrement: 1 } }
+                });
+                logger.info(`[reverseAdmissionPayment] Decremented filledSeats for course=${allottedCourseId}`);
+            }
+
+            // 2f. Release hostel / transport seat
+            if (accommodationType === AccommodationType.HOSTEL && hostelId) {
+                await tx.hostel.update({
+                    where: { id: hostelId },
+                    data: { filled: { decrement: 1 } }
+                });
+            } else if (accommodationType === AccommodationType.TRANSPORT && transportRouteId) {
+                await tx.transportRoute.update({
+                    where: { id: transportRouteId },
+                    data: { filled: { decrement: 1 } }
+                });
+            }
+
+            // 2g. Reset StudentAdmission
+            if (admission) {
+                const newPaidFee = Math.max(0, (admission.paidFee ?? 0) - paidAmount);
+                const newTotalFee = Math.max(0, (admission.totalFee ?? 0) - paidAmount);
+
+                await tx.studentAdmission.update({
+                    where: { studentId },
+                    data: {
+                        status: AdmissionStatus.SEAT_ALLOTTED,
+                        paidFee: newPaidFee,
+                        totalFee: newTotalFee,
+                        feeStatus: FeeStatus.PENDING,
+                        allottedCourseId: null,
+                        accommodationType: AccommodationType.NONE,
+                        hostelId: null,
+                        hostelType: null,
+                        hostelPaymentMode: null,
+                        transportRouteId: null,
+                        roomNumber: null
+                    }
+                });
+                logger.info(`[reverseAdmissionPayment] Reset StudentAdmission for student=${studentId} → SEAT_ALLOTTED`);
+            }
+        });
+
+        logger.info(`[reverseAdmissionPayment] Completed reversal. paymentId=${paymentId} student=${studentId} admin=${adminId} reason="${reason ?? 'none'}"`);
+
+        return {
+            success: true,
+            message: 'Admission payment reversed successfully. The seat has been released and student status reset to SEAT_ALLOTTED.',
+            reversed: {
+                paymentId,
+                studentId,
+                amount: paidAmount,
+                allottedCourseId,
+                adminId,
+                reason
+            }
+        };
     }
 };
-

@@ -495,15 +495,13 @@ export const DashboardService = {
 
     async getSeatAllocationStats(type: string, page: number = 1, limit: number = 10, search?: string) {
         const skip = (page - 1) * limit;
-        let where: any = {};
 
-        // === SEARCH LOGIC ===
-        if (search) {
-            where.OR = [
+        // === SEARCH CONDITION ===
+        const searchCondition: any = search ? {
+            OR: [
                 { applicationId: { contains: search, mode: 'insensitive' } },
                 { name: { contains: search, mode: 'insensitive' } },
                 { phone: { contains: search, mode: 'insensitive' } },
-                // Add Course Search
                 {
                     admissionDetails: {
                         allottedCourse: {
@@ -514,79 +512,56 @@ export const DashboardService = {
                         }
                     }
                 }
-            ];
+            ]
+        } : {};
+
+        // === TYPE FILTER CONDITION ===
+        let typeCondition: any = {};
+
+        if (type === 'not_allocated') {
+            typeCondition = {
+                OR: [
+                    { admissionDetails: null },
+                    { admissionDetails: { allottedCourseId: null } }
+                ],
+                studentScholarship: { isNot: null }
+            };
+        } else if (type === 'allocated') {
+            typeCondition = { admissionDetails: { allottedCourseId: { not: null } } };
+        } else if (type === 'not_allocated_eligible') {
+            typeCondition = {
+                OR: [
+                    { admissionDetails: null },
+                    { admissionDetails: { allottedCourseId: null } }
+                ],
+                studentScholarship: { isEligible: 'YES' }
+            };
+        } else if (type === 'not_allocated_not_eligible') {
+            typeCondition = {
+                OR: [
+                    { admissionDetails: null },
+                    { admissionDetails: { allottedCourseId: null } }
+                ],
+                studentScholarship: { isEligible: 'NO' }
+            };
+        } else if (type === 'allocated_eligible') {
+            typeCondition = {
+                admissionDetails: { allottedCourseId: { not: null } },
+                studentScholarship: { isEligible: 'YES' }
+            };
+        } else if (type === 'allocated_not_eligible') {
+            typeCondition = {
+                admissionDetails: { allottedCourseId: { not: null } },
+                studentScholarship: { isEligible: 'NO' }
+            };
+        } else if (type === 'all') {
+            typeCondition = { studentScholarship: { isNot: null } };
         }
 
-        // === FILTER LOGIC ===
-        // 1. Not Allocated (Only with Scholarship Allocation)
-        if (type === 'not_allocated') {
-            const notAllocatedCondition = {
-                OR: [
-                    { admissionDetails: null },
-                    { admissionDetails: { allottedCourseId: null } }
-                ]
-            };
-            where = { 
-                ...where, 
-                ...notAllocatedCondition,
-                studentScholarship: { isNot: null }
-            };
-        } 
-        // 2. Allocated (Any Scholarship Status)
-        else if (type === 'allocated') {
-            where = { ...where, admissionDetails: { allottedCourseId: { not: null } } };
-        }
-        // 3. Not Allocated AND Eligible (Scholarship YES)
-        else if (type === 'not_allocated_eligible') {
-            const notAllocatedCondition = {
-                OR: [
-                    { admissionDetails: null },
-                    { admissionDetails: { allottedCourseId: null } }
-                ]
-            };
-            where = { 
-                ...where, 
-                ...notAllocatedCondition,
-                studentScholarship: { isEligible: 'YES' }
-            };
-        }
-        // 3a. Not Allocated AND Not Eligible (Scholarship NO)
-        else if (type === 'not_allocated_not_eligible') {
-            const notAllocatedCondition = {
-                OR: [
-                    { admissionDetails: null },
-                    { admissionDetails: { allottedCourseId: null } }
-                ]
-            };
-            where = { 
-                ...where, 
-                ...notAllocatedCondition,
-                studentScholarship: { isEligible: 'NO' }
-            };
-        }
-        // 4. Allocated AND Eligible (Scholarship YES)
-        else if (type === 'allocated_eligible') {
-             where = { 
-                ...where, 
-                admissionDetails: { allottedCourseId: { not: null } },
-                studentScholarship: { isEligible: 'YES' }
-            };
-        }
-        // 4. Allocated AND Not Eligible (Scholarship NO)
-        else if (type === 'allocated_not_eligible') {
-             where = { 
-                ...where, 
-                admissionDetails: { allottedCourseId: { not: null } },
-                studentScholarship: { isEligible: 'NO' }
-            };
-        }
-        // 5. All Students (Only with Scholarship Record)
-        else if (type === 'all') {
-             where = { 
-                ...where,
-                studentScholarship: { isNot: null }
-            };
-        }
+        // === COMBINE: use AND so search OR and type OR never collide ===
+        const where: any = search
+            ? { AND: [searchCondition, typeCondition] }
+            : typeCondition;
 
         const [total, students] = await Promise.all([
             prisma.student.count({ where }),
@@ -629,7 +604,9 @@ export const DashboardService = {
                                 }
                             }
                         }
-                    }
+                    },
+                    proId: true,
+                    pro: { select: { proNumber: true } }
                 },
                 orderBy: { createdAt: 'desc' }
             })
@@ -642,6 +619,7 @@ export const DashboardService = {
             data: students
         };
     },
+
 
     /**
      * Get All Course Codes
