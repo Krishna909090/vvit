@@ -4,7 +4,7 @@ import logger from '../../utils/logger';
 import { AdmissionStatus, RequestStatus } from '@prisma/client';
 import { Role } from '../../constants/roles';
 import { v4 as uuidv4 } from 'uuid';
-import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, uploadDocumentsAndPreferences as uploadDocsService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService, updatePersonalDetails as updatePersonalDetailsService, changeServicePreferences } from './student.service';
+import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, getHallTicketByApplicationId, uploadDocumentsAndPreferences as uploadDocsService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService, updatePersonalDetails as updatePersonalDetailsService, changeServicePreferences } from './student.service';
 import { bookExamSlot } from '../exam/exam.service';
 import QRCode from 'qrcode';
 import { catchAsync } from '../../utils/catchAsync';
@@ -93,6 +93,17 @@ export const getHallTicket = catchAsync(async (req: Request, res: Response, next
         success: true,
         data: hallTicketUrl
     });
+});
+
+// Download Hall Ticket by Application ID
+export const getHallTicketByAppId = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getHallTicketByAppId] by=${req.user?.userId || 'anonymous'}`);
+    const { applicationId } = req.params;
+    if (!applicationId) throw new AppError('Application ID is required', 400);
+
+    const data = await getHallTicketByApplicationId(applicationId);
+
+    sendResponse({ res, statusCode: 200, success: true, data });
 });
 
 // Phase 4: Branch Preference & Documents

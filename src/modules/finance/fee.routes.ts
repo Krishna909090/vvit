@@ -9,7 +9,8 @@ import {
     getApplicationFee, updateApplicationFee,
     collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands, getPaymentHistory,
     addStudentDiscount,
-    getDiscountRequests
+    getDiscountRequests,
+    getCourseFeeHeads
 } from './fee.controller';
 
 import {
@@ -26,6 +27,9 @@ router.post('/fee-head', authenticate, authorizePermission('finance.create.all')
 router.get('/fee-head', authenticate, authorizePermission('finance.read.all'), getFeeHeads);
 router.put('/fee-head/:id', authenticate, authorizePermission('finance.update.all'), updateFeeHead);
 router.delete('/fee-head/:id', authenticate, authorizePermission('finance.delete.all'), deleteFeeHead);
+
+// Course Fee Heads
+router.get('/course-fee-heads/:courseId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getCourseFeeHeads);
 
 // Fee Structure
 router.post('/fee-structure/bulk', authenticate, authorizePermission('finance.create.all'), validateRequest(createBulkFeeStructureSchema), createBulkFeeStructure);

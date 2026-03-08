@@ -24,6 +24,8 @@ export interface InvoiceData {
   hideTxnId?: boolean
   isCancellation?: boolean
   reason?: string
+  academicYear?: string
+  counterName?: string
   address: {
     line1: string
     line2?: string
@@ -82,7 +84,7 @@ function drawInvoiceInstance(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY
     drawInfoGrid(doc, data, offsetY)
     drawSubjectBar(doc, data, offsetY)
     drawItemsTable(doc, data, offsetY)
-    drawFooter(doc, offsetY)
+    drawFooter(doc, offsetY, data)
 }
 
 function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) {
@@ -144,7 +146,7 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
   const top = offsetY + 95
 
   doc
-    .roundedRect(30, top, 535, 85, 6)
+    .roundedRect(30, top, 535, data.academicYear ? 97 : 85, 6)
     .strokeColor('#eaeaea')
     .stroke()
 
@@ -178,15 +180,21 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
     doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y)
     doc.text(`Reason: ${data.reason ?? ''}`, rightX, y + 12)
   } else {
-    doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, y)
-    doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y + 12)
+    if (data.academicYear) {
+      doc.font('Helvetica-Bold').fontSize(8).fillColor('#333')
+      doc.text(data.academicYear, rightX, y)
+      doc.font('Helvetica').fontSize(9).fillColor('#333')
+    }
+    const ayOffset = data.academicYear ? 12 : 0;
+    doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, y + ayOffset)
+    doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y + ayOffset + 12)
 
     if (!data.hideTxnId) {
-      doc.text(`Txn ID: ${data.transactionId}`, rightX, y + 24)
+      doc.text(`Txn ID: ${data.transactionId}`, rightX, y + ayOffset + 24)
     }
 
-    const utrOffset = data.hideTxnId ? 24 : 36
-    const payOffset = data.hideTxnId ? 36 : 48
+    const utrOffset = (data.hideTxnId ? 24 : 36) + ayOffset
+    const payOffset = (data.hideTxnId ? 36 : 48) + ayOffset
     const utrDisplay = (data.referenceId && data.referenceId !== data.transactionId) ? data.referenceId : 'N/A';
     doc.text(`UTR: ${utrDisplay}`, rightX, y + utrOffset)
 
@@ -285,7 +293,20 @@ function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: num
 
 /* ================= FOOTER ================= */
 
-function drawFooter(doc: PDFKit.PDFDocument, offsetY: number) {
+function drawFooter(doc: PDFKit.PDFDocument, offsetY: number, data?: InvoiceData) {
+  if (data?.counterName) {
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(8)
+      .fillColor('#333')
+      .text(
+        `Counter: ${data.counterName}`,
+        0,
+        offsetY + 365,
+        { align: 'center', width: doc.page.width }
+      )
+  }
+
   doc
     .font('Helvetica')
     .fontSize(8)

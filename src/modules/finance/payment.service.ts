@@ -313,7 +313,7 @@ export const initiateMultiComponentPayment = async (
         ? (referenceNumber || `OFFLINE_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`)
         : `TXN_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
     
-    const paymentStatus = isOffline ? PaymentStatus.SUCCESS : PaymentStatus.PENDING;
+    const paymentStatus = PaymentStatus.PENDING;
     const paymentMode = isOffline ? PaymentMode.OFFLINE : PaymentMode.ONLINE;
 
     // 3. Create Payment Records
@@ -474,10 +474,16 @@ const _processComponentLogic = async (payment: any) => {
 
     if (component === PaymentComponent.APPLICATION_FEE) {
          if (currentStatus?.status !== AdmissionStatus.ADMISSION_CONFIRMED && currentStatus?.status !== AdmissionStatus.ENROLLED) {
-            await prisma.studentAdmission.update({
-                where: { studentId },
-                data: { status: AdmissionStatus.ENTRANCE_FEE_PAID, feeStatus: FeeStatus.PARTIAL }
-            });
+            try {
+                await prisma.studentAdmission.update({
+                    where: { studentId },
+                    data: { status: AdmissionStatus.ENTRANCE_FEE_PAID, feeStatus: FeeStatus.PARTIAL }
+                });
+                logger.info(`[processComponentLogic] Updated student ${studentId} status to ENTRANCE_FEE_PAID`);
+            } catch (error) {
+                logger.error(`[processComponentLogic] Failed to update admission status for student ${studentId}: ${error}`);
+                // Don't fail the payment, but log the issue
+            }
          }
     } else if (component === PaymentComponent.TUITION || component === PaymentComponent.ADMISSION || component === PaymentComponent.SCHOLARSHIP_TOKEN) {
         if ((component === PaymentComponent.SCHOLARSHIP_TOKEN || component === PaymentComponent.TUITION) && currentStatus?.status !== AdmissionStatus.ADMISSION_CONFIRMED && currentStatus?.status !== AdmissionStatus.ENROLLED) {
@@ -1032,52 +1038,69 @@ export const _unused_processPaymentSuccess = async (paymentOrPayments: any | any
 
 
 
-export const recordOfflineApplicationFeePayment = async (studentId: string, paymentMethod: PaymentMethod, transactionId?: string, remarks?: string, adminId?: string) => {
+export const recordOfflineApplicationFeePayment = async (studentId: string, paymentMethod: PaymentMethod, transactionId?: string, remarks?: string, adminId?: string, referenceNumber?: string) => {
     const amount = await getApplicationFeeAmount();
-    
-    // Check if already paid
-    const existingPayment = await prisma.payment.findFirst({
-        where: { 
-            studentId, 
-            component: PaymentComponent.APPLICATION_FEE,
-            status: PaymentStatus.SUCCESS 
-        }
-    });
-
-    if (existingPayment) {
-        throw new AppError('Application fee already paid', 400);
-    }
 
     const student = await prisma.student.findUnique({ where: { id: studentId } });
     if (!student) throw new AppError('Student not found', 404);
 
+    const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
+    if (!admission) throw new AppError('Student admission record not found. Please ensure the student has completed registration.', 400);
+
     // If CASH, generate a system transaction ID
     const providerTxId = transactionId || `CASH_${Date.now()}_${studentId.substring(0, 8)}`;
 
-    const payment = await prisma.payment.create({
-        data: {
-            studentId,
-            amount,
-            status: PaymentStatus.SUCCESS, // Direct Success
-            component: PaymentComponent.APPLICATION_FEE,
-            providerTxId,
-            method: paymentMethod,
-            mode: PaymentMode.OFFLINE,
-            collectedBy: adminId,
-            metadata: { remarks, mode: 'OFFLINE_ENTRY' }
+    // Transaction to prevent race conditions and ensure atomicity
+    const result = await prisma.$transaction(async (tx) => {
+        // Duplicate check inside transaction to prevent race conditions
+        const existingPayment = await tx.payment.findFirst({
+            where: {
+                studentId,
+                component: PaymentComponent.APPLICATION_FEE,
+                status: { in: [PaymentStatus.SUCCESS, PaymentStatus.PENDING] }
+            }
+        });
+
+        if (existingPayment) {
+            throw new AppError('Application fee already paid', 400);
         }
+
+        const payment = await tx.payment.create({
+            data: {
+                studentId,
+                amount,
+                status: PaymentStatus.PENDING,
+                component: PaymentComponent.APPLICATION_FEE,
+                providerTxId,
+                referenceNumber: referenceNumber || null,
+                method: paymentMethod,
+                mode: PaymentMode.OFFLINE,
+                collectedBy: adminId,
+                createdBy: adminId,
+                updatedBy: adminId,
+                metadata: { remarks, mode: 'OFFLINE_ENTRY' }
+            }
+        });
+
+        return payment;
     });
 
-    // Reuse the success processing logic (Invoice, Admission Status, Ledger, etc.)
-    await processSinglePaymentSuccess({ ...payment, student }, { remarks, adminId });
+    // Process success logic (Invoice, Admission Status, Ledger)
+    // Outside transaction since it has its own DB writes + external calls (S3)
+    await processSinglePaymentSuccess({ ...result, student }, { remarks, adminId });
 
-    // Fetch the updated payment to return invoiceUrl and status
-    const updatedPayment = await prisma.payment.findUnique({ where: { id: payment.id } });
-    
-    if (updatedPayment?.invoiceUrl) {
+    // Verify critical side-effects completed
+    const updatedPayment = await prisma.payment.findUnique({ where: { id: result.id } });
+
+    if (!updatedPayment || updatedPayment.status !== PaymentStatus.SUCCESS) {
+        logger.error(`[recordOfflineApplicationFeePayment] Payment ${result.id} processing failed — status is ${updatedPayment?.status}`);
+        throw new AppError('Payment recorded but processing failed. Please contact admin.', 500);
+    }
+
+    if (updatedPayment.invoiceUrl) {
         updatedPayment.invoiceUrl = await convertToPresignedUrl(updatedPayment.invoiceUrl) as string;
     }
-    
+
     return updatedPayment;
 };
 
@@ -1117,12 +1140,19 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
         return;
     }
 
+    logger.info(`Found ${payments.length} payments for transaction: ${merchantTransactionId}`);
+
     if (code === 'PAYMENT_SUCCESS') {
+        logger.info(`Payment success callback received for transaction: ${merchantTransactionId}, updating ${payments.length} payments`);
         const needsUpdate = payments.some(p => p.status !== PaymentStatus.SUCCESS);
         if (needsUpdate) {
+            logger.info(`Updating payment status to SUCCESS for ${payments.length} payments`);
             await processMultiPaymentSuccess(payments, decodedPayload);
+        } else {
+            logger.info(`Payments already SUCCESS for transaction: ${merchantTransactionId}`);
         }
     } else {
+         logger.warn(`Payment failed for transaction: ${merchantTransactionId}, code: ${code}`);
          await prisma.payment.updateMany({
             where: { providerTxId: merchantTransactionId },
             data: {
@@ -1130,7 +1160,6 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
                 metadata: decodedPayload
             }
         });
-        logger.warn(`Payment failed for transaction: ${merchantTransactionId}`);
     }
 
     return { status: 'OK' };
@@ -1914,7 +1943,7 @@ export const processUnifiedPayment = async (data: any) => {
     logger.info(`[processUnifiedPayment] Transaction ID generated: ${providerTxId}`);
 
     // 4. Create Payment Record
-    logger.info(`[processUnifiedPayment] Creating payment record with status=${mode === PaymentMode.OFFLINE ? 'SUCCESS' : 'PENDING'}`);
+    logger.info(`[processUnifiedPayment] Creating payment record with status=PENDING`);
 
     const payment = await prisma.payment.create({
         data: {
@@ -1922,7 +1951,7 @@ export const processUnifiedPayment = async (data: any) => {
             amount,
             mode,
             method: method || (mode === PaymentMode.ONLINE ? PaymentMethod.UPI : PaymentMethod.CASH),
-            status: mode === PaymentMode.OFFLINE ? PaymentStatus.SUCCESS : PaymentStatus.PENDING,
+            status: PaymentStatus.PENDING,
             component,
             referenceNumber,
             feeHeadId,
@@ -2117,8 +2146,16 @@ export const getStudentFinancialHistory = async (studentId: string) => {
                      logger.info(`[FinancialHistory] HostelType: ${admission.hostelType}, PriceCat: ${JSON.stringify(priceCategory)}`);
                      
                      if (priceCategory) {
-                         accCost = priceCategory.accommodationPrice ?? 0;
-                         messCost = priceCategory.messPrice ?? 0;
+                         const meta = priceCategory.metadata as any;
+                         if (meta && (meta.accommodation || meta.laundry || meta.registration || meta.mess)) {
+                             // Use metadata breakdown: accommodation + laundry + registration → accCost, mess → messCost
+                             accCost = (meta.accommodation ?? 0) + (meta.laundry ?? 0) + (meta.registration ?? 0);
+                             messCost = meta.mess ?? 0;
+                             logger.info(`[FinancialHistory] Using metadata breakdown - Acc: ${meta.accommodation}, Laundry: ${meta.laundry}, Reg: ${meta.registration}, Mess: ${meta.mess}`);
+                         } else {
+                             accCost = priceCategory.accommodationPrice ?? 0;
+                             messCost = priceCategory.messPrice ?? 0;
+                         }
                      }
                  }
              }

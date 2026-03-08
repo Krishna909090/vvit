@@ -29,6 +29,14 @@ export const getFeeHeads = catchAsync(async (req: Request, res: Response, next: 
     sendResponse({ res, statusCode: 200, success: true, data: feeHeads });
 });
 
+export const getCourseFeeHeads = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { courseId } = req.params;
+    const { academicYearId } = req.query;
+    if (!courseId) throw new AppError('courseId is required', 400);
+    const data = await FeeService.getCourseFeeHeads(courseId, academicYearId as string | undefined);
+    sendResponse({ res, statusCode: 200, success: true, data });
+});
+
 export const updateFeeHead = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
     const { name, description } = req.body;

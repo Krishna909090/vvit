@@ -177,6 +177,16 @@ export const InvoiceService = {
             }
         }
 
+        // Resolve counter name if payment was created by non-student
+        let counterName: string | undefined;
+        const creatorId = primaryPayment.collectedBy || primaryPayment.createdBy;
+        if (creatorId) {
+            const creator = await prisma.user.findUnique({ where: { id: creatorId }, select: { name: true, role: true } });
+            if (creator && creator.role !== 'STUDENT') {
+                counterName = creator.name || undefined;
+            }
+        }
+
         // Prepare Data
         const invoiceData: any = {
             invoiceNumber: invoiceNumber,
@@ -190,12 +200,14 @@ export const InvoiceService = {
             amount: totalAmount,
             description: description,
             items: invoiceItems,
+            academicYear: 'Academic Year 2026–2027',
+            counterName,
             address: {
                 line1: (primaryPayment.student as any).addressLine1 || (primaryPayment.student as any).address || '',
                 line2: (primaryPayment.student as any).addressLine2 || (primaryPayment.student as any).address2 || '',
                 city: primaryPayment.student.city || '',
                 state: primaryPayment.student.state || '',
-                pincode: primaryPayment.student.pincode || ''   
+                pincode: primaryPayment.student.pincode || ''
             }
         };
 

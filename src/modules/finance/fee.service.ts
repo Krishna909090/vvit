@@ -43,6 +43,55 @@ export const FeeService = {
         return prisma.feeHead.findMany({ where: { isDeleted: false } });
     },
 
+    getCourseFeeHeads: async (courseId: string, academicYearId?: string) => {
+        const where: any = { isDeleted: false, courseId };
+        if (academicYearId) where.academicYearId = academicYearId;
+
+        const feeStructures = await prisma.feeStructure.findMany({
+            where,
+            include: {
+                feeHead: true,
+                academicYear: true
+            }
+        });
+
+        const course = await prisma.course.findUnique({ where: { id: courseId } });
+        if (!course) throw new AppError('Course not found', 404);
+
+        // Helper: Map Fee Head Name to Category
+        const getCategoryFromHeadName = (name: string): string => {
+            const headName = (name || '').toUpperCase();
+            if (headName.includes('MESS')) return 'HOSTEL_MESS';
+            if (headName.includes('HOSTEL') || headName.includes('ACCOMMODATION') || headName.includes('ROOM')) return 'HOSTEL_ACCOMMODATION';
+            if (headName.includes('TRANSPORT') || headName.includes('BUS')) return 'TRANSPORT';
+            if (headName.includes('TUITION') || headName.includes('SEMESTER') || headName.includes('COLLEGE')) return 'TUITION';
+            if (headName.includes('BOOK') || headName.includes('LIBRARY')) return 'BOOK_BANK';
+            if (headName.includes('ADMISSION') || headName.includes('ENTRANCE')) return 'ADMISSION';
+            return 'OTHER';
+        };
+
+        const breakdown: Record<string, { demanded: number, feeHeadId: string }> = {};
+
+        feeStructures.forEach(fs => {
+            const category = getCategoryFromHeadName(fs.feeHead.name);
+            if (!breakdown[category]) {
+                breakdown[category] = { demanded: 0, feeHeadId: '' };
+            }
+            breakdown[category].demanded += fs.amount;
+            if (!breakdown[category].feeHeadId) {
+                breakdown[category].feeHeadId = fs.feeHeadId;
+            }
+        });
+
+        const totalDemanded = Object.values(breakdown).reduce((sum, cat) => sum + cat.demanded, 0);
+
+        return {
+            courseName: course.name,
+            summary: { totalDemanded },
+            breakdown
+        };
+    },
+
     updateFeeHead: async (id: string, name: string, description: string, userId: string) => {
         return prisma.feeHead.update({
             where: { id },
