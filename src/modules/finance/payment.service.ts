@@ -2146,8 +2146,16 @@ export const getStudentFinancialHistory = async (studentId: string) => {
                      logger.info(`[FinancialHistory] HostelType: ${admission.hostelType}, PriceCat: ${JSON.stringify(priceCategory)}`);
                      
                      if (priceCategory) {
-                         accCost = priceCategory.accommodationPrice ?? 0;
-                         messCost = priceCategory.messPrice ?? 0;
+                         const meta = priceCategory.metadata as any;
+                         if (meta && (meta.accommodation || meta.laundry || meta.registration || meta.mess)) {
+                             // Use metadata breakdown: accommodation + laundry + registration → accCost, mess → messCost
+                             accCost = (meta.accommodation ?? 0) + (meta.laundry ?? 0) + (meta.registration ?? 0);
+                             messCost = meta.mess ?? 0;
+                             logger.info(`[FinancialHistory] Using metadata breakdown - Acc: ${meta.accommodation}, Laundry: ${meta.laundry}, Reg: ${meta.registration}, Mess: ${meta.mess}`);
+                         } else {
+                             accCost = priceCategory.accommodationPrice ?? 0;
+                             messCost = priceCategory.messPrice ?? 0;
+                         }
                      }
                  }
              }
