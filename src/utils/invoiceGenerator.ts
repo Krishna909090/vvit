@@ -79,7 +79,7 @@ export const generateInvoicePDF = async (
 /* ================= DRAWING LOGIC ================= */
 
 function drawInvoiceInstance(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number, copyLabel: string) {
-    drawHeader(doc, offsetY, data)
+    drawHeader(doc, offsetY)
     drawWatermark(doc, copyLabel, offsetY)
     drawInfoGrid(doc, data, offsetY)
     drawSubjectBar(doc, data, offsetY)
@@ -101,7 +101,7 @@ function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) 
 
 /* ================= HEADER ================= */
 
-function drawHeader(doc: PDFKit.PDFDocument, topY: number, data?: InvoiceData) {
+function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
   const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
 
   // University name
@@ -115,20 +115,6 @@ function drawHeader(doc: PDFKit.PDFDocument, topY: number, data?: InvoiceData) {
       topY + 20,
       { align: 'center', width: doc.page.width }
     )
-
-  // Academic Year
-  if (data?.academicYear) {
-    doc
-      .font('Helvetica')
-      .fontSize(8)
-      .fillColor('#555')
-      .text(
-        data.academicYear,
-        0,
-        topY + 35,
-        { align: 'center', width: doc.page.width }
-      )
-  }
 
   // Logo (left)
   if (fs.existsSync(logoPath)) {
@@ -160,7 +146,7 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
   const top = offsetY + 95
 
   doc
-    .roundedRect(30, top, 535, 85, 6)
+    .roundedRect(30, top, 535, data.academicYear ? 97 : 85, 6)
     .strokeColor('#eaeaea')
     .stroke()
 
@@ -194,15 +180,21 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
     doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y)
     doc.text(`Reason: ${data.reason ?? ''}`, rightX, y + 12)
   } else {
-    doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, y)
-    doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y + 12)
+    if (data.academicYear) {
+      doc.font('Helvetica-Bold').fontSize(8).fillColor('#333')
+      doc.text(data.academicYear, rightX, y)
+      doc.font('Helvetica').fontSize(9).fillColor('#333')
+    }
+    const ayOffset = data.academicYear ? 12 : 0;
+    doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, y + ayOffset)
+    doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y + ayOffset + 12)
 
     if (!data.hideTxnId) {
-      doc.text(`Txn ID: ${data.transactionId}`, rightX, y + 24)
+      doc.text(`Txn ID: ${data.transactionId}`, rightX, y + ayOffset + 24)
     }
 
-    const utrOffset = data.hideTxnId ? 24 : 36
-    const payOffset = data.hideTxnId ? 36 : 48
+    const utrOffset = (data.hideTxnId ? 24 : 36) + ayOffset
+    const payOffset = (data.hideTxnId ? 36 : 48) + ayOffset
     const utrDisplay = (data.referenceId && data.referenceId !== data.transactionId) ? data.referenceId : 'N/A';
     doc.text(`UTR: ${utrDisplay}`, rightX, y + utrOffset)
 
