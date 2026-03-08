@@ -2794,17 +2794,52 @@ export const AdminStudentService = {
     },
 
     async getCourseChangeRequests(filters: any) {
-        const { status, studentId } = filters;
-        return await prisma.courseChangeRequest.findMany({
-            where: {
-                ...(status ? { status } : {}),
-                ...(studentId ? { studentId } : {})
-            } as any,
-            include: {
-                student: true
-            } as any,
-            orderBy: { createdAt: 'desc' }
-        });
+        const { status, studentId, applicationId, page = 1, limit = 10 } = filters;
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.max(1, Math.min(100, parseInt(limit)));
+        const skip = (pageNum - 1) * limitNum;
+
+        let resolvedStudentId = studentId;
+        if (applicationId && !resolvedStudentId) {
+            const student = await prisma.student.findUnique({ where: { applicationId } });
+            if (student) resolvedStudentId = student.id;
+        }
+
+        const where = {
+            ...(status ? { status } : {}),
+            ...(resolvedStudentId ? { studentId: resolvedStudentId } : {})
+        } as any;
+
+        const [requests, total] = await Promise.all([
+            prisma.courseChangeRequest.findMany({
+                where,
+                include: { student: true } as any,
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: limitNum
+            }),
+            prisma.courseChangeRequest.count({ where })
+        ]);
+
+        const courseIds = [...new Set(requests.flatMap((r: any) => [r.fromCourse, r.toCourse].filter(Boolean)))];
+        const courses = await prisma.course.findMany({ where: { id: { in: courseIds } }, select: { id: true, name: true } });
+        const courseMap = Object.fromEntries(courses.map(c => [c.id, c.name]));
+
+        const data = requests.map((r: any) => ({
+            ...r,
+            fromCourseName: courseMap[r.fromCourse] || null,
+            toCourseName: courseMap[r.toCourse] || null
+        }));
+
+        return {
+            data,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total,
+                totalPages: Math.ceil(total / limitNum)
+            }
+        };
     },
 
     /**

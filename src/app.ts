@@ -21,6 +21,7 @@ import qualificationRequirementRoutes from './modules/qualification/qualificatio
 import emailLogRoutes from './modules/system/emailLog.routes';
 import rbacRoutes from './modules/rbac/routes/rbac.routes';
 import invoiceRoutes from './modules/finance/invoice.routes';
+import feeRoutes from './modules/finance/fee.routes';
 import cancellationRoutes from './modules/admin/cancellation.routes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
@@ -110,6 +111,7 @@ app.use('/admin/email-logs', emailLogRoutes);
 app.use('/rbac', rbacRoutes);
 app.use('/admin/finance', invoiceRoutes);
 app.use('/admin/cancellation', cancellationRoutes);
+app.use('/finance', feeRoutes);
 
 
 

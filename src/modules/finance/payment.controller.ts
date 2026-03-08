@@ -282,11 +282,11 @@ export const getFinancialSummary = catchAsync(async (req: Request, res: Response
 
 export const payOfflineApplicationFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[payOfflineApplicationFee] by=${req.user?.userId || 'anonymous'}`);
-    const { studentId, paymentMethod, transactionId, remarks } = req.body;
+    const { studentId, paymentMethod, transactionId, remarks, referenceNumber } = req.body;
 
     if (!studentId || !paymentMethod) throw new AppError("Student ID and Payment Method are required", 400);
 
-    const result = await recordOfflineApplicationFeePayment(studentId, paymentMethod, transactionId, remarks, req.user?.userId);
+    const result = await recordOfflineApplicationFeePayment(studentId, paymentMethod, transactionId, remarks, req.user?.userId, referenceNumber);
 
     sendResponse({
         res,

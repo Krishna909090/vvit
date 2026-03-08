@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
     registerStudent,
     getHallTicket,
+    getHallTicketByAppId,
     uploadDocumentsAndPreferences,
     getStudentDetails,
     addAcademicDetails,
@@ -42,6 +43,8 @@ router.post('/register', authenticate, authorizePermission(['student.create.own'
 router.post('/:studentId/pay-test-fee', authenticate, authorizePermission(['finance.create.own', 'finance.create.all']), validateRequest(studentIdParamSchema), payTestFee);
 
 router.get('/:studentId/hall-ticket', authenticate, authorizePermission(['student.read.own', 'student.read.all']), validateRequest(studentIdParamSchema), getHallTicket);
+
+router.get('/hall-ticket/application/:applicationId', authenticate, authorizePermission(['student.read.own', 'student.read.all']), getHallTicketByAppId);
 
 router.post('/:studentId/upload-docs', authenticate, authorizePermission(['document.create.own', 'document.create.all', 'info.update.own', 'info.update.all']), validateRequest(uploadDocumentsAndPreferencesSchema), uploadDocumentsAndPreferences); // upload docs is document.create/update or student.update? Let's use document.create + student.update. Assuming document.create covers it.
 

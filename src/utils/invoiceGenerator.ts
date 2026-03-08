@@ -24,6 +24,8 @@ export interface InvoiceData {
   hideTxnId?: boolean
   isCancellation?: boolean
   reason?: string
+  academicYear?: string
+  counterName?: string
   address: {
     line1: string
     line2?: string
@@ -77,12 +79,12 @@ export const generateInvoicePDF = async (
 /* ================= DRAWING LOGIC ================= */
 
 function drawInvoiceInstance(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number, copyLabel: string) {
-    drawHeader(doc, offsetY)
+    drawHeader(doc, offsetY, data)
     drawWatermark(doc, copyLabel, offsetY)
     drawInfoGrid(doc, data, offsetY)
     drawSubjectBar(doc, data, offsetY)
     drawItemsTable(doc, data, offsetY)
-    drawFooter(doc, offsetY)
+    drawFooter(doc, offsetY, data)
 }
 
 function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) {
@@ -99,7 +101,7 @@ function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) 
 
 /* ================= HEADER ================= */
 
-function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
+function drawHeader(doc: PDFKit.PDFDocument, topY: number, data?: InvoiceData) {
   const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
 
   // University name
@@ -113,6 +115,20 @@ function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
       topY + 20,
       { align: 'center', width: doc.page.width }
     )
+
+  // Academic Year
+  if (data?.academicYear) {
+    doc
+      .font('Helvetica')
+      .fontSize(8)
+      .fillColor('#555')
+      .text(
+        data.academicYear,
+        0,
+        topY + 35,
+        { align: 'center', width: doc.page.width }
+      )
+  }
 
   // Logo (left)
   if (fs.existsSync(logoPath)) {
@@ -285,7 +301,20 @@ function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: num
 
 /* ================= FOOTER ================= */
 
-function drawFooter(doc: PDFKit.PDFDocument, offsetY: number) {
+function drawFooter(doc: PDFKit.PDFDocument, offsetY: number, data?: InvoiceData) {
+  if (data?.counterName) {
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(8)
+      .fillColor('#333')
+      .text(
+        `Counter: ${data.counterName}`,
+        0,
+        offsetY + 365,
+        { align: 'center', width: doc.page.width }
+      )
+  }
+
   doc
     .font('Helvetica')
     .fontSize(8)

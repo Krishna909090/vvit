@@ -301,6 +301,12 @@ export const getHallTicket = async (studentId: string) => {
     };
 };
 
+export const getHallTicketByApplicationId = async (applicationId: string) => {
+    const student = await prisma.student.findUnique({ where: { applicationId } });
+    if (!student) throw new AppError('Student not found for this application ID', 404);
+    return getHallTicket(student.id);
+};
+
 export const uploadDocumentsAndPreferences = async (studentId: string, data: any, currentUserId: string | null) => {
     const { id, applicationId, email, phone, pref1, pref2, pref3, ...documentData } = data;
 
