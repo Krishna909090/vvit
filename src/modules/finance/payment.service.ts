@@ -313,7 +313,7 @@ export const initiateMultiComponentPayment = async (
         ? (referenceNumber || `OFFLINE_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`)
         : `TXN_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
     
-    const paymentStatus = isOffline ? PaymentStatus.SUCCESS : PaymentStatus.PENDING;
+    const paymentStatus = PaymentStatus.PENDING;
     const paymentMode = isOffline ? PaymentMode.OFFLINE : PaymentMode.ONLINE;
 
     // 3. Create Payment Records
@@ -1943,7 +1943,7 @@ export const processUnifiedPayment = async (data: any) => {
     logger.info(`[processUnifiedPayment] Transaction ID generated: ${providerTxId}`);
 
     // 4. Create Payment Record
-    logger.info(`[processUnifiedPayment] Creating payment record with status=${mode === PaymentMode.OFFLINE ? 'SUCCESS' : 'PENDING'}`);
+    logger.info(`[processUnifiedPayment] Creating payment record with status=PENDING`);
 
     const payment = await prisma.payment.create({
         data: {
@@ -1951,7 +1951,7 @@ export const processUnifiedPayment = async (data: any) => {
             amount,
             mode,
             method: method || (mode === PaymentMode.ONLINE ? PaymentMethod.UPI : PaymentMethod.CASH),
-            status: mode === PaymentMode.OFFLINE ? PaymentStatus.SUCCESS : PaymentStatus.PENDING,
+            status: PaymentStatus.PENDING,
             component,
             referenceNumber,
             feeHeadId,
