@@ -153,7 +153,7 @@ export const AcademicService = {
     },
 
     // Course
-    async createCourse(name: string, code: string, departmentId: string, degree?: string, totalSeats?: number, createdBy?: string, omrId?: string) {
+    async createCourse(name: string, code: string, departmentId: string, degree?: string, totalSeats?: number, createdBy?: string, omrId?: number) {
         const department = await prisma.department.findUnique({ where: { id: departmentId } });
         if (!department) {
             throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
@@ -176,6 +176,15 @@ export const AcademicService = {
 
         if (existingCourse) {
             throw new AppError("Course with this name or code already exists", 409);
+        }
+
+        if (omrId !== undefined && omrId !== null) {
+            const omrIdConflict = await prisma.course.findFirst({
+                where: { omrId, isDeleted: false }
+            });
+            if (omrIdConflict) {
+                throw new AppError("A course with this OMR ID already exists", 409);
+            }
         }
 
         return await prisma.course.create({
@@ -241,7 +250,7 @@ export const AcademicService = {
         return course;
     },
 
-    async updateCourse(id: string, name: string, code: string, departmentId: string, totalSeats: number | undefined, updatedBy?: string, omrId?: string) {
+    async updateCourse(id: string, name: string, code: string, departmentId: string, totalSeats: number | undefined, updatedBy?: string, omrId?: number) {
         const course = await prisma.course.findUnique({ where: { id } });
         if (!course) throw new AppError("Course not found", 404);
 
@@ -266,6 +275,15 @@ export const AcademicService = {
             });
             if (existingCourse) {
                  throw new AppError("Course code already exists", 409);
+            }
+        }
+
+        if (omrId !== undefined && omrId !== null && omrId !== course.omrId) {
+            const omrIdConflict = await prisma.course.findFirst({
+                where: { omrId, id: { not: id }, isDeleted: false }
+            });
+            if (omrIdConflict) {
+                throw new AppError("A course with this OMR ID already exists", 409);
             }
         }
 
