@@ -307,10 +307,12 @@ export const InvoiceService = {
             }
 
             // For admission-related payments, attach Allotment Order instead of Invoice
-            const isAdmissionPayment = pType === 'ADMISSION_FEE' || pType === 'TUITION_FEE';
+            const admissionComponents = [PaymentComponent.SCHOLARSHIP_TOKEN, PaymentComponent.TUITION];
+            const isAdmissionPayment = pType === 'ADMISSION_FEE' || pType === 'TUITION_FEE' || allPayments.some(p => admissionComponents.includes(p.component));
             const allotmentAttachments = [];
 
             if (isAdmissionPayment) {
+                logger.info(`[InvoiceService] Admission payment detected (pType=${pType}). Looking up Allotment Order for student=${payment.studentId}`);
                 try {
                     const allotmentDoc = await prisma.studentDocument.findUnique({
                         where: {
@@ -320,6 +322,8 @@ export const InvoiceService = {
                             }
                         }
                     });
+
+                    logger.info(`[InvoiceService] Allotment Order lookup result: ${allotmentDoc ? `found (url=${allotmentDoc.url ? 'YES' : 'NULL'})` : 'NOT FOUND'}`);
 
                     if (allotmentDoc?.url) {
                         // Extract S3 key from the full URL
@@ -332,6 +336,9 @@ export const InvoiceService = {
                             mime_type: 'application/pdf',
                             content: pdfBase64
                         });
+                        logger.info(`[InvoiceService] Allotment Order attached to email successfully`);
+                    } else {
+                        logger.warn(`[InvoiceService] Allotment Order not found or URL is null for student=${payment.studentId}. Email will be sent without attachment.`);
                     }
                 } catch (err) {
                     logger.error('[InvoiceService] Failed to fetch Allotment Order PDF for email', err);
