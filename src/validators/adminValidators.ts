@@ -263,6 +263,7 @@ export const createCourseSchema = z.object({
         departmentId: z.string().uuid("Invalid Department ID"),
         degree: z.string().optional(),
         totalSeats: z.number().int().min(0).optional(),
+        omrId: z.number().int().optional(),
     }),
 });
 

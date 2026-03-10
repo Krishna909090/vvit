@@ -863,9 +863,9 @@ export const AdminStudentService = {
                         // Proportional Scholarship Recalibration for Tuition
                         let newScholarshipAmt = 0;
                         let newDiscountTotal = existingDemand.discountAmount || 0;
+                        const studentScholarship = isTuition ? await tx.studentScholarship.findUnique({ where: { studentId: request.studentId } }) : null;
+                        const scholarshipPct = studentScholarship?.scholarshipPercentage || 0;
                         if (isTuition) {
-                            const studentScholarship = await tx.studentScholarship.findUnique({ where: { studentId: request.studentId } });
-                            const scholarshipPct = studentScholarship?.scholarshipPercentage || 0;
                             const oldScholarship = existingDemand.scholarshipAmount || 0;
                             const manualDiscount = Math.max(0, (existingDemand.discountAmount || 0) - oldScholarship);
                             newScholarshipAmt = scholarshipPct > 0 ? (newFee * scholarshipPct / 100) : oldScholarship;
@@ -886,6 +886,71 @@ export const AdminStudentService = {
                                 remarks: (existingDemand.remarks || '') + ` | Course Change: Fee updated from ${oldFee} to ${newFee}`
                             }
                         });
+
+                        // Sync FEE_DEMAND ledger entry with updated amount
+                        if (oldFee !== newFee) {
+                            const existingDemandLedger = await tx.studentLedger.findFirst({
+                                where: {
+                                    studentId: request.studentId,
+                                    feeHeadId: struct.feeHeadId,
+                                    referenceType: 'FEE_DEMAND',
+                                    type: 'DEBIT'
+                                }
+                            });
+
+                            if (existingDemandLedger) {
+                                await tx.studentLedger.update({
+                                    where: { id: existingDemandLedger.id },
+                                    data: {
+                                        amount: newFee,
+                                        description: `${existingDemandLedger.description} (Updated: ${oldFee} → ${newFee})`,
+                                    }
+                                });
+                            }
+
+                            logger.info(`[approveCourseChange] FEE_DEMAND ledger synced for student ${request.studentId}. ${oldFee} → ${newFee}`);
+                        }
+
+                        // Sync scholarship ledger entry with recalculated amount
+                        if (isTuition) {
+                            const existingScholarshipLedger = await tx.studentLedger.findFirst({
+                                where: {
+                                    studentId: request.studentId,
+                                    feeHeadId: struct.feeHeadId,
+                                    referenceType: 'SCHOLARSHIP',
+                                    type: 'CREDIT'
+                                }
+                            });
+
+                            if (existingScholarshipLedger) {
+                                if (newScholarshipAmt > 0) {
+                                    await tx.studentLedger.update({
+                                        where: { id: existingScholarshipLedger.id },
+                                        data: {
+                                            amount: newScholarshipAmt,
+                                            description: `Scholarship adjusted during course change (${studentScholarship?.scholarshipPercentage || 0}%)`,
+                                        }
+                                    });
+                                } else {
+                                    await tx.studentLedger.delete({ where: { id: existingScholarshipLedger.id } });
+                                }
+                            } else if (newScholarshipAmt > 0) {
+                                await tx.studentLedger.create({
+                                    data: {
+                                        studentId: request.studentId,
+                                        type: LedgerTransactionType.CREDIT,
+                                        amount: newScholarshipAmt,
+                                        description: `Scholarship applied during course change (${studentScholarship?.scholarshipPercentage || 0}%)`,
+                                        referenceType: 'SCHOLARSHIP',
+                                        referenceId: existingDemand.id,
+                                        feeHeadId: struct.feeHeadId,
+                                        createdBy: adminId
+                                    }
+                                });
+                            }
+
+                            logger.info(`[approveCourseChange] Scholarship ledger synced for student ${request.studentId}. Old: ${existingScholarshipLedger?.amount || 0}, New: ${newScholarshipAmt}`);
+                        }
                     } else {
                         // Create New Demand for missing heads in the new course
                         await tx.studentFeeDemand.create({
@@ -904,65 +969,46 @@ export const AdminStudentService = {
                 }
 
                 // 3. COURSE CHANGE PROCESSING FEE (10,000 DEDUCTION FROM PAID)
+                // This is an internal deduction from the student's already-paid amount,
+                // NOT a new fee demand. We only record a DEBIT ledger entry on the source head
+                // and adjust the tuition demand's paid tracking accordingly.
                 const DEDUCTION_AMOUNT = 10000;
                 const actualDeduction = Math.min(totalPaidAcrossAll, DEDUCTION_AMOUNT);
 
-                let courseChangeHead = await tx.feeHead.findFirst({
-                    where: { name: { contains: 'Course Change', mode: 'insensitive' } }
-                });
-
-                if (!courseChangeHead) {
-                    courseChangeHead = await tx.feeHead.create({
-                        data: { name: 'Course Change Fee', description: 'Fee for course/branch change processing' }
-                    });
-                }
-
-                // Create Course Change Fee Demand
-                const courseChangeDemand = await tx.studentFeeDemand.create({
-                    data: {
-                        studentId: request.studentId,
-                        feeHeadId: courseChangeHead.id,
-                        amount: DEDUCTION_AMOUNT,
-                        netAmount: DEDUCTION_AMOUNT,
-                        academicYearId,
-                        dueDate: new Date(),
-                        status: (actualDeduction >= DEDUCTION_AMOUNT) ? FeeStatus.FULL : (actualDeduction > 0 ? FeeStatus.PARTIAL : FeeStatus.PENDING),
-                        remarks: `Branch change processing fee`
-                    }
-                });
-
                 if (actualDeduction > 0) {
-                    // Decide where to pull the deduction from (prefer Tuition)
                     const sourceHeadId = tuitionHeadId || studentDemands[0]?.feeHeadId;
-                    
+
                     if (sourceHeadId) {
-                        // Debit Source (e.g., Tuition)
+                        // Debit from student's paid amount (e.g., Tuition)
                         await tx.studentLedger.create({
                             data: {
                                 studentId: request.studentId,
                                 feeHeadId: sourceHeadId,
                                 type: LedgerTransactionType.DEBIT,
                                 amount: actualDeduction,
-                                description: `Internal transfer: Course change fee deduction`,
+                                description: `Course change processing fee deducted from paid amount`,
                                 referenceType: 'COURSE_CHANGE',
                                 referenceId: request.id,
                                 createdBy: adminId
                             }
                         });
 
-                        // Credit Target (Course Change Fee)
-                        await tx.studentLedger.create({
-                            data: {
-                                studentId: request.studentId,
-                                feeHeadId: courseChangeHead.id,
-                                type: LedgerTransactionType.CREDIT,
-                                amount: actualDeduction,
-                                description: `Course change fee paid via internal transfer`,
-                                referenceType: 'COURSE_CHANGE',
-                                referenceId: request.id,
-                                createdBy: adminId
-                            }
-                        });
+                        // Update the source demand to reflect reduced effective payment
+                        const sourceDemand = studentDemands.find(d => d.feeHeadId === sourceHeadId);
+                        if (sourceDemand) {
+                            const paidOnSource = sourceDemand.payments.reduce((sum, p) => sum + p.amount, 0);
+                            const effectivePaid = paidOnSource - actualDeduction;
+                            const netAmount = sourceDemand.netAmount ?? (sourceDemand.amount - (sourceDemand.discountAmount || 0));
+                            const pending = netAmount - effectivePaid;
+
+                            await tx.studentFeeDemand.update({
+                                where: { id: sourceDemand.id },
+                                data: {
+                                    status: pending <= 0 ? FeeStatus.FULL : (effectivePaid > 0 ? FeeStatus.PARTIAL : FeeStatus.PENDING),
+                                    remarks: (sourceDemand.remarks || '') + ` | Course change fee: ${actualDeduction} deducted from paid`
+                                }
+                            });
+                        }
                     }
                 }
 

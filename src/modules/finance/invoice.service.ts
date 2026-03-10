@@ -1,8 +1,8 @@
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
-import { uploadFileToS3 } from '../../utils/s3Utils';
-import { sendAdmissionFeeReceipt, sendEntranceFeeReceipt } from '../../utils/emailService';
+import { uploadFileToS3, downloadFileFromS3 } from '../../utils/s3Utils';
+import { sendEntranceFeeReceipt } from '../../utils/emailService';
 import { PaymentStatus, PaymentComponent } from '@prisma/client';
 
 export const InvoiceService = {
@@ -306,12 +306,47 @@ export const InvoiceService = {
                  else pType = 'DEFAULT';
             }
 
-            // Use the generic sender with the specific type
+            // For admission-related payments, attach Allotment Order instead of Invoice
+            const isAdmissionPayment = pType === 'ADMISSION_FEE' || pType === 'TUITION_FEE';
+            const allotmentAttachments = [];
+
+            if (isAdmissionPayment) {
+                try {
+                    const allotmentDoc = await prisma.studentDocument.findUnique({
+                        where: {
+                            studentId_documentKey: {
+                                studentId: payment.studentId,
+                                documentKey: 'ALLOTMENT_ORDER'
+                            }
+                        }
+                    });
+
+                    if (allotmentDoc?.url) {
+                        // Extract S3 key from the full URL
+                        const s3Key = allotmentDoc.url.split('.amazonaws.com/')[1] || allotmentDoc.url;
+                        const pdfBuffer = await downloadFileFromS3(decodeURIComponent(s3Key));
+                        const pdfBase64 = pdfBuffer.toString('base64');
+
+                        allotmentAttachments.push({
+                            name: `AllotmentOrder_${payment.student.applicationId || payment.studentId}.pdf`,
+                            mime_type: 'application/pdf',
+                            content: pdfBase64
+                        });
+                    }
+                } catch (err) {
+                    logger.error('[InvoiceService] Failed to fetch Allotment Order PDF for email', err);
+                }
+            }
+
             const { sendPaymentReceipt } = await import('../../utils/emailService');
             await sendPaymentReceipt(payment.student.email || '', {
                 ...invoiceData,
                 paymentType: pType,
-                customFeeType: pType === 'DEFAULT' ? description : undefined
+                customFeeType: pType === 'DEFAULT' ? description : undefined,
+                ...(isAdmissionPayment ? {
+                    skipInvoiceAttachment: true,
+                    additionalAttachments: allotmentAttachments
+                } : {})
             });
         }
         

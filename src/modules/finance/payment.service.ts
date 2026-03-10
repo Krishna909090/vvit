@@ -2201,9 +2201,18 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         // Fines (Skipped as per existing logic logic if in Deamnd)
         
         // Credits (Discounts/Scholarships)
-        if (entry.type === 'CREDIT' && entry.referenceType !== 'PAYMENT') {
+        if (entry.type === 'CREDIT' && entry.referenceType !== 'PAYMENT' && entry.referenceType !== 'COURSE_CHANGE') {
             target.discount += entry.amount;
-            // Discount no longer deducted from demanded here. Handled in UI/Net Calcs.
+        }
+
+        // Course Change: DEBIT reduces paid on source (e.g., Tuition)
+        // CREDIT counts as paid on target (e.g., Course Change Fee) — for backward compat with old data
+        if (entry.referenceType === 'COURSE_CHANGE') {
+            if (entry.type === 'DEBIT') {
+                target.paid -= entry.amount;
+            } else if (entry.type === 'CREDIT') {
+                target.paid += entry.amount;
+            }
         }
     });
 
@@ -2238,11 +2247,15 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 8. FINAL SUMMARY
     const totalDemanded = Object.values(breakdown).reduce((sum, cat) => sum + cat.demanded, 0);
+    // Course change: DEBITs reduce paid, CREDITs add to paid (backward compat for old internal transfers)
+    const courseChangeNet = ledgers
+        .filter(l => l.referenceType === 'COURSE_CHANGE')
+        .reduce((sum, l) => sum + (l.type === 'CREDIT' ? l.amount : -l.amount), 0);
     const totalPaid = payments
         .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
-        .reduce((sum, p) => sum + p.amount, 0);
+        .reduce((sum, p) => sum + p.amount, 0) + courseChangeNet;
     const totalDiscount = ledgers
-        .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT')
+        .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE')
         .reduce((sum, l) => sum + l.amount, 0);
 
     const summary = {
