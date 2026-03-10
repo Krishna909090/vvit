@@ -19,7 +19,7 @@ import { sendAdmissionFeeReceipt, sendPaymentReceipt, sendScholarshipUpdateEmail
 // @ts-ignore
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
 import { InvoiceService } from '../finance/invoice.service';
-import { getPhonePeClient, initiatePhonePePayment } from '../finance/payment.service';
+import { getPhonePeClient, initiatePhonePePayment, generateAndSaveAllotmentOrder } from '../finance/payment.service';
 
 // --- CONFIGURATION CONSTANTS ---
 const PHONEPE_MERCHANT_ID = process.env.PHONEPE_MERCHANT_ID || '';
@@ -2733,6 +2733,20 @@ export const AdminStudentService = {
              
              return { success: true, status: PaymentStatus.SUCCESS };
          });
+
+         // Pre-generate Allotment Order for admission payments
+         const hasAdmissionComponent = payments.some((p: any) => p.component === PaymentComponent.SCHOLARSHIP_TOKEN || p.component === PaymentComponent.TUITION);
+         if (hasAdmissionComponent) {
+             try {
+                 const existingAllotment = await prisma.studentDocument.findUnique({
+                     where: { studentId_documentKey: { studentId: primaryPayment.studentId, documentKey: 'ALLOTMENT_ORDER' } }
+                 });
+                 if (!existingAllotment?.url) {
+                     await generateAndSaveAllotmentOrder(primaryPayment.studentId);
+                     logger.info(`[verifyAndFinalizePayment] Allotment Order generated for student=${primaryPayment.studentId}`);
+                 }
+             } catch (err) { logger.warn(`Failed to generate allotment order: ${err}`); }
+         }
 
          // Invoice (Unified) for Bundle
          try {
