@@ -637,4 +637,30 @@ export const reverseAdmissionPayment = catchAsync(async (req: Request, res: Resp
     });
 });
 
+// Assign PRO to Student
+export const assignPro = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId, proNumber } = req.body;
 
+    const proRecord = await prisma.pRO.findUnique({ where: { proNumber } });
+    if (!proRecord) {
+        throw new AppError('PRO not found with the given proNumber', 404);
+    }
+
+    const student = await prisma.student.findUnique({ where: { id: studentId } });
+    if (!student) {
+        throw new AppError('Student not found', 404);
+    }
+
+    const updatedStudent = await prisma.student.update({
+        where: { id: studentId },
+        data: { proId: proRecord.id }
+    });
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'PRO assigned to student successfully',
+        data: { studentId: updatedStudent.id, proId: updatedStudent.proId, proNumber }
+    });
+});

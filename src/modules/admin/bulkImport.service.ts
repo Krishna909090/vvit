@@ -1,13 +1,13 @@
 import ExcelJS from 'exceljs';
 import bcrypt from 'bcryptjs';
 import prisma from '../../config/prisma';
-import { 
-    AdmissionStatus, 
-    ApplicationMode, 
-    PaymentStatus, 
-    PaymentComponent, 
-    PaymentMethod, 
-    FeeStatus, 
+import {
+    AdmissionStatus,
+    ApplicationMode,
+    PaymentStatus,
+    PaymentComponent,
+    PaymentMethod,
+    FeeStatus,
     Prisma
 } from '@prisma/client';
 import { Role } from '../../constants/roles';
@@ -412,4 +412,286 @@ export const verifyOfflinePayment = async (studentId: string, amount: number, ty
         logger.info(`Offline payment verified for ${student.applicationId}: ${amount} ${type}`);
         return payment;
     });
+};
+
+interface OfflineApplicationInput {
+    applicationId: string;
+    name: string;
+    fatherName?: string;
+    motherName?: string;
+    email?: string;
+    phone: string;
+    dob?: string;
+    gender?: string;
+    aadharNumber?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+    pincode?: string;
+    degreeType?: string;
+    pref1?: string;
+    pref2?: string;
+    pref3?: string;
+    profilePhotoUrl?: string;
+    pro?: string;
+    isKycVerified?: string;
+}
+
+export const validateOfflineApplications = async (applications: OfflineApplicationInput[]) => {
+    const results = {
+        valid: 0,
+        invalid: 0,
+        validRecords: [] as OfflineApplicationInput[],
+        invalidRecords: [] as (OfflineApplicationInput & { errors: string[] })[]
+    };
+
+    // Check for duplicates within the input array itself
+    const seenApplicationIds = new Set<string>();
+    const seenPhones = new Set<string>();
+    const seenEmails = new Set<string>();
+
+    for (let i = 0; i < applications.length; i++) {
+        const data = applications[i];
+        const rowErrors: string[] = [];
+
+        // Required fields
+        if (!data.applicationId) rowErrors.push('applicationId is required');
+        if (!data.name) rowErrors.push('name is required');
+        if (!data.phone) rowErrors.push('phone is required');
+
+        // Duplicate within batch
+        if (data.applicationId && seenApplicationIds.has(data.applicationId)) {
+            rowErrors.push(`Duplicate applicationId '${data.applicationId}' within batch`);
+        }
+        if (data.phone && seenPhones.has(data.phone)) {
+            rowErrors.push(`Duplicate phone '${data.phone}' within batch`);
+        }
+        if (data.email && seenEmails.has(data.email)) {
+            rowErrors.push(`Duplicate email '${data.email}' within batch`);
+        }
+
+        if (data.applicationId) seenApplicationIds.add(data.applicationId);
+        if (data.phone) seenPhones.add(data.phone);
+        if (data.email) seenEmails.add(data.email);
+
+        // DOB validation
+        if (data.dob) {
+            const dobDate = new Date(data.dob);
+            if (isNaN(dobDate.getTime())) {
+                rowErrors.push(`Invalid date of birth: '${data.dob}'`);
+            }
+        }
+
+        // Check duplicates against DB
+        if (data.applicationId || data.phone) {
+            const orConditions: any[] = [];
+            if (data.applicationId) orConditions.push({ applicationId: data.applicationId });
+            if (data.phone) orConditions.push({ phone: data.phone });
+            if (data.aadharNumber) orConditions.push({ aadharNumber: data.aadharNumber });
+            if (data.email) orConditions.push({ email: data.email });
+
+            const existing = await prisma.student.findFirst({
+                where: { OR: orConditions },
+                select: { applicationId: true, phone: true, email: true, aadharNumber: true }
+            });
+
+            if (existing) {
+                const matches: string[] = [];
+                if (existing.applicationId === data.applicationId) matches.push(`applicationId: ${data.applicationId}`);
+                if (existing.phone === data.phone) matches.push(`phone: ${data.phone}`);
+                if (data.email && existing.email === data.email) matches.push(`email: ${data.email}`);
+                if (data.aadharNumber && existing.aadharNumber === data.aadharNumber) matches.push(`aadhar: ${data.aadharNumber}`);
+                rowErrors.push(`Student already exists in DB (matched: ${matches.join(', ')})`);
+            }
+        }
+
+        // Check user table for email/phone conflict
+        if (data.phone || data.email) {
+            const userOrConditions: any[] = [];
+            if (data.phone) userOrConditions.push({ phone: data.phone });
+            if (data.email) userOrConditions.push({ email: data.email });
+
+            const existingUser = await prisma.user.findFirst({
+                where: { OR: userOrConditions },
+                select: { phone: true, email: true }
+            });
+
+            if (existingUser) {
+                const matches: string[] = [];
+                if (existingUser.phone === data.phone) matches.push(`phone: ${data.phone}`);
+                if (data.email && existingUser.email === data.email) matches.push(`email: ${data.email}`);
+                rowErrors.push(`User already exists (matched: ${matches.join(', ')})`);
+            }
+        }
+
+        // Course preference validation
+        for (const prefKey of ['pref1', 'pref2', 'pref3'] as const) {
+            const prefValue = data[prefKey];
+            if (prefValue) {
+                const course = await prisma.course.findUnique({ where: { id: prefValue } });
+                if (!course) {
+                    rowErrors.push(`Invalid ${prefKey} course ID: '${prefValue}'`);
+                }
+            }
+        }
+
+        if (rowErrors.length > 0) {
+            results.invalid++;
+            results.invalidRecords.push({ ...data, errors: rowErrors });
+        } else {
+            results.valid++;
+            results.validRecords.push(data);
+        }
+    }
+
+    return results;
+};
+
+export const processOfflineApplications = async (applications: OfflineApplicationInput[], adminId: string) => {
+    // Re-validate on backend even though UI already validated (can't trust client)
+    const validation = await validateOfflineApplications(applications);
+    const invalidAppIds = new Set(validation.invalidRecords.map(r => r.applicationId));
+
+    const results = {
+        total: applications.length,
+        success: 0,
+        failed: validation.invalid,
+        invalidRecords: validation.invalidRecords,
+        errors: [] as { index: number; applicationId: string; errors: string[] }[],
+        created: [] as { applicationId: string; studentId: string }[]
+    };
+
+    // Pre-fetch shared data
+    const activeAcademicYear = await prisma.academicYear.findFirst({
+        where: { isActive: true, isDeleted: false }
+    });
+
+    const uniqueProNumbers = [...new Set(applications.map(a => a.pro).filter(Boolean))] as string[];
+    const proRecords = uniqueProNumbers.length > 0
+        ? await prisma.pRO.findMany({ where: { proNumber: { in: uniqueProNumbers } } })
+        : [];
+    const proMap = new Map(proRecords.map(p => [p.proNumber, p.id]));
+
+    const hashedPassword = await bcrypt.hash('Welcome@123', 10);
+
+    // Pre-fetch StudentGroup for auto-assignment
+    const studentGroup = await prisma.group.findUnique({ where: { name: 'StudentGroup' } });
+    if (!studentGroup) {
+        logger.error('[processOfflineApplications] CRITICAL: StudentGroup not found. Users will be created without group.');
+    }
+
+    if (applications.length === validation.invalid) {
+        return results;
+    }
+
+    // Individual transaction per student (so one failure doesn't block others)
+    for (let index = 0; index < applications.length; index++) {
+        const data = applications[index];
+        if (invalidAppIds.has(data.applicationId)) continue; // Skip records that failed validation
+        try {
+            const dobDate = data.dob ? new Date(data.dob) : undefined;
+            const proId = data.pro ? (proMap.get(data.pro) || null) : null;
+
+            const txResult = await prisma.$transaction(async (tx) => {
+                const user = await tx.user.create({
+                    data: {
+                        name: data.name,
+                        email: data.email || undefined,
+                        phone: data.phone,
+                        password: hashedPassword,
+                        role: Role.STUDENT,
+                        isDeleted: false
+                    }
+                });
+
+                // Auto-assign to StudentGroup
+                if (studentGroup) {
+                    await tx.userGroup.create({
+                        data: {
+                            userId: user.id,
+                            groupId: studentGroup.id
+                        }
+                    });
+                }
+
+                const student = await tx.student.create({
+                    data: {
+                        applicationId: data.applicationId,
+                        name: data.name,
+                        fatherName: data.fatherName || '',
+                        motherName: data.motherName || '',
+                        gender: data.gender || 'Male',
+                        dob: dobDate && isValidDate(dobDate) ? dobDate : new Date(),
+                        phone: data.phone,
+                        email: data.email || undefined,
+                        aadharNumber: data.aadharNumber || '',
+                        category: 'OC',
+                        country: data.country || 'India',
+                        address: data.address || '',
+                        city: data.city || '',
+                        state: data.state || '',
+                        pincode: data.pincode || '',
+                        profilePhotoUrl: data.profilePhotoUrl || undefined,
+                        degreeType: data.degreeType || undefined,
+                        applicationMode: ApplicationMode.OFFLINE,
+                        isOffline: true,
+                        isKycVerified: data.isKycVerified === 'true' || data.isKycVerified === '1',
+                        pref1: data.pref1 || undefined,
+                        pref2: data.pref2 || undefined,
+                        pref3: data.pref3 || undefined,
+                        userId: user.id,
+                        proId: proId,
+                        createdBy: adminId
+                    }
+                });
+
+                await tx.studentAdmission.create({
+                    data: {
+                        studentId: student.id,
+                        status: AdmissionStatus.ENTRANCE_FEE_PAID,
+                        feeStatus: FeeStatus.PARTIAL,
+                        paidFee: 500,
+                        academicYearId: activeAcademicYear?.id
+                    }
+                });
+
+                const payment = await tx.payment.create({
+                    data: {
+                        studentId: student.id,
+                        amount: 500,
+                        status: PaymentStatus.SUCCESS,
+                        component: PaymentComponent.APPLICATION_FEE,
+                        method: PaymentMethod.CASH,
+                        providerTxId: `OFF_APP_${Date.now()}_${data.applicationId}`,
+                        metadata: { notes: 'Offline Application - Bulk Import', verifiedBy: adminId }
+                    }
+                });
+
+                await tx.studentLedger.create({
+                    data: {
+                        studentId: student.id,
+                        type: 'CREDIT',
+                        amount: 500,
+                        description: 'Application Fee (Offline)',
+                        referenceType: 'PAYMENT',
+                        referenceId: payment.id,
+                        date: new Date()
+                    }
+                });
+
+                return { studentId: student.id, paymentId: payment.id };
+            });
+
+            results.success++;
+            results.created.push({ applicationId: data.applicationId, studentId: txResult.studentId });
+
+        } catch (error: any) {
+            results.failed++;
+            results.errors.push({ index, applicationId: data.applicationId, errors: [`DB insert failed: ${error.message}`] });
+            logger.error(`[processOfflineApplications] Insert failed for ${data.applicationId}: ${error.message}`);
+        }
+    }
+
+    return results;
 };

@@ -8,7 +8,7 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 router.use(authenticate);
-router.use(authorizePermission('admin.bulk.import'));
+router.use(authorizePermission('admin.create.all'));
 
 router.post(
     '/offline-students', 
@@ -25,6 +25,16 @@ router.post(
 router.post(
     '/verify-payment',
     bulkImportController.verifyPayment
+);
+
+router.post(
+    '/offline-applications/validate',
+    bulkImportController.validateOfflineApplications
+);
+
+router.post(
+    '/offline-applications',
+    bulkImportController.importOfflineApplications
 );
 
 export default router;

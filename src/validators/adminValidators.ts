@@ -529,4 +529,9 @@ export const updateFullStaffDetailsSchema = z.object({
     ),
 });
 
-
+export const assignProSchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid('Invalid student ID'),
+        proNumber: z.string().min(1, 'PRO number is required'),
+    }),
+});
