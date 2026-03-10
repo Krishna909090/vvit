@@ -441,7 +441,24 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         data: { status: PaymentStatus.SUCCESS, metadata }
     });
 
-    // 2. Generate Invoice (Unified) via InvoiceService
+    // 2. Pre-generate Allotment Order for admission payments (must happen before invoice so email can attach it)
+    const admissionComponents = [PaymentComponent.SCHOLARSHIP_TOKEN, PaymentComponent.TUITION];
+    const hasAdmissionPayment = payments.some((p: any) => admissionComponents.includes(p.component));
+    if (hasAdmissionPayment) {
+        try {
+            const existingAllotment = await prisma.studentDocument.findUnique({
+                where: { studentId_documentKey: { studentId: payments[0].studentId, documentKey: 'ALLOTMENT_ORDER' } }
+            });
+            if (!existingAllotment?.url) {
+                await generateAndSaveAllotmentOrder(payments[0].studentId);
+                logger.info(`[processMultiPaymentSuccess] Allotment Order generated for student=${payments[0].studentId}`);
+            }
+        } catch (e) {
+            logger.error(`[processMultiPaymentSuccess] Allotment Order Generation Failed: ${e}`);
+        }
+    }
+
+    // 3. Generate Invoice (Unified) via InvoiceService
     let invoiceUrl = null;
     try {
         const invoiceResult = await InvoiceService.generateInvoiceForPayment(payments[0].id);

@@ -2571,6 +2571,24 @@ export const AdminStudentService = {
              });
 
 
+             // Pre-generate Allotment Order (must happen before invoice so email can attach it)
+             try {
+                if (offlineResult.paymentId) {
+                    const offPayment = await prisma.payment.findUnique({ where: { id: offlineResult.paymentId }, select: { studentId: true, component: true } });
+                    if (offPayment && (offPayment.component === PaymentComponent.SCHOLARSHIP_TOKEN || offPayment.component === PaymentComponent.TUITION)) {
+                        const existingAllotment = await prisma.studentDocument.findUnique({
+                            where: { studentId_documentKey: { studentId: offPayment.studentId, documentKey: 'ALLOTMENT_ORDER' } }
+                        });
+                        if (!existingAllotment?.url) {
+                            await generateAndSaveAllotmentOrder(offPayment.studentId);
+                            logger.info(`[finalizeAdmission] Allotment Order generated for student=${offPayment.studentId}`);
+                        }
+                    }
+                }
+             } catch (err) {
+                logger.warn(`[finalizeAdmission] Failed to generate allotment order: ${err}`);
+             }
+
              // Auto-generate invoice (Outside TX)
              try {
                 if (offlineResult.paymentId) {
