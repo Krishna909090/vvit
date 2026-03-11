@@ -621,7 +621,7 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                         name: data.name,
                         fatherName: data.fatherName || '',
                         motherName: data.motherName || '',
-                        gender: data.gender || 'Male',
+                        gender: (data.gender || 'MALE').toUpperCase(),
                         dob: dobDate && isValidDate(dobDate) ? dobDate : new Date(),
                         phone: data.phone,
                         email: data.email || undefined,
