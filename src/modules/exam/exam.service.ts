@@ -1279,6 +1279,66 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
 };
 
 /**
+ * Process bulk exam results from JSON array.
+ * Accepts: [{ applicationId, score }]
+ * Uses upsert so it works even if studentExam doesn't exist yet (e.g. offline students).
+ */
+export const processBulkResultsJSON = async (records: { applicationId: string; score: number }[], cutoff?: number) => {
+    const results: { applicationId: string; status: string; message?: string }[] = [];
+
+    const applicationIds = records.map(r => r.applicationId).filter(Boolean);
+
+    const students = await prisma.student.findMany({
+        where: { applicationId: { in: applicationIds } },
+        select: { id: true, applicationId: true }
+    });
+
+    const studentMap = new Map(students.map(s => [s.applicationId, s.id]));
+
+    const updatePromises: Promise<{ applicationId: string; status: string; message?: string }>[] = [];
+
+    for (const row of records) {
+        const { applicationId, score } = row;
+        const studentId = studentMap.get(applicationId);
+
+        if (!studentId) {
+            results.push({ applicationId, status: 'Failed', message: 'Student not found' });
+            continue;
+        }
+
+        const numScore = Number(score);
+        if (isNaN(numScore)) {
+            results.push({ applicationId, status: 'Failed', message: 'Invalid score value' });
+            continue;
+        }
+
+        const isQualified = cutoff != null ? numScore >= Number(cutoff) : undefined;
+
+        updatePromises.push(
+            prisma.studentExam.upsert({
+                where: { studentId },
+                update: { examScore: numScore, ...(isQualified !== undefined && { isQualified }) },
+                create: { studentId, examScore: numScore, ...(isQualified !== undefined && { isQualified }) }
+            })
+            .then(() => ({ applicationId, status: 'Success' }))
+            .catch((err: any) => ({ applicationId, status: 'Failed', message: err.message }))
+        );
+    }
+
+    // Execute in batches of 50
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < updatePromises.length; i += BATCH_SIZE) {
+        const batch = updatePromises.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(batch);
+        results.push(...batchResults);
+    }
+
+    logger.info(`[processBulkResultsJSON] Processed ${records.length} records: ${results.filter(r => r.status === 'Success').length} success, ${results.filter(r => r.status === 'Failed').length} failed`);
+
+    return results;
+};
+
+/**
  * Get students by admission status with progression chain.
  * If status is HALL_TICKET_GENERATED, returns students with HALL_TICKET_GENERATED, TEST_FEE_PAID, and REGISTERED.
  * If status is TEST_FEE_PAID, returns students with TEST_FEE_PAID and REGISTERED.

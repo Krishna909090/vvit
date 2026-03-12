@@ -534,6 +534,7 @@ export const getStudentByUserId = async (userId: string) => {
             pincode: true,
             profilePhotoUrl: true,
             isKycVerified: true,
+            isOffline: true,
             userId:true,
             pref1: true,
             pref1Course: {

@@ -24,7 +24,8 @@ import {
     getApplicationsExtended,
     reverseAdmissionPayment,
     requestBranchChange,
-    requestProgramChange
+    requestProgramChange,
+    assignPro
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -36,7 +37,8 @@ import {
     deleteAcademicQualificationSchema,
     finalizeAdmissionSchema,
     verifyPaymentSchema,
-    getApplicationsExtendedSchema
+    getApplicationsExtendedSchema,
+    assignProSchema
 } from '../../validators/adminValidators';
 
 import upload from '../../config/multer';
@@ -139,5 +141,8 @@ router.post('/send-status-email', authenticate, authorizePermission(['student.up
 // Reverse Admission Payment (Undo a mistaken offline/bank-transfer payment & release seat)
 // Restricted to super-admins only (student.delete.all)
 router.post('/reverse-admission-payment', authenticate, authorizePermission(['student.delete.all']), reverseAdmissionPayment);
+
+// Assign PRO to Student
+router.post('/assign-pro', authenticate, authorizePermission(['student.update.all']), validateRequest(assignProSchema), assignPro);
 
 export default router;

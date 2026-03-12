@@ -82,6 +82,7 @@ model Course {
   updatedBy        String?
   isDeleted        Boolean?           @default(false)
   degree           String?
+  omrId            Int?
   filledSeats      Int?               @default(0)
   totalSeats       Int?               @default(0)
   department       Department         @relation(fields: [departmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -138,6 +139,7 @@ model AcademicYear {
   studentAdmissions StudentAdmission[]
   enrollments       StudentEnrollment[]
   studentFeeDemands StudentFeeDemand[]
+  payments          Payment[]
 }
 
 model StudentEnrollment {
@@ -560,6 +562,7 @@ model StudentFeeDemand {
   scholarshipAmount Float         @default(0)
   academicYearId    String?
   feeHeadId         String?
+  yearOfStudy       Int?
   payments          Payment[]
   academicYear      AcademicYear? @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeHead           FeeHead?      @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -593,7 +596,10 @@ model Payment {
   updatedBy       String?
   method          PaymentMethod?
   feeHeadId       String?
+  academicYearId  String?
+  yearOfStudy     Int?
   feeDemand       StudentFeeDemand? @relation(fields: [feeDemandId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear    AcademicYear?     @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeHead         FeeHead?          @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student         Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }

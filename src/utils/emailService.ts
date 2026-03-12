@@ -96,6 +96,7 @@ interface EmailData extends PaymentEmailData {
         pincode: string;
     };
     additionalAttachments?: any[];
+    skipInvoiceAttachment?: boolean;
 }
 
 // Environment variables
@@ -246,11 +247,14 @@ export const sendPaymentReceipt = async (
             if (fs.existsSync(path.join(assetsDir, 'students.jpg'))) studentsBase64 = fs.readFileSync(path.join(assetsDir, 'students.jpg')).toString('base64');
         } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
 
-        const attachments = [{ 
-            name: `Invoice.pdf`, 
-            mime_type: 'application/pdf', 
-            content: base64Pdf 
-        }, ...(data.additionalAttachments || [])];
+        const attachments = [
+            ...(data.skipInvoiceAttachment ? [] : [{
+                name: `Invoice.pdf`,
+                mime_type: 'application/pdf',
+                content: base64Pdf
+            }]),
+            ...(data.additionalAttachments || [])
+        ];
 
         const inlineImages = [];
         if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });

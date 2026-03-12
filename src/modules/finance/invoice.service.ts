@@ -1,8 +1,8 @@
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
-import { uploadFileToS3 } from '../../utils/s3Utils';
-import { sendAdmissionFeeReceipt, sendEntranceFeeReceipt } from '../../utils/emailService';
+import { uploadFileToS3, downloadFileFromS3 } from '../../utils/s3Utils';
+import { sendEntranceFeeReceipt } from '../../utils/emailService';
 import { PaymentStatus, PaymentComponent } from '@prisma/client';
 
 export const InvoiceService = {
@@ -306,12 +306,54 @@ export const InvoiceService = {
                  else pType = 'DEFAULT';
             }
 
-            // Use the generic sender with the specific type
+            // For admission-related payments, attach Allotment Order instead of Invoice
+            const admissionComponents = [PaymentComponent.SCHOLARSHIP_TOKEN, PaymentComponent.TUITION];
+            const isAdmissionPayment = pType === 'ADMISSION_FEE' || pType === 'TUITION_FEE' || allPayments.some(p => admissionComponents.includes(p.component));
+            const allotmentAttachments = [];
+
+            if (isAdmissionPayment) {
+                logger.info(`[InvoiceService] Admission payment detected (pType=${pType}). Looking up Allotment Order for student=${payment.studentId}`);
+                try {
+                    const allotmentDoc = await prisma.studentDocument.findUnique({
+                        where: {
+                            studentId_documentKey: {
+                                studentId: payment.studentId,
+                                documentKey: 'ALLOTMENT_ORDER'
+                            }
+                        }
+                    });
+
+                    logger.info(`[InvoiceService] Allotment Order lookup result: ${allotmentDoc ? `found (url=${allotmentDoc.url ? 'YES' : 'NULL'})` : 'NOT FOUND'}`);
+
+                    if (allotmentDoc?.url) {
+                        // Extract S3 key from the full URL
+                        const s3Key = allotmentDoc.url.split('.amazonaws.com/')[1] || allotmentDoc.url;
+                        const pdfBuffer = await downloadFileFromS3(decodeURIComponent(s3Key));
+                        const pdfBase64 = pdfBuffer.toString('base64');
+
+                        allotmentAttachments.push({
+                            name: `AllotmentOrder_${payment.student.applicationId || payment.studentId}.pdf`,
+                            mime_type: 'application/pdf',
+                            content: pdfBase64
+                        });
+                        logger.info(`[InvoiceService] Allotment Order attached to email successfully`);
+                    } else {
+                        logger.warn(`[InvoiceService] Allotment Order not found or URL is null for student=${payment.studentId}. Email will be sent without attachment.`);
+                    }
+                } catch (err) {
+                    logger.error('[InvoiceService] Failed to fetch Allotment Order PDF for email', err);
+                }
+            }
+
             const { sendPaymentReceipt } = await import('../../utils/emailService');
             await sendPaymentReceipt(payment.student.email || '', {
                 ...invoiceData,
                 paymentType: pType,
-                customFeeType: pType === 'DEFAULT' ? description : undefined
+                customFeeType: pType === 'DEFAULT' ? description : undefined,
+                ...(isAdmissionPayment ? {
+                    skipInvoiceAttachment: true,
+                    additionalAttachments: allotmentAttachments
+                } : {})
             });
         }
         

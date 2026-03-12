@@ -20,6 +20,7 @@ import {
     markAttendance,
     updateExamScore,
     uploadBulkResults,
+    uploadBulkResultsJSON,
     scanAttendance,
     verifyAttendance
 } from './exam.controller';
@@ -73,6 +74,7 @@ router.get('/hall-ticket/:studentId', authenticate, authorizePermission(['exam.r
 router.post('/mark-attendance', authenticate, authorizePermission('exam.update.all'), markAttendance);
 router.post('/results', authenticate, authorizePermission('exam.update.all'), updateExamScore);
 router.post('/results/bulk', authenticate, authorizePermission('exam.update.all'), upload.single('file'), uploadBulkResults);
+router.post('/bulk-results', authenticate, authorizePermission('exam.update.all'), uploadBulkResultsJSON);
 
 
 export default router;

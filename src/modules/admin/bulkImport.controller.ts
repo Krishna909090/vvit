@@ -25,6 +25,31 @@ export const importSeatBookingStudents = catchAsync(async (req: Request, res: Re
     });
 });
 
+export const validateOfflineApplications = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const applications = req.body;
+    if (!Array.isArray(applications) || applications.length === 0) {
+        throw new AppError('Request body must be a non-empty array of applications', 400);
+    }
+    const results = await bulkImportService.validateOfflineApplications(applications);
+    res.status(200).json({
+        status: 'success',
+        message: results.invalid === 0 ? 'All records are valid and ready to import' : `${results.invalid} record(s) have errors`,
+        data: results
+    });
+});
+
+export const importOfflineApplications = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const applications = req.body;
+    if (!Array.isArray(applications) || applications.length === 0) {
+        throw new AppError('Request body must be a non-empty array of applications', 400);
+    }
+    const results = await bulkImportService.processOfflineApplications(applications, req.user?.userId || 'ADMIN');
+    res.status(200).json({
+        status: 'success',
+        data: results
+    });
+});
+
 export const verifyPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId, amount, type } = req.body;
     if (!studentId || !amount || !type) {

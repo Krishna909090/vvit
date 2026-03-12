@@ -103,6 +103,9 @@ export const updatePersonalDetailsSchema = z.object({
         profilePhotoUrl: z.string().url().optional(),
         pro: z.string().optional(),
         proNumber: z.string().optional(),
+        pref1: z.string().uuid("Invalid Course ID").optional(),
+        pref2: z.string().uuid("Invalid Course ID").optional(),
+        pref3: z.string().uuid("Invalid Course ID").optional(),
     }).refine(data => {
         const forbiddenKeys = ['phone', 'phoneNumber', 'aadharNumber', 'aadhar'];
         const keys = Object.keys(data);

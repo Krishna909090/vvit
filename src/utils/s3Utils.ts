@@ -48,6 +48,21 @@ export const deleteFileFromS3 = async (key: string): Promise<void> => {
     }
 };
 
+export const downloadFileFromS3 = async (key: string): Promise<Buffer> => {
+    try {
+        const command = new GetObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: key
+        });
+        const response = await s3Client.send(command);
+        const byteArray = await response.Body!.transformToByteArray();
+        return Buffer.from(byteArray);
+    } catch (error) {
+        logger.error(`Error downloading file from S3: ${error}`);
+        throw new AppError('Failed to download file from S3', 500);
+    }
+};
+
 export const getPresignedUrl = async (key: string, expiresIn: number = 3600): Promise<string> => {
     try {
         const command = new GetObjectCommand({

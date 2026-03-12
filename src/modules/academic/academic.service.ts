@@ -153,7 +153,7 @@ export const AcademicService = {
     },
 
     // Course
-    async createCourse(name: string, code: string, departmentId: string, degree?: string, totalSeats?: number, createdBy?: string) {
+    async createCourse(name: string, code: string, departmentId: string, degree?: string, totalSeats?: number, createdBy?: string, omrId?: number) {
         const department = await prisma.department.findUnique({ where: { id: departmentId } });
         if (!department) {
             throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
@@ -178,14 +178,24 @@ export const AcademicService = {
             throw new AppError("Course with this name or code already exists", 409);
         }
 
+        if (omrId !== undefined && omrId !== null) {
+            const omrIdConflict = await prisma.course.findFirst({
+                where: { omrId, isDeleted: false }
+            });
+            if (omrIdConflict) {
+                throw new AppError("A course with this OMR ID already exists", 409);
+            }
+        }
+
         return await prisma.course.create({
-            data: { 
-                name, 
-                code, 
-                departmentId, 
-                degree, 
-                totalSeats: totalSeats !== undefined ? Number(totalSeats) : 0, 
-                createdBy 
+            data: {
+                name,
+                code,
+                departmentId,
+                degree,
+                totalSeats: totalSeats !== undefined ? Number(totalSeats) : 0,
+                omrId,
+                createdBy
             }
         });
     },
@@ -240,15 +250,16 @@ export const AcademicService = {
         return course;
     },
 
-    async updateCourse(id: string, name: string, code: string, departmentId: string, totalSeats: number | undefined, updatedBy?: string) {
+    async updateCourse(id: string, name: string, code: string, departmentId: string, totalSeats: number | undefined, updatedBy?: string, omrId?: number) {
         const course = await prisma.course.findUnique({ where: { id } });
         if (!course) throw new AppError("Course not found", 404);
 
         if (
-            (name === undefined || course.name === name) && 
-            (code === undefined || course.code === code) && 
+            (name === undefined || course.name === name) &&
+            (code === undefined || course.code === code) &&
             (departmentId === undefined || course.departmentId === departmentId) &&
-            (totalSeats === undefined || course.totalSeats === totalSeats)
+            (totalSeats === undefined || course.totalSeats === totalSeats) &&
+            (omrId === undefined || course.omrId === omrId)
         ) {
             throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
         }
@@ -267,8 +278,18 @@ export const AcademicService = {
             }
         }
 
+        if (omrId !== undefined && omrId !== null && omrId !== course.omrId) {
+            const omrIdConflict = await prisma.course.findFirst({
+                where: { omrId, id: { not: id }, isDeleted: false }
+            });
+            if (omrIdConflict) {
+                throw new AppError("A course with this OMR ID already exists", 409);
+            }
+        }
+
         const updateData: any = { name, code, departmentId, updatedBy };
         if (totalSeats !== undefined) updateData.totalSeats = totalSeats;
+        if (omrId !== undefined) updateData.omrId = omrId;
 
         return await prisma.course.update({
             where: { id },

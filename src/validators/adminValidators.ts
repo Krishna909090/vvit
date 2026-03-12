@@ -263,6 +263,7 @@ export const createCourseSchema = z.object({
         departmentId: z.string().uuid("Invalid Department ID"),
         degree: z.string().optional(),
         totalSeats: z.number().int().min(0).optional(),
+        omrId: z.number().int().optional(),
     }),
 });
 
@@ -427,6 +428,9 @@ export const updateStudentPersonalDetailsSchema = z.object({
         country: z.string().min(1).optional(),
         profilePhotoUrl: z.string().url().optional(),
         aadharNumber: z.string().optional(),
+        pref1: z.string().uuid("Invalid Course ID").optional(),
+        pref2: z.string().uuid("Invalid Course ID").optional(),
+        pref3: z.string().uuid("Invalid Course ID").optional(),
     }).refine(data => {
         const forbiddenKeys = ['phone', 'phoneNumber'];
         const keys = Object.keys(data);
@@ -528,4 +532,9 @@ export const updateFullStaffDetailsSchema = z.object({
     ),
 });
 
-
+export const assignProSchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid('Invalid student ID'),
+        proNumber: z.string().min(1, 'PRO number is required'),
+    }),
+});

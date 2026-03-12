@@ -97,10 +97,10 @@ export const deleteDepartment = catchAsync(async (req: Request, res: Response, n
 
 // Course
 export const createCourse = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { name, code, departmentId, degree, totalSeats } = req.body;
+    const { name, code, departmentId, degree, totalSeats, omrId } = req.body;
     const adminId = req.user?.userId;
 
-    const course = await AcademicService.createCourse(name, code, departmentId, degree, totalSeats, adminId);
+    const course = await AcademicService.createCourse(name, code, departmentId, degree, totalSeats, adminId, omrId !== undefined ? Number(omrId) : undefined);
     
     sendResponse({
         res,
@@ -132,9 +132,9 @@ export const getCourseById = catchAsync(async (req: Request, res: Response, next
 
 export const updateCourse = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { name, code, departmentId, totalSeats } = req.body;
-    
-    const updatedCourse = await AcademicService.updateCourse(id, name, code, departmentId, totalSeats, req.user?.userId);
+    const { name, code, departmentId, totalSeats, omrId } = req.body;
+
+    const updatedCourse = await AcademicService.updateCourse(id, name, code, departmentId, totalSeats, req.user?.userId, omrId !== undefined ? Number(omrId) : undefined);
     
     sendResponse({ res, statusCode: 200, success: true, message: "Course updated successfully", data: updatedCourse });
 });

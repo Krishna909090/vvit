@@ -608,3 +608,33 @@ export const uploadBulkResults = catchAsync(async (req: Request, res: Response, 
         fs.unlinkSync(req.file.path);
     }
 });
+
+/**
+ * Controller: Bulk Upload Exam Results (JSON array).
+ * Route: POST /exam/results/bulk-json
+ */
+export const uploadBulkResultsJSON = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const records = req.body?.records;
+    const cutoff = req.body?.cutoff;
+
+    if (!Array.isArray(records) || records.length === 0) {
+        throw new AppError('Request body must contain a non-empty "records" array', 400);
+    }
+
+    const results = await examService.processBulkResultsJSON(records, cutoff);
+
+    const successCount = results.filter(r => r.status === 'Success').length;
+    const failedCount = results.filter(r => r.status === 'Failed').length;
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: `Processed ${results.length} records: ${successCount} success, ${failedCount} failed`,
+        data: {
+            summary: { total: results.length, successful: successCount, failed: failedCount },
+            failedRecords: results.filter(r => r.status === 'Failed'),
+            allResults: results
+        }
+    });
+});
