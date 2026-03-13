@@ -1295,6 +1295,14 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
 
     const studentMap = new Map(students.map(s => [s.applicationId, s.id]));
 
+    // Pre-fetch exam records to check attendance
+    const studentIds = students.map(s => s.id);
+    const examRecords = await prisma.studentExam.findMany({
+        where: { studentId: { in: studentIds } },
+        select: { studentId: true, examAttended: true }
+    });
+    const examMap = new Map(examRecords.map(e => [e.studentId, e.examAttended]));
+
     const updatePromises: Promise<{ applicationId: string; status: string; message?: string }>[] = [];
 
     for (const row of records) {
@@ -1303,6 +1311,12 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
 
         if (!studentId) {
             results.push({ applicationId, status: 'Failed', message: 'Student not found' });
+            continue;
+        }
+
+        // Only allow score update for students who attended the exam
+        if (!examMap.get(studentId)) {
+            results.push({ applicationId, status: 'Failed', message: 'Student has not attended the exam' });
             continue;
         }
 
@@ -1315,10 +1329,9 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
         const isQualified = cutoff != null ? numScore >= Number(cutoff) : undefined;
 
         updatePromises.push(
-            prisma.studentExam.upsert({
+            prisma.studentExam.update({
                 where: { studentId },
-                update: { examScore: numScore, ...(isQualified !== undefined && { isQualified }) },
-                create: { studentId, examScore: numScore, ...(isQualified !== undefined && { isQualified }) }
+                data: { examScore: numScore, ...(isQualified !== undefined && { isQualified }) }
             })
             .then(() => ({ applicationId, status: 'Success' }))
             .catch((err: any) => ({ applicationId, status: 'Failed', message: err.message }))
