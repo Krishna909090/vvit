@@ -349,7 +349,8 @@ export const updateStudentPersonalDetails = catchAsync(async (req: Request, res:
         res,
         statusCode: 200,
         success: true,
-        message: result.message
+        message: result.message,
+        data: result.profilePhotoUrl ? { profilePhotoUrl: result.profilePhotoUrl } : undefined
     });
 });
 

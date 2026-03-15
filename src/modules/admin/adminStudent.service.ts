@@ -1448,7 +1448,13 @@ export const AdminStudentService = {
              }
         });
 
-        return { success: true, message: 'Student personal details updated successfully' };
+        // Return presigned profilePhotoUrl if it was updated
+        let presignedPhotoUrl: string | null = null;
+        if (updateData.profilePhotoUrl) {
+            presignedPhotoUrl = await convertToPresignedUrl(updateData.profilePhotoUrl) || updateData.profilePhotoUrl;
+        }
+
+        return { success: true, message: 'Student personal details updated successfully', profilePhotoUrl: presignedPhotoUrl };
     },
 
     async getStudentDetails(studentId: string) {
