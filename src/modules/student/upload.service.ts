@@ -8,6 +8,7 @@ export interface UploadResult {
     url: string;
     key: string;
     filename: string;
+    presignedUrl?: string;
 }
 
 
@@ -24,10 +25,24 @@ export const uploadFileToS3 = async (
     }
 
     logger.info(`File uploaded to S3: ${s3File.key}`);
+
+    // Generate presigned URL for immediate use
+    let presignedUrl: string | undefined;
+    try {
+        const command = new GetObjectCommand({
+            Bucket: process.env.AWS_S3_BUCKET_NAME!,
+            Key: s3File.key,
+        });
+        presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+    } catch (err) {
+        logger.warn(`Failed to generate presigned URL for uploaded file: ${err}`);
+    }
+
     return {
         url: s3File.location,
         key: s3File.key,
-        filename: file.originalname
+        filename: file.originalname,
+        presignedUrl
     };
 };
 

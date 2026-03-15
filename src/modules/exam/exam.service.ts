@@ -1284,7 +1284,7 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
  * Uses upsert so it works even if studentExam doesn't exist yet (e.g. offline students).
  */
 export const processBulkResultsJSON = async (records: { applicationId: string; score: number; status: string }[]) => {
-    const results: { applicationId: string; status: string; message?: string }[] = [];
+    const results: any[] = [];
 
     const applicationIds = records.map(r => r.applicationId).filter(Boolean);
 
@@ -1303,32 +1303,32 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
     });
     const examMap = new Map(examRecords.map(e => [e.studentId, e.examAttended]));
 
-    const updatePromises: Promise<{ applicationId: string; status: string; message?: string }>[] = [];
+    const updatePromises: Promise<any>[] = [];
 
     for (const row of records) {
         const { applicationId, score, status: qualStatus } = row;
         const studentId = studentMap.get(applicationId);
 
         if (!studentId) {
-            results.push({ applicationId, status: 'Failed', message: 'Student not found' });
+            results.push({ ...row, result: 'Failed', message: 'Student not found' });
             continue;
         }
 
         // Only allow score update for students who attended the exam
         if (!examMap.get(studentId)) {
-            results.push({ applicationId, status: 'Failed', message: 'Student has not attended the exam' });
+            results.push({ ...row, result: 'Failed', message: 'Student has not attended the exam' });
             continue;
         }
 
         const numScore = Number(score);
         if (isNaN(numScore)) {
-            results.push({ applicationId, status: 'Failed', message: 'Invalid score value' });
+            results.push({ ...row, result: 'Failed', message: 'Invalid score value' });
             continue;
         }
 
         const upperStatus = (qualStatus || '').toUpperCase().trim();
         if (upperStatus !== 'Q' && upperStatus !== 'NQ') {
-            results.push({ applicationId, status: 'Failed', message: 'Status must be "Q" (Qualified) or "NQ" (Not Qualified)' });
+            results.push({ ...row, result: 'Failed', message: 'Status must be "Q" (Qualified) or "NQ" (Not Qualified)' });
             continue;
         }
 
@@ -1372,9 +1372,9 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
                         });
                     }
 
-                    return { applicationId, status: 'Success' };
+                    return { ...row, result: 'Success' };
                 } catch (err: any) {
-                    return { applicationId, status: 'Failed', message: err.message };
+                    return { ...row, result: 'Failed', message: err.message };
                 }
             })()
         );

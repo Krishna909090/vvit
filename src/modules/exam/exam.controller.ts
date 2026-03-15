@@ -622,8 +622,8 @@ export const uploadBulkResultsJSON = catchAsync(async (req: Request, res: Respon
 
     const results = await examService.processBulkResultsJSON(records);
 
-    const successCount = results.filter(r => r.status === 'Success').length;
-    const failedCount = results.filter(r => r.status === 'Failed').length;
+    const successCount = results.filter((r: any) => r.result === 'Success').length;
+    const failedCount = results.filter((r: any) => r.result === 'Failed').length;
 
     sendResponse({
         res,
@@ -632,8 +632,8 @@ export const uploadBulkResultsJSON = catchAsync(async (req: Request, res: Respon
         message: `Processed ${results.length} records: ${successCount} success, ${failedCount} failed`,
         data: {
             summary: { total: results.length, successful: successCount, failed: failedCount },
-            failedRecords: results.filter(r => r.status === 'Failed'),
-            allResults: results
+            failedRecords: results.filter((r: any) => r.result === 'Failed'),
+            successRecords: results.filter((r: any) => r.result === 'Success')
         }
     });
 });
