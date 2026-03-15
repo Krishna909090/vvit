@@ -1352,9 +1352,10 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
                         await prisma.academicQualification.update({
                             where: { id: existingVvitat.id },
                             data: {
-                                percentage: numScore,
+                                percentage: null,
                                 board: 'VVITU',
-                                gpaOrMarks: 'MARKS',
+                                gpaOrMarks: String(numScore),
+                                hallTicketNumber: applicationId,
                                 verificationStatus: 'APPROVED'
                             }
                         });
@@ -1365,8 +1366,9 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
                                 level: 'VVITAT',
                                 board: 'VVITU',
                                 yearOfPassing: new Date().getFullYear().toString(),
-                                percentage: numScore,
-                                gpaOrMarks: 'MARKS',
+                                percentage: null,
+                                gpaOrMarks: String(numScore),
+                                hallTicketNumber: applicationId,
                                 verificationStatus: 'APPROVED'
                             }
                         });
