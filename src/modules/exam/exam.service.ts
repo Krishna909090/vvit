@@ -1283,7 +1283,7 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
  * Accepts: [{ applicationId, score }]
  * Uses upsert so it works even if studentExam doesn't exist yet (e.g. offline students).
  */
-export const processBulkResultsJSON = async (records: { applicationId: string; score: number }[], cutoff?: number) => {
+export const processBulkResultsJSON = async (records: { applicationId: string; score: number; status: string }[]) => {
     const results: { applicationId: string; status: string; message?: string }[] = [];
 
     const applicationIds = records.map(r => r.applicationId).filter(Boolean);
@@ -1306,7 +1306,7 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
     const updatePromises: Promise<{ applicationId: string; status: string; message?: string }>[] = [];
 
     for (const row of records) {
-        const { applicationId, score } = row;
+        const { applicationId, score, status: qualStatus } = row;
         const studentId = studentMap.get(applicationId);
 
         if (!studentId) {
@@ -1326,15 +1326,57 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
             continue;
         }
 
-        const isQualified = cutoff != null ? numScore >= Number(cutoff) : undefined;
+        const upperStatus = (qualStatus || '').toUpperCase().trim();
+        if (upperStatus !== 'Q' && upperStatus !== 'NQ') {
+            results.push({ applicationId, status: 'Failed', message: 'Status must be "Q" (Qualified) or "NQ" (Not Qualified)' });
+            continue;
+        }
+
+        const isQualified = upperStatus === 'Q';
 
         updatePromises.push(
-            prisma.studentExam.update({
-                where: { studentId },
-                data: { examScore: numScore, ...(isQualified !== undefined && { isQualified }) }
-            })
-            .then(() => ({ applicationId, status: 'Success' }))
-            .catch((err: any) => ({ applicationId, status: 'Failed', message: err.message }))
+            (async () => {
+                try {
+                    // Update exam score and qualification
+                    await prisma.studentExam.update({
+                        where: { studentId },
+                        data: { examScore: numScore, isQualified }
+                    });
+
+                    // Create/update VVITAT academic qualification record
+                    const existingVvitat = await prisma.academicQualification.findFirst({
+                        where: { studentId, level: 'VVITAT' }
+                    });
+
+                    if (existingVvitat) {
+                        await prisma.academicQualification.update({
+                            where: { id: existingVvitat.id },
+                            data: {
+                                percentage: numScore,
+                                board: 'VVITU',
+                                gpaOrMarks: 'MARKS',
+                                verificationStatus: 'APPROVED'
+                            }
+                        });
+                    } else {
+                        await prisma.academicQualification.create({
+                            data: {
+                                studentId,
+                                level: 'VVITAT',
+                                board: 'VVITU',
+                                yearOfPassing: new Date().getFullYear().toString(),
+                                percentage: numScore,
+                                gpaOrMarks: 'MARKS',
+                                verificationStatus: 'APPROVED'
+                            }
+                        });
+                    }
+
+                    return { applicationId, status: 'Success' };
+                } catch (err: any) {
+                    return { applicationId, status: 'Failed', message: err.message };
+                }
+            })()
         );
     }
 
