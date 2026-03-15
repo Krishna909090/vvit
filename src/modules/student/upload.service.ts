@@ -3,6 +3,7 @@ import logger from '../../utils/logger';
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3Client } from "../../config/awsConfig";
+import { convertToPresignedUrl } from '../../utils/s3Utils';
 
 export interface UploadResult {
     url: string;
@@ -26,14 +27,10 @@ export const uploadFileToS3 = async (
 
     logger.info(`File uploaded to S3: ${s3File.key}`);
 
-    // Generate presigned URL for immediate use
+    // Generate presigned URL for immediate use using the same method that works everywhere else
     let presignedUrl: string | undefined;
     try {
-        const command = new GetObjectCommand({
-            Bucket: process.env.AWS_S3_BUCKET_NAME!,
-            Key: s3File.key,
-        });
-        presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+        presignedUrl = await convertToPresignedUrl(s3File.location) || undefined;
     } catch (err) {
         logger.warn(`Failed to generate presigned URL for uploaded file: ${err}`);
     }
