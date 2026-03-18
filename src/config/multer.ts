@@ -36,10 +36,14 @@ const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCa
         '.png': ['image/png']
     };
 
-    // Block double extensions (e.g., file.pdf.exe, shell.php.jpg)
-    const dotCount = (file.originalname.match(/\./g) || []).length;
-    if (dotCount > 1) {
-        return cb(new Error('Double extensions are not allowed in file names.'));
+    // Block dangerous double extensions (e.g., file.pdf.exe, shell.php.jpg)
+    const parts = file.originalname.split('.');
+    if (parts.length > 2) {
+        const secondLastExt = '.' + parts[parts.length - 2].toLowerCase();
+        const dangerousExts = ['.php', '.exe', '.sh', '.bat', '.cmd', '.js', '.py', '.rb'];
+        if (dangerousExts.includes(secondLastExt)) {
+            return cb(new Error('Double extensions are not allowed in file names.'));
+        }
     }
 
     const ext = path.extname(file.originalname).toLowerCase();
