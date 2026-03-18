@@ -19,7 +19,7 @@ export const getQualificationRequirements = async (degreeType?: string) => {
     
     const requirements = await prisma.qualificationRequirement.findMany({
         where,
-        orderBy: { createdAt: 'desc' }
+        orderBy: { createdAt: 'asc' }
     });
     
     return requirements;
