@@ -70,21 +70,22 @@ const checkExpiredScholarships = async () => {
 
 // ─────────────────────────────────────────────
 // Job 2: Stale PENDING Payment Cleanup
-// Marks ONLINE payments older than 30 minutes as FAILED
+// Marks ONLINE payments older than 22 minutes as FAILED
+// PhonePe QR expires at 20 min — 22 min gives 2 min buffer
 // ─────────────────────────────────────────────
 
 export const startStalePaymentCleanupJob = () => {
-    logger.info('[StalePaymentCleanup] Starting (Interval: 15 minutes)');
+    logger.info('[StalePaymentCleanup] Starting (Interval: 5 minutes)');
 
-    // Run every 15 minutes
+    // Run every 5 minutes
     setInterval(async () => {
         await cleanupStalePayments();
-    }, 15 * 60 * 1000);
+    }, 5 * 60 * 1000);
 };
 
 const cleanupStalePayments = async () => {
     try {
-        const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
+        const thirtyMinAgo = new Date(Date.now() - 22 * 60 * 1000);
 
         const stalePayments = await prisma.payment.findMany({
             where: {
@@ -129,15 +130,17 @@ export const startPaymentReconciliationJob = () => {
 
 const reconcilePendingPayments = async () => {
     try {
-        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
-        const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
+        const threeMinAgo = new Date(Date.now() - 3 * 60 * 1000);
+        const twentyTwoMinAgo = new Date(Date.now() - 22 * 60 * 1000);
 
-        // Find PENDING online payments between 5-30 minutes old
+        // Find PENDING online payments between 3-22 minutes old
+        // Lower: 3 min gives PhonePe time to send webhook first
+        // Upper: 22 min aligns with PhonePe QR expiry (20 min) + 2 min buffer
         const pendingPayments = await prisma.payment.findMany({
             where: {
                 status: PaymentStatus.PENDING,
                 mode: PaymentMode.ONLINE,
-                createdAt: { gt: thirtyMinAgo, lt: fiveMinAgo }
+                createdAt: { gt: twentyTwoMinAgo, lt: threeMinAgo }
             },
             select: { id: true, providerTxId: true, studentId: true },
             distinct: ['providerTxId']

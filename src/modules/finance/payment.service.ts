@@ -246,7 +246,7 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     try {
         const result = await initiatePhonePePayment(studentId, amount, transactionId, redirectUrl, 'ADMISSION');
         payLog.info('GATEWAY_REDIRECT', `PhonePe redirect URL generated`, { studentId, txnId: transactionId, paymentId: createdPayment.id });
-        return { redirectUrl: result.redirectUrl, paymentId: createdPayment.id };
+        return { redirectUrl: result.redirectUrl, paymentId: createdPayment.id, expiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString() };
     } catch (err) {
         await prisma.payment.update({
             where: { id: createdPayment.id },
@@ -398,7 +398,7 @@ export const initiateMultiComponentPayment = async (
         const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}/admin/fees/offlinepayments?appId=${student.applicationId}&paymentId=${paymentIds.join(',')}`;
         try {
             const result = await initiatePhonePePayment(studentId, totalAmount, transactionId, redirectUrl, 'ADMISSION');
-            return { redirectUrl: result.redirectUrl, paymentIds };
+            return { redirectUrl: result.redirectUrl, paymentIds, expiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString() };
         } catch (err) {
             await prisma.payment.updateMany({
                 where: { id: { in: paymentIds } },
