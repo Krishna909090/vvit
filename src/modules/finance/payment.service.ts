@@ -2,7 +2,10 @@ import axios from 'axios';
 import crypto from 'crypto';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
-import logger from '../../utils/logger';
+import logger, { createModuleLogger } from '../../utils/logger';
+const payLog = createModuleLogger('PAYMENT');
+const webhookLog = createModuleLogger('WEBHOOK');
+const ledgerLog = createModuleLogger('LEDGER');
 import { format } from 'date-fns';
 import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod, PaymentMode, HostelPaymentMode } from '@prisma/client';
 import { getApplicationFeeAmount } from './fee.service';
@@ -132,7 +135,12 @@ export const initiatePhonePePayment = async (studentId: string, amount: number, 
         const response = await client.pay(request);
         return { redirectUrl: response.redirectUrl };
     } catch (error: any) {
-        logger.error(`PhonePe Initiation Error [${transactionId}]:`, error);
+        logger.error(`PhonePe Initiation Error [${transactionId}]: ${error?.message || error}`, {
+            stack: error?.stack,
+            response: error?.response?.data,
+            code: error?.code,
+            status: error?.status
+        });
         throw new AppError('Failed to initiate payment gateway', 502);
     }
 };
@@ -144,9 +152,10 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     });
     
     // Step 1: Check Student Existence and Payment Status
-    logger.info(`[initiateApplicationFeePayment] Step 1: Validating student ${studentId}`);
+    payLog.info('INITIATE', `Application fee payment started`, { studentId, amount, applicationId: student?.applicationId });
 
     if (!student) {
+        payLog.error('INITIATE_FAILED', `Student not found`, { studentId });
         throw new AppError('Student not found', 404);
     }
     
@@ -230,12 +239,21 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     }, { isolationLevel: 'Serializable' });
 
     // Step 3: Initiate PhonePe Request
-    logger.info(`[initiateApplicationFeePayment] Step 3: Initiating Payment with PhonePe txnId=${transactionId}`);
+    payLog.info('GATEWAY_INIT', `Initiating PhonePe payment`, { studentId, txnId: transactionId, amount });
     const redirectUrl = `${process.env.FRONTEND_URL}/student/payment?txnId=${transactionId}`;
-    
+
     // Explicitly use 'ADMISSION' credentials for Application Fee
-    const result = await initiatePhonePePayment(studentId, amount, transactionId, redirectUrl, 'ADMISSION');
-    return { redirectUrl: result.redirectUrl, paymentId: createdPayment.id };
+    try {
+        const result = await initiatePhonePePayment(studentId, amount, transactionId, redirectUrl, 'ADMISSION');
+        payLog.info('GATEWAY_REDIRECT', `PhonePe redirect URL generated`, { studentId, txnId: transactionId, paymentId: createdPayment.id });
+        return { redirectUrl: result.redirectUrl, paymentId: createdPayment.id };
+    } catch (err) {
+        await prisma.payment.update({
+            where: { id: createdPayment.id },
+            data: { status: PaymentStatus.FAILED, metadata: { reason: 'GATEWAY_INIT_FAILED' } as any }
+        });
+        throw err;
+    }
 };
 
 export const initiateMultiComponentPayment = async (
@@ -316,11 +334,31 @@ export const initiateMultiComponentPayment = async (
     const paymentStatus = PaymentStatus.PENDING;
     const paymentMode = isOffline ? PaymentMode.OFFLINE : PaymentMode.ONLINE;
 
-    // 3. Create Payment Records
+    // 3. Duplicate check for offline payments with reference numbers
+    if (isOffline && referenceNumber) {
+        const existingPayment = await prisma.payment.findFirst({
+            where: { referenceNumber, studentId, status: PaymentStatus.SUCCESS }
+        });
+        if (existingPayment) {
+            throw new AppError(`Duplicate payment: reference number '${referenceNumber}' already used for this student`, 409);
+        }
+    }
+
+    // 4. Create Payment Records
     const paymentIds: string[] = [];
     const createdPayments: any[] = [];
-    
+
     await prisma.$transaction(async (tx) => {
+        // Double-check inside transaction to prevent race condition
+        if (isOffline && referenceNumber) {
+            const duplicate = await tx.payment.findFirst({
+                where: { referenceNumber, studentId, status: { in: [PaymentStatus.SUCCESS, PaymentStatus.PENDING] } }
+            });
+            if (duplicate) {
+                throw new AppError(`Duplicate payment: reference number '${referenceNumber}' already used`, 409);
+            }
+        }
+
         for (const item of components) {
             const payment = await tx.payment.create({
                 data: {
@@ -358,8 +396,16 @@ export const initiateMultiComponentPayment = async (
         };
     } else {
         const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}/admin/fees/offlinepayments?appId=${student.applicationId}&paymentId=${paymentIds.join(',')}`;
-        const result = await initiatePhonePePayment(studentId, totalAmount, transactionId, redirectUrl, 'ADMISSION');
-        return { redirectUrl: result.redirectUrl, paymentIds };
+        try {
+            const result = await initiatePhonePePayment(studentId, totalAmount, transactionId, redirectUrl, 'ADMISSION');
+            return { redirectUrl: result.redirectUrl, paymentIds };
+        } catch (err) {
+            await prisma.payment.updateMany({
+                where: { id: { in: paymentIds } },
+                data: { status: PaymentStatus.FAILED, metadata: { reason: 'GATEWAY_INIT_FAILED' } as any }
+            });
+            throw err;
+        }
     }
 };
 
@@ -422,7 +468,10 @@ const processSinglePaymentSuccess = async (payment: any, metadata: any) => {
 
 const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     if (!payments || payments.length === 0) return;
-    logger.info(`[processMultiPaymentSuccess] Processing ${payments.length} payments. Ref=${payments[0].providerTxId}`);
+    const txnId = payments[0].providerTxId;
+    const studentId = payments[0].studentId;
+    payLog.info('PROCESSING', `Processing ${payments.length} payment(s)`, { txnId, studentId, count: payments.length });
+    logger.info(`[processMultiPaymentSuccess] Processing ${payments.length} payments. Ref=${txnId}`);
 
     // Idempotency guard — skip payments already marked SUCCESS to prevent
     // double ledger entries and double fee settlement on duplicate callbacks
@@ -440,6 +489,7 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         where: { id: { in: pendingPayments.map((p: any) => p.id) } },
         data: { status: PaymentStatus.SUCCESS, metadata }
     });
+    payLog.info('SUCCESS', `${pendingPayments.length} payment(s) marked SUCCESS`, { txnId, studentId, amount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
 
     // 2. Pre-generate Allotment Order for admission payments (must happen before invoice so email can attach it)
     const admissionComponents = [PaymentComponent.SCHOLARSHIP_TOKEN, PaymentComponent.TUITION];
@@ -451,10 +501,10 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
             });
             if (!existingAllotment?.url) {
                 await generateAndSaveAllotmentOrder(payments[0].studentId);
-                logger.info(`[processMultiPaymentSuccess] Allotment Order generated for student=${payments[0].studentId}`);
+                payLog.info('ALLOTMENT_GENERATED', `Allotment order generated`, { studentId });
             }
         } catch (e) {
-            logger.error(`[processMultiPaymentSuccess] Allotment Order Generation Failed: ${e}`);
+            payLog.error('ALLOTMENT_FAILED', `Allotment order generation failed: ${e}`, { studentId });
         }
     }
 
@@ -463,8 +513,9 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     try {
         const invoiceResult = await InvoiceService.generateInvoiceForPayment(payments[0].id);
         invoiceUrl = invoiceResult.invoiceUrl;
+        payLog.info('INVOICE_GENERATED', `Invoice generated`, { studentId, txnId, invoiceNumber: invoiceResult.invoiceNumber });
     } catch (e) {
-        logger.error(`[processMultiPaymentSuccess] Invoice Generation Failed: ${e}`);
+        payLog.error('INVOICE_FAILED', `Invoice generation failed: ${e}`, { studentId, txnId });
     }
 
     // 3. Process Logic (Iterate)
@@ -472,13 +523,16 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         await _processComponentLogic(payment);
         if (payment.component !== PaymentComponent.APPLICATION_FEE) {
             await _settleFeeDemands(payment);
+            payLog.info('FEE_SETTLED', `Fee demand settled`, { studentId, component: payment.component, amount: payment.amount });
         }
         await _createPaymentLedger(payment);
+        ledgerLog.info('CREATED', `Ledger entry created`, { studentId, type: 'CREDIT', amount: payment.amount, component: payment.component });
     }
 
     // 4. Triggers
     await _handleTriggers(payments);
 
+    payLog.info('COMPLETED', `Payment processing completed`, { txnId, studentId, totalAmount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
     return { invoiceUrl };
 };
 
@@ -593,15 +647,17 @@ const _createPaymentLedger = async (payment: any) => {
         await prisma.studentLedger.create({
             data: {
                 studentId: payment.studentId,
-                type: 'CREDIT', 
+                type: 'CREDIT',
                 amount: payment.amount,
                 description: `Payment Received via ${payment.method || 'ONLINE'} (${payment.component})`,
                 referenceId: payment.id,
                 referenceType: 'PAYMENT',
-                feeHeadId: payment.feeHeadId || undefined, 
-                createdBy: payment.createdBy || payment.collectedBy || 'SYSTEM', // Strict tracking
+                feeHeadId: payment.feeHeadId || undefined,
+                academicYearId: payment.academicYearId || undefined,
+                yearOfStudy: payment.yearOfStudy || undefined,
+                createdBy: payment.createdBy || payment.collectedBy || 'SYSTEM',
                 date: new Date()
-            } as any 
+            } as any
         });
     } catch (err) {
         logger.error(`Ledger Creation Failed for ${payment.id}: ${err}`);
@@ -1122,11 +1178,15 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
 };
 
 export const handlePaymentCallback = async (base64Payload: string, xVerify: string) => {
+    webhookLog.info('RECEIVED', `Legacy callback received`);
+
     // 1. Decode Payload first to identify Merchant
     const decodedBuffer = Buffer.from(base64Payload, 'base64');
     const decodedString = decodedBuffer.toString('utf-8');
     const decodedPayload = JSON.parse(decodedString);
     const { merchantTransactionId, code, merchantId } = decodedPayload;
+
+    webhookLog.info('DECODED', `Callback decoded`, { txnId: merchantTransactionId, code, merchantId });
 
     // 2. Select Credentials
     let saltKey = PHONEPE_CREDENTIALS.ADMISSION.SALT_KEY;
@@ -1143,9 +1203,11 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
     const expectedChecksum = sha256 + "###" + saltIndex;
 
     if (expectedChecksum !== xVerify) {
-        logger.error(`Invalid checksum in payment callback. Recv: ${xVerify}, Calc: ${expectedChecksum}, Merch: ${merchantId}`);
+        webhookLog.error('CHECKSUM_FAILED', `Invalid checksum`, { txnId: merchantTransactionId, merchantId });
         throw new AppError("Invalid checksum", 400);
     }
+
+    webhookLog.info('VERIFIED', `Checksum verified`, { txnId: merchantTransactionId });
 
     const payments = await prisma.payment.findMany({
         where: { providerTxId: merchantTransactionId },
@@ -1153,30 +1215,121 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
     });
 
     if (payments.length === 0) {
-        logger.error(`Payment not found for transaction: ${merchantTransactionId}`);
+        webhookLog.error('NOT_FOUND', `No payments found for transaction`, { txnId: merchantTransactionId });
         return;
     }
 
-    logger.info(`Found ${payments.length} payments for transaction: ${merchantTransactionId}`);
-
     if (code === 'PAYMENT_SUCCESS') {
-        logger.info(`Payment success callback received for transaction: ${merchantTransactionId}, updating ${payments.length} payments`);
+        webhookLog.info('PAYMENT_SUCCESS', `Payment success callback`, { txnId: merchantTransactionId, count: payments.length });
         const needsUpdate = payments.some(p => p.status !== PaymentStatus.SUCCESS);
         if (needsUpdate) {
-            logger.info(`Updating payment status to SUCCESS for ${payments.length} payments`);
             await processMultiPaymentSuccess(payments, decodedPayload);
         } else {
-            logger.info(`Payments already SUCCESS for transaction: ${merchantTransactionId}`);
+            webhookLog.info('ALREADY_PROCESSED', `Payments already SUCCESS (idempotent)`, { txnId: merchantTransactionId });
         }
     } else {
-         logger.warn(`Payment failed for transaction: ${merchantTransactionId}, code: ${code}`);
-         await prisma.payment.updateMany({
+        webhookLog.warn('PAYMENT_FAILED', `Payment failed callback`, { txnId: merchantTransactionId, code });
+        await prisma.payment.updateMany({
             where: { providerTxId: merchantTransactionId },
             data: {
                 status: PaymentStatus.FAILED,
                 metadata: decodedPayload
             }
         });
+    }
+
+    return { status: 'OK' };
+};
+
+/**
+ * New Standard Checkout Webhook Handler
+ * PhonePe sends: { type, payload } with Authorization: SHA256(username:password)
+ * Events: checkout.order.completed, checkout.order.failed, pg.refund.completed, pg.refund.failed
+ */
+export const handleNewWebhook = async (body: any, authHeader: string) => {
+    // 1. Verify Authorization
+    const webhookUsername = process.env.PHONEPE_WEBHOOK_USERNAME || '';
+    const webhookPassword = process.env.PHONEPE_WEBHOOK_PASSWORD || '';
+
+    if (!webhookUsername || !webhookPassword) {
+        logger.error('[Webhook] PHONEPE_WEBHOOK_USERNAME or PHONEPE_WEBHOOK_PASSWORD not configured');
+        throw new AppError('Webhook not configured', 500);
+    }
+
+    const expectedAuth = crypto.createHash('sha256').update(`${webhookUsername}:${webhookPassword}`).digest('hex');
+
+    if (authHeader !== expectedAuth) {
+        logger.error(`[Webhook] Invalid authorization. Received: ${authHeader?.substring(0, 20)}...`);
+        throw new AppError('Invalid authorization', 401);
+    }
+
+    const { type, payload } = body;
+    if (!type || !payload) {
+        throw new AppError('Invalid webhook body: missing type or payload', 400);
+    }
+
+    const merchantOrderId = payload.merchantOrderId;
+    const merchantId = payload.merchantId;
+
+    logger.info(`[Webhook] Received event=${type} merchantOrderId=${merchantOrderId} merchantId=${merchantId}`);
+
+    // 2. Find payments by merchantOrderId (this is our providerTxId)
+    const payments = await prisma.payment.findMany({
+        where: { providerTxId: merchantOrderId },
+        include: { student: true }
+    });
+
+    if (payments.length === 0) {
+        logger.warn(`[Webhook] No payments found for merchantOrderId=${merchantOrderId}`);
+        return { status: 'OK', message: 'No matching payments' };
+    }
+
+    logger.info(`[Webhook] Found ${payments.length} payment(s) for merchantOrderId=${merchantOrderId}`);
+
+    // 3. Process based on event type
+    switch (type) {
+        case 'checkout.order.completed': {
+            const needsUpdate = payments.some(p => p.status !== PaymentStatus.SUCCESS);
+            if (needsUpdate) {
+                logger.info(`[Webhook] Processing SUCCESS for ${merchantOrderId}`);
+                await processMultiPaymentSuccess(payments, payload);
+            } else {
+                logger.info(`[Webhook] Payments already SUCCESS for ${merchantOrderId} (idempotent)`);
+            }
+            break;
+        }
+
+        case 'checkout.order.failed': {
+            const pendingPayments = payments.filter(p => p.status === PaymentStatus.PENDING);
+            if (pendingPayments.length > 0) {
+                logger.warn(`[Webhook] Processing FAILURE for ${merchantOrderId}, errorCode=${payload.errorCode}`);
+                await prisma.payment.updateMany({
+                    where: { providerTxId: merchantOrderId, status: PaymentStatus.PENDING },
+                    data: {
+                        status: PaymentStatus.FAILED,
+                        metadata: { webhookEvent: type, errorCode: payload.errorCode, detailedErrorCode: payload.detailedErrorCode }
+                    }
+                });
+            } else {
+                logger.info(`[Webhook] No pending payments to fail for ${merchantOrderId}`);
+            }
+            break;
+        }
+
+        case 'pg.refund.completed': {
+            logger.info(`[Webhook] Refund completed: refundId=${payload.refundId}, originalOrder=${payload.originalMerchantOrderId}, amount=${payload.amount}`);
+            // TODO: Implement refund processing when refund flow is built
+            break;
+        }
+
+        case 'pg.refund.failed': {
+            logger.warn(`[Webhook] Refund failed: refundId=${payload.refundId}, originalOrder=${payload.originalMerchantOrderId}, error=${payload.errorCode}`);
+            // TODO: Implement refund failure handling
+            break;
+        }
+
+        default:
+            logger.warn(`[Webhook] Unknown event type: ${type}`);
     }
 
     return { status: 'OK' };
@@ -1367,6 +1520,10 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
         return { redirectUrl: response.redirectUrl, totalAmount: amountToPay, paymentId: payment.id, component: paymentComponent };
     } catch (error: any) {
         logger.error(`PhonePe Payment Initiation Error (${paymentComponent}): ${error.message}`, error);
+        await prisma.payment.update({
+            where: { id: payment.id },
+            data: { status: PaymentStatus.FAILED, metadata: { reason: 'GATEWAY_INIT_FAILED' } as any }
+        });
         throw new AppError('Failed to initiate payment gateway', 502);
     }
 
@@ -1596,6 +1753,10 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
         const response = await client.pay(request);
         return response.redirectUrl;
     } catch (error: any) {
+        await prisma.payment.update({
+            where: { id: createdPayment.id },
+            data: { status: PaymentStatus.FAILED, metadata: { reason: 'GATEWAY_INIT_FAILED' } as any }
+        });
         throw new AppError('Failed to initiate payment gateway', 502);
     }
 };

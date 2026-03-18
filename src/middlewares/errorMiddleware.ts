@@ -10,11 +10,10 @@ const handleZodError = (err: ZodError) => {
 };
 
 const handlePrismaError = (err: any) => {
-    logger.error(`[Prisma Error] code: ${err.code}`, { 
+    logger.error(`[Prisma Error] code: ${err.code}`, {
         code: err.code,
         message: err.message,
-        meta: err.meta,
-        clientVersion: err.clientVersion 
+        target: err.meta?.target // Only log the constraint name, not full query details
     });
 
     // Handle specific Prisma errors if needed
@@ -64,16 +63,28 @@ export const globalErrorHandler = (err: any, req: Request, res: Response, next: 
     err.statusCode = err.statusCode || 500;
     err.status = err.status || 'error';
 
+    // Sanitize sensitive fields before logging
+    const sanitizeBody = (body: any) => {
+        if (!body || typeof body !== 'object') return body;
+        const sanitized = { ...body };
+        const sensitiveKeys = ['password', 'otp', 'otpHash', 'token', 'authorization', 'aadharNumber', 'aadhaarNumber', 'secret', 'creditCard'];
+        for (const key of Object.keys(sanitized)) {
+            if (sensitiveKeys.some(sk => key.toLowerCase().includes(sk.toLowerCase()))) {
+                sanitized[key] = '[REDACTED]';
+            }
+        }
+        return sanitized;
+    };
+
     // Log the error with request context for PM2/CloudWatch
-    logger.error(`[Global Error Handler] ${req.method} ${req.url}`, {
+    logger.error(`[Global Error Handler] ${req.method} ${req.url} ${err.message}`, {
         status: err.status,
         statusCode: err.statusCode,
-        message: err.message,
         stack: err.stack,
         request: {
             method: req.method,
             url: req.url,
-            body: req.body,
+            body: sanitizeBody(req.body),
             query: req.query,
             params: req.params,
             // @ts-ignore

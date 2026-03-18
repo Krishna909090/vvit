@@ -1,6 +1,6 @@
 import prisma from '../config/prisma';
 import logger from '../utils/logger';
-import { ScholarshipStatus } from '@prisma/client';
+import { ScholarshipStatus, PaymentStatus, PaymentMode } from '@prisma/client';
 
 // ─────────────────────────────────────────────
 // Job 1: Scholarship Expiry
@@ -61,10 +61,117 @@ const checkExpiredScholarships = async () => {
             }
         }
 
-        logger.info(`[ScholarshipExpiryJob] Check Completed. ✅ Processed: ${processedCount} | ❌ Failed: ${expiredAllocations.length - processedCount} | Total: ${expiredAllocations.length}`);
+        logger.info(`[ScholarshipExpiryJob] Check Completed. Processed: ${processedCount} | Failed: ${expiredAllocations.length - processedCount} | Total: ${expiredAllocations.length}`);
 
     } catch (error) {
         logger.error(`Error in Scholarship Expiry Job: ${error}`);
+    }
+};
+
+// ─────────────────────────────────────────────
+// Job 2: Stale PENDING Payment Cleanup
+// Marks ONLINE payments older than 30 minutes as FAILED
+// ─────────────────────────────────────────────
+
+export const startStalePaymentCleanupJob = () => {
+    logger.info('[StalePaymentCleanup] Starting (Interval: 15 minutes)');
+
+    // Run every 15 minutes
+    setInterval(async () => {
+        await cleanupStalePayments();
+    }, 15 * 60 * 1000);
+};
+
+const cleanupStalePayments = async () => {
+    try {
+        const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
+
+        const stalePayments = await prisma.payment.findMany({
+            where: {
+                status: PaymentStatus.PENDING,
+                mode: PaymentMode.ONLINE,
+                createdAt: { lt: thirtyMinAgo }
+            },
+            select: { id: true, providerTxId: true, studentId: true, createdAt: true }
+        });
+
+        if (stalePayments.length === 0) return;
+
+        logger.info(`[StalePaymentCleanup] Found ${stalePayments.length} stale PENDING payment(s)`);
+
+        // Mark as FAILED
+        const ids = stalePayments.map(p => p.id);
+        await prisma.payment.updateMany({
+            where: { id: { in: ids } },
+            data: { status: PaymentStatus.FAILED, metadata: { reason: 'AUTO_EXPIRED', expiredAt: new Date().toISOString() } }
+        });
+
+        logger.info(`[StalePaymentCleanup] Marked ${ids.length} stale payments as FAILED`);
+    } catch (error) {
+        logger.error(`[StalePaymentCleanup] Error: ${error}`);
+    }
+};
+
+// ─────────────────────────────────────────────
+// Job 3: Payment Reconciliation
+// Checks PhonePe status for PENDING online payments (5-30 min old)
+// to catch missed callbacks
+// ─────────────────────────────────────────────
+
+export const startPaymentReconciliationJob = () => {
+    logger.info('[PaymentReconciliation] Starting (Interval: 10 minutes)');
+
+    // Run every 10 minutes
+    setInterval(async () => {
+        await reconcilePendingPayments();
+    }, 10 * 60 * 1000);
+};
+
+const reconcilePendingPayments = async () => {
+    try {
+        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
+
+        // Find PENDING online payments between 5-30 minutes old
+        const pendingPayments = await prisma.payment.findMany({
+            where: {
+                status: PaymentStatus.PENDING,
+                mode: PaymentMode.ONLINE,
+                createdAt: { gt: thirtyMinAgo, lt: fiveMinAgo }
+            },
+            select: { id: true, providerTxId: true, studentId: true },
+            distinct: ['providerTxId']
+        });
+
+        if (pendingPayments.length === 0) return;
+
+        logger.info(`[PaymentReconciliation] Found ${pendingPayments.length} pending payment(s) to reconcile`);
+
+        const { checkPaymentStatus } = await import('../modules/finance/payment.service');
+
+        let reconciled = 0;
+        let failed = 0;
+
+        for (const payment of pendingPayments) {
+            if (!payment.providerTxId) continue;
+            try {
+                const result = await checkPaymentStatus(payment.providerTxId);
+                if (result.status === 'SUCCESS' || result.status === 'FAILED') {
+                    reconciled++;
+                    logger.info(`[PaymentReconciliation] Reconciled ${payment.providerTxId} -> ${result.status}`);
+                }
+            } catch (err) {
+                failed++;
+                logger.warn(`[PaymentReconciliation] Failed to reconcile ${payment.providerTxId}: ${err}`);
+            }
+
+            // Small delay to avoid hammering PhonePe API
+            await new Promise(r => setTimeout(r, 500));
+        }
+
+        logger.info(`[PaymentReconciliation] Done. Reconciled: ${reconciled}, Failed: ${failed}, Total: ${pendingPayments.length}`);
+    } catch (error) {
+        logger.error(`[PaymentReconciliation] Error: ${error}`);
     }
 };
 

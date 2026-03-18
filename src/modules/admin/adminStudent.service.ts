@@ -133,7 +133,7 @@ export const AdminStudentService = {
                     courseChangeLogs: true,
                     discountRequests: true,
                     user: true,
-                    enrollment: true,
+                    enrollments: true,
                     hostelAllocation: true,
                     transportAllocation: true,
                     convenorDetails: true,
@@ -306,7 +306,7 @@ export const AdminStudentService = {
                     courseChangeLogs: true,
                     discountRequests: true,
                     user: true,
-                    enrollment: true,
+                    enrollments: true,
                     hostelAllocation: true,
                     transportAllocation: true,
                     convenorDetails: true,
@@ -1309,15 +1309,15 @@ export const AdminStudentService = {
         if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         
         // Upsert Enrollment
-        const enrollment = await prisma.studentEnrollment.upsert({
+        const enrollment = await (prisma.studentEnrollment as any).upsert({
             where: { studentId },
             update: { rollNumber, sectionId, academicYearId, updatedBy: userId },
-            create: { 
-                studentId, 
-                rollNumber, 
-                sectionId, 
+            create: {
+                studentId,
+                rollNumber,
+                sectionId,
                 academicYearId,
-                createdBy: userId 
+                createdBy: userId
             }
         });
         
@@ -1491,7 +1491,7 @@ export const AdminStudentService = {
                 courseChangeLogs: true,
                 discountRequests: true,
                 ledgerEntries: true,
-                enrollment: {
+                enrollments: {
                      include: {
                          academicYear: true,
                          section: { include: { batch: true } }
@@ -1566,7 +1566,7 @@ export const AdminStudentService = {
                 courseChangeLogs: true,
                 discountRequests: true,
                 ledgerEntries: true,
-                enrollment: {
+                enrollments: {
                      include: {
                          academicYear: true,
                          section: { include: { batch: true } }

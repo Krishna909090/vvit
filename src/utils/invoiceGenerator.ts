@@ -102,7 +102,7 @@ function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) 
 /* ================= HEADER ================= */
 
 function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
-  const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
+  const logoPath = path.join(process.cwd(), 'src/assets/logo.png')
 
   // University name
   doc

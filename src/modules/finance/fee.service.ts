@@ -597,9 +597,9 @@ export const FeeService = {
         // Get student quota type and course type to filter
         const student = await prisma.student.findUnique({ 
             where: { id: studentId },
-            include: { enrollment: true }
+            include: { enrollments: { orderBy: { createdAt: 'desc' }, take: 1 } }
         });
-        
+
         if (!student) {
             logger.error(`[generateFeeDemands] Student not found: ${studentId}`);
             throw new AppError("Student not found", 404);
@@ -608,13 +608,9 @@ export const FeeService = {
         const studentQuota = student.quotaType;
         const studentCourseType = student.courseType;
 
-        // Filter fee structures: 
-        // 1. If structure has NO quotaType/courseType (applies to all)
-        // 2. OR structure matches student's quotaType/courseType
-        // 3. AND yearOfStudy matches student's calculated year
-        
-        // Calculate Year of Study
-        const currentYear = student.enrollment?.currentSemester ? Math.ceil(student.enrollment.currentSemester / 2) : 1; // Default to 1 if no enrollment
+        // Calculate Year of Study from latest enrollment
+        const latestEnrollment = student.enrollments?.[0];
+        const currentYear = latestEnrollment?.currentSemester ? Math.ceil(latestEnrollment.currentSemester / 2) : 1;
         logger.debug(`[generateFeeDemands] Student Context: Quota=${studentQuota}, Type=${studentCourseType}, Year=${currentYear}`);
 
         const applicableFees = feeStructures.filter(fs => 

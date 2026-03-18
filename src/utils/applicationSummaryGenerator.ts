@@ -216,7 +216,7 @@ function drawTable(doc: PDFKit.PDFDocument, startY: number, headers: any[], rows
 }
 
 function drawHeader(doc: PDFKit.PDFDocument, photoBuffer: Buffer | null = null) {
-  const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png');
+  const logoPath = path.join(process.cwd(), 'src/assets/logo.png');
 
   // University name
   doc.font('Helvetica-Bold').fontSize(14).fillColor('#C0392B')

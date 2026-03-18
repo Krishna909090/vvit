@@ -601,7 +601,9 @@ export const getStudentByUserId = async (userId: string) => {
                     updatedAt: true
                 }
             },
-            academicQualifications: true,
+            academicQualifications: {
+                orderBy: { createdAt: 'asc' }
+            },
             studentScholarship: true
         }
     });

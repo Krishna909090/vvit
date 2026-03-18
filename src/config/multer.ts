@@ -13,24 +13,42 @@ const storage = multerS3({
     },
     key: function (req: any, file: any, cb: any) {
         // Priority: Phone (New Student via Admin) -> UserID (Logged in) -> Param StudentID -> Public
-        const studentId = req.query.phone || req.user?.userId || req.params.studentId || 'public';
-        const folder = req.query.folder || 'documents';
+        const rawStudentId = req.query.phone || req.user?.userId || req.params.studentId || 'public';
+        const rawFolder = req.query.folder || 'documents';
+
+        // Sanitize to prevent path traversal — allow only alphanumeric, hyphens, underscores
+        const sanitize = (val: string) => val.replace(/[^a-zA-Z0-9_\-]/g, '');
+        const studentId = sanitize(rawStudentId);
+        const folder = sanitize(rawFolder);
+
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         const filename = `${folder}/${studentId}/${file.fieldname}-${uniqueSuffix}${path.extname(file.originalname)}`;
         cb(null, filename);
     }
 });
 
-// File filter to validate file types
+// File filter to validate file types (extension + MIME type)
 const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-    // Allowed file extensions
-    const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png'];
-    const ext = path.extname(file.originalname).toLowerCase();
+    const allowedTypes: Record<string, string[]> = {
+        '.pdf': ['application/pdf'],
+        '.jpg': ['image/jpeg'],
+        '.jpeg': ['image/jpeg'],
+        '.png': ['image/png']
+    };
 
-    if (allowedExtensions.includes(ext)) {
+    // Block double extensions (e.g., file.pdf.exe, shell.php.jpg)
+    const dotCount = (file.originalname.match(/\./g) || []).length;
+    if (dotCount > 1) {
+        return cb(new Error('Double extensions are not allowed in file names.'));
+    }
+
+    const ext = path.extname(file.originalname).toLowerCase();
+    const allowedMimes = allowedTypes[ext];
+
+    if (allowedMimes && allowedMimes.includes(file.mimetype)) {
         cb(null, true);
     } else {
-        cb(new Error(`Invalid file type. Allowed types: ${allowedExtensions.join(', ')}`));
+        cb(new Error(`Invalid file type. Allowed: PDF, JPG, JPEG, PNG with matching MIME type.`));
     }
 };
 

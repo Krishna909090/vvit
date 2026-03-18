@@ -7,7 +7,31 @@ const url = process.env.DATABASE_URL || '';
 const host = url.split('@')[1]?.split('/')[0] || 'Unknown';
 logger.info(`[Prisma Init] Connecting to Host: ${host}`);
 
-const prismaClient = new PrismaClient();
+// Append connection pool params if not already present
+const poolSize = process.env.DB_POOL_SIZE || '20';
+const poolTimeout = process.env.DB_POOL_TIMEOUT || '10'; // seconds
+if (url && !url.includes('connection_limit')) {
+    const separator = url.includes('?') ? '&' : '?';
+    process.env.DATABASE_URL = `${url}${separator}connection_limit=${poolSize}&pool_timeout=${poolTimeout}`;
+}
+
+const prismaClient = new PrismaClient({
+    log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
+});
+
+// Critical models that require audit logging on mutations
+const auditedModels = new Set([
+    'Payment', 'StudentLedger', 'StudentFeeDemand', 'StudentAdmission',
+    'ScholarshipAllocation', 'StudentScholarship', 'CancellationRequest', 'DiscountRequest'
+]);
+
+// Fire-and-forget audit log (non-blocking)
+const logAudit = (action: string, model: string, entityId: string | undefined, userId: string | undefined, details?: any) => {
+    if (!auditedModels.has(model)) return;
+    prismaClient.auditLog.create({
+        data: { action, entity: model, entityId, userId, details: details ? JSON.stringify(details) : undefined }
+    }).catch(err => logger.warn(`[AuditLog] Failed to write: ${err}`));
+};
 
 // Identify models with specific fields
 const modelsWithSoftDelete = new Set<string>();
@@ -67,7 +91,9 @@ const prisma = prismaClient.$extends({
                 }
 
                 args.data = data;
-                return query(args);
+                const result = await query(args);
+                logAudit('CREATE', model, (result as any)?.id, userId, { data: args.data });
+                return result;
             },
             async createMany({ model, args, query }) {
                 const { userId } = getContext();
@@ -120,7 +146,9 @@ const prisma = prismaClient.$extends({
                 if (data.createdBy) delete data.createdBy;
                 
                 args.data = data;
-                return query(args);
+                const result = await query(args);
+                logAudit('UPDATE', model, (args.where as any)?.id, userId, { changes: args.data });
+                return result;
             },
             async updateMany({ model, args, query }) {
                 const { userId } = getContext();
@@ -234,5 +262,15 @@ const prisma = prismaClient.$extends({
         }
     }
 });
+
+// Graceful shutdown — close DB connections on process exit
+const gracefulShutdown = async () => {
+    logger.info('[Prisma] Disconnecting...');
+    await prismaClient.$disconnect();
+    process.exit(0);
+};
+
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
 
 export default prisma;

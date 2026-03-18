@@ -13,11 +13,15 @@ export interface PaymentEmailData {
     allotmentOrderUrl?: string; // Link to allotment if needed (for Admission Fee)
 }
 
+// Prevent XSS in HTML email templates by escaping user-controlled strings
+const escapeHtml = (str: string): string =>
+    (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+
 export const getPaymentReceiptTemplate = (data: PaymentEmailData) => {
   const {
-    studentName,
-    applicationId,
-    transactionId,
+    studentName: rawName,
+    applicationId: rawAppId,
+    transactionId: rawTxnId,
     amount,
     date,
     paymentType,
@@ -25,6 +29,11 @@ export const getPaymentReceiptTemplate = (data: PaymentEmailData) => {
     supportEmail = "admissions@vvit.edu.in",
     allotmentOrderUrl
   } = data;
+
+  // Sanitize all user-controlled strings before embedding in HTML
+  const studentName = escapeHtml(rawName);
+  const applicationId = escapeHtml(rawAppId);
+  const transactionId = escapeHtml(rawTxnId);
 
   const dateObj = date ? new Date(date) : new Date();
   const formattedDate = dateObj.toLocaleString("en-IN", {
@@ -213,14 +222,19 @@ export interface HallTicketEmailData {
 
 export const getHallTicketTemplate = (data: HallTicketEmailData) => {
     const {
-        studentName,
-        applicationId,
+        studentName: rawName,
+        applicationId: rawAppId,
         examDate,
         startTime,
-        examCenterName,
-        examCenterAddress,
+        examCenterName: rawCenter,
+        examCenterAddress: rawAddress,
         supportEmail = "admissions@vvit.edu.in"
     } = data;
+
+    const studentName = escapeHtml(rawName);
+    const applicationId = escapeHtml(rawAppId);
+    const examCenterName = escapeHtml(rawCenter);
+    const examCenterAddress = escapeHtml(rawAddress);
 
     return `
 <!DOCTYPE html>
@@ -324,14 +338,17 @@ export interface StatusUpdateEmailData {
 
 export const getStatusUpdateTemplate = (data: StatusUpdateEmailData) => {
     const {
-        studentName,
-        applicationId,
+        studentName: rawName,
+        applicationId: rawAppId,
         updateType,
         approvedItems = [],
         rejectedItems = [],
         pendingItems = [],
         supportEmail = "admissions@vvit.edu.in"
     } = data;
+
+    const studentName = escapeHtml(rawName);
+    const applicationId = escapeHtml(rawAppId);
 
     let title = "Status Update";
     let greeting = "Application Status Update";

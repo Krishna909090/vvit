@@ -26,11 +26,11 @@ export const AcademicService = {
     },
 
     async getSchools() {
-        return await prisma.school.findMany({ 
+        return await prisma.school.findMany({
             where: { isDeleted: false },
             include: { departments: {
                 where: { isDeleted: false }
-            } } 
+            } }
         });
     },
 

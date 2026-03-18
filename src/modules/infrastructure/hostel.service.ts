@@ -32,16 +32,16 @@ export const HostelService = {
     async getAllHostels() {
         return await prisma.hostel.findMany({
             where: { isDeleted: false },
-            include: { 
-                blocks: { 
+            include: {
+                blocks: {
                     where: { isDeleted: false },
-                    include: { 
-                        rooms: { 
+                    include: {
+                        rooms: {
                             where: { isDeleted: false },
-                            include: { beds: true } 
-                        } 
-                    } 
-                } 
+                            include: { beds: true }
+                        }
+                    }
+                }
             }
         });
     },
@@ -129,9 +129,9 @@ export const HostelService = {
 
         const blocks = await prisma.hostelBlock.findMany({
             where,
-            include: { 
+            include: {
                 hostel: { select: { name: true } },
-                rooms: true 
+                rooms: true
             }
         });
 

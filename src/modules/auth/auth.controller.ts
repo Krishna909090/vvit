@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
 import * as authService from './auth.service';
 import logger from '../../utils/logger';
 
@@ -7,6 +8,7 @@ import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 import { sendResponse } from '../../utils/response';
 import { maskPhone, maskEmail } from '../../utils/mask';
+import { invalidatePermissionCache } from '../../middleware/rbac.middleware';
 
 
 // Controller: Validates request data, triggers OTP verification, and sends auth response.
@@ -115,5 +117,28 @@ export const submitAadhaarOtp = catchAsync(async (req: Request, res: Response) =
     message: "Aadhaar OTP verified successfully",
     data: result
   });
+});
+
+export const logout = catchAsync(async (req: Request, res: Response) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) throw new AppError('No token provided', 400);
+
+    // Decode to get expiry time (don't verify — might be expired already)
+    const decoded = jwt.decode(token) as { exp?: number, userId?: string };
+    const expiresAt = decoded?.exp ? decoded.exp * 1000 : Date.now() + 4 * 60 * 60 * 1000;
+
+    authService.blacklistToken(token, expiresAt);
+
+    // Clear permission cache for this user
+    if (decoded?.userId) {
+        invalidatePermissionCache(decoded.userId);
+    }
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Logged out successfully'
+    });
 });
 
