@@ -16,6 +16,6 @@ const router = Router();
  * @query   { correlationId?, studentId?, txnId?, level?, startDate?, endDate?, page?, limit? }
  * @returns {{ success: boolean, data: LogEntry[], meta: { total, page, limit } }} Paginated log entries matching the search criteria.
  */
-router.get('/logs/search', authenticate, authorizePermission('system.read.all'), searchLogs);
+router.get('/logs/search', authenticate, authorizePermission('admin.read.all'), searchLogs);
 
 export default router;
