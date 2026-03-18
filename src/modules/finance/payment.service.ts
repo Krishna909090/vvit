@@ -239,13 +239,13 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     }, { isolationLevel: 'Serializable' });
 
     // Step 3: Initiate PhonePe Request
-    payLog.info('GATEWAY_INIT', `Initiating PhonePe payment`, { studentId, txnId: transactionId, amount });
+    payLog.info('GATEWAY_INIT', `Initiating PhonePe payment`, { studentId, applicationId: student.applicationId, txnId: transactionId, amount });
     const redirectUrl = `${process.env.FRONTEND_URL}/student/payment?txnId=${transactionId}`;
 
     // Explicitly use 'ADMISSION' credentials for Application Fee
     try {
         const result = await initiatePhonePePayment(studentId, amount, transactionId, redirectUrl, 'ADMISSION');
-        payLog.info('GATEWAY_REDIRECT', `PhonePe redirect URL generated`, { studentId, txnId: transactionId, paymentId: createdPayment.id });
+        payLog.info('GATEWAY_REDIRECT', `PhonePe redirect URL generated`, { studentId, applicationId: student.applicationId, txnId: transactionId, paymentId: createdPayment.id });
         return { redirectUrl: result.redirectUrl, paymentId: createdPayment.id, expiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString() };
     } catch (err) {
         await prisma.payment.update({
@@ -470,7 +470,8 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     if (!payments || payments.length === 0) return;
     const txnId = payments[0].providerTxId;
     const studentId = payments[0].studentId;
-    payLog.info('PROCESSING', `Processing ${payments.length} payment(s)`, { txnId, studentId, count: payments.length });
+    const applicationId = payments[0].student?.applicationId;
+    payLog.info('PROCESSING', `Processing ${payments.length} payment(s)`, { txnId, studentId, applicationId, count: payments.length });
     logger.info(`[processMultiPaymentSuccess] Processing ${payments.length} payments. Ref=${txnId}`);
 
     // Idempotency guard — skip payments already marked SUCCESS to prevent
@@ -489,7 +490,7 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         where: { id: { in: pendingPayments.map((p: any) => p.id) } },
         data: { status: PaymentStatus.SUCCESS, metadata }
     });
-    payLog.info('SUCCESS', `${pendingPayments.length} payment(s) marked SUCCESS`, { txnId, studentId, amount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
+    payLog.info('SUCCESS', `${pendingPayments.length} payment(s) marked SUCCESS`, { txnId, studentId, applicationId, amount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
 
     // 2. Pre-generate Allotment Order for admission payments (must happen before invoice so email can attach it)
     const admissionComponents = [PaymentComponent.SCHOLARSHIP_TOKEN, PaymentComponent.TUITION];
@@ -513,9 +514,9 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     try {
         const invoiceResult = await InvoiceService.generateInvoiceForPayment(payments[0].id);
         invoiceUrl = invoiceResult.invoiceUrl;
-        payLog.info('INVOICE_GENERATED', `Invoice generated`, { studentId, txnId, invoiceNumber: invoiceResult.invoiceNumber });
+        payLog.info('INVOICE_GENERATED', `Invoice generated`, { studentId, applicationId, txnId, invoiceNumber: invoiceResult.invoiceNumber });
     } catch (e) {
-        payLog.error('INVOICE_FAILED', `Invoice generation failed: ${e}`, { studentId, txnId });
+        payLog.error('INVOICE_FAILED', `Invoice generation failed: ${e}`, { studentId, applicationId, txnId });
     }
 
     // 3. Process Logic (Iterate)
@@ -532,7 +533,7 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     // 4. Triggers
     await _handleTriggers(payments);
 
-    payLog.info('COMPLETED', `Payment processing completed`, { txnId, studentId, totalAmount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
+    payLog.info('COMPLETED', `Payment processing completed`, { txnId, studentId, applicationId, totalAmount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
     return { invoiceUrl };
 };
 
