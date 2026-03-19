@@ -19,6 +19,7 @@ import verificationRoutes from './modules/admin/verification.routes';
 import academicRoutes from './modules/academic/academic.routes';
 import qualificationRequirementRoutes from './modules/qualification/qualificationRequirement.routes';
 import emailLogRoutes from './modules/system/emailLog.routes';
+import logsRoutes from './modules/system/logs.routes';
 import rbacRoutes from './modules/rbac/routes/rbac.routes';
 import invoiceRoutes from './modules/finance/invoice.routes';
 import feeRoutes from './modules/finance/fee.routes';
@@ -28,6 +29,7 @@ import { globalErrorHandler } from './middlewares/errorMiddleware';
 import { generalRateLimiter } from './middlewares/rateLimitMiddleware';
 import { enhancedSecurityHeaders, additionalSecurityHeaders } from './middlewares/securityHeaders';
 import { requestContextMiddleware } from './utils/requestContext';
+import { sanitizeInput } from './middlewares/sanitizeMiddleware';
 
 const app = express();
 
@@ -39,9 +41,10 @@ app.use(enhancedSecurityHeaders); // Enhanced Helmet configuration
 app.use(additionalSecurityHeaders); // Custom security headers
 app.use(requestContextMiddleware); // Attach correlation ID to every request
 app.use(cors({
-    origin: process.env.CORS_ORIGIN === '*' ? true : (process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true), // Allow all if * or undefined (dev), else specific list
+    origin: process.env.CORS_ORIGIN === '*' ? true : (process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : false), // Reject if CORS_ORIGIN not configured
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-correlation-id'],
+    exposedHeaders: ['x-correlation-id'],
     credentials: true,
     maxAge: 86400 // 24 hours
 }));
@@ -49,7 +52,7 @@ app.use(compression()); // Gzip compression
 app.use(express.json({ limit: '10kb' })); // Body limit
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(hpp()); // Prevent HTTP Parameter Pollution
-// app.use(sanitizeInput); // Input sanitization (XSS, NoSQL injection prevention) - TEMPORARILY DISABLED FOR DEMO
+app.use(sanitizeInput);
 
 app.use(morgan('combined', {
     stream: { write: (message: string) => logger.info(message.trim()) }
@@ -108,6 +111,7 @@ app.use('/api/admission', dataImportRoutes);
 app.use('/verification', verificationRoutes);
 app.use('/qualification-requirements', qualificationRequirementRoutes);
 app.use('/admin/email-logs', emailLogRoutes);
+app.use('/system', logsRoutes);
 app.use('/rbac', rbacRoutes);
 app.use('/admin/finance', invoiceRoutes);
 app.use('/admin/cancellation', cancellationRoutes);

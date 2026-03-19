@@ -615,16 +615,15 @@ export const uploadBulkResults = catchAsync(async (req: Request, res: Response, 
  */
 export const uploadBulkResultsJSON = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const records = req.body?.records;
-    const cutoff = req.body?.cutoff;
 
     if (!Array.isArray(records) || records.length === 0) {
         throw new AppError('Request body must contain a non-empty "records" array', 400);
     }
 
-    const results = await examService.processBulkResultsJSON(records, cutoff);
+    const results = await examService.processBulkResultsJSON(records);
 
-    const successCount = results.filter(r => r.status === 'Success').length;
-    const failedCount = results.filter(r => r.status === 'Failed').length;
+    const successCount = results.filter((r: any) => r.result === 'Success').length;
+    const failedCount = results.filter((r: any) => r.result === 'Failed').length;
 
     sendResponse({
         res,
@@ -633,8 +632,8 @@ export const uploadBulkResultsJSON = catchAsync(async (req: Request, res: Respon
         message: `Processed ${results.length} records: ${successCount} success, ${failedCount} failed`,
         data: {
             summary: { total: results.length, successful: successCount, failed: failedCount },
-            failedRecords: results.filter(r => r.status === 'Failed'),
-            allResults: results
+            failedRecords: results.filter((r: any) => r.result === 'Failed'),
+            successRecords: results.filter((r: any) => r.result === 'Success')
         }
     });
 });

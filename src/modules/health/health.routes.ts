@@ -8,6 +8,17 @@ import { version } from '../../../package.json';
 
 const router = Router();
 
+// ═══════════════════════════════════════════════════════════
+//  BASIC HEALTH CHECK
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * @route   GET /health
+ * @desc    Lightweight health check — confirms the API process is running.
+ *          Does NOT verify downstream dependencies (database, cache, etc.).
+ * @access  Public (no authentication required).
+ * @returns {{ status: "ok", version: string, timestamp: string, uptime: number }}
+ */
 router.get('/health', (req: Request, res: Response) => {
     res.status(200).json({
         status: 'ok',
@@ -17,6 +28,19 @@ router.get('/health', (req: Request, res: Response) => {
     });
 });
 
+// ═══════════════════════════════════════════════════════════
+//  DETAILED HEALTH CHECK
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * @route   GET /health/detailed
+ * @desc    Comprehensive health check that verifies database connectivity, memory usage, and CPU stats.
+ *          Returns "ok" (200), "degraded" (200), or "unhealthy" (503) based on subsystem checks.
+ * @access  Public (no authentication required).
+ * @sideEffect Executes a `SELECT 1` query against the database to test connectivity.
+ * @returns {{ status: string, timestamp: string, uptime: number, version: string, environment: string,
+ *             checks: { database, memory, disk }, details: { memoryUsage, cpuUsage } }}
+ */
 router.get('/health/detailed', async (req: Request, res: Response) => {
     const healthCheck = {
         status: 'ok',
@@ -80,17 +104,30 @@ router.get('/health/detailed', async (req: Request, res: Response) => {
         healthCheck.status = 'unhealthy';
     }
 
-    const statusCode = healthCheck.status === 'ok' ? 200 : 
+    const statusCode = healthCheck.status === 'ok' ? 200 :
                        healthCheck.status === 'degraded' ? 200 : 503;
 
     res.status(statusCode).json(healthCheck);
 });
 
+// ═══════════════════════════════════════════════════════════
+//  READINESS PROBE
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * @route   GET /health/ready
+ * @desc    Kubernetes-style readiness probe. Returns 200 only when the database is reachable,
+ *          indicating the service can accept traffic.
+ * @access  Public (no authentication required).
+ * @sideEffect Executes a `SELECT 1` query against the database.
+ * @returns {{ status: "ready" | "not ready", timestamp: string, error?: string }}
+ *          200 if ready, 503 if not.
+ */
 router.get('/health/ready', async (req: Request, res: Response) => {
     try {
         // Check database connection
         await prisma.$queryRaw`SELECT 1`;
-        
+
         res.status(200).json({
             status: 'ready',
             timestamp: new Date().toISOString(),
@@ -105,6 +142,17 @@ router.get('/health/ready', async (req: Request, res: Response) => {
     }
 });
 
+// ═══════════════════════════════════════════════════════════
+//  LIVENESS PROBE
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * @route   GET /health/live
+ * @desc    Kubernetes-style liveness probe. Always returns 200 if the process is running.
+ *          Does NOT check any dependencies.
+ * @access  Public (no authentication required).
+ * @returns {{ status: "alive", timestamp: string }}
+ */
 router.get('/health/live', (req: Request, res: Response) => {
     res.status(200).json({
         status: 'alive',
@@ -112,6 +160,19 @@ router.get('/health/live', (req: Request, res: Response) => {
     });
 });
 
+// ═══════════════════════════════════════════════════════════
+//  PROCESS METRICS
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * @route   GET /metrics
+ * @desc    Expose raw process metrics (memory, CPU, uptime) for monitoring tools and dashboards.
+ * @access  Public (no authentication required).
+ * @returns {{ timestamp: string, uptime: number,
+ *             memory: { heapUsed, heapTotal, external, rss },
+ *             cpu: { user, system },
+ *             process: { pid, version, platform, arch } }}
+ */
 router.get('/metrics', (req: Request, res: Response) => {
     const memUsage = process.memoryUsage();
     const cpuUsage = process.cpuUsage();

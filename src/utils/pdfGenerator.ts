@@ -113,21 +113,21 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
             const valueX = infoStartX + 120;
             const rowHeight = 20;
 
-            const drawField = (label: string, value: string, y: number) => {
+            const maxValueWidth = qrX - valueX - 10; // Leave 10px gap before QR
+
+            const drawField = (label: string, value: string, y: number): number => {
                 doc.font('Helvetica-Bold').text(label, labelX, y);
-                doc.font('Helvetica').text(`:  ${value}`, valueX, y);
+                const textHeight = doc.heightOfString(`:  ${value}`, { width: maxValueWidth });
+                doc.font('Helvetica').text(`:  ${value}`, valueX, y, { width: maxValueWidth });
+                return Math.max(rowHeight, textHeight + 4); // Return actual height used
             };
 
-            drawField('Application ID', data.applicationId, currentY);
-            currentY += rowHeight;
+            currentY += drawField('Application ID', data.applicationId, currentY);
             if (data.rollNumber) {
-                drawField('Roll No', data.rollNumber, currentY);
-                currentY += rowHeight;
+                currentY += drawField('Roll No', data.rollNumber, currentY);
             }
-            drawField('Name', data.studentName, currentY);
-            currentY += rowHeight;
-            drawField('Father\'s Name', data.fatherName || 'N/A', currentY);
-            currentY += rowHeight;
+            currentY += drawField('Name', data.studentName, currentY);
+            currentY += drawField('Father\'s Name', data.fatherName || 'N/A', currentY);
             drawField('Mother\'s Name', data.motherName || 'N/A', currentY);
             
             // Side-by-Side: QR & Photo

@@ -216,7 +216,7 @@ function drawTable(doc: PDFKit.PDFDocument, startY: number, headers: any[], rows
 }
 
 function drawHeader(doc: PDFKit.PDFDocument, photoBuffer: Buffer | null = null) {
-  const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png');
+  const logoPath = path.join(process.cwd(), 'src/assets/logo.png');
 
   // University name
   doc.font('Helvetica-Bold').fontSize(14).fillColor('#C0392B')
@@ -227,7 +227,7 @@ function drawHeader(doc: PDFKit.PDFDocument, photoBuffer: Buffer | null = null) 
 
   // Address
   doc.font('Helvetica').fontSize(9).fillColor('#555')
-    .text('Nambur, Guntur, Andhra Pradesh – 522508', 0, 50, { align: 'center' });
+    .text('Uppalapadu Road, Nambur, Pedhakakani Mandal, Guntur, Andhra Pradesh – 522508', 0, 50, { align: 'center' });
 
   if (fs.existsSync(logoPath)) {
     // Moved Logo Down

@@ -13,6 +13,25 @@ import { getUserPermissions, getUserModules } from '../rbac/services/rbac.servic
 
 // JWT_SECRET is validated on startup by envValidator - no fallback needed
 const JWT_SECRET = process.env.JWT_SECRET!;
+
+// In-memory token blacklist for logout. Tokens auto-expire so this stays bounded.
+const tokenBlacklist = new Map<string, number>(); // token → expiresAt (epoch ms)
+
+// Clean up expired entries every 30 minutes
+setInterval(() => {
+    const now = Date.now();
+    for (const [token, expiresAt] of tokenBlacklist) {
+        if (expiresAt < now) tokenBlacklist.delete(token);
+    }
+}, 30 * 60 * 1000);
+
+export const blacklistToken = (token: string, expiresAt: number) => {
+    tokenBlacklist.set(token, expiresAt);
+};
+
+export const isTokenBlacklisted = (token: string): boolean => {
+    return tokenBlacklist.has(token);
+};
 const OTP_SALT_ROUNDS = 10;
 const OTP_MAX_ATTEMPTS = 5;
 const STUDENT_OTP_EXPIRY_MIN = 10;
@@ -263,7 +282,7 @@ export const verifyOtp = async (
   const token = jwt.sign(
     { userId: user.id, role: user.role },
     JWT_SECRET,
-    { expiresIn: "1d" }
+    { expiresIn: (process.env.JWT_EXPIRY || "4h") as any }
   );
 
   logger.info(
@@ -319,7 +338,7 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
   const token = jwt.sign(
     { userId: user.id, role: user.role },
     JWT_SECRET,
-    { expiresIn: "1d" }
+    { expiresIn: (process.env.JWT_EXPIRY || "4h") as any }
   );
 
   logger.info(`[login] Password login success: userId=${user.id}`);

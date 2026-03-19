@@ -43,6 +43,9 @@ model UserOtp {
   createdBy   String?
   updatedBy   String?
   user        User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([userId, type, used])
 }
 
 model School {
@@ -140,14 +143,16 @@ model AcademicYear {
   enrollments       StudentEnrollment[]
   studentFeeDemands StudentFeeDemand[]
   payments          Payment[]
+  ledgerEntries     StudentLedger[]
 }
 
 model StudentEnrollment {
   id              String            @id @default(dbgenerated("gen_random_uuid()"))
-  studentId       String            @unique
+  studentId       String
   sectionId       String
-  rollNumber      String            @unique
+  rollNumber      String
   currentSemester Int?              @default(1)
+  yearOfStudy     Int?              @default(1)
   academicYearId  String
   status          EnrollmentStatus? @default(ACTIVE)
   createdAt       DateTime?         @default(now())
@@ -157,6 +162,11 @@ model StudentEnrollment {
   academicYear    AcademicYear      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   section         Section           @relation(fields: [sectionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student         Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentId, academicYearId])
+  @@index([studentId])
+  @@index([academicYearId])
+  @@index([status])
 }
 
 model Student {
@@ -223,7 +233,7 @@ model Student {
   user                      User?                   @relation("StudentUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   admissionDetails          StudentAdmission?
   documents                 StudentDocument[]
-  enrollment                StudentEnrollment?
+  enrollments               StudentEnrollment[]
   examDetails               StudentExam?
   feeDemands                StudentFeeDemand[]
   ledgerEntries             StudentLedger[]
@@ -233,6 +243,11 @@ model Student {
   proId                     String?
   proCommissionAmount       Float?                  @default(0)
   pro                       PRO?                    @relation(fields: [proId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([phone])
+  @@index([degreeType])
+  @@index([createdAt])
+  @@index([proId])
 }
 
 model ConvenorAdmission {
@@ -299,6 +314,7 @@ model StudentAdmission {
   transportRouteId  String?
   roomNumber        String?
   allottedCourseId  String?
+  seatAllotedBy     String?
   createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
   hostelPaymentMode HostelPaymentMode? @default(YEARWISE)
@@ -317,6 +333,7 @@ model StudentDocument {
   url         String
   status      StudentDocumentStatus? @default(PENDING)
   remarks     String?
+  verifiedBy  String?
   isDeleted   Boolean?               @default(false)
   createdAt   DateTime?              @default(now())
   updatedAt   DateTime               @updatedAt
@@ -563,11 +580,17 @@ model StudentFeeDemand {
   academicYearId    String?
   feeHeadId         String?
   yearOfStudy       Int?
+  isDeleted         Boolean?      @default(false)
+  deletedAt         DateTime?
+  deletedBy         String?
   payments          Payment[]
   academicYear      AcademicYear? @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeHead           FeeHead?      @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeStructure      FeeStructure? @relation(fields: [feeStructureId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student           Student       @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([studentId])
+  @@index([studentId, status])
 }
 
 model Payment {
@@ -598,10 +621,21 @@ model Payment {
   feeHeadId       String?
   academicYearId  String?
   yearOfStudy     Int?
+  isDeleted       Boolean?          @default(false)
+  deletedAt       DateTime?
+  deletedBy       String?
   feeDemand       StudentFeeDemand? @relation(fields: [feeDemandId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   academicYear    AcademicYear?     @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeHead         FeeHead?          @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student         Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([studentId])
+  @@index([status])
+  @@index([studentId, status])
+  @@index([studentId, component])
+  @@index([providerTxId])
+  @@index([feeDemandId])
+  @@index([createdAt])
 }
 
 model CourseChangeLog {
@@ -658,6 +692,10 @@ model AuditLog {
   ipAddress String?
   userAgent String?
   user      User?     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([entity, entityId])
+  @@index([userId])
+  @@index([timestamp])
 }
 
 model CancellationRequest {
@@ -764,6 +802,8 @@ model HallTicket {
   createdBy   String?
   updatedBy   String?
   student     Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([studentId])
 }
 
 model InvigilatorCredential {
@@ -1004,9 +1044,13 @@ model AcademicQualification {
   schoolName          String?
   updatedBy           String?
   verificationStatus  String?              @default("PENDING")
+  verifiedBy          String?
   remarks             String?
   student             Student              @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   studentScholarships StudentScholarship[]
+
+  @@index([studentId])
+  @@index([studentId, level])
 }
 
 model StudentScholarship {
@@ -1070,8 +1114,19 @@ model StudentLedger {
   createdBy     String?
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
-  feeHeadId     String?
-  student       Student               @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeHeadId       String?
+  academicYearId  String?
+  yearOfStudy     Int?
+  isDeleted       Boolean?              @default(false)
+  deletedAt       DateTime?
+  deletedBy       String?
+  academicYear    AcademicYear?         @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student         Student               @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([studentId])
+  @@index([studentId, type])
+  @@index([studentId, academicYearId])
+  @@index([academicYearId])
 }
 
 model Configuration {

@@ -1,34 +1,41 @@
 // middlewares/rateLimitMiddleware.ts
-// Standardized rate limiting: 100 requests per 1 hour across all endpoints
+// Tiered rate limiting based on endpoint sensitivity
 
 import rateLimit from 'express-rate-limit';
 import logger from '../utils/logger';
 
-const commonConfig = {
-    windowMs: 60 * 60 * 1000, // 1 hour
-    max: 1000000, // 100 requests per hour
-    message: {
-        success: false,
-        message: 'Too many requests from this IP. Please try again after 1 hour.'
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-    handler: (req: any, res: any) => {
-        logger.warn(`[RateLimit] Rate limit exceeded for IP: ${req.ip}, path: ${req.path}`);
-        res.status(429).json({
-            success: false,
-            message: 'Too many requests. Please try again after 1 hour.'
-        });
-    }
-};
+const createLimiter = (windowMs: number, max: number, label: string) =>
+    rateLimit({
+        windowMs,
+        max,
+        standardHeaders: true,
+        legacyHeaders: false,
+        handler: (req: any, res: any) => {
+            logger.warn(`[RateLimit:${label}] Limit exceeded for IP: ${req.ip}, path: ${req.path}`);
+            res.status(429).json({
+                success: false,
+                message: 'Too many requests. Please try again later.'
+            });
+        }
+    });
 
-/**
- * Common configuration applied to all tiered limiters to meet the requirement: 100 req / 1 hr
- */
+// Auth: 1000 requests per 15 minutes (login, OTP, verify)
+export const authRateLimiter = createLimiter(15 * 60 * 1000, 1000, 'auth');
 
-export const authRateLimiter = rateLimit(commonConfig);
-export const uploadRateLimiter = rateLimit(commonConfig);
-export const writeRateLimiter = rateLimit(commonConfig);
-export const readRateLimiter = rateLimit(commonConfig);
-export const generalRateLimiter = rateLimit(commonConfig);
-export const qrScanRateLimiter = rateLimit(commonConfig);
+// Upload: 1000 requests per 15 minutes
+export const uploadRateLimiter = createLimiter(15 * 60 * 1000, 1000, 'upload');
+
+// Write: 1000 requests per 15 minutes (create/update operations)
+export const writeRateLimiter = createLimiter(15 * 60 * 1000, 1000, 'write');
+
+// Read: 1000 requests per 15 minutes (list/get operations)
+export const readRateLimiter = createLimiter(15 * 60 * 1000, 1000, 'read');
+
+// General: 1000 requests per 15 minutes (fallback for all other endpoints)
+export const generalRateLimiter = createLimiter(15 * 60 * 1000, 1000, 'general');
+
+// QR Scan: 1000 requests per 15 minutes (invigilator scanning)
+export const qrScanRateLimiter = createLimiter(15 * 60 * 1000, 1000, 'qrScan');
+
+// Payment: 1000 requests per 15 minutes (prevent duplicate payment attempts)
+export const paymentRateLimiter = createLimiter(15 * 60 * 1000, 1000, 'payment');

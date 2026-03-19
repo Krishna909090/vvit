@@ -601,7 +601,9 @@ export const getStudentByUserId = async (userId: string) => {
                     updatedAt: true
                 }
             },
-            academicQualifications: true,
+            academicQualifications: {
+                orderBy: { createdAt: 'asc' }
+            },
             studentScholarship: true
         }
     });
@@ -842,7 +844,8 @@ export const updateProfilePhoto = async (studentId: string, newPhotoUrl: string,
         }
     });
 
-    return { message: 'Profile photo updated successfully', url: newPhotoUrl };
+    const presignedUrl = await convertToPresignedUrl(newPhotoUrl) || newPhotoUrl;
+    return { message: 'Profile photo updated successfully', url: presignedUrl };
 };
 
 export const changeServicePreferences = async (studentId: string, data: any, currentUserId: string | null) => {

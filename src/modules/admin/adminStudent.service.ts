@@ -133,7 +133,7 @@ export const AdminStudentService = {
                     courseChangeLogs: true,
                     discountRequests: true,
                     user: true,
-                    enrollment: true,
+                    enrollments: true,
                     hostelAllocation: true,
                     transportAllocation: true,
                     convenorDetails: true,
@@ -306,7 +306,7 @@ export const AdminStudentService = {
                     courseChangeLogs: true,
                     discountRequests: true,
                     user: true,
-                    enrollment: true,
+                    enrollments: true,
                     hostelAllocation: true,
                     transportAllocation: true,
                     convenorDetails: true,
@@ -1309,15 +1309,15 @@ export const AdminStudentService = {
         if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         
         // Upsert Enrollment
-        const enrollment = await prisma.studentEnrollment.upsert({
+        const enrollment = await (prisma.studentEnrollment as any).upsert({
             where: { studentId },
             update: { rollNumber, sectionId, academicYearId, updatedBy: userId },
-            create: { 
-                studentId, 
-                rollNumber, 
-                sectionId, 
+            create: {
+                studentId,
+                rollNumber,
+                sectionId,
                 academicYearId,
-                createdBy: userId 
+                createdBy: userId
             }
         });
         
@@ -1448,7 +1448,13 @@ export const AdminStudentService = {
              }
         });
 
-        return { success: true, message: 'Student personal details updated successfully' };
+        // Return presigned profilePhotoUrl if it was updated
+        let presignedPhotoUrl: string | null = null;
+        if (updateData.profilePhotoUrl) {
+            presignedPhotoUrl = await convertToPresignedUrl(updateData.profilePhotoUrl) || updateData.profilePhotoUrl;
+        }
+
+        return { success: true, message: 'Student personal details updated successfully', profilePhotoUrl: presignedPhotoUrl };
     },
 
     async getStudentDetails(studentId: string) {
@@ -1485,7 +1491,7 @@ export const AdminStudentService = {
                 courseChangeLogs: true,
                 discountRequests: true,
                 ledgerEntries: true,
-                enrollment: {
+                enrollments: {
                      include: {
                          academicYear: true,
                          section: { include: { batch: true } }
@@ -1560,7 +1566,7 @@ export const AdminStudentService = {
                 courseChangeLogs: true,
                 discountRequests: true,
                 ledgerEntries: true,
-                enrollment: {
+                enrollments: {
                      include: {
                          academicYear: true,
                          section: { include: { batch: true } }
@@ -1649,8 +1655,9 @@ export const AdminStudentService = {
             where: { id: qualificationId },
             data: {
                 verificationStatus: status,
-                remarks: remarks,
-                updatedBy: adminId
+                remarks: remarks ?? null,
+                verifiedBy: adminId ?? null,
+                updatedBy: adminId ?? null
             }
         });
 
@@ -1998,6 +2005,7 @@ export const AdminStudentService = {
      * Handles: Ledger Creation, Paid Fee Update, Demand Settlement, and Admission Updates.
      */
     async processPaymentSuccess(payment: any, adminId: string | undefined, tx: any) {
+        const resolvedAdminId = adminId || 'SYSTEM';
         // 1. Create Ledger Entry
         await tx.studentLedger.create({
             data: {
@@ -2008,7 +2016,7 @@ export const AdminStudentService = {
                 referenceId: payment.id,
                 referenceType: 'PAYMENT',
                 feeHeadId: payment.feeHeadId,
-                createdBy: adminId || 'SYSTEM'
+                createdBy: resolvedAdminId
             }
         });
 
@@ -2025,7 +2033,7 @@ export const AdminStudentService = {
                  // Check if fully paid (compare against netAmount if exists, else amount)
                  const targetAmount = demand.netAmount ?? demand.amount;
                  const newStatus = payment.amount >= targetAmount ? 'FULL' : 'PARTIAL';
-                 
+
                  await tx.studentFeeDemand.update({
                      where: { id: payment.feeDemandId },
                      data: { status: newStatus }
@@ -2036,7 +2044,7 @@ export const AdminStudentService = {
         // 4. Execute Admission Updates (Allocation/Scholarship) if metadata dictates
         const meta = payment.metadata as any;
         if (meta && meta.targetAction === 'FINALIZE_ADMISSION') {
-             await this.executeAdmissionUpdates(payment.studentId, meta, payment.id, adminId || 'SYSTEM', tx);
+             await this.executeAdmissionUpdates(payment.studentId, meta, payment.id, resolvedAdminId, tx);
         }
     },
 
@@ -2132,15 +2140,19 @@ export const AdminStudentService = {
             // --- 2. Course Allocation ---
             if (!oldAdmission?.allottedCourseId || oldAdmission.allottedCourseId !== course.allottedCourseId) {
                 logger.debug(`[executeAdmissionUpdates] Assigning new course seat: ${course.allottedCourseId}`);
-                const courseRecord = await tx.course.findUnique({ where: { id: course.allottedCourseId } });
-                if (!courseRecord || courseRecord.filledSeats >= courseRecord.totalSeats) {
-                    logger.warn(`[executeAdmissionUpdates] Course ${course.allottedCourseId} is fully booked (${courseRecord?.filledSeats}/${courseRecord?.totalSeats})`);
+                // Atomic check-and-increment using raw SQL to prevent TOCTOU overbooking:
+                // UPDATE only fires when filledSeats < totalSeats — no separate read needed
+                const result = await tx.$executeRaw`
+                    UPDATE "Course"
+                    SET "filledSeats" = "filledSeats" + 1
+                    WHERE id = ${course.allottedCourseId} AND "filledSeats" < "totalSeats"
+                `;
+                if (result === 0) {
+                    const courseRecord = await tx.course.findUnique({ where: { id: course.allottedCourseId } });
+                    if (!courseRecord) throw new AppError("Invalid Course ID", 400);
+                    logger.warn(`[executeAdmissionUpdates] Course ${course.allottedCourseId} is fully booked (${courseRecord.filledSeats}/${courseRecord.totalSeats})`);
                     throw new AppError("Course is fully booked. No seats available.", 400);
                 }
-                await tx.course.update({
-                     where: { id: course.allottedCourseId },
-                     data: { filledSeats: { increment: 1 } }
-                });
             }
 
             // --- Calculate Accommodation Cost Delta ---
@@ -2184,6 +2196,11 @@ export const AdminStudentService = {
             const isNewAdmission = !oldAdmission || (oldAdmission.status !== AdmissionStatus.ADMISSION_CONFIRMED && oldAdmission.status !== AdmissionStatus.ENROLLED);
 
             if (isNewAdmission) {
+                // NOTE: payload.amount here is the payment amount passed through metadata (e.g. token fee or full tuition).
+                // This value is used to set totalFee on the admission record and generate the tuition DEBIT ledger entry.
+                // If only a token amount was paid, totalFee will reflect that — the remaining outstanding balance
+                // will be visible in the ledger (DEBIT minus CREDITs). Ensure the correct full fee is passed
+                // in payload.amount when calling finalizeAdmission for a complete tuition payment.
                 baseTuition = payload.amount ?? 0;
                 logger.info(`[executeAdmissionUpdates] New Admission Detected. Adding Base Tuition: ${baseTuition}`);
                 
@@ -2228,24 +2245,21 @@ export const AdminStudentService = {
                 }
             });
             
-             // --- 4. Scholarship Update ---
-            // null → save as 0 | positive number → update percentage + flip isEligible to YES
+            // --- 4. Update Scholarship ---
             const scholarshipPct = scholarship.percentage ?? 0;
             await tx.studentScholarship.update({
                 where: { studentId },
                 data: {
                     scholarshipPercentage: scholarshipPct,
-                    ...(scholarshipPct > 0 ? { isEligible: 'YES' } : {}),
+                    isEligible: scholarshipPct > 0 ? 'YES' : 'NO',
                     updatedBy: adminId
                 }
             });
             logger.debug(`[executeAdmissionUpdates] Scholarship updated: percentage=${scholarshipPct}`);
 
-            // Propagate discount to fee demands only when percentage is set
             if (scholarshipPct > 0) {
                 await this.propagateScholarshipUpdate(studentId, scholarshipPct, adminId, tx);
             }
-
 
             logger.info(`[executeAdmissionUpdates] Successfully completed all updates for student=${studentId}`);
         } catch (error) {
@@ -2343,28 +2357,13 @@ export const AdminStudentService = {
         }
 
         // Validate Fee Structure ID if provided and resolve Demand
+        // validFeeStructure is either the fetched record or {id:'skip'} (when feeStructureId was not provided).
+        // When feeStructureId IS provided, Promise.all ran prisma.feeStructure.findUnique which returns Object | null.
         let feeDemandId = null;
         if (payment.feeStructureId) {
             if (!validFeeStructure || (validFeeStructure as any).id === 'skip') {
-                 // Check if it's 'skip' is not strictly necessary if we trust payment.feeStructureId is consistent, 
-                 // but 'skip' implies it wasn't fetched, which contradicts payment.feeStructureId being truthy here unless it changed (it didn't).
-                 // However, findUnique returns null if not found.
-                 // So if payment.feeStructureId is true, validFeeStructure is either Object or Null. It is NOT {id:'skip'}.
-                 // Wait, if I returned {id: 'skip'} in the else branch of Promise.all...
-                 // Correct logic:
-                 /*
-                   if (payment.feeStructureId) is TRUE:
-                      Promise went into `prisma.feeStructure...` branch.
-                      Result is `Structure` or `null`.
-                      It allows us to check `if (!validFeeStructure)`.
-                 */
-                 if (!validFeeStructure) {
-                    logger.warn(`[finalizeAdmission] Invalid Fee Structure ID: ${payment.feeStructureId}`);
-                    throw new AppError("Invalid Fee Structure ID", 400);
-                 }
-            } else if (!validFeeStructure) { // Should be covered above, but typescript might be confused by the union return type
-                 logger.warn(`[finalizeAdmission] Invalid Fee Structure ID: ${payment.feeStructureId}`);
-                 throw new AppError("Invalid Fee Structure ID", 400);
+                logger.warn(`[finalizeAdmission] Invalid Fee Structure ID: ${payment.feeStructureId}`);
+                throw new AppError("Invalid Fee Structure ID", 400);
             }
 
             // Try to find matching Demand to link
@@ -2395,76 +2394,77 @@ export const AdminStudentService = {
             if (isOnline) {
              // === ONLINE FLOW (Initiate) ===
              try {
-             
-             // ------------------------------------------------------------------
-             // BLOCK 3: IDEMPOTENCY CHECK
-             // Check if a PENDING payment already exists for this student/fee.
-             // If yes, we reuse it to avoid duplicate records and return the same link.
-             // ------------------------------------------------------------------
+
              const targetComponent = payment.component || PaymentComponent.TUITION;
-             const existingPending = await prisma.payment.findFirst({
-                 where: {
-                     studentId,
-                     component: targetComponent,
-                     status: PaymentStatus.PENDING
-                 }
-             });
 
-             let newPayment;
-             let isNew = true;
+             // ------------------------------------------------------------------
+             // BLOCK 3 & 4: IDEMPOTENCY CHECK + CREATE — wrapped in a transaction
+             // to prevent duplicate PENDING records under concurrent requests.
+             // ------------------------------------------------------------------
+             let newPayment = await prisma.$transaction(async (itx) => {
+                 const existingPending = await itx.payment.findFirst({
+                     where: {
+                         studentId,
+                         component: targetComponent,
+                         status: PaymentStatus.PENDING
+                     }
+                 });
 
-             if (existingPending) {
-                 logger.info(`[finalizeAdmission] Found existing PENDING payment ${existingPending.id}. Reusing it.`);
-                 newPayment = existingPending;
-                 isNew = false;
-                 
-                 // Reuse existing providerTxId if available and matches TXN format, otherwise generate new one
-                 if (!newPayment.providerTxId || !newPayment.providerTxId.startsWith('TXN_')) {
-                     const newTxnId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
-                     logger.info(`[finalizeAdmission] Existing payment missing valid TXN ID. Updating to ${newTxnId}`);
-                     newPayment = await prisma.payment.update({
-                         where: { id: newPayment.id },
-                         data: { providerTxId: newTxnId }
-                     });
-                 }
-             } else {
-                 try {
-                     // ------------------------------------------------------------------
-                     // BLOCK 4: CREATE PAYMENT RECORD
-                     // No existing payment found. Create a new PENDING record.
-                     // We generate a transaction ID (TXN_...) to track it.
-                     // ------------------------------------------------------------------
-                     logger.info(`[finalizeAdmission][Online] Step 1: Creating PENDING payment record`);
-                     
-                     const feeComponent = targetComponent; 
-                     const merchantTransactionId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
-
-                     newPayment = await prisma.payment.create({
+                 if (existingPending) {
+                     logger.info(`[finalizeAdmission] Found existing PENDING payment ${existingPending.id}. Reusing it.`);
+                     // Refresh amount and metadata with the latest payload in case they changed
+                     const refreshed = await itx.payment.update({
+                         where: { id: existingPending.id },
                          data: {
-                             studentId,
                              amount: payment.amount,
-                             method: payment.method,
-                             mode: PaymentMode.ONLINE,
-                             status: PaymentStatus.PENDING, 
-                             component: feeComponent,
-                             providerTxId: merchantTransactionId, // Verify providerTxId
-                             feeHeadId: payment.feeHeadId,
-                             feeDemandId: feeDemandId || undefined,
-                             collectedBy: adminId,
-                             createdBy: adminId, // Strict data
+                             providerTxId: (existingPending.providerTxId?.startsWith('TXN_'))
+                                 ? existingPending.providerTxId
+                                 : `TXN_${Date.now()}_${studentId.substring(0, 8)}`,
                              metadata: {
-                                scholarship,
-                                allocation,
-                                course,
-                                feeComponent,
-                                amount: payment.amount,
-                                feeStructureId: payment.feeStructureId,
-                                targetAction: 'FINALIZE_ADMISSION'
+                                 scholarship,
+                                 allocation,
+                                 course,
+                                 feeComponent: targetComponent,
+                                 amount: payment.amount,
+                                 feeStructureId: payment.feeStructureId,
+                                 targetAction: 'FINALIZE_ADMISSION'
                              }
                          }
                      });
-                 } catch (e: any) { throw e; }
-             }
+                     return refreshed;
+                 }
+
+                 // ------------------------------------------------------------------
+                 // No existing payment found — create a fresh PENDING record.
+                 // ------------------------------------------------------------------
+                 logger.info(`[finalizeAdmission][Online] Step 1: Creating PENDING payment record`);
+                 const merchantTransactionId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
+
+                 return itx.payment.create({
+                     data: {
+                         studentId,
+                         amount: payment.amount,
+                         method: payment.method,
+                         mode: PaymentMode.ONLINE,
+                         status: PaymentStatus.PENDING,
+                         component: targetComponent,
+                         providerTxId: merchantTransactionId,
+                         feeHeadId: payment.feeHeadId,
+                         feeDemandId: feeDemandId || undefined,
+                         collectedBy: adminId,
+                         createdBy: adminId,
+                         metadata: {
+                             scholarship,
+                             allocation,
+                             course,
+                             feeComponent: targetComponent,
+                             amount: payment.amount,
+                             feeStructureId: payment.feeStructureId,
+                             targetAction: 'FINALIZE_ADMISSION'
+                         }
+                     }
+                 });
+             });
 
              // Use stored providerTxId or regenerate if missing (shouldn't happen for new ones)
              const merchantTransactionId = newPayment.providerTxId || newPayment.id.replace(/-/g, '');
@@ -2529,6 +2529,18 @@ export const AdminStudentService = {
                      throw new AppError("Payment for this component has already been completed.", 409);
                  }
 
+                 // Resolve feeDemandId inside the transaction to avoid stale links
+                 let resolvedFeeDemandId = feeDemandId;
+                 if (payment.feeStructureId && !resolvedFeeDemandId) {
+                     const demand = await tx.studentFeeDemand.findFirst({
+                         where: { studentId, feeStructureId: payment.feeStructureId }
+                     });
+                     if (demand) {
+                         resolvedFeeDemandId = demand.id;
+                         logger.info(`[finalizeAdmission][Offline] Resolved feeDemandId inside TX: ${demand.id}`);
+                     }
+                 }
+
                  // ------------------------------------------------------------------
                  // SUB-BLOCK 6.1: RECORD PAYMENT
                  // Create a payment record with status SUCCESS.
@@ -2543,8 +2555,15 @@ export const AdminStudentService = {
                         status: PaymentStatus.SUCCESS,
                         component: feeComponent,
                         feeHeadId: payment.feeHeadId,
-                        feeDemandId: feeDemandId || undefined,
-                        referenceNumber: payment.referenceNumber || `REF-${Date.now()}`,
+                        feeDemandId: resolvedFeeDemandId || undefined,
+                        referenceNumber: (() => {
+                            if (!payment.referenceNumber) {
+                                const autoRef = `REF-${Date.now()}`;
+                                logger.warn(`[finalizeAdmission][Offline] No referenceNumber provided for CASH payment. Auto-generating: ${autoRef}. This may affect audit/reconciliation.`);
+                                return autoRef;
+                            }
+                            return payment.referenceNumber;
+                        })(),
                         instrumentDate: payment.date ? new Date(payment.date) : new Date(),
                         collectedBy: adminId,
                         createdBy: adminId, // Strict data
@@ -3084,5 +3103,31 @@ export const AdminStudentService = {
                 reason
             }
         };
+    },
+
+    async updateSeatAllotedBy(studentId: string, seatAllotedBy: string, adminId: string | undefined) {
+        if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+        if (!seatAllotedBy) throw new AppError('seatAllotedBy is required', 400);
+
+        const user = await prisma.user.findUnique({ where: { id: seatAllotedBy } });
+        if (!user) throw new AppError('User not found for seatAllotedBy ID', 404);
+
+        const student = await prisma.student.findUnique({ where: { id: studentId } });
+        if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+
+        const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
+        if (!admission) throw new AppError('Admission record not found for this student', 404);
+
+        const updated = await prisma.studentAdmission.update({
+            where: { studentId },
+            data: {
+                seatAllotedBy
+            }
+        });
+
+        logger.info(`[updateSeatAllotedBy] studentId=${studentId} seatAllotedBy="${seatAllotedBy}" by admin=${adminId}`);
+
+        return updated;
     }
 };
+

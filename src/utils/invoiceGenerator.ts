@@ -102,7 +102,7 @@ function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) 
 /* ================= HEADER ================= */
 
 function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
-  const logoPath = path.join(process.cwd(), 'src/assets/CollegeLogo.png')
+  const logoPath = path.join(process.cwd(), 'src/assets/logo.png')
 
   // University name
   doc
@@ -165,16 +165,6 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
 
   doc.font('Helvetica').fontSize(9).fillColor('#333')
   doc.text(`Student ID: ${data.studentId}`, leftX, y + 12)
-  doc.text(
-    `${data.address.line1}${data.address.line2 ? ', ' + data.address.line2 : ''}`,
-    leftX,
-    y + 24
-  )
-  doc.text(
-    `${data.address.city}, ${data.address.state} - ${data.address.pincode}`,
-    leftX,
-    y + 36
-  )
 
   if (data.isCancellation) {
     doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y)
@@ -189,12 +179,8 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
     doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, y + ayOffset)
     doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y + ayOffset + 12)
 
-    if (!data.hideTxnId) {
-      doc.text(`Txn ID: ${data.transactionId}`, rightX, y + ayOffset + 24)
-    }
-
-    const utrOffset = (data.hideTxnId ? 24 : 36) + ayOffset
-    const payOffset = (data.hideTxnId ? 36 : 48) + ayOffset
+    const utrOffset = 24 + ayOffset
+    const payOffset = 36 + ayOffset
     const utrDisplay = (data.referenceId && data.referenceId !== data.transactionId) ? data.referenceId : 'N/A';
     doc.text(`UTR: ${utrDisplay}`, rightX, y + utrOffset)
 

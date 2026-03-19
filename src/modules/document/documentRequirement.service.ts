@@ -22,10 +22,7 @@ export const getDocumentRequirements = async (degreeType?: string) => {
     
     const requirements = await prisma.documentRequirement.findMany({
         where,
-        orderBy: [
-            { degreeType: 'asc' },
-            { documentName: 'asc' }
-        ]
+        orderBy: { createdAt: 'asc' }
     });
     
     logger.info(`[getDocumentRequirements] Found ${requirements.length} document requirements`);

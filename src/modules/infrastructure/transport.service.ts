@@ -48,9 +48,9 @@ export const TransportService = {
     },
 
     async getTransportRoutes() {
-        return await prisma.transportRoute.findMany({ 
+        return await prisma.transportRoute.findMany({
             where: { isDeleted: false },
-            include: { stops: true } 
+            include: { stops: true }
         });
     },
 

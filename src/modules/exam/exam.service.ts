@@ -317,7 +317,7 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
             applicationId: student.applicationId,
             phone: student.phone,
             email: student.email,
-            profilePhotoUrl: student.profilePhotoUrl,
+            profilePhotoUrl: await convertToPresignedUrl(student.profilePhotoUrl),
             fatherName: student.fatherName,
             dob: student.dob,
         },
@@ -1283,8 +1283,8 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
  * Accepts: [{ applicationId, score }]
  * Uses upsert so it works even if studentExam doesn't exist yet (e.g. offline students).
  */
-export const processBulkResultsJSON = async (records: { applicationId: string; score: number }[], cutoff?: number) => {
-    const results: { applicationId: string; status: string; message?: string }[] = [];
+export const processBulkResultsJSON = async (records: { applicationId: string; score: number; status: string }[]) => {
+    const results: any[] = [];
 
     const applicationIds = records.map(r => r.applicationId).filter(Boolean);
 
@@ -1295,33 +1295,90 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
 
     const studentMap = new Map(students.map(s => [s.applicationId, s.id]));
 
-    const updatePromises: Promise<{ applicationId: string; status: string; message?: string }>[] = [];
+    // Pre-fetch exam records to check attendance
+    const studentIds = students.map(s => s.id);
+    const examRecords = await prisma.studentExam.findMany({
+        where: { studentId: { in: studentIds } },
+        select: { studentId: true, examAttended: true }
+    });
+    const examMap = new Map(examRecords.map(e => [e.studentId, e.examAttended]));
+
+    const updatePromises: Promise<any>[] = [];
 
     for (const row of records) {
-        const { applicationId, score } = row;
+        const { applicationId, score, status: qualStatus } = row;
         const studentId = studentMap.get(applicationId);
 
         if (!studentId) {
-            results.push({ applicationId, status: 'Failed', message: 'Student not found' });
+            results.push({ ...row, result: 'Failed', message: 'Student not found' });
+            continue;
+        }
+
+        // Only allow score update for students who attended the exam
+        if (!examMap.get(studentId)) {
+            results.push({ ...row, result: 'Failed', message: 'Student has not attended the exam' });
             continue;
         }
 
         const numScore = Number(score);
         if (isNaN(numScore)) {
-            results.push({ applicationId, status: 'Failed', message: 'Invalid score value' });
+            results.push({ ...row, result: 'Failed', message: 'Invalid score value' });
             continue;
         }
 
-        const isQualified = cutoff != null ? numScore >= Number(cutoff) : undefined;
+        const upperStatus = (qualStatus || '').toUpperCase().trim();
+        if (upperStatus !== 'Q' && upperStatus !== 'NQ') {
+            results.push({ ...row, result: 'Failed', message: 'Status must be "Q" (Qualified) or "NQ" (Not Qualified)' });
+            continue;
+        }
+
+        const isQualified = upperStatus === 'Q';
 
         updatePromises.push(
-            prisma.studentExam.upsert({
-                where: { studentId },
-                update: { examScore: numScore, ...(isQualified !== undefined && { isQualified }) },
-                create: { studentId, examScore: numScore, ...(isQualified !== undefined && { isQualified }) }
-            })
-            .then(() => ({ applicationId, status: 'Success' }))
-            .catch((err: any) => ({ applicationId, status: 'Failed', message: err.message }))
+            (async () => {
+                try {
+                    // Update exam score and qualification
+                    await prisma.studentExam.update({
+                        where: { studentId },
+                        data: { examScore: numScore, isQualified }
+                    });
+
+                    // Create/update VVITAT academic qualification record
+                    const existingVvitat = await prisma.academicQualification.findFirst({
+                        where: { studentId, level: 'VVITAT' }
+                    });
+
+                    if (existingVvitat) {
+                        await prisma.academicQualification.update({
+                            where: { id: existingVvitat.id },
+                            data: {
+                                percentage: null,
+                                board: 'VVITU',
+                                gpaOrMarks: String(numScore),
+                                hallTicketNumber: applicationId,
+                                verificationStatus: 'APPROVED'
+                            }
+                        });
+                    } else {
+                        await prisma.academicQualification.create({
+                            data: {
+                                studentId,
+                                level: 'VVITAT',
+                                board: 'VVITU',
+                                yearOfPassing: new Date().getFullYear().toString(),
+                                percentage: null,
+                                gpaOrMarks: String(numScore),
+                                hallTicketNumber: applicationId,
+                                verificationStatus: 'APPROVED'
+                            }
+                        });
+                    }
+
+                    return { ...row, result: 'Success' };
+                } catch (err: any) {
+                    return { ...row, result: 'Failed', message: err.message };
+                }
+            })()
         );
     }
 

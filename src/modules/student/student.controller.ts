@@ -364,6 +364,17 @@ export const updateProfilePhoto = catchAsync(async (req: Request, res: Response,
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     if (!photoUrl) throw new AppError('Photo URL is required', 400);
 
+    // Validate URL scheme — only allow https (or http for local dev)
+    try {
+        const parsedUrl = new URL(photoUrl);
+        if (!['https:', 'http:'].includes(parsedUrl.protocol)) {
+            throw new AppError('Invalid URL scheme. Only HTTPS URLs are allowed.', 400);
+        }
+    } catch (e: any) {
+        if (e instanceof AppError) throw e;
+        throw new AppError('Invalid URL format', 400);
+    }
+
     const { updateProfilePhoto: updatePhotoService } = await import('./student.service');
     const result = await updatePhotoService(studentId, photoUrl, req.user?.userId || null);
 
