@@ -542,6 +542,6 @@ export const assignProSchema = z.object({
 export const updateSeatAllotedBySchema = z.object({
     body: z.object({
         studentId: z.string().uuid('Invalid student ID'),
-        seatAllotedBy: z.string().uuid('Invalid seatAllotedBy UUID'),
+        seatAllotedBy: z.string().uuid('Invalid seatAllotedBy UUID').nullable().optional(),
     }),
 });

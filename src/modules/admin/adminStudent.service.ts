@@ -1655,9 +1655,9 @@ export const AdminStudentService = {
             where: { id: qualificationId },
             data: {
                 verificationStatus: status,
-                remarks: remarks,
-                verifiedBy: adminId,
-                updatedBy: adminId
+                remarks: remarks ?? null,
+                verifiedBy: adminId ?? null,
+                updatedBy: adminId ?? null
             }
         });
 
@@ -3109,8 +3109,7 @@ export const AdminStudentService = {
         const updated = await prisma.studentAdmission.update({
             where: { studentId },
             data: {
-                seatAllotedBy,
-                updatedBy: adminId
+                seatAllotedBy
             }
         });
 
