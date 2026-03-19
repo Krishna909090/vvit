@@ -256,14 +256,41 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     }
 };
 
+/**
+ * initiateMultiComponentPayment
+ *
+ * Handles payment for multiple fee components in a single transaction.
+ * Used by POST /multi-component route.
+ *
+ * IMPORTANT — mode vs paymentMethod:
+ *   The `mode` param (ONLINE/OFFLINE) is accepted from the caller but intentionally IGNORED here.
+ *   Payment mode is derived automatically from `paymentMethod`:
+ *     - CASH, CHEQUE, DEMAND_DRAFT, NEFT, RTGS, NEFT_RTGS, IMPS → OFFLINE
+ *     - UPI (or anything else) → ONLINE
+ *   Do NOT rely on `mode` to control offline/online behavior in this function.
+ *   Use `paymentMethod` instead.
+ *
+ * Restricted components (must be paid separately via /pay-component):
+ *   HOSTEL, HOSTEL_ACCOMMODATION, HOSTEL_MESS, TRANSPORT
+ *
+ * Online flow:
+ *   - All components share a single PhonePe transaction (total amount charged at once).
+ *   - Always uses the ADMISSION PhonePe merchant account regardless of component type.
+ *   - Individual payment records are created as PENDING; finalized via webhook callback.
+ *
+ * Offline flow:
+ *   - All component payments are immediately marked SUCCESS in the same call.
+ *   - A single combined invoice is generated for all components.
+ *   - Fee demands are settled per component individually.
+ */
 export const initiateMultiComponentPayment = async (
-    studentId: string, 
-    rawComponents: { component: string | PaymentComponent, amount: number, feeHeadId?: string }[], 
-    userId?: string, 
-    paymentMethod: PaymentMethod = PaymentMethod.UPI, 
+    studentId: string,
+    rawComponents: { component: string | PaymentComponent, amount: number, feeHeadId?: string }[],
+    userId?: string,
+    paymentMethod: PaymentMethod = PaymentMethod.UPI,
     remarks?: string,
     referenceNumber?: string,
-    mode?: string
+    mode?: string // NOTE: ignored — mode is derived from paymentMethod above
 ) => {
     logger.info(`[initiateMultiComponentPayment] Student=${studentId}, Components=${JSON.stringify(rawComponents)}, Method=${paymentMethod}, Mode=${mode}, Ref=${referenceNumber}`);
 
@@ -317,10 +344,12 @@ export const initiateMultiComponentPayment = async (
     const totalAmount = components.reduce((sum, c) => sum + c.amount, 0);
     if (totalAmount <= 0) throw new AppError('Total amount must be greater than zero', 400);
 
+    // Mode is derived from paymentMethod — the `mode` parameter passed in is NOT used.
+    // Any non-cash method (UPI etc.) is treated as ONLINE; all cash/bank-transfer methods as OFFLINE.
     const isOffline = [
-        PaymentMethod.CASH, 
-        PaymentMethod.CHEQUE, 
-        PaymentMethod.DEMAND_DRAFT, 
+        PaymentMethod.CASH,
+        PaymentMethod.CHEQUE,
+        PaymentMethod.DEMAND_DRAFT,
         PaymentMethod.NEFT_RTGS,
         PaymentMethod.IMPS,
         PaymentMethod.NEFT,
