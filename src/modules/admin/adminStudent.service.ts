@@ -2245,19 +2245,11 @@ export const AdminStudentService = {
                 }
             });
             
-             // --- 4. Scholarship Update ---
-            // null → save as 0 | positive number → update percentage + flip isEligible to YES
-            // upsert instead of update: avoids P2025 crash when no scholarship record exists yet
+            // --- 4. Update Scholarship ---
             const scholarshipPct = scholarship.percentage ?? 0;
-            await tx.studentScholarship.upsert({
+            await tx.studentScholarship.update({
                 where: { studentId },
-                update: {
-                    scholarshipPercentage: scholarshipPct,
-                    ...(scholarshipPct > 0 ? { isEligible: 'YES' } : {}),
-                    updatedBy: adminId
-                },
-                create: {
-                    studentId,
+                data: {
                     scholarshipPercentage: scholarshipPct,
                     isEligible: scholarshipPct > 0 ? 'YES' : 'NO',
                     updatedBy: adminId
@@ -2265,11 +2257,9 @@ export const AdminStudentService = {
             });
             logger.debug(`[executeAdmissionUpdates] Scholarship updated: percentage=${scholarshipPct}`);
 
-            // Propagate discount to fee demands only when percentage is set
             if (scholarshipPct > 0) {
                 await this.propagateScholarshipUpdate(studentId, scholarshipPct, adminId, tx);
             }
-
 
             logger.info(`[executeAdmissionUpdates] Successfully completed all updates for student=${studentId}`);
         } catch (error) {

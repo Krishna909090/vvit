@@ -469,7 +469,13 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
         if (response.state === 'COMPLETED' || response.state === 'PAYMENT_SUCCESS') {
              const needsUpdate = payments.some(p => p.status !== PaymentStatus.SUCCESS);
              if (needsUpdate) {
-                 await processMultiPaymentSuccess(payments, response);
+                 const isAdmissionPayment = payments.some((p: any) => p.metadata?.targetAction === 'FINALIZE_ADMISSION');
+                 if (isAdmissionPayment) {
+                     const { AdminStudentService } = await import('../admin/adminStudent.service');
+                     await AdminStudentService._completeAdmissionTransaction(payments, 'system', merchantTransactionId, response);
+                 } else {
+                     await processMultiPaymentSuccess(payments, response);
+                 }
              }
              return { status: 'SUCCESS', data: response, paymentIds: payments.map(p => p.id) };
 
