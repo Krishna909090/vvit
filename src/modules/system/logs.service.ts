@@ -13,19 +13,16 @@ const LOG_GROUP = process.env.CW_LOG_GROUP || '/vvitu/erp/application';
  * Returns structured timeline entries.
  */
 export const searchTransactionLogs = async (
-    searchTerm: string,
+    searchTerm: string | null,
     startTime?: Date,
     endTime?: Date
 ) => {
     const start = startTime || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // default 7 days
     const end = endTime || new Date();
 
-    const query = `
-        fields @timestamp, @message
-        | filter @message like "${searchTerm}"
-        | sort @timestamp asc
-        | limit 500
-    `;
+    const query = searchTerm
+        ? `fields @timestamp, @message | filter @message like "${searchTerm}" | sort @timestamp asc | limit 500`
+        : `fields @timestamp, @message | sort @timestamp asc | limit 500`;
 
     try {
         const startQuery = await cwClient.send(new StartQueryCommand({
@@ -89,8 +86,8 @@ export const searchTransactionLogs = async (
 
         return {
             total: timeline.length,
-            query: searchTerm,
-            timeRange: { start: start.toISOString(), end: end.toISOString() },
+            query: searchTerm || '',
+            timeRange: { from: start.toISOString(), to: end.toISOString() },
             timeline
         };
 
@@ -103,7 +100,12 @@ export const searchTransactionLogs = async (
 /**
  * Fallback: Search from local log files when CloudWatch is not configured.
  */
-export const searchLocalLogs = async (searchTerm: string, days: number = 7) => {
+export const searchLocalLogs = async (
+    searchTerm: string | null,
+    days: number = 7,
+    startTime?: Date,
+    endTime?: Date
+) => {
     const fs = await import('fs');
     const path = await import('path');
     const readline = await import('readline');
@@ -111,49 +113,68 @@ export const searchLocalLogs = async (searchTerm: string, days: number = 7) => {
     const logDir = path.join(process.cwd(), 'logs/erp');
     const results: any[] = [];
 
-    // Read recent log files
-    const now = new Date();
-    for (let d = 0; d < days; d++) {
-        const date = new Date(now);
-        date.setDate(date.getDate() - d);
-        const dateStr = date.toISOString().split('T')[0];
-        const filePath = path.join(logDir, `application-${dateStr}.log`);
+    const seenLines = new Set<string>();
+    const now = endTime || new Date();
 
-        if (!fs.existsSync(filePath)) continue;
-
+    const readLogFile = async (filePath: string) => {
+        if (!fs.existsSync(filePath)) return;
         const fileStream = fs.createReadStream(filePath);
         const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
 
         for await (const line of rl) {
-            if (line.includes(searchTerm)) {
-                try {
-                    const parsed = JSON.parse(line);
-                    results.push({
-                        timestamp: parsed.timestamp,
-                        level: parsed.level,
-                        correlationId: parsed.correlationId,
-                        module: parsed.module || extractModule(parsed.message),
-                        action: parsed.action || extractAction(parsed.message),
-                        message: parsed.message,
-                        meta: parsed.meta
-                    });
-                } catch {
-                    results.push({
-                        timestamp: '',
-                        level: 'info',
-                        module: extractModule(line),
-                        action: extractAction(line),
-                        message: line
-                    });
+            if (!line.trim()) continue;
+            if (searchTerm && !line.includes(searchTerm)) continue;
+
+            // Deduplicate (error.log entries also appear in application.log)
+            if (seenLines.has(line)) continue;
+            seenLines.add(line);
+
+            try {
+                const parsed = JSON.parse(line);
+                const entryTime = parsed.timestamp ? new Date(parsed.timestamp) : null;
+                if (entryTime) {
+                    if (startTime && entryTime < startTime) continue;
+                    if (endTime && entryTime > endTime) continue;
                 }
+                results.push({
+                    timestamp: parsed.timestamp,
+                    level: parsed.level,
+                    correlationId: parsed.correlationId,
+                    module: parsed.module || extractModule(parsed.message),
+                    action: parsed.action || extractAction(parsed.message),
+                    message: parsed.message,
+                    meta: parsed.meta
+                });
+            } catch {
+                results.push({
+                    timestamp: '',
+                    level: 'info',
+                    module: extractModule(line),
+                    action: extractAction(line),
+                    message: line
+                });
             }
         }
+    };
+
+    for (let d = 0; d < days; d++) {
+        const date = new Date(now);
+        date.setDate(date.getDate() - d);
+        const dateStr = date.toISOString().split('T')[0];
+
+        // Read both application and error log files for the date
+        await readLogFile(path.join(logDir, `application-${dateStr}.log`));
+        await readLogFile(path.join(logDir, `error-${dateStr}.log`));
     }
 
     return {
         total: results.length,
-        query: searchTerm,
+        query: searchTerm || '',
         source: 'local',
+        timeRange: {
+            from: (startTime || new Date(Date.now() - days * 24 * 60 * 60 * 1000)).toISOString(),
+            to: now.toISOString()
+        },
         timeline: results.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
     };
 };

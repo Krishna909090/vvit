@@ -25,7 +25,8 @@ import {
     reverseAdmissionPayment,
     requestBranchChange,
     requestProgramChange,
-    assignPro
+    assignPro,
+    updateSeatAllotedBy
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -38,7 +39,8 @@ import {
     finalizeAdmissionSchema,
     verifyPaymentSchema,
     getApplicationsExtendedSchema,
-    assignProSchema
+    assignProSchema,
+    updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
 
 import upload from '../../config/multer';
@@ -463,5 +465,7 @@ router.post('/reverse-admission-payment', authenticate, authorizePermission(['st
  * Response: { status, data: { studentId, proId, proNumber } }
  */
 router.post('/assign-pro', authenticate, authorizePermission(['student.update.all']), validateRequest(assignProSchema), assignPro);
+
+router.patch('/seat-alloted-by', authenticate, authorizePermission(['student.update.all']), validateRequest(updateSeatAllotedBySchema), updateSeatAllotedBy);
 
 export default router;

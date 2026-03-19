@@ -538,3 +538,10 @@ export const assignProSchema = z.object({
         proNumber: z.string().min(1, 'PRO number is required'),
     }),
 });
+
+export const updateSeatAllotedBySchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid('Invalid student ID'),
+        seatAllotedBy: z.string().uuid('Invalid seatAllotedBy UUID'),
+    }),
+});

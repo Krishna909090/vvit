@@ -80,7 +80,7 @@ export const generateAllotmentOrderPDF = async (
 /* ================= FOOTER ================= */
 
 function drawFooter(doc: PDFKit.PDFDocument) {
-  const footerText = 'For any queries please contact admission office contact details: 9898989898, 98989798989';
+  const footerText = 'For any queries please contact admission office contact details: 8341098336, 8179488336, 7702943336.';
   
   doc
     .fontSize(9)
@@ -307,7 +307,6 @@ function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
 
   const instructions = [
     '1. Provisional Nature of Admission: The admission offered through this letter is purely provisional in nature and is subject to fulfilment of all eligibility requirements as prescribed by VVIT University and statutory authorities.',
-    '2. Confirmation of Admission: Confirmation of admission shall be strictly subject to:',
     '2. Confirmation of Admission: Confirmation of admission shall be strictly subject to:',
     '   • Submission of all original documents as specified in the separate annexures applicable for UG and PG programmes, and',
     '   • Payment of all applicable fee components, including but not limited to Tuition Fee, Hostel Fee and/or Transportation Fee, within the stipulated time.',

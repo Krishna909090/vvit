@@ -1656,6 +1656,7 @@ export const AdminStudentService = {
             data: {
                 verificationStatus: status,
                 remarks: remarks,
+                verifiedBy: adminId,
                 updatedBy: adminId
             }
         });
@@ -3090,5 +3091,32 @@ export const AdminStudentService = {
                 reason
             }
         };
+    },
+
+    async updateSeatAllotedBy(studentId: string, seatAllotedBy: string, adminId: string | undefined) {
+        if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+        if (!seatAllotedBy) throw new AppError('seatAllotedBy is required', 400);
+
+        const user = await prisma.user.findUnique({ where: { id: seatAllotedBy } });
+        if (!user) throw new AppError('User not found for seatAllotedBy ID', 404);
+
+        const student = await prisma.student.findUnique({ where: { id: studentId } });
+        if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+
+        const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
+        if (!admission) throw new AppError('Admission record not found for this student', 404);
+
+        const updated = await prisma.studentAdmission.update({
+            where: { studentId },
+            data: {
+                seatAllotedBy,
+                updatedBy: adminId
+            }
+        });
+
+        logger.info(`[updateSeatAllotedBy] studentId=${studentId} seatAllotedBy="${seatAllotedBy}" by admin=${adminId}`);
+
+        return updated;
     }
 };
+

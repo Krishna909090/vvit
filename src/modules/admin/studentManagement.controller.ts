@@ -639,6 +639,12 @@ export const reverseAdmissionPayment = catchAsync(async (req: Request, res: Resp
 });
 
 // Assign PRO to Student
+export const updateSeatAllotedBy = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
+    const { studentId, seatAllotedBy } = req.body;
+    const result = await AdminStudentService.updateSeatAllotedBy(studentId, seatAllotedBy, req.user?.userId);
+    sendResponse({ res, statusCode: 200, success: true, message: 'seatAllotedBy updated successfully', data: result });
+});
+
 export const assignPro = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId, proNumber } = req.body;
 

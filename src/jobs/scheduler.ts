@@ -77,7 +77,8 @@ const checkExpiredScholarships = async () => {
 export const startStalePaymentCleanupJob = () => {
     logger.info('[StalePaymentCleanup] Starting (Interval: 5 minutes)');
 
-    // Run every 5 minutes
+    // Run immediately on startup, then every 5 minutes
+    cleanupStalePayments();
     setInterval(async () => {
         await cleanupStalePayments();
     }, 5 * 60 * 1000);
@@ -104,7 +105,7 @@ const cleanupStalePayments = async () => {
         const ids = stalePayments.map(p => p.id);
         await prisma.payment.updateMany({
             where: { id: { in: ids } },
-            data: { status: PaymentStatus.FAILED, metadata: { reason: 'AUTO_EXPIRED', expiredAt: new Date().toISOString() } }
+            data: { status: PaymentStatus.FAILED, metadata: { reason: 'AUTO_EXPIRED', expiredAt: new Date().toISOString() } as any }
         });
 
         logger.info(`[StalePaymentCleanup] Marked ${ids.length} stale payments as FAILED`);
@@ -122,7 +123,8 @@ const cleanupStalePayments = async () => {
 export const startPaymentReconciliationJob = () => {
     logger.info('[PaymentReconciliation] Starting (Interval: 10 minutes)');
 
-    // Run every 10 minutes
+    // Run immediately on startup, then every 10 minutes
+    reconcilePendingPayments();
     setInterval(async () => {
         await reconcilePendingPayments();
     }, 10 * 60 * 1000);
