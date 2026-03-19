@@ -317,7 +317,7 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
             applicationId: student.applicationId,
             phone: student.phone,
             email: student.email,
-            profilePhotoUrl: student.profilePhotoUrl,
+            profilePhotoUrl: await convertToPresignedUrl(student.profilePhotoUrl),
             fatherName: student.fatherName,
             dob: student.dob,
         },
