@@ -397,14 +397,60 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
 
     await Promise.all(docPromises);
 
-    // Update Admission Status
-    const admission = await prisma.studentAdmission.update({
-        where: { studentId },
-        data: { status: AdmissionStatus.DOCUMENTS_SUBMITTED }
-    });
+    // Update Admission Status — skip if student is already at a later stage
+    const protectedStatuses: AdmissionStatus[] = [
+        AdmissionStatus.SEAT_ALLOTTED,
+        AdmissionStatus.ADMISSION_CONFIRMED,
+        AdmissionStatus.ENROLLED
+    ];
+    const currentAdmissionStatus = student.admissionDetails?.status as AdmissionStatus | undefined;
+    let admissionStatus = currentAdmissionStatus;
+
+    if (!currentAdmissionStatus || !protectedStatuses.includes(currentAdmissionStatus)) {
+        const admission = await prisma.studentAdmission.update({
+            where: { studentId },
+            data: { status: AdmissionStatus.DOCUMENTS_SUBMITTED }
+        });
+        admissionStatus = admission.status as AdmissionStatus;
+    }
 
     logger.info(`Documents uploaded for student: ${studentId}`);
-    return { studentId, status: admission.status };
+    return { studentId, status: admissionStatus };
+};
+
+export const reUploadDocument = async (studentId: string, documentKey: string, url: string) => {
+    const student = await prisma.student.findUnique({
+        where: { id: studentId },
+        include: { admissionDetails: true }
+    });
+
+    if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+
+    const doc = await prisma.studentDocument.upsert({
+        where: { studentId_documentKey: { studentId, documentKey } },
+        update: { url, status: StudentDocumentStatus.PENDING, remarks: null, isDeleted: false },
+        create: { studentId, documentKey, url, status: StudentDocumentStatus.PENDING, isDeleted: false }
+    });
+
+    // If rejected previously, move back to DOCUMENTS_SUBMITTED so admin can re-verify.
+    // Never downgrade a student who is already at SEAT_ALLOTTED / ADMISSION_CONFIRMED / ENROLLED.
+    const protectedStatuses: AdmissionStatus[] = [
+        AdmissionStatus.SEAT_ALLOTTED,
+        AdmissionStatus.ADMISSION_CONFIRMED,
+        AdmissionStatus.ENROLLED
+    ];
+    const currentStatus = student.admissionDetails?.status as AdmissionStatus | undefined;
+    if (currentStatus === AdmissionStatus.DOCUMENTS_PENDING) {
+        await prisma.studentAdmission.update({
+            where: { studentId },
+            data: { status: AdmissionStatus.DOCUMENTS_SUBMITTED }
+        });
+    }
+    // Protected statuses (SEAT_ALLOTTED, ADMISSION_CONFIRMED, ENROLLED) and all
+    // other statuses are left unchanged.
+
+    logger.info(`[reUploadDocument] student=${studentId} documentKey=${documentKey}`);
+    return doc;
 };
 
 export const removeDocument = async (studentId: string, documentKey: string) => {

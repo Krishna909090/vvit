@@ -11,7 +11,8 @@ import {
     getApplicationSummary,
     requestServiceChange,
     updateProfilePhoto,
-    requestCourseChange
+    requestCourseChange,
+    reUploadDocument
 } from './student.controller';
 import { changeCourseSchema } from '../../validators/adminValidators';
 import {
@@ -148,6 +149,19 @@ router.get('/exam-slots', authenticate, authorizePermission(['exam.read.own', 'e
  * Response: { status, message }
  */
 router.post('/:studentId/upload-docs', authenticate, authorizePermission(['document.create.own', 'document.create.all', 'info.update.own', 'info.update.all']), validateRequest(uploadDocumentsAndPreferencesSchema), uploadDocumentsAndPreferences);
+
+/**
+ * POST /student/:studentId/re-upload-doc
+ * Re-uploads a single document for a student (replaces existing).
+ * Resets the document's verification status back to PENDING and clears any rejection remarks.
+ * If admission status is DOCUMENTS_PENDING (rejected), moves it back to DOCUMENTS_SUBMITTED.
+ * Protected statuses (SEAT_ALLOTTED, ADMISSION_CONFIRMED, ENROLLED) are never downgraded.
+ * Accessible by both the student (own) and admin/staff (all).
+ * Params: { studentId }
+ * Body: { documentKey: string, url: string }
+ * Response: { status, data: StudentDocument }
+ */
+router.post('/:studentId/re-upload-doc', authenticate, authorizePermission(['document.create.own', 'document.create.all']), reUploadDocument);
 
 /**
  * POST /student/:studentId/academic-details

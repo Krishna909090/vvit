@@ -572,28 +572,41 @@ export const AdminStudentService = {
         });
 
         if (student) {
-            if (status === StudentDocumentStatus.REJECTED) {
-                 await prisma.studentAdmission.update({
-                    where: { studentId },
-                    data: { status: AdmissionStatus.DOCUMENTS_PENDING }
-                });
-            } else {
-                const requirements = await prisma.documentRequirement.findMany({
-                    where: { degreeType: student.degreeType || '', isRequired: true }
-                });
+            const currentAdmission = await prisma.studentAdmission.findUnique({
+                where: { studentId },
+                select: { status: true }
+            });
+            const protectedStatuses: AdmissionStatus[] = [
+                AdmissionStatus.SEAT_ALLOTTED,
+                AdmissionStatus.ADMISSION_CONFIRMED,
+                AdmissionStatus.ENROLLED
+            ];
+            const isProtected = currentAdmission?.status && protectedStatuses.includes(currentAdmission.status as AdmissionStatus);
 
-                const requiredKeys = requirements.map(r => r.documentKey);
-                const verifiedKeys = student.documents
-                    .filter(d => d.status === StudentDocumentStatus.APPROVED)
-                    .map(d => d.documentKey);
-
-                const allVerified = requiredKeys.every(key => verifiedKeys.includes(key));
-
-                if (allVerified) {
+            if (!isProtected) {
+                if (status === StudentDocumentStatus.REJECTED) {
                     await prisma.studentAdmission.update({
                         where: { studentId },
-                        data: { status: AdmissionStatus.DOCUMENTS_VERIFIED }
+                        data: { status: AdmissionStatus.DOCUMENTS_PENDING }
                     });
+                } else {
+                    const requirements = await prisma.documentRequirement.findMany({
+                        where: { degreeType: student.degreeType || '', isRequired: true }
+                    });
+
+                    const requiredKeys = requirements.map(r => r.documentKey);
+                    const verifiedKeys = student.documents
+                        .filter(d => d.status === StudentDocumentStatus.APPROVED)
+                        .map(d => d.documentKey);
+
+                    const allVerified = requiredKeys.every(key => verifiedKeys.includes(key));
+
+                    if (allVerified) {
+                        await prisma.studentAdmission.update({
+                            where: { studentId },
+                            data: { status: AdmissionStatus.DOCUMENTS_VERIFIED }
+                        });
+                    }
                 }
             }
         }

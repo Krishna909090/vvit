@@ -3,7 +3,7 @@ import { authenticate, authorizePermission } from '../../middleware/rbac.middlew
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     getAllApplications, uploadBulkApplications, requestCancellation, approveCancellation,
-    verifyAndAllotSeat, verifyStudentDocument, requestCourseChange, approveCourseChange, getCourseChangeRequests,
+    verifyAndAllotSeat, verifyStudentDocument, reUploadDocument, requestCourseChange, approveCourseChange, getCourseChangeRequests,
     updateAdmissionDetails, getStudentCertificates, downloadStudentDocuments, updateRollNumber,
     updateStudentStatus,
     setScholarshipEligibility,
@@ -247,6 +247,18 @@ router.get('/application-pdf/:studentId', authenticate, authorizePermission(['st
  * Response: { status, data: StudentDocument }
  */
 router.post('/verify-document/:studentId', authenticate, authorizePermission(['document.update.all']), verifyStudentDocument);
+
+/**
+ * POST /admin/student/re-upload-doc/:studentId
+ * Admin re-uploads a single document on behalf of a student.
+ * Resets document status to PENDING and clears rejection remarks.
+ * If admission status is DOCUMENTS_PENDING, moves it back to DOCUMENTS_SUBMITTED.
+ * Protected statuses (SEAT_ALLOTTED, ADMISSION_CONFIRMED, ENROLLED) are never downgraded.
+ * Params: { studentId }
+ * Body: { documentKey: string, url: string }
+ * Response: { status, data: StudentDocument }
+ */
+router.post('/re-upload-doc/:studentId', authenticate, authorizePermission(['document.create.all']), reUploadDocument);
 
 // ═══════════════════════════════════════════════════════════
 //  DOCUMENT REQUIREMENTS MANAGEMENT
