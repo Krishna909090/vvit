@@ -65,7 +65,7 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
             
             currentY += 25;
             doc.fontSize(10).fillColor('#555555')
-               .text('Uppalapadu Road, Nambur, pedakakani Mandal, Guntur, Andhra Pradesh – 522508', 0, currentY, { align: 'center', width: doc.page.width });
+               .text('Uppalapadu Road, Nambur, Pedakakani Mandal, Guntur, Andhra Pradesh – 522508', 0, currentY, { align: 'center', width: doc.page.width });
 
             // Logo
             if (fs.existsSync(logoPath)) {

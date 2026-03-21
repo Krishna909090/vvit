@@ -131,7 +131,7 @@ function drawHeader(doc: PDFKit.PDFDocument) {
     .fontSize(10)
     .fillColor('#000000')
     .text(
-      'Uppalapadu Road, Nambur, pedakakani Mandal, Guntur, Andhra Pradesh – 522508',
+      'Uppalapadu Road, Nambur, Pedakakani Mandal, Guntur, Andhra Pradesh – 522508',
       { width: doc.page.width, align: 'center' }
     )
 

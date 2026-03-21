@@ -227,7 +227,7 @@ function drawHeader(doc: PDFKit.PDFDocument, photoBuffer: Buffer | null = null) 
 
   // Address
   doc.font('Helvetica').fontSize(9).fillColor('#555')
-    .text('Uppalapadu Road, Nambur, pedakakani Mandal, Guntur, Andhra Pradesh – 522508', 0, 50, { align: 'center' });
+    .text('Uppalapadu Road, Nambur, Pedakakani Mandal, Guntur, Andhra Pradesh – 522508', 0, 50, { align: 'center' });
 
   if (fs.existsSync(logoPath)) {
     // Moved Logo Down
