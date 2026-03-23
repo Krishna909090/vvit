@@ -123,6 +123,19 @@ export const verifyAndAllotSeat = catchAsync(async (req: Request, res: Response,
     });
 });
 
+// Re-upload a single document on behalf of a student
+export const reUploadDocument = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { documentKey, url } = req.body;
+
+    if (!documentKey || !url) throw new AppError('documentKey and url are required', 400);
+
+    const doc = await StudentService.reUploadDocument(studentId, documentKey, url);
+
+    logger.info(`[admin.reUploadDocument] studentId=${studentId} documentKey=${documentKey}`);
+    sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.FILE_UPLOADED, data: doc });
+});
+
 // Verify Student Document
 export const verifyStudentDocument = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;

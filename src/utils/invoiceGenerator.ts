@@ -133,7 +133,7 @@ function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
     .fontSize(8)
     .fillColor('#555')
     .text(
-      'VVIT University, Uppalapadu Road,\nNambur, DT, Pedhakakani Mandal,\nGuntur, Andhra Pradesh – 522508',
+      'VVIT University, Uppalapadu Road,\nNambur, DT, Pedakakani Mandal,\nGuntur, Andhra Pradesh – 522508',
       350,
       topY + 48,
       { align: 'right' }

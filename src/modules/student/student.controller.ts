@@ -4,7 +4,7 @@ import logger from '../../utils/logger';
 import { AdmissionStatus, RequestStatus } from '@prisma/client';
 import { Role } from '../../constants/roles';
 import { v4 as uuidv4 } from 'uuid';
-import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, getHallTicketByApplicationId, uploadDocumentsAndPreferences as uploadDocsService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService, updatePersonalDetails as updatePersonalDetailsService, changeServicePreferences } from './student.service';
+import { registerStudent as registerStudentService, getHallTicket as getHallTicketService, getHallTicketByApplicationId, uploadDocumentsAndPreferences as uploadDocsService, reUploadDocument as reUploadDocumentService, addAcademicDetails as addAcademicDetailsService, getStudentByUserId as getStudentByUserIdService, updatePersonalDetails as updatePersonalDetailsService, changeServicePreferences } from './student.service';
 import { bookExamSlot } from '../exam/exam.service';
 import QRCode from 'qrcode';
 import { catchAsync } from '../../utils/catchAsync';
@@ -130,6 +130,19 @@ export const uploadDocumentsAndPreferences = catchAsync(async (req: Request, res
 
 
 
+
+export const reUploadDocument = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { documentKey, url } = req.body;
+
+    if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+    if (!documentKey || !url) throw new AppError('documentKey and url are required', 400);
+
+    const doc = await reUploadDocumentService(studentId, documentKey, url);
+
+    logger.info(`[reUploadDocument] success studentId=${studentId} documentKey=${documentKey}`);
+    sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.FILE_UPLOADED, data: doc });
+});
 
 // Select Exam Date and Center
 // Select Exam Date and Center (via Slot)
