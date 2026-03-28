@@ -26,7 +26,8 @@ import {
     requestBranchChange,
     requestProgramChange,
     assignPro,
-    updateSeatAllotedBy
+    updateSeatAllotedBy,
+    getFinancialApplications
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -65,6 +66,14 @@ const router = Router();
  * Response: { status, data: { applications[], total, page, limit } }
  */
 router.get('/applications', authenticate, authorizePermission(['student.read.all']), validateRequest(getAllApplicationsSchema), getAllApplications);
+
+/**
+ * GET /admin/student/applications/financials
+ * Returns paginated student cards with financial breakdown per student.
+ * Includes application fee, tuition, admission, book bank, hostel (paid/total) and transport (yes/no).
+ * Query: { page?, limit?, search? }
+ */
+router.get('/applications/financials', authenticate, authorizePermission(['student.read.all']), getFinancialApplications);
 
 /**
  * GET /admin/student/applications-extended

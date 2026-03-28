@@ -778,7 +778,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
 
     if (
         student.admissionDetails?.status !== AdmissionStatus.ENTRANCE_FEE_PAID &&
-        student.admissionDetails?.status !== AdmissionStatus.EXAM_SCHEDULED
+        student.admissionDetails?.status !== AdmissionStatus.EXAM_SCHEDULED,student.admissionDetails?.status !== AdmissionStatus.ADMISSION_CONFIRMED
     ) {
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_ELIGIBLE_SLOT, 400);
     }

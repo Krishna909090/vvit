@@ -59,8 +59,7 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
 
             // Logo
             const logoPath = path.join(process.cwd(), 'src/assets/logo.png');
-            const logoWidth = 80;
-            const logoHeight = 80; // Assuming ~square aspect ratio for layout reservation
+            const logoWidth = 55;
             const logoY = currentY + 10; // Align logo with header text top
 
             try {

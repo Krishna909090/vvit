@@ -651,6 +651,19 @@ export const reverseAdmissionPayment = catchAsync(async (req: Request, res: Resp
     });
 });
 
+// Get Financial Applications
+export const getFinancialApplications = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getFinancialApplications] by=${req.user?.userId || 'anonymous'}`);
+    const result = await AdminStudentService.getFinancialApplications(req.query);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
 // Assign PRO to Student
 export const updateSeatAllotedBy = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const { studentId, seatAllotedBy } = req.body;

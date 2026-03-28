@@ -315,6 +315,7 @@ model StudentAdmission {
   roomNumber        String?
   allottedCourseId  String?
   seatAllotedBy     String?
+  seatAllottedAt    DateTime?
   createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
   hostelPaymentMode HostelPaymentMode? @default(YEARWISE)
@@ -1343,6 +1344,7 @@ enum PaymentMethod {
   IMPS
   NEFT
   RTGS
+  OFFICE_QR
 }
 
 enum LedgerTransactionType {
