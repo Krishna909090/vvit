@@ -3768,6 +3768,7 @@ export const AdminStudentService = {
                     gender: true,
                     phone: true,
                     email: true,
+                    degreeType: true,
                     admissionDetails: {
                         select: {
                             seatAllottedAt: true,
@@ -3858,7 +3859,7 @@ export const AdminStudentService = {
                 phone: student.phone,
                 email: student.email,
                 branch: student.admissionDetails?.allottedCourse?.name ?? null,
-                degree: student.admissionDetails?.allottedCourse?.degree ?? null,
+                degree: student.admissionDetails?.allottedCourse?.degree ?? student.degreeType ?? null,
                 dateOfAllotment: student.admissionDetails?.seatAllottedAt ?? null,
                 applicationFee: {
                     paid: student.payments.length > 0,
