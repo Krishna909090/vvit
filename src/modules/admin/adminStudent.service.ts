@@ -30,7 +30,7 @@ const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://loc
 
 export const AdminStudentService = {
     async getAllApplications(query: any) {
-        const { page = 1, limit = 10, search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder } = query;
+        const { page = 1, limit = 10, search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate } = query;
         const skip = (Number(page) - 1) * Number(limit);
 
         const where: any = {};
@@ -280,6 +280,45 @@ export const AdminStudentService = {
                     status: PaymentStatus.SUCCESS
                 }
             };
+        }
+
+        // createdAt date range filter
+        if (dateRange) {
+            const now = new Date();
+            const startOfDayFn = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+            const endOfDayFn = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
+            let gte: Date | undefined;
+            let lte: Date | undefined;
+
+            const val = String(dateRange).toLowerCase();
+
+            if (val === 'today') {
+                gte = startOfDayFn(now);
+                lte = endOfDayFn(now);
+            } else if (val === '7d') {
+                const d = new Date(now);
+                d.setDate(now.getDate() - 7);
+                gte = startOfDayFn(d);
+                lte = endOfDayFn(now);
+            } else if (val === '15d') {
+                const d = new Date(now);
+                d.setDate(now.getDate() - 15);
+                gte = startOfDayFn(d);
+                lte = endOfDayFn(now);
+            } else if (val === '30d') {
+                const d = new Date(now);
+                d.setDate(now.getDate() - 30);
+                gte = startOfDayFn(d);
+                lte = endOfDayFn(now);
+            } else if (val === 'custom' && startDate && endDate) {
+                gte = startOfDayFn(new Date(String(startDate)));
+                lte = endOfDayFn(new Date(String(endDate)));
+            }
+
+            if (gte && lte) {
+                where.createdAt = { gte, lte };
+            }
         }
 
         const [students, total] = await prisma.$transaction([

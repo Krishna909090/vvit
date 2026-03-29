@@ -190,6 +190,9 @@ export const getAllApplicationsSchema = z.object({
         seatCancellation: z.string().optional(),
         cancellationReason: z.string().optional(),
         allotmentOrder: z.string().optional(),
+        dateRange: z.string().optional(),
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
     }),
 });
 
