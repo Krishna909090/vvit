@@ -134,8 +134,9 @@ export const AdminStudentService = {
         }
 
         if (qualificationLevel) {
+            const levels = String(qualificationLevel).split(',').map(l => l.trim()).filter(Boolean);
             where.academicQualifications = {
-                some: { ...(where.academicQualifications?.some || {}), level: String(qualificationLevel) }
+                some: { ...(where.academicQualifications?.some || {}), level: levels.length === 1 ? levels[0] : { in: levels } }
             };
         }
 
