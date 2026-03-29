@@ -88,9 +88,12 @@ export const AdminStudentService = {
         }
 
         if (qualificationVerifiedBy) {
-            where.academicQualifications = {
-                some: { verifiedBy: String(qualificationVerifiedBy) }
-            };
+            if (!where.AND) where.AND = [];
+            where.AND.push({
+                academicQualifications: {
+                    some: { verifiedBy: String(qualificationVerifiedBy) }
+                }
+            });
         }
 
         if (gender) {
@@ -120,48 +123,67 @@ export const AdminStudentService = {
         }
 
         if (qualificationVerified) {
+            if (!where.AND) where.AND = [];
             if (String(qualificationVerified).toUpperCase() === 'VERIFIED') {
-                where.academicQualifications = {
-                    ...where.academicQualifications,
-                    every: { verificationStatus: 'APPROVED' }
-                };
+                where.AND.push({
+                    academicQualifications: {
+                        every: { verificationStatus: 'APPROVED' }
+                    }
+                });
             } else if (String(qualificationVerified).toUpperCase() === 'UNVERIFIED') {
-                where.academicQualifications = {
-                    ...where.academicQualifications,
-                    none: { verificationStatus: 'APPROVED' }
-                };
+                where.AND.push({
+                    academicQualifications: {
+                        none: { verificationStatus: 'APPROVED' }
+                    }
+                });
             }
         }
 
+        const academicQualificationConditions: any[] = [];
+
         if (qualificationLevel) {
             const levels = String(qualificationLevel).split(',').map(l => l.trim()).filter(Boolean);
-            where.academicQualifications = {
-                some: { ...(where.academicQualifications?.some || {}), level: levels.length === 1 ? levels[0] : { in: levels } }
-            };
+            academicQualificationConditions.push({
+                academicQualifications: {
+                    some: { level: levels.length === 1 ? levels[0] : { in: levels } }
+                }
+            });
         }
 
         if (qualificationBoard) {
-            where.academicQualifications = {
-                some: { ...(where.academicQualifications?.some || {}), board: { contains: String(qualificationBoard), mode: 'insensitive' } }
-            };
+            academicQualificationConditions.push({
+                academicQualifications: {
+                    some: { board: { contains: String(qualificationBoard), mode: 'insensitive' } }
+                }
+            });
         }
 
         if (marks10thMin || marks10thMax) {
-            const range: any = {};
-            if (marks10thMin) range.gte = Number(marks10thMin);
-            if (marks10thMax) range.lte = Number(marks10thMax);
-            where.academicQualifications = {
-                some: { level: '10th', percentage: range }
-            };
+            const conditions: string[] = [`"level" = '10th'`, `"gpaOrMarks" IS NOT NULL`];
+            if (marks10thMin) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${Number(marks10thMin)}`);
+            if (marks10thMax) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${Number(marks10thMax)}`);
+            const studentIds10th: { studentId: string }[] = await prisma.$queryRawUnsafe(
+                `SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE ${conditions.join(' AND ')}`
+            );
+            academicQualificationConditions.push({
+                id: { in: studentIds10th.map(r => r.studentId) }
+            });
         }
 
         if (marks12thMin || marks12thMax) {
-            const range: any = {};
-            if (marks12thMin) range.gte = Number(marks12thMin);
-            if (marks12thMax) range.lte = Number(marks12thMax);
-            where.academicQualifications = {
-                some: { level: '12th', percentage: range }
-            };
+            const conditions: string[] = [`"level" = '12th'`, `"gpaOrMarks" IS NOT NULL`];
+            if (marks12thMin) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${Number(marks12thMin)}`);
+            if (marks12thMax) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${Number(marks12thMax)}`);
+            const studentIds12th: { studentId: string }[] = await prisma.$queryRawUnsafe(
+                `SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE ${conditions.join(' AND ')}`
+            );
+            academicQualificationConditions.push({
+                id: { in: studentIds12th.map(r => r.studentId) }
+            });
+        }
+
+        if (academicQualificationConditions.length > 0) {
+            where.AND = [...(where.AND || []), ...academicQualificationConditions];
         }
 
         if (certificateStatus) {
@@ -431,7 +453,26 @@ export const AdminStudentService = {
         else if (query.hasDocuments === 'false') where.documents = { none: {} };
         if (createdBy) where.createdBy = String(createdBy);
         if (qualificationVerifiedBy) {
-            where.academicQualifications = { some: { verifiedBy: String(qualificationVerifiedBy) } };
+            if (!where.AND) where.AND = [];
+            where.AND.push({
+                academicQualifications: { some: { verifiedBy: String(qualificationVerifiedBy) } }
+            });
+        }
+        if (qualificationVerified) {
+            if (!where.AND) where.AND = [];
+            if (String(qualificationVerified).toUpperCase() === 'VERIFIED') {
+                where.AND.push({
+                    academicQualifications: {
+                        every: { verificationStatus: 'APPROVED' }
+                    }
+                });
+            } else if (String(qualificationVerified).toUpperCase() === 'UNVERIFIED') {
+                where.AND.push({
+                    academicQualifications: {
+                        none: { verificationStatus: 'APPROVED' }
+                    }
+                });
+            }
         }
         if (gender) where.gender = { equals: String(gender), mode: 'insensitive' };
         if (pref1) where.pref1 = String(pref1);
@@ -444,16 +485,47 @@ export const AdminStudentService = {
             end.setHours(23, 59, 59, 999);
             where.examDetails = { testDate: { gte: start, lte: end } };
         }
+
+        const csvAcademicConditions: any[] = [];
         if (qualificationLevel) {
             const levels = String(qualificationLevel).split(',').map(l => l.trim()).filter(Boolean);
-            where.academicQualifications = {
-                some: { ...(where.academicQualifications?.some || {}), level: levels.length === 1 ? levels[0] : { in: levels } }
-            };
+            csvAcademicConditions.push({
+                academicQualifications: {
+                    some: { level: levels.length === 1 ? levels[0] : { in: levels } }
+                }
+            });
         }
         if (qualificationBoard) {
-            where.academicQualifications = {
-                some: { ...(where.academicQualifications?.some || {}), board: { contains: String(qualificationBoard), mode: 'insensitive' } }
-            };
+            csvAcademicConditions.push({
+                academicQualifications: {
+                    some: { board: { contains: String(qualificationBoard), mode: 'insensitive' } }
+                }
+            });
+        }
+        if (marks10thMin || marks10thMax) {
+            const conditions: string[] = [`"level" = '10th'`, `"gpaOrMarks" IS NOT NULL`];
+            if (marks10thMin) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${Number(marks10thMin)}`);
+            if (marks10thMax) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${Number(marks10thMax)}`);
+            const studentIds10th: { studentId: string }[] = await prisma.$queryRawUnsafe(
+                `SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE ${conditions.join(' AND ')}`
+            );
+            csvAcademicConditions.push({
+                id: { in: studentIds10th.map(r => r.studentId) }
+            });
+        }
+        if (marks12thMin || marks12thMax) {
+            const conditions: string[] = [`"level" = '12th'`, `"gpaOrMarks" IS NOT NULL`];
+            if (marks12thMin) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${Number(marks12thMin)}`);
+            if (marks12thMax) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${Number(marks12thMax)}`);
+            const studentIds12th: { studentId: string }[] = await prisma.$queryRawUnsafe(
+                `SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE ${conditions.join(' AND ')}`
+            );
+            csvAcademicConditions.push({
+                id: { in: studentIds12th.map(r => r.studentId) }
+            });
+        }
+        if (csvAcademicConditions.length > 0) {
+            where.AND = [...(where.AND || []), ...csvAcademicConditions];
         }
         if (applicationFeePaid === 'UNPAID') {
             where.payments = { none: { component: PaymentComponent.APPLICATION_FEE, status: PaymentStatus.SUCCESS } };
@@ -498,7 +570,28 @@ export const AdminStudentService = {
             }
         });
 
-        const rows = students.map((s: any) => ({
+        // Collect all unique verifiedBy user IDs to resolve names
+        const verifierIds = new Set<string>();
+        for (const s of students) {
+            for (const q of (s as any).academicQualifications || []) {
+                if (q.verifiedBy) verifierIds.add(q.verifiedBy);
+            }
+        }
+        const verifierMap = new Map<string, string>();
+        if (verifierIds.size > 0) {
+            const verifiers = await prisma.user.findMany({
+                where: { id: { in: Array.from(verifierIds) } },
+                select: { id: true, name: true }
+            });
+            for (const v of verifiers) {
+                verifierMap.set(v.id, v.name || v.id);
+            }
+        }
+
+        const rows = students.map((s: any) => {
+            const q10th = s.academicQualifications?.find((q: any) => q.level === '10th');
+            const q12th = s.academicQualifications?.find((q: any) => q.level === '12th');
+            return {
             'Application ID': s.applicationId || '',
             'Name': s.name || '',
             'Gender': s.gender || '',
@@ -516,8 +609,17 @@ export const AdminStudentService = {
             'Is Qualified': s.examDetails?.isQualified ? 'Yes' : 'No',
             'Application Fee Paid': s.payments?.some((p: any) => p.component === PaymentComponent.APPLICATION_FEE && p.status === PaymentStatus.SUCCESS) ? 'PAID' : 'UNPAID',
             'Scholarship Eligible': s.studentScholarship?.isEligible || '',
+            '10th Marks': q10th?.gpaOrMarks ?? '',
+            '10th Board': q10th?.board || '',
+            '10th Verification Status': q10th?.verificationStatus || '',
+            '10th Verified By': q10th?.verifiedBy ? (verifierMap.get(q10th.verifiedBy) || q10th.verifiedBy) : '',
+            '12th Marks': q12th?.gpaOrMarks ?? '',
+            '12th Board': q12th?.board || '',
+            '12th Verification Status': q12th?.verificationStatus || '',
+            '12th Verified By': q12th?.verifiedBy ? (verifierMap.get(q12th.verifiedBy) || q12th.verifiedBy) : '',
             'Created At': s.createdAt ? new Date(s.createdAt).toISOString().split('T')[0] : '',
-        }));
+        };
+        });
 
         return Papa.unparse(rows);
     },
