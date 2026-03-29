@@ -127,6 +127,7 @@ export const AdminStudentService = {
 
         if (qualificationVerified) {
             if (!where.AND) where.AND = [];
+            where.AND.push({ academicQualifications: { some: {} } });
             const values = String(qualificationVerified).split(',').map(v => v.trim().toUpperCase()).filter(Boolean);
             const verificationOrConditions: any[] = [];
             for (const val of values) {
@@ -482,6 +483,7 @@ export const AdminStudentService = {
         }
         if (qualificationVerified) {
             if (!where.AND) where.AND = [];
+            where.AND.push({ academicQualifications: { some: {} } });
             const values = String(qualificationVerified).split(',').map(v => v.trim().toUpperCase()).filter(Boolean);
             const verificationOrConditions: any[] = [];
             for (const val of values) {
