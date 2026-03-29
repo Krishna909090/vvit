@@ -459,9 +459,10 @@ export const updateStudentPersonalDetailsSchema = z.object({
         country: z.string().min(1).optional(),
         profilePhotoUrl: z.string().url().optional(),
         aadharNumber: z.string().optional(),
-        pref1: z.string().uuid("Invalid Course ID").optional(),
-        pref2: z.string().uuid("Invalid Course ID").optional(),
-        pref3: z.string().uuid("Invalid Course ID").optional(),
+        degreeType: z.string().min(1).optional(),
+        pref1: z.string().uuid("Invalid Course ID").nullable().optional(),
+        pref2: z.string().uuid("Invalid Course ID").nullable().optional(),
+        pref3: z.string().uuid("Invalid Course ID").nullable().optional(),
     }).refine(data => {
         const forbiddenKeys = ['phone', 'phoneNumber'];
         const keys = Object.keys(data);
