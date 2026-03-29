@@ -101,15 +101,18 @@ export const AdminStudentService = {
         }
 
         if (pref1) {
-            where.pref1 = String(pref1);
+            const values = String(pref1).split(',').map(v => v.trim()).filter(Boolean);
+            where.pref1 = values.length === 1 ? values[0] : { in: values };
         }
 
         if (pref2) {
-            where.pref2 = String(pref2);
+            const values = String(pref2).split(',').map(v => v.trim()).filter(Boolean);
+            where.pref2 = values.length === 1 ? values[0] : { in: values };
         }
 
         if (pref3) {
-            where.pref3 = String(pref3);
+            const values = String(pref3).split(',').map(v => v.trim()).filter(Boolean);
+            where.pref3 = values.length === 1 ? values[0] : { in: values };
         }
 
         if (examDate) {
@@ -124,18 +127,33 @@ export const AdminStudentService = {
 
         if (qualificationVerified) {
             if (!where.AND) where.AND = [];
-            if (String(qualificationVerified).toUpperCase() === 'VERIFIED') {
-                where.AND.push({
-                    academicQualifications: {
-                        every: { verificationStatus: 'APPROVED' }
-                    }
-                });
-            } else if (String(qualificationVerified).toUpperCase() === 'UNVERIFIED') {
-                where.AND.push({
-                    academicQualifications: {
-                        none: { verificationStatus: 'APPROVED' }
-                    }
-                });
+            const values = String(qualificationVerified).split(',').map(v => v.trim().toUpperCase()).filter(Boolean);
+            const verificationOrConditions: any[] = [];
+            for (const val of values) {
+                if (val === 'VERIFIED') {
+                    verificationOrConditions.push({
+                        academicQualifications: {
+                            every: { verificationStatus: 'APPROVED' }
+                        }
+                    });
+                } else if (val === 'UNVERIFIED') {
+                    verificationOrConditions.push({
+                        academicQualifications: {
+                            none: { verificationStatus: 'APPROVED' }
+                        }
+                    });
+                } else {
+                    verificationOrConditions.push({
+                        academicQualifications: {
+                            some: { verificationStatus: val }
+                        }
+                    });
+                }
+            }
+            if (verificationOrConditions.length === 1) {
+                where.AND.push(verificationOrConditions[0]);
+            } else if (verificationOrConditions.length > 1) {
+                where.AND.push({ OR: verificationOrConditions });
             }
         }
 
@@ -187,9 +205,11 @@ export const AdminStudentService = {
         }
 
         if (certificateStatus) {
-            where.documents = {
-                every: { status: String(certificateStatus).toUpperCase() }
-            };
+            if (!where.AND) where.AND = [];
+            where.AND.push(
+                { documents: { some: {} } },
+                { documents: { every: { status: String(certificateStatus).toUpperCase() } } }
+            );
         }
 
         if (certificatesApproved) {
@@ -227,16 +247,18 @@ export const AdminStudentService = {
         }
 
         if (program) {
+            const values = String(program).split(',').map(v => v.trim()).filter(Boolean);
             where.admissionDetails = {
                 ...where.admissionDetails,
-                allottedCourse: { degree: String(program) }
+                allottedCourse: { degree: values.length === 1 ? values[0] : { in: values } }
             };
         }
 
         if (branch) {
+            const values = String(branch).split(',').map(v => v.trim()).filter(Boolean);
             where.admissionDetails = {
                 ...where.admissionDetails,
-                allottedCourseId: String(branch)
+                allottedCourseId: values.length === 1 ? values[0] : { in: values }
             };
         }
 
@@ -460,24 +482,42 @@ export const AdminStudentService = {
         }
         if (qualificationVerified) {
             if (!where.AND) where.AND = [];
-            if (String(qualificationVerified).toUpperCase() === 'VERIFIED') {
-                where.AND.push({
-                    academicQualifications: {
-                        every: { verificationStatus: 'APPROVED' }
-                    }
-                });
-            } else if (String(qualificationVerified).toUpperCase() === 'UNVERIFIED') {
-                where.AND.push({
-                    academicQualifications: {
-                        none: { verificationStatus: 'APPROVED' }
-                    }
-                });
+            const values = String(qualificationVerified).split(',').map(v => v.trim().toUpperCase()).filter(Boolean);
+            const verificationOrConditions: any[] = [];
+            for (const val of values) {
+                if (val === 'VERIFIED') {
+                    verificationOrConditions.push({
+                        academicQualifications: { every: { verificationStatus: 'APPROVED' } }
+                    });
+                } else if (val === 'UNVERIFIED') {
+                    verificationOrConditions.push({
+                        academicQualifications: { none: { verificationStatus: 'APPROVED' } }
+                    });
+                } else {
+                    verificationOrConditions.push({
+                        academicQualifications: { some: { verificationStatus: val } }
+                    });
+                }
+            }
+            if (verificationOrConditions.length === 1) {
+                where.AND.push(verificationOrConditions[0]);
+            } else if (verificationOrConditions.length > 1) {
+                where.AND.push({ OR: verificationOrConditions });
             }
         }
         if (gender) where.gender = { equals: String(gender), mode: 'insensitive' };
-        if (pref1) where.pref1 = String(pref1);
-        if (pref2) where.pref2 = String(pref2);
-        if (pref3) where.pref3 = String(pref3);
+        if (pref1) {
+            const values = String(pref1).split(',').map(v => v.trim()).filter(Boolean);
+            where.pref1 = values.length === 1 ? values[0] : { in: values };
+        }
+        if (pref2) {
+            const values = String(pref2).split(',').map(v => v.trim()).filter(Boolean);
+            where.pref2 = values.length === 1 ? values[0] : { in: values };
+        }
+        if (pref3) {
+            const values = String(pref3).split(',').map(v => v.trim()).filter(Boolean);
+            where.pref3 = values.length === 1 ? values[0] : { in: values };
+        }
         if (examDate) {
             const start = new Date(String(examDate));
             start.setHours(0, 0, 0, 0);
@@ -536,10 +576,18 @@ export const AdminStudentService = {
             where.admissionDetails = { ...where.admissionDetails, status: seatStatus };
         }
         if (program) {
-            where.admissionDetails = { ...where.admissionDetails, allottedCourse: { name: { contains: String(program), mode: 'insensitive' } } };
+            const values = String(program).split(',').map(v => v.trim()).filter(Boolean);
+            where.admissionDetails = {
+                ...where.admissionDetails,
+                allottedCourse: { degree: values.length === 1 ? values[0] : { in: values } }
+            };
         }
         if (branch) {
-            where.admissionDetails = { ...where.admissionDetails, allottedCourse: { name: { contains: String(branch), mode: 'insensitive' } } };
+            const values = String(branch).split(',').map(v => v.trim()).filter(Boolean);
+            where.admissionDetails = {
+                ...where.admissionDetails,
+                allottedCourseId: values.length === 1 ? values[0] : { in: values }
+            };
         }
         if (dateRange) {
             const now = new Date();
