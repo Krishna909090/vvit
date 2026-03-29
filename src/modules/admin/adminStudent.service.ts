@@ -1,5 +1,5 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, CancellationStatus, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType, PaymentMethod, PaymentStatus, PaymentMode, PaymentComponent, LedgerTransactionType, HostelPaymentMode } from '@prisma/client';
+import { AdmissionStatus, CancellationStatus, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType, PaymentMethod, PaymentStatus, PaymentMode, PaymentComponent, LedgerTransactionType, HostelPaymentMode, WaitingListStatus } from '@prisma/client';
 import { Role } from '../../constants/roles';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
@@ -3898,6 +3898,268 @@ export const AdminStudentService = {
                 totalPages: Math.ceil(total / Number(limit))
             }
         };
-    }
+    },
+
+    // =============================================
+    // Waiting List Management
+    // =============================================
+
+    /**
+     * Add a student to the waiting list for one or more courses.
+     * Validates: student exists, courses exist, no duplicate entries.
+     */
+    async addToWaitingList(data: { studentId: string; courseIds: string[]; remarks?: string }, adminId: string) {
+        const { studentId, courseIds, remarks } = data;
+
+        if (!studentId) throw new AppError('Student ID is required', 400);
+        if (!courseIds || courseIds.length === 0) throw new AppError('At least one course ID is required', 400);
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            select: { id: true, name: true, applicationId: true }
+        });
+        if (!student) throw new AppError('Student not found', 404);
+
+        // Validate all courses exist
+        const courses = await prisma.course.findMany({
+            where: { id: { in: courseIds }, isDeleted: false },
+            select: { id: true, name: true, degree: true, filledSeats: true, totalSeats: true }
+        });
+        if (courses.length !== courseIds.length) {
+            const foundIds = courses.map(c => c.id);
+            const missing = courseIds.filter(id => !foundIds.includes(id));
+            throw new AppError(`Courses not found: ${missing.join(', ')}`, 404);
+        }
+
+        // Check for existing WAITING entries for this student
+        const existing = await prisma.waitingList.findMany({
+            where: { studentId, courseId: { in: courseIds }, status: WaitingListStatus.WAITING }
+        });
+        const existingCourseIds = new Set(existing.map(e => e.courseId));
+
+        // Only create entries for courses not already in waiting list
+        const newCourseIds = courseIds.filter(id => !existingCourseIds.has(id));
+
+        if (newCourseIds.length === 0) {
+            throw new AppError('Student is already on the waiting list for all selected courses', 409);
+        }
+
+        // Get current max priority for each course to assign next position
+        const entries = await prisma.$transaction(
+            newCourseIds.map(courseId =>
+                prisma.waitingList.create({
+                    data: {
+                        studentId,
+                        courseId,
+                        remarks,
+                        status: WaitingListStatus.WAITING,
+                        createdBy: adminId,
+                    },
+                    include: {
+                        course: { select: { name: true, degree: true } }
+                    }
+                })
+            )
+        );
+
+        logger.info(`[addToWaitingList] Student=${studentId} added to ${entries.length} course(s): ${newCourseIds.join(', ')}`);
+
+        return {
+            student: { id: student.id, name: student.name, applicationId: student.applicationId },
+            added: entries.map(e => ({
+                id: e.id,
+                courseId: e.courseId,
+                courseName: e.course.name,
+                degree: e.course.degree,
+                status: e.status,
+            })),
+            skipped: existingCourseIds.size > 0
+                ? courses.filter(c => existingCourseIds.has(c.id)).map(c => ({ courseId: c.id, courseName: c.name, reason: 'Already on waiting list' }))
+                : [],
+        };
+    },
+
+    /**
+     * Get the waiting list for a specific course or all courses.
+     */
+    async getWaitingList(query: { courseId?: string; status?: string; page?: number; limit?: number }) {
+        const { courseId, status, page = 1, limit = 50 } = query;
+        const skip = (Number(page) - 1) * Number(limit);
+        const take = Number(limit);
+
+        const where: any = {};
+        if (courseId) where.courseId = courseId;
+        if (status) where.status = status;
+        else where.status = WaitingListStatus.WAITING;
+
+        const [entries, total] = await Promise.all([
+            prisma.waitingList.findMany({
+                where,
+                skip,
+                take,
+                orderBy: { createdAt: 'asc' },
+                include: {
+                    student: {
+                        select: { id: true, name: true, applicationId: true, phone: true, email: true, degreeType: true }
+                    },
+                    course: {
+                        select: { id: true, name: true, degree: true, filledSeats: true, totalSeats: true }
+                    }
+                }
+            }),
+            prisma.waitingList.count({ where })
+        ]);
+
+        return {
+            entries: entries.map((e, i) => ({
+                id: e.id,
+                position: skip + i + 1,
+                student: e.student,
+                course: e.course,
+                status: e.status,
+                remarks: e.remarks,
+                createdAt: e.createdAt,
+            })),
+            pagination: { total, page: Number(page), limit: Number(limit), totalPages: Math.ceil(total / take) }
+        };
+    },
+
+    /**
+     * Get waiting list entries for a specific student.
+     */
+    async getStudentWaitingList(studentId: string) {
+        if (!studentId) throw new AppError('Student ID is required', 400);
+
+        const entries = await prisma.waitingList.findMany({
+            where: { studentId },
+            orderBy: { createdAt: 'asc' },
+            include: {
+                course: { select: { id: true, name: true, degree: true, filledSeats: true, totalSeats: true } }
+            }
+        });
+
+        return entries.map(e => ({
+            id: e.id,
+            courseId: e.courseId,
+            courseName: e.course.name,
+            degree: e.course.degree,
+            availableSeats: (e.course.totalSeats || 0) - (e.course.filledSeats || 0),
+            status: e.status,
+            remarks: e.remarks,
+            createdAt: e.createdAt,
+        }));
+    },
+
+    /**
+     * Allot a seat from the waiting list. Moves student from WAITING → ALLOTTED
+     * and triggers the standard seat allotment flow.
+     */
+    async allotFromWaitingList(waitingListId: string, adminId: string) {
+        if (!waitingListId) throw new AppError('Waiting list entry ID is required', 400);
+
+        const entry = await prisma.waitingList.findUnique({
+            where: { id: waitingListId },
+            include: {
+                student: { include: { admissionDetails: true } },
+                course: true
+            }
+        });
+
+        if (!entry) throw new AppError('Waiting list entry not found', 404);
+        if (entry.status !== WaitingListStatus.WAITING) throw new AppError(`Entry is already ${entry.status}`, 400);
+        if (!entry.student.admissionDetails) throw new AppError('Student has no admission record', 400);
+
+        // Check seat availability
+        const availableSeats = (entry.course.totalSeats || 0) - (entry.course.filledSeats || 0);
+        if (availableSeats <= 0) throw new AppError(`No seats available in ${entry.course.name}`, 400);
+
+        await prisma.$transaction(async (tx) => {
+            // 1. Allot the seat
+            await tx.course.update({
+                where: { id: entry.courseId },
+                data: { filledSeats: { increment: 1 } }
+            });
+
+            // 2. Update admission
+            await tx.studentAdmission.update({
+                where: { studentId: entry.studentId },
+                data: {
+                    allottedCourseId: entry.courseId,
+                    status: AdmissionStatus.SEAT_ALLOTTED,
+                    seatAllottedAt: new Date(),
+                    seatAllotedBy: adminId,
+                }
+            });
+
+            // 3. Mark this entry as ALLOTTED
+            await tx.waitingList.update({
+                where: { id: waitingListId },
+                data: { status: WaitingListStatus.ALLOTTED, allottedAt: new Date(), allottedBy: adminId, updatedBy: adminId }
+            });
+
+            // 4. Cancel all other WAITING entries for this student
+            await tx.waitingList.updateMany({
+                where: { studentId: entry.studentId, status: WaitingListStatus.WAITING, id: { not: waitingListId } },
+                data: { status: WaitingListStatus.CANCELLED, updatedBy: adminId }
+            });
+
+            // 5. Log seat allocation
+            await tx.seatAllocation.create({
+                data: {
+                    studentId: entry.studentId,
+                    newCourse: entry.courseId,
+                    allocatedBy: adminId,
+                    notes: `Allotted from waiting list`,
+                }
+            });
+        });
+
+        logger.info(`[allotFromWaitingList] Student=${entry.studentId} allotted to ${entry.course.name} from waiting list`);
+
+        return {
+            studentId: entry.studentId,
+            studentName: entry.student.name,
+            courseId: entry.courseId,
+            courseName: entry.course.name,
+            degree: entry.course.degree,
+            status: 'ALLOTTED',
+        };
+    },
+
+    /**
+     * Remove a student from the waiting list (cancel specific entry or all).
+     */
+    async removeFromWaitingList(data: { waitingListId?: string; studentId?: string; courseId?: string }, adminId: string) {
+        const { waitingListId, studentId, courseId } = data;
+
+        if (waitingListId) {
+            // Cancel specific entry
+            const entry = await prisma.waitingList.findUnique({ where: { id: waitingListId } });
+            if (!entry) throw new AppError('Waiting list entry not found', 404);
+            if (entry.status !== WaitingListStatus.WAITING) throw new AppError(`Entry is already ${entry.status}`, 400);
+
+            await prisma.waitingList.update({
+                where: { id: waitingListId },
+                data: { status: WaitingListStatus.CANCELLED, updatedBy: adminId }
+            });
+
+            return { cancelled: 1 };
+        }
+
+        if (studentId) {
+            // Cancel all waiting entries for a student (optionally filtered by course)
+            const where: any = { studentId, status: WaitingListStatus.WAITING };
+            if (courseId) where.courseId = courseId;
+
+            const result = await prisma.waitingList.updateMany({
+                where,
+                data: { status: WaitingListStatus.CANCELLED, updatedBy: adminId }
+            });
+
+            return { cancelled: result.count };
+        }
+
+        throw new AppError('Either waitingListId or studentId is required', 400);
+    },
 };
 

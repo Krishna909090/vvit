@@ -1,6 +1,6 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
-import { FeeStructure, SystemSetting, FeeHead, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType, FeeStatus } from '@prisma/client';
+import { FeeStructure, SystemSetting, FeeHead, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType, FeeStatus, AccommodationType, LedgerTransactionType } from '@prisma/client';
 import { Role, RoleType } from '../../constants/roles';
 import { MESSAGES } from '../../constants/messages';
 import logger from '../../utils/logger';
@@ -1259,6 +1259,210 @@ export const FeeService = {
 
             return { message: 'Success', demandId };
         });
+    },
+
+    /**
+     * Change a student's accommodation type.
+     * Handles: TRANSPORT → HOSTEL, HOSTEL → TRANSPORT, HOSTEL → NONE, TRANSPORT → NONE
+     *
+     * Steps:
+     *   1. Validate transition and required fields
+     *   2. Release old allocation (decrement seat, subtract fee)
+     *   3. Assign new allocation (increment seat, add fee)
+     *   4. Update StudentAdmission record
+     *   5. Create ledger entries for fee adjustments
+     *   6. Log as ServiceChangeRequest
+     */
+    async changeAccommodationType(data: {
+        studentId: string;
+        newType: 'HOSTEL' | 'TRANSPORT' | 'NONE';
+        hostelId?: string;
+        hostelType?: string;
+        transportRouteId?: string;
+        reason?: string;
+    }, adminId: string) {
+        const { studentId, newType, hostelId, hostelType, transportRouteId, reason } = data;
+
+        if (!studentId) throw new AppError('Student ID is required', 400);
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: {
+                admissionDetails: {
+                    include: {
+                        hostel: true,
+                        transportRoute: true,
+                    }
+                }
+            }
+        });
+        if (!student?.admissionDetails) throw new AppError('Student or admission not found', 404);
+
+        const admission = student.admissionDetails;
+        const oldType = admission.accommodationType || 'NONE';
+
+        if (oldType === newType) throw new AppError(`Student is already on ${newType}`, 400);
+
+        // Validate required fields for new type
+        if (newType === 'HOSTEL' && !hostelId) throw new AppError('hostelId is required for HOSTEL', 400);
+        if (newType === 'TRANSPORT' && !transportRouteId) throw new AppError('transportRouteId is required for TRANSPORT', 400);
+
+        const result = await prisma.$transaction(async (tx) => {
+            let oldCost = 0;
+            let newCost = 0;
+            let oldLabel = '';
+            let newLabel = '';
+
+            // --- Release old allocation ---
+            if (oldType === 'HOSTEL' && admission.hostelId) {
+                await tx.hostel.update({
+                    where: { id: admission.hostelId },
+                    data: { filled: { decrement: 1 } }
+                });
+                oldCost = admission.hostel?.cost || 0;
+                oldLabel = `Hostel (${admission.hostel?.name || admission.hostelId})`;
+            } else if (oldType === 'TRANSPORT' && admission.transportRouteId) {
+                await tx.transportRoute.update({
+                    where: { id: admission.transportRouteId },
+                    data: { filled: { decrement: 1 } }
+                });
+                oldCost = admission.transportRoute?.cost || 0;
+                oldLabel = `Transport (${admission.transportRoute?.name || admission.transportRouteId})`;
+            }
+
+            // --- Assign new allocation ---
+            if (newType === 'HOSTEL') {
+                const hostel = await tx.hostel.findUnique({ where: { id: hostelId } });
+                if (!hostel) throw new AppError('Hostel not found', 404);
+                if ((hostel.filled ?? 0) >= hostel.capacity) throw new AppError('Hostel is full', 400);
+
+                await tx.hostel.update({
+                    where: { id: hostelId },
+                    data: { filled: { increment: 1 } }
+                });
+                newCost = hostel.cost || 0;
+                newLabel = `Hostel (${hostel.name})`;
+            } else if (newType === 'TRANSPORT') {
+                const route = await tx.transportRoute.findUnique({ where: { id: transportRouteId } });
+                if (!route) throw new AppError('Transport route not found', 404);
+                if ((route.filled ?? 0) >= (route.capacity ?? 0)) throw new AppError('Transport route is full', 400);
+
+                await tx.transportRoute.update({
+                    where: { id: transportRouteId },
+                    data: { filled: { increment: 1 } }
+                });
+                newCost = route.cost || 0;
+                newLabel = `Transport (${route.name})`;
+            }
+            // newType === 'NONE' → no new allocation needed
+
+            // --- Update StudentAdmission ---
+            await tx.studentAdmission.update({
+                where: { studentId },
+                data: {
+                    accommodationType: newType as AccommodationType,
+                    hostelId: newType === 'HOSTEL' ? hostelId : null,
+                    hostelType: newType === 'HOSTEL' ? (hostelType as any) : null,
+                    transportRouteId: newType === 'TRANSPORT' ? transportRouteId : null,
+                    hostelPaymentMode: newType === 'HOSTEL' ? undefined : null,
+                    totalFee: { increment: newCost - oldCost },
+                }
+            });
+
+            let transferAmount = 0;
+
+            // --- Transfer paid amount from old service to new service ---
+            // Between services (hostel ↔ transport): DEBIT old + CREDIT new to move the payment.
+            // To NONE: record a refundable credit so there's an audit trail for the overpayment.
+            if (oldType !== 'NONE') {
+                const oldComponents = oldType === 'HOSTEL'
+                    ? ['HOSTEL', 'HOSTEL_ACCOMMODATION', 'HOSTEL_MESS']
+                    : ['TRANSPORT'];
+
+                const paidToOld = await tx.payment.aggregate({
+                    where: {
+                        studentId,
+                        status: 'SUCCESS',
+                        component: { in: oldComponents as any },
+                        isDeleted: false,
+                    },
+                    _sum: { amount: true }
+                });
+
+                transferAmount = paidToOld._sum.amount || 0;
+
+                if (transferAmount > 0) {
+                    const oldServiceName = oldType === 'HOSTEL' ? 'Hostel' : 'Transport';
+
+                    if (newType === 'NONE') {
+                        // → NONE: record the paid amount as a refundable credit
+                        await tx.studentLedger.create({
+                            data: {
+                                studentId,
+                                type: LedgerTransactionType.CREDIT,
+                                amount: transferAmount,
+                                description: `${oldServiceName} cancelled — ₹${transferAmount.toLocaleString()} paid, refund due (service change: ${oldType} → NONE)`,
+                                referenceType: 'SERVICE_CHANGE',
+                                createdBy: adminId,
+                            }
+                        });
+                    } else {
+                        // Hostel ↔ Transport: DEBIT old + CREDIT new to transfer payment
+                        const newServiceName = newType === 'HOSTEL' ? 'Hostel' : 'Transport';
+
+                        await tx.studentLedger.create({
+                            data: {
+                                studentId,
+                                type: LedgerTransactionType.DEBIT,
+                                amount: transferAmount,
+                                description: `${oldServiceName} payment transferred to ${newServiceName} (service change: ${oldType} → ${newType})`,
+                                referenceType: 'SERVICE_CHANGE',
+                                createdBy: adminId,
+                            }
+                        });
+
+                        await tx.studentLedger.create({
+                            data: {
+                                studentId,
+                                type: LedgerTransactionType.CREDIT,
+                                amount: transferAmount,
+                                description: `Payment received from ${oldServiceName} transfer (service change: ${oldType} → ${newType})`,
+                                referenceType: 'SERVICE_CHANGE',
+                                createdBy: adminId,
+                            }
+                        });
+                    }
+                }
+            }
+
+            // --- Log as ServiceChangeRequest ---
+            await tx.serviceChangeRequest.create({
+                data: {
+                    studentId,
+                    type: 'FACILITY',
+                    fromValue: oldType,
+                    toValue: newType,
+                    reason: reason || `Admin changed accommodation: ${oldType} → ${newType}`,
+                    status: 'APPROVED',
+                    approvedBy: adminId,
+                }
+            });
+
+            return {
+                oldType,
+                newType,
+                oldCost,
+                newCost,
+                feeAdjustment: newCost - oldCost,
+                transferAmount,
+                oldLabel: oldLabel || 'None',
+                newLabel: newLabel || 'None',
+            };
+        });
+
+        logger.info(`[changeAccommodationType] Student=${studentId} ${result.oldType} → ${result.newType}, Fee adjustment: ${result.feeAdjustment}`);
+
+        return result;
     },
 };
 

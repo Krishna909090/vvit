@@ -95,6 +95,7 @@ model Course {
   studentsPref2    Student[]          @relation("Pref2")
   studentsPref3    Student[]          @relation("Pref3")
   allottedStudents StudentAdmission[] @relation("AllottedCourse")
+  waitingList      WaitingList[]
 }
 
 model Batch {
@@ -239,6 +240,7 @@ model Student {
   ledgerEntries             StudentLedger[]
   studentScholarship        StudentScholarship?
   transportAllocation       TransportAllocation?
+  waitingListEntries        WaitingList[]
 
   proId                     String?
   proCommissionAmount       Float?                  @default(0)
@@ -1154,6 +1156,27 @@ model ServiceChangeRequest {
   student    Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
+model WaitingList {
+  id         String            @id @default(dbgenerated("gen_random_uuid()"))
+  studentId  String
+  courseId   String
+  priority   Int               @default(0)
+  status     WaitingListStatus @default(WAITING)
+  remarks    String?
+  allottedAt DateTime?
+  allottedBy String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  createdBy  String?
+  updatedBy  String?
+  student    Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course     Course            @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentId, courseId])
+  @@index([studentId])
+  @@index([courseId, status])
+}
+
 enum AdmissionStatus {
   REGISTERED
   ENTRANCE_FEE_PAID
@@ -1266,6 +1289,13 @@ enum RequestStatus {
   FORWARDED
   APPROVED
   REJECTED
+}
+
+enum WaitingListStatus {
+  WAITING
+  ALLOTTED
+  CANCELLED
+  EXPIRED
 }
 
 enum StudentDocumentStatus {

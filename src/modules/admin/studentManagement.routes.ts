@@ -28,7 +28,12 @@ import {
     assignPro,
     updateSeatAllotedBy,
     getFinancialApplications,
-    exportApplicationsCsv
+    exportApplicationsCsv,
+    addToWaitingList,
+    getWaitingList,
+    getStudentWaitingList,
+    allotFromWaitingList,
+    removeFromWaitingList
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -496,5 +501,43 @@ router.post('/reverse-admission-payment', authenticate, authorizePermission(['st
 router.post('/assign-pro', authenticate, authorizePermission(['student.update.all']), validateRequest(assignProSchema), assignPro);
 
 router.patch('/seat-alloted-by', authenticate, authorizePermission(['student.update.all']), validateRequest(updateSeatAllotedBySchema), updateSeatAllotedBy);
+
+// ═══════════════════════════════════════════════════════════
+//  WAITING LIST
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * POST /admin/student/waiting-list
+ * Add a student to waiting list for one or more courses.
+ * Body: { studentId, courseIds: [uuid, ...], remarks? }
+ */
+router.post('/waiting-list', authenticate, authorizePermission(['student.update.all']), addToWaitingList);
+
+/**
+ * GET /admin/student/waiting-list
+ * Get waiting list entries. Filter by courseId, status.
+ * Query: { courseId?, status?, page?, limit? }
+ */
+router.get('/waiting-list', authenticate, authorizePermission(['student.read.all']), getWaitingList);
+
+/**
+ * GET /admin/student/waiting-list/:studentId
+ * Get waiting list entries for a specific student.
+ */
+router.get('/waiting-list/:studentId', authenticate, authorizePermission(['student.read.all']), getStudentWaitingList);
+
+/**
+ * POST /admin/student/waiting-list/allot
+ * Allot a seat from the waiting list. Moves WAITING → ALLOTTED, cancels other entries.
+ * Body: { waitingListId }
+ */
+router.post('/waiting-list/allot', authenticate, authorizePermission(['student.update.all']), allotFromWaitingList);
+
+/**
+ * POST /admin/student/waiting-list/remove
+ * Remove entries from waiting list (cancel).
+ * Body: { waitingListId? } or { studentId?, courseId? }
+ */
+router.post('/waiting-list/remove', authenticate, authorizePermission(['student.update.all']), removeFromWaitingList);
 
 export default router;

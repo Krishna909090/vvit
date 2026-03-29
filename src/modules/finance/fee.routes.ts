@@ -10,7 +10,8 @@ import {
     collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands, getPaymentHistory,
     addStudentDiscount,
     getDiscountRequests,
-    getCourseFeeHeads
+    getCourseFeeHeads,
+    changeAccommodationType
 } from './fee.controller';
 
 import {
@@ -264,5 +265,14 @@ router.post('/student-discount', authenticate, authorizePermission('finance.crea
  * Response: { status, data: [{ id, amount, method, component, status, invoiceUrl, createdAt }] }
  */
 router.get('/payment-history/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getPaymentHistory);
+
+/**
+ * POST /finance/fees/change-accommodation
+ * Changes a student's accommodation type (Transport → Hostel, Hostel → Transport, any → None).
+ * Releases old allocation, assigns new, adjusts fees, creates ledger entries.
+ * Body: { studentId, newType: 'HOSTEL'|'TRANSPORT'|'NONE', hostelId?, hostelType?, transportRouteId?, reason? }
+ * Response: { status, data: { oldType, newType, oldCost, newCost, feeAdjustment } }
+ */
+router.post('/change-accommodation', authenticate, authorizePermission('finance.update.all'), changeAccommodationType);
 
 export default router;

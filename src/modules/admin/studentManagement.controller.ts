@@ -706,3 +706,32 @@ export const assignPro = catchAsync(async (req: Request, res: Response, next: Ne
         data: { studentId: updatedStudent.id, proId: updatedStudent.proId, proNumber }
     });
 });
+
+// ═══════════════════════════════════════════════════════════
+//  WAITING LIST
+// ═══════════════════════════════════════════════════════════
+
+export const addToWaitingList = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const result = await AdminStudentService.addToWaitingList(req.body, req.user!.userId);
+    sendResponse({ res, statusCode: 201, success: true, message: 'Student added to waiting list', data: result });
+});
+
+export const getWaitingList = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const result = await AdminStudentService.getWaitingList(req.query as any);
+    sendResponse({ res, statusCode: 200, success: true, message: 'Waiting list fetched', data: result });
+});
+
+export const getStudentWaitingList = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const result = await AdminStudentService.getStudentWaitingList(req.params.studentId);
+    sendResponse({ res, statusCode: 200, success: true, message: 'Student waiting list fetched', data: result });
+});
+
+export const allotFromWaitingList = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const result = await AdminStudentService.allotFromWaitingList(req.body.waitingListId, req.user!.userId);
+    sendResponse({ res, statusCode: 200, success: true, message: `Seat allotted to ${result.studentName} in ${result.courseName}`, data: result });
+});
+
+export const removeFromWaitingList = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const result = await AdminStudentService.removeFromWaitingList(req.body, req.user!.userId);
+    sendResponse({ res, statusCode: 200, success: true, message: `${result.cancelled} entries removed from waiting list`, data: result });
+});
