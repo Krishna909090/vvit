@@ -2011,14 +2011,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
             target.discount += entry.amount;
         }
 
-        // Course Change: DEBIT reduces paid on source (e.g., Tuition)
-        // CREDIT counts as paid on target (e.g., Course Change Fee) — for backward compat with old data
-        if (entry.referenceType === 'COURSE_CHANGE') {
-            if (entry.type === 'DEBIT') {
-                target.paid -= entry.amount;
-            } else if (entry.type === 'CREDIT') {
-                target.paid += entry.amount;
-            }
+        // Course change processing fee — DEBIT reduces paid on the source category (tuition)
+        if (entry.referenceType === 'COURSE_CHANGE' && entry.type === 'DEBIT') {
+            target.paid -= entry.amount;
         }
     });
 
@@ -2053,13 +2048,14 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 8. FINAL SUMMARY
     const totalDemanded = Object.values(breakdown).reduce((sum, cat) => sum + cat.demanded, 0);
-    // Course change: DEBITs reduce paid, CREDITs add to paid (backward compat for old internal transfers)
-    const courseChangeNet = ledgers
-        .filter(l => l.referenceType === 'COURSE_CHANGE')
-        .reduce((sum, l) => sum + (l.type === 'CREDIT' ? l.amount : -l.amount), 0);
+
+    // Course change DEBIT reduces effective paid (processing fee deducted from tuition)
+    const courseChangeDeduction = ledgers
+        .filter(l => l.referenceType === 'COURSE_CHANGE' && l.type === 'DEBIT')
+        .reduce((sum, l) => sum + l.amount, 0);
     const totalPaid = payments
         .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
-        .reduce((sum, p) => sum + p.amount, 0) + courseChangeNet;
+        .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
     const totalDiscount = ledgers
         .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE')
         .reduce((sum, l) => sum + l.amount, 0);
@@ -2067,7 +2063,8 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     const summary = {
         totalDemanded,
         totalPaid,
-        totalDiscount, 
+        totalDiscount,
+        courseChangeFee: courseChangeDeduction,
         totalPending: Math.max(0, totalDemanded - totalPaid - totalDiscount)
     };
     
@@ -2098,5 +2095,221 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         breakdown,
         ledger: ledgers,
         payments: paymentsWithUrls
+    };
+};
+
+/**
+ * Get a chronological flowchart of all financial events for a student.
+ * Returns a timeline that clearly explains: what happened, when, how much, and the running balance.
+ */
+export const getStudentFinancialFlow = async (studentId: string) => {
+    // Fetch all data in parallel
+    const [student, ledgers, allFeeHeads, courseChangeLogs, scholarship, scholarshipAuditLogs] = await Promise.all([
+        prisma.student.findUnique({
+            where: { id: studentId },
+            select: {
+                id: true,
+                name: true,
+                applicationId: true,
+                admissionDetails: {
+                    select: {
+                        status: true,
+                        seatAllottedAt: true,
+                        allottedCourse: { select: { name: true, degree: true } },
+                        hostelType: true,
+                        accommodationType: true,
+                    }
+                }
+            }
+        }),
+        prisma.studentLedger.findMany({
+            where: { studentId, isDeleted: false },
+            orderBy: { date: 'asc' },
+        }),
+        prisma.feeHead.findMany({ select: { id: true, name: true } }),
+        prisma.courseChangeLog.findMany({
+            where: { studentId },
+            orderBy: { date: 'asc' }
+        }),
+        prisma.studentScholarship.findUnique({
+            where: { studentId },
+            select: { id: true, scholarshipPercentage: true, type: true, createdAt: true }
+        }),
+        // Fetch audit logs for scholarship changes (CREATE + UPDATE)
+        prisma.auditLog.findMany({
+            where: { entity: 'StudentScholarship', action: { in: ['CREATE', 'UPDATE'] } },
+            orderBy: { timestamp: 'asc' },
+            select: { action: true, timestamp: true, details: true, entityId: true }
+        })
+    ]);
+
+    // Build feeHeadId -> name map for resolving ledger entries
+    const feeHeadMap = new Map<string, string>();
+    allFeeHeads.forEach(h => feeHeadMap.set(h.id, h.name));
+
+    if (!student) throw new AppError('Student not found', 404);
+
+    // Build timeline events
+    const timeline: Array<{
+        step: number;
+        date: string;
+        event: string;
+        type: 'APPLICATION' | 'SEAT_ALLOTMENT' | 'FEE_DEMAND' | 'PAYMENT' | 'SCHOLARSHIP' | 'DISCOUNT' | 'COURSE_CHANGE' | 'FINE' | 'INFO';
+        category: string;
+        amount: number | null;
+        sign: '+' | '-' | null;
+        description: string;
+    }> = [];
+
+    // 1. Seat allotment event
+    if (student.admissionDetails?.seatAllottedAt) {
+        timeline.push({
+            step: 0,
+            date: student.admissionDetails.seatAllottedAt.toISOString(),
+            event: 'Seat Allotted',
+            type: 'SEAT_ALLOTMENT',
+            category: '',
+            amount: null,
+            sign: null,
+            description: `Course: ${student.admissionDetails.allottedCourse?.name || 'N/A'} (${student.admissionDetails.allottedCourse?.degree || 'N/A'})`
+        });
+    }
+
+    // 2. Scholarship events (from AuditLog for CREATE/UPDATE on StudentScholarship)
+    if (scholarship) {
+        // Filter audit logs for this student's scholarship record
+        const scholarshipLogs = scholarshipAuditLogs.filter(log => log.entityId === scholarship.id);
+
+        if (scholarshipLogs.length > 0) {
+            scholarshipLogs.forEach(log => {
+                const details = typeof log.details === 'string' ? JSON.parse(log.details) : log.details;
+                const isCreate = log.action === 'CREATE';
+                const pct = details?.data?.scholarshipPercentage || details?.changes?.scholarshipPercentage || scholarship.scholarshipPercentage;
+
+                timeline.push({
+                    step: 0,
+                    date: (log.timestamp || new Date()).toISOString(),
+                    event: isCreate ? 'Scholarship Allocated' : 'Scholarship Updated',
+                    type: 'SCHOLARSHIP',
+                    category: '',
+                    amount: null,
+                    sign: null,
+                    description: isCreate
+                        ? `${pct}% scholarship allocated (${scholarship.type})`
+                        : `Scholarship updated to ${pct}% (${scholarship.type})`
+                });
+            });
+        } else {
+            // Fallback: no audit logs found, use createdAt from scholarship record
+            timeline.push({
+                step: 0,
+                date: scholarship.createdAt.toISOString(),
+                event: 'Scholarship Allocated',
+                type: 'SCHOLARSHIP',
+                category: '',
+                amount: null,
+                sign: null,
+                description: `${scholarship.scholarshipPercentage}% scholarship allocated (${scholarship.type})`
+            });
+        }
+    }
+
+    // 3. Process each ledger entry into a timeline event
+    ledgers.forEach(entry => {
+        const feeHeadName = (entry.feeHeadId ? feeHeadMap.get(entry.feeHeadId) : '') || '';
+        const refType = entry.referenceType || '';
+
+        let event = '';
+        let type: typeof timeline[0]['type'] = 'INFO';
+        let sign: '+' | '-' | null = null;
+
+        if (refType === 'FEE_DEMAND') {
+            event = 'Fee Charged';
+            type = 'FEE_DEMAND';
+            sign = '-';
+        } else if (refType === 'FEE_GENERATION') {
+            event = 'Fee Generated';
+            type = 'FEE_DEMAND';
+            sign = '-';
+        } else if (refType === 'PAYMENT') {
+            event = 'Payment Received';
+            type = 'PAYMENT';
+            sign = '+';
+        } else if (refType === 'SCHOLARSHIP') {
+            event = 'Scholarship Applied';
+            type = 'SCHOLARSHIP';
+            sign = '+';
+        } else if (refType === 'COURSE_CHANGE' && entry.type === 'DEBIT') {
+            event = 'Course Change Fee';
+            type = 'COURSE_CHANGE';
+            sign = '-';
+        } else if (entry.type === 'CREDIT' && refType !== 'PAYMENT') {
+            event = 'Discount / Adjustment';
+            type = 'DISCOUNT';
+            sign = '+';
+        } else if (entry.type === 'DEBIT') {
+            event = 'Charge';
+            type = 'FEE_DEMAND';
+            sign = '-';
+        }
+
+        timeline.push({
+            step: 0,
+            date: entry.date.toISOString(),
+            event,
+            type,
+            category: feeHeadName,
+            amount: entry.amount,
+            sign,
+            description: entry.description || ''
+        });
+    });
+
+    // 3. Course change events (from CourseChangeLog)
+    courseChangeLogs.forEach(log => {
+        timeline.push({
+            step: 0,
+            date: (log.date || new Date()).toISOString(),
+            event: 'Course Changed',
+            type: 'COURSE_CHANGE',
+            category: '',
+            amount: null,
+            sign: null,
+            description: `${log.oldDegree || ''} ${log.oldCourse} → ${log.newDegree || ''} ${log.newCourse}`
+        });
+    });
+
+    // Sort by date ascending, then assign step numbers
+    timeline.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    timeline.forEach((item, i) => { item.step = i + 1; });
+
+    // 4. Compute running balance after each step
+    let totalCharged = 0;
+    let totalCredits = 0; // payments + scholarships + discounts
+    const flow = timeline.map(item => {
+        if (item.sign === '-' && item.amount) totalCharged += item.amount;
+        if (item.sign === '+' && item.amount) totalCredits += item.amount;
+
+        return {
+            ...item,
+            runningBalance: totalCharged - totalCredits
+        };
+    });
+
+    // 5. Summary at the end
+    const currentPending = Math.max(0, totalCharged - totalCredits);
+
+    return {
+        student: {
+            id: student.id,
+            name: student.name,
+            applicationId: student.applicationId,
+            course: student.admissionDetails?.allottedCourse?.name || null,
+            degree: student.admissionDetails?.allottedCourse?.degree || null,
+            scholarship: scholarship ? `${scholarship.scholarshipPercentage}% (${scholarship.type})` : null,
+        },
+        totalSteps: flow.length,
+        currentPending,
+        flow
     };
 };

@@ -2198,8 +2198,8 @@ export const AdminStudentService = {
              const { studentId: _sid, id: _id, ...updateProps } = data;
 
              // Apply conversions if specific fields are present
-             if (updateProps.score) updateProps.score = Number(updateProps.score);
-             if (updateProps.scholarshipPercentage) updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
+             if (updateProps.score !== undefined) updateProps.score = Number(updateProps.score);
+             if (updateProps.scholarshipPercentage !== undefined) updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
 
              // Check qualification existence if updating it
              if (updateProps.qualificationId) {

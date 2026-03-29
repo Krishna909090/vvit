@@ -1,6 +1,6 @@
 import express from 'express';
 import { handlePaymentCallback, handleNewWebhook } from './payment.service';
-import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment, payFeeComponent, payMultiComponentFee } from './payment.controller';
+import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, getFinancialFlow, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment, payFeeComponent, payMultiComponentFee } from './payment.controller';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
@@ -176,6 +176,17 @@ router.get('/history/:studentId', authenticate, authorizePermission(['finance.re
  */
 router.get('/summary', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getFinancialSummary);
 router.get('/summary/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getFinancialSummary);
+
+/**
+ * GET /finance/flow
+ * GET /finance/flow/:studentId
+ * Returns a chronological flowchart of all financial events for a student.
+ * Each step shows: what happened, when, amount, sign (+/-), and running balance.
+ * Without studentId: flow for logged-in student. With studentId: for specific student (admin).
+ * Response: { status, data: { student, totalSteps, currentPending, flow[] } }
+ */
+router.get('/flow', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getFinancialFlow);
+router.get('/flow/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getFinancialFlow);
 
 // ═══════════════════════════════════════════════════════════
 // PAYMENT WEBHOOK / CALLBACK (PhonePe → Backend)
