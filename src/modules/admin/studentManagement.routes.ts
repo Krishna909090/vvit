@@ -27,7 +27,8 @@ import {
     requestProgramChange,
     assignPro,
     updateSeatAllotedBy,
-    getFinancialApplications
+    getFinancialApplications,
+    exportApplicationsCsv
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -57,6 +58,13 @@ const router = Router();
 // ═══════════════════════════════════════════════════════════
 //  APPLICATIONS
 // ═══════════════════════════════════════════════════════════
+
+/**
+ * GET /admin/student/applications/export-csv
+ * Exports filtered student applications as a CSV file.
+ * Accepts the same query filters as GET /applications.
+ */
+router.get('/applications/export-csv', authenticate, authorizePermission(['student.read.all']), validateRequest(getAllApplicationsSchema), exportApplicationsCsv);
 
 /**
  * GET /admin/student/applications

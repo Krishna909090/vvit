@@ -402,6 +402,126 @@ export const AdminStudentService = {
         };
     },
 
+    async exportApplicationsCsv(query: any) {
+        const { search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate } = query;
+
+        const where: any = {};
+        if (search) {
+            where.OR = [
+                { name: { contains: String(search), mode: 'insensitive' } },
+                { email: { contains: String(search), mode: 'insensitive' } },
+                { phone: { contains: String(search), mode: 'insensitive' } },
+                { applicationId: { contains: String(search), mode: 'insensitive' } }
+            ];
+        }
+        if (applicationId) where.applicationId = String(applicationId);
+        if (status) where.admissionDetails = { status };
+        if (quotaType) where.quotaType = quotaType;
+        if (degreeType) where.degreeType = degreeType;
+        if (isScholarshipEligible) {
+            if (String(isScholarshipEligible).toUpperCase() === 'NULL') {
+                where.studentScholarship = null;
+            } else if (String(isScholarshipEligible).toUpperCase() === 'NOT_NULL') {
+                where.studentScholarship = { isNot: null };
+            } else {
+                where.studentScholarship = { isEligible: String(isScholarshipEligible) };
+            }
+        }
+        if (query.hasDocuments === 'true') where.documents = { some: {} };
+        else if (query.hasDocuments === 'false') where.documents = { none: {} };
+        if (createdBy) where.createdBy = String(createdBy);
+        if (qualificationVerifiedBy) {
+            where.academicQualifications = { some: { verifiedBy: String(qualificationVerifiedBy) } };
+        }
+        if (gender) where.gender = { equals: String(gender), mode: 'insensitive' };
+        if (pref1) where.pref1 = String(pref1);
+        if (pref2) where.pref2 = String(pref2);
+        if (pref3) where.pref3 = String(pref3);
+        if (examDate) {
+            const start = new Date(String(examDate));
+            start.setHours(0, 0, 0, 0);
+            const end = new Date(String(examDate));
+            end.setHours(23, 59, 59, 999);
+            where.examDetails = { testDate: { gte: start, lte: end } };
+        }
+        if (qualificationLevel) {
+            const levels = String(qualificationLevel).split(',').map(l => l.trim()).filter(Boolean);
+            where.academicQualifications = {
+                some: { ...(where.academicQualifications?.some || {}), level: levels.length === 1 ? levels[0] : { in: levels } }
+            };
+        }
+        if (qualificationBoard) {
+            where.academicQualifications = {
+                some: { ...(where.academicQualifications?.some || {}), board: { contains: String(qualificationBoard), mode: 'insensitive' } }
+            };
+        }
+        if (applicationFeePaid === 'UNPAID') {
+            where.payments = { none: { component: PaymentComponent.APPLICATION_FEE, status: PaymentStatus.SUCCESS } };
+        } else if (applicationFeePaid === 'PAID') {
+            where.payments = { some: { component: PaymentComponent.APPLICATION_FEE, status: PaymentStatus.SUCCESS } };
+        }
+        if (seatStatus) {
+            where.admissionDetails = { ...where.admissionDetails, status: seatStatus };
+        }
+        if (program) {
+            where.admissionDetails = { ...where.admissionDetails, allottedCourse: { name: { contains: String(program), mode: 'insensitive' } } };
+        }
+        if (branch) {
+            where.admissionDetails = { ...where.admissionDetails, allottedCourse: { name: { contains: String(branch), mode: 'insensitive' } } };
+        }
+        if (dateRange) {
+            const now = new Date();
+            const startOfDayFn = (d: Date) => { d.setHours(0, 0, 0, 0); return d; };
+            const endOfDayFn = (d: Date) => { d.setHours(23, 59, 59, 999); return d; };
+            let gte: Date | null = null, lte: Date | null = null;
+            const val = String(dateRange);
+            if (val === 'today') { gte = startOfDayFn(new Date(now)); lte = endOfDayFn(new Date(now)); }
+            else if (val === '7d') { const d = new Date(now); d.setDate(now.getDate() - 7); gte = startOfDayFn(d); lte = endOfDayFn(now); }
+            else if (val === '15d') { const d = new Date(now); d.setDate(now.getDate() - 15); gte = startOfDayFn(d); lte = endOfDayFn(now); }
+            else if (val === '30d') { const d = new Date(now); d.setDate(now.getDate() - 30); gte = startOfDayFn(d); lte = endOfDayFn(now); }
+            else if (val === 'custom' && startDate && endDate) { gte = startOfDayFn(new Date(String(startDate))); lte = endOfDayFn(new Date(String(endDate))); }
+            if (gte && lte) where.createdAt = { gte, lte };
+        }
+
+        const students = await prisma.student.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            include: {
+                admissionDetails: { include: { allottedCourse: true } },
+                examDetails: true,
+                academicQualifications: true,
+                pref1Course: true,
+                pref2Course: true,
+                pref3Course: true,
+                studentScholarship: true,
+                payments: true,
+            }
+        });
+
+        const rows = students.map((s: any) => ({
+            'Application ID': s.applicationId || '',
+            'Name': s.name || '',
+            'Gender': s.gender || '',
+            'Email': s.email || '',
+            'Phone': s.phone || '',
+            'Degree Type': s.degreeType || '',
+            'Quota Type': s.quotaType || '',
+            'Preference 1': s.pref1Course?.name || '',
+            'Preference 2': s.pref2Course?.name || '',
+            'Preference 3': s.pref3Course?.name || '',
+            'Allotted Course': s.admissionDetails?.allottedCourse?.name || '',
+            'Admission Status': s.admissionDetails?.status || '',
+            'Exam Date': s.examDetails?.testDate ? new Date(s.examDetails.testDate).toISOString().split('T')[0] : '',
+            'Exam Score': s.examDetails?.examScore ?? '',
+            'Is Qualified': s.examDetails?.isQualified ? 'Yes' : 'No',
+            'Application Fee Paid': s.payments?.some((p: any) => p.component === PaymentComponent.APPLICATION_FEE && p.status === PaymentStatus.SUCCESS) ? 'PAID' : 'UNPAID',
+            'Scholarship Eligible': s.studentScholarship?.isEligible || '',
+            'Created At': s.createdAt ? new Date(s.createdAt).toISOString().split('T')[0] : '',
+        }));
+
+        return Papa.unparse(rows);
+    },
+
     async getApplicationsExtended(query: any) {
         const { page = 1, limit = 10, search, status, quotaType, courseType, degree, applicationId, isScholarshipEligible, gender, preference, paymentStatus } = query;
         const skip = (Number(page) - 1) * Number(limit);

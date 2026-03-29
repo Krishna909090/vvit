@@ -11,6 +11,15 @@ import { Role } from '../../constants/roles';
 import fs from 'fs';
 import path from 'path';
 
+// Export Applications as CSV
+export const exportApplicationsCsv = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[exportApplicationsCsv] by=${req.user?.userId || 'anonymous'}`);
+    const csv = await AdminStudentService.exportApplicationsCsv(req.query);
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=applications.csv');
+    res.send(csv);
+});
+
 // Get All Applications
 export const getAllApplications = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getAllApplications] by=${req.user?.userId || 'anonymous'}`);
