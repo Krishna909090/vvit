@@ -2199,7 +2199,10 @@ export const AdminStudentService = {
 
              // Apply conversions if specific fields are present
              if (updateProps.score !== undefined) updateProps.score = Number(updateProps.score);
-             if (updateProps.scholarshipPercentage !== undefined) updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
+             if (updateProps.scholarshipPercentage !== undefined) {
+                 updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
+                 if (updateProps.scholarshipPercentage > 0) updateProps.isEligible = 'Yes';
+             }
 
              // Check qualification existence if updating it
              if (updateProps.qualificationId) {
@@ -2251,11 +2254,11 @@ export const AdminStudentService = {
                  studentId,
                  type,
                  degreeType,
-                 score: score ? Number(score) : undefined,
+                 score: score !== undefined ? Number(score) : undefined,
                  remarks,
-                 scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
+                 scholarshipPercentage: scholarshipPercentage !== undefined ? Number(scholarshipPercentage) : undefined,
                  qualificationId,
-                 isEligible,
+                 isEligible: (scholarshipPercentage !== undefined && Number(scholarshipPercentage) > 0) ? 'Yes' : isEligible,
                  createdBy: adminId,
                  updatedBy: adminId
              }
@@ -2478,7 +2481,8 @@ export const AdminStudentService = {
                 where: {
                     referenceId: demand.id,
                     referenceType: 'SCHOLARSHIP',
-                    type: 'CREDIT'
+                    type: 'CREDIT',
+                    isDeleted: false
                 }
             });
 

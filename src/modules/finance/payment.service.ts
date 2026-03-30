@@ -1859,9 +1859,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 3. Fetch Financial Records (Parallel)
     const [ledgers, payments, feeDemands] = await Promise.all([
-        prisma.studentLedger.findMany({ where: { studentId }, orderBy: { date: 'desc' } }),
-        prisma.payment.findMany({ 
-            where: { studentId, status: PaymentStatus.SUCCESS },
+        prisma.studentLedger.findMany({ where: { studentId, isDeleted: false }, orderBy: { date: 'desc' } }),
+        prisma.payment.findMany({
+            where: { studentId, status: PaymentStatus.SUCCESS, isDeleted: false },
             include: {
                 feeDemand: {
                     include: { feeStructure: { include: { feeHead: true } } }
@@ -1869,7 +1869,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
             }
         }),
         prisma.studentFeeDemand.findMany({
-            where: { studentId },
+            where: { studentId, isDeleted: false },
             include: { feeStructure: { include: { feeHead: true } } }
         })
     ]);
