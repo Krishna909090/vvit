@@ -1616,10 +1616,12 @@ export const AdminStudentService = {
             
             // Handle Hostel Payment Mode Adjustment
             if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                feeAdjustment -= 6000;
+                const oldSemFee = admission.hostelType?.includes('SHARING_4') ? 7000 : admission.hostelType?.includes('SHARING_8') ? 6000 : 0;
+                feeAdjustment -= oldSemFee;
             }
             if (accommodationType === AccommodationType.HOSTEL && hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                feeAdjustment += 6000;
+                const newSemFee = hostelType?.includes('SHARING_4') ? 7000 : hostelType?.includes('SHARING_8') ? 6000 : 0;
+                feeAdjustment += newSemFee;
             }
 
             const currentPaid = (admission.paidFee ?? 0) + Number(paidAmount || 0);
@@ -2686,7 +2688,8 @@ export const AdminStudentService = {
                  
                  // Subtract semwise extra if applicable
                  if (oldAdmission.accommodationType === AccommodationType.HOSTEL && oldAdmission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                     accCostDelta -= 6000;
+                     const oldSemFee = oldAdmission.hostelType?.includes('SHARING_4') ? 7000 : oldAdmission.hostelType?.includes('SHARING_8') ? 6000 : 0;
+                     accCostDelta -= oldSemFee;
                  }
             }
 
@@ -2702,7 +2705,8 @@ export const AdminStudentService = {
             
              // Add semwise extra if applicable
             if (allocation.type === AccommodationType.HOSTEL && allocation.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                 accCostDelta += 6000;
+                 const newSemFee = allocation.hostelType?.includes('SHARING_4') ? 7000 : allocation.hostelType?.includes('SHARING_8') ? 6000 : 0;
+                 accCostDelta += newSemFee;
             }
             
             logger.debug(`[executeAdmissionUpdates] Total Fee Adjustment: ${accCostDelta}`);

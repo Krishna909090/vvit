@@ -1054,6 +1054,12 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
              }
         }
         
+        // Add semwise surcharge if applicable
+        if (student.admissionDetails.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
+            if (hostelSelection.hostelType === 'SHARING_4') accommodationFee += 7000;
+            else if (hostelSelection.hostelType === 'SHARING_8') accommodationFee += 6000;
+        }
+
         // Deduct paid
         accommodationFee = Math.max(0, accommodationFee - paidAccommodation);
         messFee = Math.max(0, messFee - paidMess);
@@ -1468,8 +1474,8 @@ export const getStudentFinancialSummary = async (studentId: string) => {
 
     if (student.admissionDetails.hostelPaymentMode === HostelPaymentMode.SEMWISE && hostelFee > 0) {
         let semFee = 0;
-        if (student.admissionDetails.hostelType?.includes('SHARING_4')) semFee = 6000;
-        else if (student.admissionDetails.hostelType?.includes('SHARING_8')) semFee = 5000;
+        if (student.admissionDetails.hostelType?.includes('SHARING_4')) semFee = 7000;
+        else if (student.admissionDetails.hostelType?.includes('SHARING_8')) semFee = 6000;
         
         hostelFee += semFee;
         logger.info(`[FinancialSummary] SemWise Mode. Added ${semFee}. Total Hostel: ${hostelFee}`);
@@ -1968,8 +1974,8 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
              if (admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
                  let semFee = 0;
-                 if (admission.hostelType?.includes('SHARING_4')) semFee = 6000;
-                 else if (admission.hostelType?.includes('SHARING_8')) semFee = 5000;
+                 if (admission.hostelType?.includes('SHARING_4')) semFee = 7000;
+                 else if (admission.hostelType?.includes('SHARING_8')) semFee = 6000;
                  
                  accCost += semFee;
                  logger.info(`[FinancialHistory] SemWise added ${semFee} to AccCost. New AccCost: ${accCost}`);
