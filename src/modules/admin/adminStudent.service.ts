@@ -30,7 +30,7 @@ const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://loc
 
 export const AdminStudentService = {
     async getAllApplications(query: any) {
-        const { page = 1, limit = 10, search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate } = query;
+        const { page = 1, limit = 10, search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate, seatAllotedBy } = query;
         const skip = (Number(page) - 1) * Number(limit);
 
         const where: any = {};
@@ -94,6 +94,11 @@ export const AdminStudentService = {
                     some: { verifiedBy: String(qualificationVerifiedBy) }
                 }
             });
+        }
+
+        if (seatAllotedBy) {
+            if (!where.admissionDetails) where.admissionDetails = {};
+            where.admissionDetails.seatAllotedBy = String(seatAllotedBy);
         }
 
         if (gender) {

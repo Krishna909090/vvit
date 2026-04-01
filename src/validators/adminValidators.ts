@@ -193,6 +193,7 @@ export const getAllApplicationsSchema = z.object({
         dateRange: z.string().optional(),
         startDate: z.string().optional(),
         endDate: z.string().optional(),
+        seatAllotedBy: z.string().optional(),
     }),
 });
 
