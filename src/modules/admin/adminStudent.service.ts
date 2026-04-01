@@ -30,7 +30,7 @@ const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://loc
 
 export const AdminStudentService = {
     async getAllApplications(query: any) {
-        const { page = 1, limit = 10, search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate, seatAllotedBy } = query;
+        const { page = 1, limit = 10, search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate, seatAllotedBy, proCode } = query;
         const skip = (Number(page) - 1) * Number(limit);
 
         const where: any = {};
@@ -99,6 +99,15 @@ export const AdminStudentService = {
         if (seatAllotedBy) {
             if (!where.admissionDetails) where.admissionDetails = {};
             where.admissionDetails.seatAllotedBy = String(seatAllotedBy);
+        }
+
+        if (proCode) {
+            const pro = await prisma.pRO.findUnique({ where: { proNumber: String(proCode) } });
+            if (pro) {
+                where.proId = pro.id;
+            } else {
+                where.id = 'NO_MATCH';
+            }
         }
 
         if (gender) {

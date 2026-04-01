@@ -194,6 +194,7 @@ export const getAllApplicationsSchema = z.object({
         startDate: z.string().optional(),
         endDate: z.string().optional(),
         seatAllotedBy: z.string().optional(),
+        proCode: z.string().optional(),
     }),
 });
 
