@@ -15,7 +15,7 @@ export const InvoiceService = {
         
         const payment = await prisma.payment.findUnique({
             where: { id: paymentId },
-            include: { student: true, feeHead: true }
+            include: { student: { include: { admissionDetails: { include: { allottedCourse: true } } } }, feeHead: true }
         }) as any;
 
         if (!payment) {
@@ -188,12 +188,15 @@ export const InvoiceService = {
         }
 
         // Prepare Data
+        const courseName = primaryPayment.student.admissionDetails?.allottedCourse?.name || undefined;
+
         const invoiceData: any = {
             invoiceNumber: invoiceNumber,
             date: primaryPayment.createdAt || new Date(),
             studentName: primaryPayment.student.name,
             studentId: primaryPayment.student.applicationId || primaryPayment.studentId,
             applicationId: primaryPayment.student.applicationId || primaryPayment.studentId,
+            courseName,
             paymentMethod: (primaryPayment.method === 'NEFT_RTGS') ? 'Bank Transfer' : (primaryPayment.method || 'ONLINE'),
             transactionId: internalTxId,
             referenceId: realTransactionId,

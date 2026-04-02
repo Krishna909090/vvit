@@ -1,5 +1,5 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, CancellationStatus, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType, PaymentMethod, PaymentStatus, PaymentMode, PaymentComponent, LedgerTransactionType, HostelPaymentMode } from '@prisma/client';
+import { AdmissionStatus, CancellationStatus, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType, PaymentMethod, PaymentStatus, PaymentMode, PaymentComponent, LedgerTransactionType, HostelPaymentMode, WaitingListStatus } from '@prisma/client';
 import { Role } from '../../constants/roles';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
@@ -28,72 +28,366 @@ const PHONEPE_SALT_INDEX = parseInt(process.env.PHONEPE_SALT_INDEX || '1', 10);
 const PHONEPE_ENV = process.env.PHONEPE_ENV === 'PROD' ? Env.PRODUCTION : Env.SANDBOX;
 const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://localhost:5173';
 
-export const AdminStudentService = {
-    async getAllApplications(query: any) {
-        const { page = 1, limit = 10, search, status, quotaType, courseType, applicationId, isScholarshipEligible } = query;
-        const skip = (Number(page) - 1) * Number(limit);
+const buildApplicationFilters = async (query: any): Promise<any> => {
+    const { search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate, seatAllotedBy, proCode } = query;
 
-        const where: any = {};
-        if (search) {
-            where.OR = [
-                { name: { contains: String(search), mode: 'insensitive' } },
-                { email: { contains: String(search), mode: 'insensitive' } },
-                { phone: { contains: String(search), mode: 'insensitive' } },
-                { applicationId: { contains: String(search), mode: 'insensitive' } }
-            ];
-        }
+    const where: any = {};
+    if (search) {
+        where.OR = [
+            { name: { contains: String(search), mode: 'insensitive' } },
+            { email: { contains: String(search), mode: 'insensitive' } },
+            { phone: { contains: String(search), mode: 'insensitive' } },
+            { applicationId: { contains: String(search), mode: 'insensitive' } }
+        ];
+    }
 
-        if (applicationId) {
-            where.applicationId = String(applicationId);
-        }
+    if (applicationId) {
+        where.applicationId = String(applicationId);
+    }
 
-        if (status) {
-            where.admissionDetails = {
-                status: status
+    if (status) {
+        where.admissionDetails = {
+            status: status
+        };
+    }
+
+    if (quotaType) {
+        where.quotaType = quotaType;
+    }
+
+    if (degreeType) {
+        where.degreeType = degreeType;
+    }
+
+    if (isScholarshipEligible) {
+        if (String(isScholarshipEligible).toUpperCase() === 'NULL') {
+            where.studentScholarship = null;
+        } else if (String(isScholarshipEligible).toUpperCase() === 'NOT_NULL') {
+            where.studentScholarship = { isNot: null };
+        } else {
+            where.studentScholarship = {
+                isEligible: String(isScholarshipEligible)
             };
         }
+    }
 
-        if (quotaType) {
-            where.quotaType = quotaType;
-        }
+    if (query.hasDocuments === 'true') {
+        where.documents = {
+            some: {}
+        };
+    } else if (query.hasDocuments === 'false') {
+         where.documents = {
+            none: {}
+        };
+    }
 
-        if (courseType) {
-            where.degreeType = courseType;
+    if (createdBy) {
+        where.createdBy = String(createdBy);
+    }
+
+    if (qualificationVerifiedBy) {
+        if (!where.AND) where.AND = [];
+        where.AND.push({
+            academicQualifications: {
+                some: { verifiedBy: String(qualificationVerifiedBy) }
+            }
+        });
+    }
+
+    if (seatAllotedBy) {
+        if (!where.admissionDetails) where.admissionDetails = {};
+        where.admissionDetails.seatAllotedBy = String(seatAllotedBy);
+    }
+
+    if (proCode) {
+        const pro = await prisma.pRO.findUnique({ where: { proNumber: String(proCode) } });
+        if (pro) {
+            where.proId = pro.id;
+        } else {
+            where.id = 'NO_MATCH';
         }
-        
-        if (isScholarshipEligible) {
-            if (String(isScholarshipEligible).toUpperCase() === 'NULL') {
-                where.studentScholarship = null;
-            } else if (String(isScholarshipEligible).toUpperCase() === 'NOT_NULL') {
-                where.studentScholarship = { isNot: null };
+    }
+
+    if (gender) {
+        where.gender = { equals: String(gender), mode: 'insensitive' };
+    }
+
+    if (pref1) {
+        const values = String(pref1).split(',').map(v => v.trim()).filter(Boolean);
+        where.pref1 = values.length === 1 ? values[0] : { in: values };
+    }
+
+    if (pref2) {
+        const values = String(pref2).split(',').map(v => v.trim()).filter(Boolean);
+        where.pref2 = values.length === 1 ? values[0] : { in: values };
+    }
+
+    if (pref3) {
+        const values = String(pref3).split(',').map(v => v.trim()).filter(Boolean);
+        where.pref3 = values.length === 1 ? values[0] : { in: values };
+    }
+
+    if (examDate) {
+        const start = new Date(String(examDate));
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(String(examDate));
+        end.setHours(23, 59, 59, 999);
+        where.examDetails = {
+            testDate: { gte: start, lte: end }
+        };
+    }
+
+    if (qualificationVerified) {
+        if (!where.AND) where.AND = [];
+        where.AND.push({ academicQualifications: { some: {} } });
+        const values = String(qualificationVerified).split(',').map(v => v.trim().toUpperCase()).filter(Boolean);
+        const verificationOrConditions: any[] = [];
+        for (const val of values) {
+            if (val === 'VERIFIED') {
+                verificationOrConditions.push({
+                    academicQualifications: {
+                        every: { verificationStatus: 'APPROVED' }
+                    }
+                });
+            } else if (val === 'UNVERIFIED') {
+                verificationOrConditions.push({
+                    academicQualifications: {
+                        none: { verificationStatus: 'APPROVED' }
+                    }
+                });
             } else {
-                where.studentScholarship = {
-                    isEligible: String(isScholarshipEligible)
-                };
+                verificationOrConditions.push({
+                    academicQualifications: {
+                        some: { verificationStatus: val }
+                    }
+                });
             }
         }
-
-        if (query.hasDocuments === 'true') {
-            where.documents = {
-                some: {} 
-            };
-        } else if (query.hasDocuments === 'false') {
-             where.documents = {
-                none: {} 
-            };
+        if (verificationOrConditions.length === 1) {
+            where.AND.push(verificationOrConditions[0]);
+        } else if (verificationOrConditions.length > 1) {
+            where.AND.push({ OR: verificationOrConditions });
         }
+    }
 
-        // Filter: Only return students who have paid the Application Fee
-        // Check if payments filter already exists (unlikely given previous logic), but safer to merge or add to AND if needed.
-        // Since where.payments is not used above, we can assign it.
-        // However, if we want to be safe in case future code adds it, we can use logical AND but Prisma `where` structure is specific.
-        // Direct assignment is compatible with current code structure.
+    const academicQualificationConditions: any[] = [];
+
+    if (qualificationLevel) {
+        const levels = String(qualificationLevel).split(',').map(l => l.trim()).filter(Boolean);
+        academicQualificationConditions.push({
+            academicQualifications: {
+                some: { level: levels.length === 1 ? levels[0] : { in: levels } }
+            }
+        });
+    }
+
+    if (qualificationBoard) {
+        academicQualificationConditions.push({
+            academicQualifications: {
+                some: { board: { contains: String(qualificationBoard), mode: 'insensitive' } }
+            }
+        });
+    }
+
+    if (marks10thMin || marks10thMax) {
+        const conditions: string[] = [`"level" = '10th'`, `"gpaOrMarks" IS NOT NULL`];
+        if (marks10thMin) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${Number(marks10thMin)}`);
+        if (marks10thMax) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${Number(marks10thMax)}`);
+        const studentIds10th: { studentId: string }[] = await prisma.$queryRawUnsafe(
+            `SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE ${conditions.join(' AND ')}`
+        );
+        academicQualificationConditions.push({
+            id: { in: studentIds10th.map(r => r.studentId) }
+        });
+    }
+
+    if (marks12thMin || marks12thMax) {
+        const conditions: string[] = [`"level" = '12th'`, `"gpaOrMarks" IS NOT NULL`];
+        if (marks12thMin) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${Number(marks12thMin)}`);
+        if (marks12thMax) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${Number(marks12thMax)}`);
+        const studentIds12th: { studentId: string }[] = await prisma.$queryRawUnsafe(
+            `SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE ${conditions.join(' AND ')}`
+        );
+        academicQualificationConditions.push({
+            id: { in: studentIds12th.map(r => r.studentId) }
+        });
+    }
+
+    if (academicQualificationConditions.length > 0) {
+        where.AND = [...(where.AND || []), ...academicQualificationConditions];
+    }
+
+    if (certificateStatus) {
+        if (!where.AND) where.AND = [];
+        where.AND.push(
+            { documents: { some: {} } },
+            { documents: { every: { status: String(certificateStatus).toUpperCase() } } }
+        );
+    }
+
+    if (certificatesApproved) {
+        const val = String(certificatesApproved).toUpperCase();
+        if (val === 'YES') {
+            where.documents = { some: { status: 'APPROVED' } };
+        } else if (val === 'NO') {
+            where.documents = { none: { status: 'APPROVED' } };
+        } else if (val === 'PENDING') {
+            where.documents = { some: { status: 'PENDING' } };
+        }
+    }
+
+    if (seatStatus) {
+        const val = String(seatStatus).toUpperCase();
+        if (val === 'ALLOTTED') {
+            where.admissionDetails = { ...where.admissionDetails, allottedCourseId: { not: null } };
+        } else if (val === 'PENDING') {
+            where.admissionDetails = { ...where.admissionDetails, allottedCourseId: null };
+        }
+    }
+
+    if (scholarship) {
+        const val = String(scholarship).toUpperCase();
+        where.studentScholarship = {
+            isEligible: val === 'YES' ? 'YES' : 'NO'
+        };
+    }
+
+    if (scholarshipPercentage) {
+        where.studentScholarship = {
+            ...where.studentScholarship,
+            scholarshipPercentage: Number(scholarshipPercentage)
+        };
+    }
+
+    if (program) {
+        const values = String(program).split(',').map(v => v.trim()).filter(Boolean);
+        where.admissionDetails = {
+            ...where.admissionDetails,
+            allottedCourse: { degree: values.length === 1 ? values[0] : { in: values } }
+        };
+    }
+
+    if (branch) {
+        const values = String(branch).split(',').map(v => v.trim()).filter(Boolean);
+        where.admissionDetails = {
+            ...where.admissionDetails,
+            allottedCourseId: values.length === 1 ? values[0] : { in: values }
+        };
+    }
+
+    if (facilities) {
+        where.admissionDetails = {
+            ...where.admissionDetails,
+            accommodationType: String(facilities).toUpperCase()
+        };
+    }
+
+    if (discountApplied) {
+        const val = String(discountApplied).toUpperCase();
+        if (val === 'YES') {
+            where.discountRequests = { some: {} };
+        } else if (val === 'NO') {
+            where.discountRequests = { none: {} };
+        }
+    }
+
+    if (branchChange) {
+        const val = String(branchChange).toUpperCase();
+        if (val === 'YES') {
+            where.courseChangeLogs = { some: {} };
+        } else if (val === 'NO') {
+            where.courseChangeLogs = { none: {} };
+        }
+    }
+
+    if (seatCancellation) {
+        const val = String(seatCancellation).toUpperCase();
+        if (val === 'YES') {
+            where.cancellationRequests = { some: {} };
+        } else if (val === 'NO') {
+            where.cancellationRequests = { none: {} };
+        }
+    }
+
+    if (cancellationReason) {
+        where.cancellationRequests = {
+            some: { conditionType: String(cancellationReason) }
+        };
+    }
+
+    if (allotmentOrder) {
+        const val = String(allotmentOrder).toUpperCase();
+        if (val === 'YES') {
+            where.documents = { some: { documentKey: 'ALLOTMENT_ORDER' } };
+        } else if (val === 'NO') {
+            where.documents = { none: { documentKey: 'ALLOTMENT_ORDER' } };
+        }
+    }
+
+    if (applicationFeePaid === 'UNPAID') {
+        where.payments = {
+            none: {
+                component: PaymentComponent.APPLICATION_FEE,
+                status: PaymentStatus.SUCCESS
+            }
+        };
+    } else if (applicationFeePaid === 'PAID') {
         where.payments = {
             some: {
                 component: PaymentComponent.APPLICATION_FEE,
                 status: PaymentStatus.SUCCESS
             }
         };
+    }
+
+    // createdAt date range filter
+    if (dateRange) {
+        const now = new Date();
+        const startOfDayFn = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+        const endOfDayFn = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
+        let gte: Date | undefined;
+        let lte: Date | undefined;
+
+        const val = String(dateRange).toLowerCase();
+
+        if (val === 'today') {
+            gte = startOfDayFn(now);
+            lte = endOfDayFn(now);
+        } else if (val === '7d') {
+            const d = new Date(now);
+            d.setDate(now.getDate() - 7);
+            gte = startOfDayFn(d);
+            lte = endOfDayFn(now);
+        } else if (val === '15d') {
+            const d = new Date(now);
+            d.setDate(now.getDate() - 15);
+            gte = startOfDayFn(d);
+            lte = endOfDayFn(now);
+        } else if (val === '30d') {
+            const d = new Date(now);
+            d.setDate(now.getDate() - 30);
+            gte = startOfDayFn(d);
+            lte = endOfDayFn(now);
+        } else if (val === 'custom' && startDate && endDate) {
+            gte = startOfDayFn(new Date(String(startDate)));
+            lte = endOfDayFn(new Date(String(endDate)));
+        }
+
+        if (gte && lte) {
+            where.createdAt = { gte, lte };
+        }
+    }
+
+    return where;
+};
+
+export const AdminStudentService = {
+    async getAllApplications(query: any) {
+        const { page = 1, limit = 10 } = query;
+        const skip = (Number(page) - 1) * Number(limit);
+
+        const where = await buildApplicationFilters(query);
 
         const [students, total] = await prisma.$transaction([
             prisma.student.findMany({
@@ -173,6 +467,78 @@ export const AdminStudentService = {
                 totalPages: Math.ceil(total / Number(limit))
             }
         };
+    },
+
+    async exportApplicationsCsv(query: any) {
+        const where = await buildApplicationFilters(query);
+
+        const students = await prisma.student.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            include: {
+                admissionDetails: { include: { allottedCourse: true } },
+                examDetails: true,
+                academicQualifications: true,
+                pref1Course: true,
+                pref2Course: true,
+                pref3Course: true,
+                studentScholarship: true,
+                payments: true,
+            }
+        });
+
+        // Collect all unique verifiedBy user IDs to resolve names
+        const verifierIds = new Set<string>();
+        for (const s of students) {
+            for (const q of (s as any).academicQualifications || []) {
+                if (q.verifiedBy) verifierIds.add(q.verifiedBy);
+            }
+        }
+        const verifierMap = new Map<string, string>();
+        if (verifierIds.size > 0) {
+            const verifiers = await prisma.user.findMany({
+                where: { id: { in: Array.from(verifierIds) } },
+                select: { id: true, name: true }
+            });
+            for (const v of verifiers) {
+                verifierMap.set(v.id, v.name || v.id);
+            }
+        }
+
+        const rows = students.map((s: any) => {
+            const q10th = s.academicQualifications?.find((q: any) => q.level === '10th');
+            const q12th = s.academicQualifications?.find((q: any) => q.level === '12th');
+            return {
+            'Application ID': s.applicationId || '',
+            'Name': s.name || '',
+            'Gender': s.gender || '',
+            'Email': s.email || '',
+            'Phone': s.phone || '',
+            'Degree Type': s.degreeType || '',
+            'Quota Type': s.quotaType || '',
+            'Preference 1': s.pref1Course?.name || '',
+            'Preference 2': s.pref2Course?.name || '',
+            'Preference 3': s.pref3Course?.name || '',
+            'Allotted Course': s.admissionDetails?.allottedCourse?.name || '',
+            'Admission Status': s.admissionDetails?.status || '',
+            'Exam Date': s.examDetails?.testDate ? new Date(s.examDetails.testDate).toISOString().split('T')[0] : '',
+            'Exam Score': s.examDetails?.examScore ?? '',
+            'Is Qualified': s.examDetails?.isQualified ? 'Yes' : 'No',
+            'Application Fee Paid': s.payments?.some((p: any) => p.component === PaymentComponent.APPLICATION_FEE && p.status === PaymentStatus.SUCCESS) ? 'PAID' : 'UNPAID',
+            'Scholarship Eligible': s.studentScholarship?.isEligible || '',
+            '10th Marks': q10th?.gpaOrMarks ?? '',
+            '10th Board': q10th?.board || '',
+            '10th Verification Status': q10th?.verificationStatus || '',
+            '10th Verified By': q10th?.verifiedBy ? (verifierMap.get(q10th.verifiedBy) || q10th.verifiedBy) : '',
+            '12th Marks': q12th?.gpaOrMarks ?? '',
+            '12th Board': q12th?.board || '',
+            '12th Verification Status': q12th?.verificationStatus || '',
+            '12th Verified By': q12th?.verifiedBy ? (verifierMap.get(q12th.verifiedBy) || q12th.verifiedBy) : '',
+            'Created At': s.createdAt ? new Date(s.createdAt).toISOString().split('T')[0] : '',
+        };
+        });
+
+        return Papa.unparse(rows);
     },
 
     async getApplicationsExtended(query: any) {
@@ -1117,10 +1483,12 @@ export const AdminStudentService = {
             
             // Handle Hostel Payment Mode Adjustment
             if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                feeAdjustment -= 6000;
+                const oldSemFee = admission.hostelType?.includes('SHARING_4') ? 7000 : admission.hostelType?.includes('SHARING_8') ? 6000 : 0;
+                feeAdjustment -= oldSemFee;
             }
             if (accommodationType === AccommodationType.HOSTEL && hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                feeAdjustment += 6000;
+                const newSemFee = hostelType?.includes('SHARING_4') ? 7000 : hostelType?.includes('SHARING_8') ? 6000 : 0;
+                feeAdjustment += newSemFee;
             }
 
             const currentPaid = (admission.paidFee ?? 0) + Number(paidAmount || 0);
@@ -1548,8 +1916,15 @@ export const AdminStudentService = {
     async getStudentDetailsByApplicationId(applicationId: string) {
         if (!applicationId) throw new AppError('Application ID is required', 400);
 
-        const student = await prisma.student.findUnique({
-            where: { applicationId },
+        const student = await prisma.student.findFirst({
+            where: {
+                OR: [
+                    { applicationId: { contains: applicationId, mode: 'insensitive' } },
+                    { name: { contains: applicationId, mode: 'insensitive' } },
+                    { email: { contains: applicationId, mode: 'insensitive' } },
+                    { phone: { contains: applicationId } },
+                ]
+            },
             include: {
                 admissionDetails: {
                     include: {
@@ -1699,8 +2074,11 @@ export const AdminStudentService = {
              const { studentId: _sid, id: _id, ...updateProps } = data;
 
              // Apply conversions if specific fields are present
-             if (updateProps.score) updateProps.score = Number(updateProps.score);
-             if (updateProps.scholarshipPercentage) updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
+             if (updateProps.score !== undefined) updateProps.score = Number(updateProps.score);
+             if (updateProps.scholarshipPercentage !== undefined) {
+                 updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
+                 if (updateProps.scholarshipPercentage > 0) updateProps.isEligible = 'Yes';
+             }
 
              // Check qualification existence if updating it
              if (updateProps.qualificationId) {
@@ -1752,11 +2130,11 @@ export const AdminStudentService = {
                  studentId,
                  type,
                  degreeType,
-                 score: score ? Number(score) : undefined,
+                 score: score !== undefined ? Number(score) : undefined,
                  remarks,
-                 scholarshipPercentage: scholarshipPercentage ? Number(scholarshipPercentage) : undefined,
+                 scholarshipPercentage: scholarshipPercentage !== undefined ? Number(scholarshipPercentage) : undefined,
                  qualificationId,
-                 isEligible,
+                 isEligible: (scholarshipPercentage !== undefined && Number(scholarshipPercentage) > 0) ? 'Yes' : isEligible,
                  createdBy: adminId,
                  updatedBy: adminId
              }
@@ -1979,7 +2357,8 @@ export const AdminStudentService = {
                 where: {
                     referenceId: demand.id,
                     referenceType: 'SCHOLARSHIP',
-                    type: 'CREDIT'
+                    type: 'CREDIT',
+                    isDeleted: false
                 }
             });
 
@@ -2183,7 +2562,8 @@ export const AdminStudentService = {
                  
                  // Subtract semwise extra if applicable
                  if (oldAdmission.accommodationType === AccommodationType.HOSTEL && oldAdmission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                     accCostDelta -= 6000;
+                     const oldSemFee = oldAdmission.hostelType?.includes('SHARING_4') ? 7000 : oldAdmission.hostelType?.includes('SHARING_8') ? 6000 : 0;
+                     accCostDelta -= oldSemFee;
                  }
             }
 
@@ -2199,7 +2579,8 @@ export const AdminStudentService = {
             
              // Add semwise extra if applicable
             if (allocation.type === AccommodationType.HOSTEL && allocation.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                 accCostDelta += 6000;
+                 const newSemFee = allocation.hostelType?.includes('SHARING_4') ? 7000 : allocation.hostelType?.includes('SHARING_8') ? 6000 : 0;
+                 accCostDelta += newSemFee;
             }
             
             logger.debug(`[executeAdmissionUpdates] Total Fee Adjustment: ${accCostDelta}`);
@@ -2207,29 +2588,6 @@ export const AdminStudentService = {
             // --- Determine Base Tuition Fee (For New Admissions) ---
             let baseTuition = 0;
             const isNewAdmission = !oldAdmission || (oldAdmission.status !== AdmissionStatus.ADMISSION_CONFIRMED && oldAdmission.status !== AdmissionStatus.ENROLLED);
-
-            if (isNewAdmission) {
-                // NOTE: payload.amount here is the payment amount passed through metadata (e.g. token fee or full tuition).
-                // This value is used to set totalFee on the admission record and generate the tuition DEBIT ledger entry.
-                // If only a token amount was paid, totalFee will reflect that — the remaining outstanding balance
-                // will be visible in the ledger (DEBIT minus CREDITs). Ensure the correct full fee is passed
-                // in payload.amount when calling finalizeAdmission for a complete tuition payment.
-                baseTuition = payload.amount ?? 0;
-                logger.info(`[executeAdmissionUpdates] New Admission Detected. Adding Base Tuition: ${baseTuition}`);
-                
-                // Generate Tuition DEBIT Ledger
-                await tx.studentLedger.create({
-                    data: {
-                        studentId,
-                        type: LedgerTransactionType.DEBIT,
-                        amount: baseTuition,
-                        description: 'Tuition Fee (Annual)',
-                        referenceType: 'FEE_GENERATION',
-                        referenceId: `ADMISSION_${Date.now()}`,
-                        createdBy: adminId
-                    }
-                });
-            }
 
             // --- 3. Update Admission Record ---
             logger.debug(`[executeAdmissionUpdates] Updating Student Admission record`);
@@ -2243,7 +2601,8 @@ export const AdminStudentService = {
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
                     hostelPaymentMode: allocation.type === AccommodationType.HOSTEL ? allocation.hostelPaymentMode : null,
                     transportRouteId: allocation.type === AccommodationType.TRANSPORT ? allocation.transportRouteId : null,
-                    totalFee: { increment: (accCostDelta + baseTuition) }
+                    totalFee: { increment: (accCostDelta + baseTuition) },
+                    seatAllottedAt: new Date()
                 },
                 create: {
                     studentId,
@@ -2254,7 +2613,8 @@ export const AdminStudentService = {
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
                     hostelPaymentMode: allocation.type === AccommodationType.HOSTEL ? allocation.hostelPaymentMode : null,
                     transportRouteId: allocation.type === AccommodationType.TRANSPORT ? allocation.transportRouteId : null,
-                    totalFee: (accCostDelta + baseTuition) > 0 ? (accCostDelta + baseTuition) : 0
+                    totalFee: (accCostDelta + baseTuition) > 0 ? (accCostDelta + baseTuition) : 0,
+                    seatAllottedAt: new Date()
                 }
             });
             
@@ -3134,13 +3494,554 @@ export const AdminStudentService = {
         const updated = await prisma.studentAdmission.update({
             where: { studentId },
             data: {
-                seatAllotedBy
+                seatAllotedBy,
+                seatAllottedAt: new Date()
             }
         });
 
         logger.info(`[updateSeatAllotedBy] studentId=${studentId} seatAllotedBy="${seatAllotedBy}" by admin=${adminId}`);
 
         return updated;
-    }
+    },
+
+    async getFinancialApplications(query: any) {
+        const { page = 1, limit = 10, search, applicationId, gender, degree, feeType, dateRange, startDate, endDate, seatAllotedBy } = query;
+        const skip = (Number(page) - 1) * Number(limit);
+        const take = Number(limit);
+
+        const where: any = {};
+
+        if (search) {
+            where.OR = [
+                { name: { contains: String(search), mode: 'insensitive' } },
+                { email: { contains: String(search), mode: 'insensitive' } },
+                { phone: { contains: String(search), mode: 'insensitive' } },
+                { applicationId: { contains: String(search), mode: 'insensitive' } }
+            ];
+        }
+
+        if (applicationId) {
+            where.applicationId = String(applicationId);
+        }
+
+        // seatAllottedAt date range filter
+        if (dateRange) {
+            const now = new Date();
+            const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+            const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
+            let gte: Date | undefined;
+            let lte: Date | undefined;
+
+            const val = String(dateRange).toUpperCase();
+
+            if (val === 'TODAY') {
+                gte = startOfDay(now);
+                lte = endOfDay(now);
+            } else if (val === 'YESTERDAY') {
+                const yesterday = new Date(now);
+                yesterday.setDate(now.getDate() - 1);
+                gte = startOfDay(yesterday);
+                lte = endOfDay(yesterday);
+            } else if (val === '7DAYS') {
+                const d = new Date(now);
+                d.setDate(now.getDate() - 7);
+                gte = startOfDay(d);
+                lte = endOfDay(now);
+            } else if (val === '15DAYS') {
+                const d = new Date(now);
+                d.setDate(now.getDate() - 15);
+                gte = startOfDay(d);
+                lte = endOfDay(now);
+            } else if (val === '30DAYS') {
+                const d = new Date(now);
+                d.setDate(now.getDate() - 30);
+                gte = startOfDay(d);
+                lte = endOfDay(now);
+            } else if (val === 'CUSTOM' && startDate && endDate) {
+                gte = startOfDay(new Date(String(startDate)));
+                lte = endOfDay(new Date(String(endDate)));
+            }
+
+            if (gte && lte) {
+                where.admissionDetails = {
+                    ...where.admissionDetails,
+                    seatAllottedAt: { gte, lte }
+                };
+            }
+        }
+
+        // seatAllotedBy filter
+        if (seatAllotedBy) {
+            where.admissionDetails = {
+                ...where.admissionDetails,
+                seatAllotedBy: String(seatAllotedBy)
+            };
+        }
+
+        // Gender filter
+        if (gender) {
+            where.gender = { equals: String(gender), mode: 'insensitive' };
+        }
+
+        // Degree/Course filter — via allotted course
+        if (degree) {
+            where.admissionDetails = {
+                ...where.admissionDetails,
+                allottedCourse: { degree: String(degree) }
+            };
+        }
+
+        // Fee Statistics filter — students who have paid that fee type
+        logger.info(`[getFinancialApplications] feeType=${feeType} gender=${gender} degree=${degree}`);
+        if (feeType) {
+            const val = String(feeType).toUpperCase();
+            if (val === 'APPLICATION_FEE') {
+                where.payments = {
+                    some: { component: PaymentComponent.APPLICATION_FEE, status: PaymentStatus.SUCCESS }
+                };
+            } else if (val === 'TUITION') {
+                where.ledgerEntries = {
+                    some: { type: LedgerTransactionType.CREDIT, isDeleted: false, description: { contains: 'TUITION', mode: 'insensitive' } }
+                };
+            } else if (val === 'ADMISSION') {
+                where.ledgerEntries = {
+                    some: { type: LedgerTransactionType.CREDIT, isDeleted: false, description: { contains: 'ADMISSION', mode: 'insensitive' } }
+                };
+            } else if (val === 'BOOK_BANK') {
+                where.ledgerEntries = {
+                    some: {
+                        type: LedgerTransactionType.CREDIT,
+                        isDeleted: false,
+                        OR: [
+                            { description: { endsWith: '- BOOK_BANK', mode: 'insensitive' } },
+                            { description: { endsWith: '(BOOK_BANK)', mode: 'insensitive' } }
+                        ]
+                    }
+                };
+            } else if (val === 'HOSTEL') {
+                where.ledgerEntries = {
+                    some: {
+                        type: LedgerTransactionType.CREDIT,
+                        isDeleted: false,
+                        OR: [
+                            { description: { contains: 'HOSTEL_ACCOMODATION', mode: 'insensitive' } },
+                            { description: { contains: 'HOSTEL_MESS', mode: 'insensitive' } }
+                        ]
+                    }
+                };
+            } else if (val === 'TRANSPORT') {
+                where.ledgerEntries = {
+                    some: { type: LedgerTransactionType.CREDIT, isDeleted: false, description: { contains: 'TRANSPORT', mode: 'insensitive' } }
+                };
+            }
+        }
+
+        const [students, total] = await Promise.all([
+            prisma.student.findMany({
+                where,
+                skip,
+                take,
+                orderBy: { createdAt: 'desc' },
+                select: {
+                    id: true,
+                    applicationId: true,
+                    name: true,
+                    gender: true,
+                    phone: true,
+                    email: true,
+                    degreeType: true,
+                    admissionDetails: {
+                        select: {
+                            seatAllottedAt: true,
+                            accommodationType: true,
+                            allottedCourse: {
+                                select: { name: true, degree: true }
+                            },
+                            hostel: {
+                                select: { cost: true }
+                            },
+                            transportRoute: {
+                                select: { cost: true }
+                            }
+                        }
+                    },
+                    payments: {
+                        where: {
+                            component: PaymentComponent.APPLICATION_FEE,
+                            status: PaymentStatus.SUCCESS
+                        },
+                        select: { id: true }
+                    },
+                    feeDemands: {
+                        where: { isDeleted: false },
+                        select: {
+                            netAmount: true,
+                            amount: true,
+                            feeHead: { select: { name: true } }
+                        }
+                    },
+                    ledgerEntries: {
+                        where: { type: LedgerTransactionType.CREDIT, isDeleted: false },
+                        select: { amount: true, description: true }
+                    }
+                }
+            }),
+            prisma.student.count({ where })
+        ]);
+
+        const applications = students.map((student: any) => {
+            const demands = student.feeDemands as { netAmount: number | null; amount: number; feeHead: { name: string } | null }[];
+            const credits = student.ledgerEntries as { amount: number; description: string | null }[];
+
+            const getTotalByHead = (keyword: string) =>
+                demands
+                    .filter((d) => d.feeHead?.name?.toUpperCase().includes(keyword.toUpperCase()))
+                    .reduce((sum, d) => sum + (d.netAmount ?? d.amount ?? 0), 0);
+
+            // Extract fee type keyword from description:
+            // Format 1: "Admission Payment (UPI) - TUITION"    → after " - "
+            // Format 2: "Payment Received via CASH (BOOK_BANK)" → inside last "()"
+            const getFeeKeyword = (desc: string | null): string => {
+                if (!desc) return '';
+                const upper = desc.toUpperCase();
+                const dashMatch = upper.match(/- ([A-Z_]+)\s*$/);
+                if (dashMatch) return dashMatch[1].trim();
+                const parenMatch = upper.match(/\(([A-Z_]+)\)\s*$/);
+                if (parenMatch) return parenMatch[1].trim();
+                return '';
+            };
+
+            const getPaidByDesc = (keyword: string) =>
+                credits
+                    .filter((c) => getFeeKeyword(c.description) === keyword.toUpperCase())
+                    .reduce((sum, c) => sum + (c.amount ?? 0), 0);
+
+            // Description-based: HOSTEL_ACCOMODATION, HOSTEL_MESS, TRANSPORT
+            const hostelPaid = credits
+                .filter((c) => {
+                    const kw = getFeeKeyword(c.description);
+                    return kw === 'HOSTEL_ACCOMODATION' || kw === 'HOSTEL_MESS';
+                })
+                .reduce((sum, c) => sum + (c.amount ?? 0), 0);
+
+            const hostelTotal = student.admissionDetails?.hostel?.cost ?? 0;
+
+            const transportPaid = credits
+                .filter((c) => getFeeKeyword(c.description) === 'TRANSPORT')
+                .reduce((sum, c) => sum + (c.amount ?? 0), 0);
+
+            const transportTotal = student.admissionDetails?.transportRoute?.cost ?? 0;
+
+            return {
+                studentId: student.id,
+                applicationId: student.applicationId,
+                name: student.name,
+                gender: student.gender,
+                phone: student.phone,
+                email: student.email,
+                branch: student.admissionDetails?.allottedCourse?.name ?? null,
+                degree: student.admissionDetails?.allottedCourse?.degree ?? student.degreeType ?? null,
+                dateOfAllotment: student.admissionDetails?.seatAllottedAt ?? null,
+                applicationFee: {
+                    paid: student.payments.length > 0,
+                    amount: 500
+                },
+                tuitionFee: {
+                    paid: getPaidByDesc('TUITION'),
+                    total: getTotalByHead('TUITION')
+                },
+                admissionFee: {
+                    paid: getPaidByDesc('ADMISSION'),
+                    total: getTotalByHead('ADMISSION')
+                },
+                bookBankFee: {
+                    paid: getPaidByDesc('BOOK_BANK'),       // ledger description suffix: "BOOK_BANK"
+                    total: getTotalByHead('BOOK BANK')      // feeHead.name: "Book Bank"
+                },
+                hostelFee: {
+                    paid: hostelPaid,
+                    total: hostelTotal
+                },
+                transport: {
+                    opted: student.admissionDetails?.accommodationType === AccommodationType.TRANSPORT,
+                    paid: transportPaid,
+                    total: transportTotal
+                }
+            };
+        });
+
+        return {
+            applications,
+            pagination: {
+                total,
+                page: Number(page),
+                limit: Number(limit),
+                totalPages: Math.ceil(total / Number(limit))
+            }
+        };
+    },
+
+    // =============================================
+    // Waiting List Management
+    // =============================================
+
+    /**
+     * Add a student to the waiting list for one or more courses.
+     * Validates: student exists, courses exist, no duplicate entries.
+     */
+    async addToWaitingList(data: { studentId: string; courseIds: string[]; remarks?: string }, adminId: string) {
+        const { studentId, courseIds, remarks } = data;
+
+        if (!studentId) throw new AppError('Student ID is required', 400);
+        if (!courseIds || courseIds.length === 0) throw new AppError('At least one course ID is required', 400);
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            select: { id: true, name: true, applicationId: true }
+        });
+        if (!student) throw new AppError('Student not found', 404);
+
+        // Validate all courses exist
+        const courses = await prisma.course.findMany({
+            where: { id: { in: courseIds }, isDeleted: false },
+            select: { id: true, name: true, degree: true, filledSeats: true, totalSeats: true }
+        });
+        if (courses.length !== courseIds.length) {
+            const foundIds = courses.map(c => c.id);
+            const missing = courseIds.filter(id => !foundIds.includes(id));
+            throw new AppError(`Courses not found: ${missing.join(', ')}`, 404);
+        }
+
+        // Check for existing WAITING entries for this student
+        const existing = await prisma.waitingList.findMany({
+            where: { studentId, courseId: { in: courseIds }, status: WaitingListStatus.WAITING }
+        });
+        const existingCourseIds = new Set(existing.map(e => e.courseId));
+
+        // Only create entries for courses not already in waiting list
+        const newCourseIds = courseIds.filter(id => !existingCourseIds.has(id));
+
+        if (newCourseIds.length === 0) {
+            throw new AppError('Student is already on the waiting list for all selected courses', 409);
+        }
+
+        // Get current max priority for each course to assign next position
+        const entries = await prisma.$transaction(
+            newCourseIds.map(courseId =>
+                prisma.waitingList.create({
+                    data: {
+                        studentId,
+                        courseId,
+                        remarks,
+                        status: WaitingListStatus.WAITING,
+                        createdBy: adminId,
+                    },
+                    include: {
+                        course: { select: { name: true, degree: true } }
+                    }
+                })
+            )
+        );
+
+        logger.info(`[addToWaitingList] Student=${studentId} added to ${entries.length} course(s): ${newCourseIds.join(', ')}`);
+
+        return {
+            student: { id: student.id, name: student.name, applicationId: student.applicationId },
+            added: entries.map(e => ({
+                id: e.id,
+                courseId: e.courseId,
+                courseName: e.course.name,
+                degree: e.course.degree,
+                status: e.status,
+            })),
+            skipped: existingCourseIds.size > 0
+                ? courses.filter(c => existingCourseIds.has(c.id)).map(c => ({ courseId: c.id, courseName: c.name, reason: 'Already on waiting list' }))
+                : [],
+        };
+    },
+
+    /**
+     * Get the waiting list for a specific course or all courses.
+     */
+    async getWaitingList(query: { courseId?: string; status?: string; page?: number; limit?: number }) {
+        const { courseId, status, page = 1, limit = 50 } = query;
+        const skip = (Number(page) - 1) * Number(limit);
+        const take = Number(limit);
+
+        const where: any = {};
+        if (courseId) where.courseId = courseId;
+        if (status) where.status = status;
+        else where.status = WaitingListStatus.WAITING;
+
+        const [entries, total] = await Promise.all([
+            prisma.waitingList.findMany({
+                where,
+                skip,
+                take,
+                orderBy: { createdAt: 'asc' },
+                include: {
+                    student: {
+                        select: { id: true, name: true, applicationId: true, phone: true, email: true, degreeType: true }
+                    },
+                    course: {
+                        select: { id: true, name: true, degree: true, filledSeats: true, totalSeats: true }
+                    }
+                }
+            }),
+            prisma.waitingList.count({ where })
+        ]);
+
+        return {
+            entries: entries.map((e, i) => ({
+                id: e.id,
+                position: skip + i + 1,
+                student: e.student,
+                course: e.course,
+                status: e.status,
+                remarks: e.remarks,
+                createdAt: e.createdAt,
+            })),
+            pagination: { total, page: Number(page), limit: Number(limit), totalPages: Math.ceil(total / take) }
+        };
+    },
+
+    /**
+     * Get waiting list entries for a specific student.
+     */
+    async getStudentWaitingList(studentId: string) {
+        if (!studentId) throw new AppError('Student ID is required', 400);
+
+        const entries = await prisma.waitingList.findMany({
+            where: { studentId },
+            orderBy: { createdAt: 'asc' },
+            include: {
+                course: { select: { id: true, name: true, degree: true, filledSeats: true, totalSeats: true } }
+            }
+        });
+
+        return entries.map(e => ({
+            id: e.id,
+            courseId: e.courseId,
+            courseName: e.course.name,
+            degree: e.course.degree,
+            availableSeats: (e.course.totalSeats || 0) - (e.course.filledSeats || 0),
+            status: e.status,
+            remarks: e.remarks,
+            createdAt: e.createdAt,
+        }));
+    },
+
+    /**
+     * Allot a seat from the waiting list. Moves student from WAITING → ALLOTTED
+     * and triggers the standard seat allotment flow.
+     */
+    async allotFromWaitingList(waitingListId: string, adminId: string) {
+        if (!waitingListId) throw new AppError('Waiting list entry ID is required', 400);
+
+        const entry = await prisma.waitingList.findUnique({
+            where: { id: waitingListId },
+            include: {
+                student: { include: { admissionDetails: true } },
+                course: true
+            }
+        });
+
+        if (!entry) throw new AppError('Waiting list entry not found', 404);
+        if (entry.status !== WaitingListStatus.WAITING) throw new AppError(`Entry is already ${entry.status}`, 400);
+        if (!entry.student.admissionDetails) throw new AppError('Student has no admission record', 400);
+
+        // Check seat availability
+        const availableSeats = (entry.course.totalSeats || 0) - (entry.course.filledSeats || 0);
+        if (availableSeats <= 0) throw new AppError(`No seats available in ${entry.course.name}`, 400);
+
+        await prisma.$transaction(async (tx) => {
+            // 1. Allot the seat
+            await tx.course.update({
+                where: { id: entry.courseId },
+                data: { filledSeats: { increment: 1 } }
+            });
+
+            // 2. Update admission
+            await tx.studentAdmission.update({
+                where: { studentId: entry.studentId },
+                data: {
+                    allottedCourseId: entry.courseId,
+                    status: AdmissionStatus.SEAT_ALLOTTED,
+                    seatAllottedAt: new Date(),
+                    seatAllotedBy: adminId,
+                }
+            });
+
+            // 3. Mark this entry as ALLOTTED
+            await tx.waitingList.update({
+                where: { id: waitingListId },
+                data: { status: WaitingListStatus.ALLOTTED, allottedAt: new Date(), allottedBy: adminId, updatedBy: adminId }
+            });
+
+            // 4. Cancel all other WAITING entries for this student
+            await tx.waitingList.updateMany({
+                where: { studentId: entry.studentId, status: WaitingListStatus.WAITING, id: { not: waitingListId } },
+                data: { status: WaitingListStatus.CANCELLED, updatedBy: adminId }
+            });
+
+            // 5. Log seat allocation
+            await tx.seatAllocation.create({
+                data: {
+                    studentId: entry.studentId,
+                    newCourse: entry.courseId,
+                    allocatedBy: adminId,
+                    notes: `Allotted from waiting list`,
+                }
+            });
+        });
+
+        logger.info(`[allotFromWaitingList] Student=${entry.studentId} allotted to ${entry.course.name} from waiting list`);
+
+        return {
+            studentId: entry.studentId,
+            studentName: entry.student.name,
+            courseId: entry.courseId,
+            courseName: entry.course.name,
+            degree: entry.course.degree,
+            status: 'ALLOTTED',
+        };
+    },
+
+    /**
+     * Remove a student from the waiting list (cancel specific entry or all).
+     */
+    async removeFromWaitingList(data: { waitingListId?: string; studentId?: string; courseId?: string }, adminId: string) {
+        const { waitingListId, studentId, courseId } = data;
+
+        if (waitingListId) {
+            // Cancel specific entry
+            const entry = await prisma.waitingList.findUnique({ where: { id: waitingListId } });
+            if (!entry) throw new AppError('Waiting list entry not found', 404);
+            if (entry.status !== WaitingListStatus.WAITING) throw new AppError(`Entry is already ${entry.status}`, 400);
+
+            await prisma.waitingList.update({
+                where: { id: waitingListId },
+                data: { status: WaitingListStatus.CANCELLED, updatedBy: adminId }
+            });
+
+            return { cancelled: 1 };
+        }
+
+        if (studentId) {
+            // Cancel all waiting entries for a student (optionally filtered by course)
+            const where: any = { studentId, status: WaitingListStatus.WAITING };
+            if (courseId) where.courseId = courseId;
+
+            const result = await prisma.waitingList.updateMany({
+                where,
+                data: { status: WaitingListStatus.CANCELLED, updatedBy: adminId }
+            });
+
+            return { cancelled: result.count };
+        }
+
+        throw new AppError('Either waitingListId or studentId is required', 400);
+    },
 };
 

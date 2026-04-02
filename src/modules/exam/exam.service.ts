@@ -776,12 +776,6 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
     });
     if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
 
-    if (
-        student.admissionDetails?.status !== AdmissionStatus.ENTRANCE_FEE_PAID &&
-        student.admissionDetails?.status !== AdmissionStatus.EXAM_SCHEDULED
-    ) {
-        throw new AppError(MESSAGES.ERROR.STUDENT_NOT_ELIGIBLE_SLOT, 400);
-    }
 
     const existingExam = await prisma.studentExam.findUnique({
         where: { studentId },

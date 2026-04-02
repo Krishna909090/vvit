@@ -26,7 +26,14 @@ import {
     requestBranchChange,
     requestProgramChange,
     assignPro,
-    updateSeatAllotedBy
+    updateSeatAllotedBy,
+    getFinancialApplications,
+    exportApplicationsCsv,
+    addToWaitingList,
+    getWaitingList,
+    getStudentWaitingList,
+    allotFromWaitingList,
+    removeFromWaitingList
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -58,6 +65,13 @@ const router = Router();
 // ═══════════════════════════════════════════════════════════
 
 /**
+ * GET /admin/student/applications/export-csv
+ * Exports filtered student applications as a CSV file.
+ * Accepts the same query filters as GET /applications.
+ */
+router.get('/applications/export-csv', authenticate, authorizePermission(['student.read.all']), validateRequest(getAllApplicationsSchema), exportApplicationsCsv);
+
+/**
  * GET /admin/student/applications
  * Retrieves a paginated list of all student applications with basic details.
  * Supports filtering by status, quota type, course type, scholarship eligibility, and document presence.
@@ -65,6 +79,14 @@ const router = Router();
  * Response: { status, data: { applications[], total, page, limit } }
  */
 router.get('/applications', authenticate, authorizePermission(['student.read.all']), validateRequest(getAllApplicationsSchema), getAllApplications);
+
+/**
+ * GET /admin/student/applications/financials
+ * Returns paginated student cards with financial breakdown per student.
+ * Includes application fee, tuition, admission, book bank, hostel (paid/total) and transport (yes/no).
+ * Query: { page?, limit?, search? }
+ */
+router.get('/applications/financials', authenticate, authorizePermission(['student.read.all']), getFinancialApplications);
 
 /**
  * GET /admin/student/applications-extended
@@ -479,5 +501,43 @@ router.post('/reverse-admission-payment', authenticate, authorizePermission(['st
 router.post('/assign-pro', authenticate, authorizePermission(['student.update.all']), validateRequest(assignProSchema), assignPro);
 
 router.patch('/seat-alloted-by', authenticate, authorizePermission(['student.update.all']), validateRequest(updateSeatAllotedBySchema), updateSeatAllotedBy);
+
+// ═══════════════════════════════════════════════════════════
+//  WAITING LIST
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * POST /admin/student/waiting-list
+ * Add a student to waiting list for one or more courses.
+ * Body: { studentId, courseIds: [uuid, ...], remarks? }
+ */
+router.post('/waiting-list', authenticate, authorizePermission(['student.update.all']), addToWaitingList);
+
+/**
+ * GET /admin/student/waiting-list
+ * Get waiting list entries. Filter by courseId, status.
+ * Query: { courseId?, status?, page?, limit? }
+ */
+router.get('/waiting-list', authenticate, authorizePermission(['student.read.all']), getWaitingList);
+
+/**
+ * GET /admin/student/waiting-list/:studentId
+ * Get waiting list entries for a specific student.
+ */
+router.get('/waiting-list/:studentId', authenticate, authorizePermission(['student.read.all']), getStudentWaitingList);
+
+/**
+ * POST /admin/student/waiting-list/allot
+ * Allot a seat from the waiting list. Moves WAITING → ALLOTTED, cancels other entries.
+ * Body: { waitingListId }
+ */
+router.post('/waiting-list/allot', authenticate, authorizePermission(['student.update.all']), allotFromWaitingList);
+
+/**
+ * POST /admin/student/waiting-list/remove
+ * Remove entries from waiting list (cancel).
+ * Body: { waitingListId? } or { studentId?, courseId? }
+ */
+router.post('/waiting-list/remove', authenticate, authorizePermission(['student.update.all']), removeFromWaitingList);
 
 export default router;

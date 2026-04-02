@@ -13,6 +13,7 @@ import {
     getInvoiceUrl,
     checkPaymentStatus as checkPaymentStatusService,
     getStudentFinancialHistory,
+    getStudentFinancialFlow,
     initiateTokenPayment,
     recordOfflineApplicationFeePayment,
     processUnifiedPayment,
@@ -369,9 +370,32 @@ export const payFeeComponent = catchAsync(async (req: Request, res: Response, ne
 
     sendResponse({
         res,
-        statusCode: 200, 
+        statusCode: 200,
         success: true,
         message: result.message || "Payment processed",
         data: result.data
+    });
+});
+
+export const getFinancialFlow = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    let { studentId } = req.params;
+
+    if (!studentId && req.user?.role === 'STUDENT') {
+        const { getStudentByUserId } = await import('../student/student.service');
+        const student = await getStudentByUserId(req.user.userId);
+        if (!student) throw new AppError('Student not found', 404);
+        studentId = student.id;
+    }
+
+    if (!studentId) throw new AppError('Student ID is required', 400);
+
+    const flow = await getStudentFinancialFlow(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Financial flow retrieved successfully',
+        data: flow
     });
 });

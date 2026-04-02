@@ -25,6 +25,8 @@ export type FinalStatus =
 
 export interface ComponentPaid {
     tuition:   number;
+    admission: number;
+    bookBank:  number;
     hostel:    number;
     transport: number;
     others:    number;
@@ -55,6 +57,8 @@ export interface AdjustmentResult {
     conditionRemarks:   string;
     componentBreakdown: {
         tuition:   ComponentBreakdown;
+        admission: ComponentBreakdown;
+        bookBank:  ComponentBreakdown;
         hostel:    ComponentBreakdown;
         transport: ComponentBreakdown;
         others:    ComponentBreakdown;
@@ -69,6 +73,8 @@ export const calculateFeeAdjustment = (input: AdjustmentInput): AdjustmentResult
 
     const comp = {
         tuition:   componentPaid.tuition   ?? 0,
+        admission: componentPaid.admission ?? 0,
+        bookBank:  componentPaid.bookBank  ?? 0,
         hostel:    componentPaid.hostel    ?? 0,
         transport: componentPaid.transport ?? 0,
         others:    componentPaid.others    ?? 0,
@@ -87,6 +93,8 @@ export const calculateFeeAdjustment = (input: AdjustmentInput): AdjustmentResult
 
     const breakdown = {
         tuition:   zeroBreakdown(comp.tuition),
+        admission: zeroBreakdown(comp.admission),
+        bookBank:  zeroBreakdown(comp.bookBank),
         hostel:    zeroBreakdown(comp.hostel),
         transport: zeroBreakdown(comp.transport),
         others:    zeroBreakdown(comp.others),
@@ -113,7 +121,7 @@ export const calculateFeeAdjustment = (input: AdjustmentInput): AdjustmentResult
             }
 
             // Compute per-component refund (paid - deducted)
-            (['tuition', 'hostel', 'transport', 'others'] as const).forEach(k => {
+            (['tuition', 'admission', 'bookBank', 'hostel', 'transport', 'others'] as const).forEach(k => {
                 breakdown[k].refund = breakdown[k].paid - breakdown[k].deducted;
             });
 
@@ -126,7 +134,7 @@ export const calculateFeeAdjustment = (input: AdjustmentInput): AdjustmentResult
         case 'INTERNAL_BRANCH_TRANSFER': {
             // Full component-wise transfer, no deduction
             transferAmount = totalPaid;
-            (['tuition', 'hostel', 'transport', 'others'] as const).forEach(k => {
+            (['tuition', 'admission', 'bookBank', 'hostel', 'transport', 'others'] as const).forEach(k => {
                 breakdown[k].transfer = breakdown[k].paid;
             });
             finalStatus       = 'TRANSFER';
@@ -167,7 +175,7 @@ export const calculateFeeAdjustment = (input: AdjustmentInput): AdjustmentResult
         case 'MANAGEMENT_CANCEL_FULL_REFUND': {
             // Full refund, no deduction
             refundAmount = totalPaid;
-            (['tuition', 'hostel', 'transport', 'others'] as const).forEach(k => {
+            (['tuition', 'admission', 'bookBank', 'hostel', 'transport', 'others'] as const).forEach(k => {
                 breakdown[k].refund = breakdown[k].paid;
             });
             finalStatus      = 'REFUND_FULL';
@@ -198,7 +206,7 @@ const _spreadRefundProportionally = (
     totalPaid: number,
 ) => {
     if (totalPaid === 0) return;
-    (['tuition', 'hostel', 'transport', 'others'] as const).forEach(k => {
+    (['tuition', 'admission', 'bookBank', 'hostel', 'transport', 'others'] as const).forEach(k => {
         breakdown[k].refund = Math.round((comp[k] / totalPaid) * refundAmount);
     });
 };
@@ -212,7 +220,7 @@ const fetchComponentPaid = async (studentId: string): Promise<{ componentPaid: C
         select: { component: true, amount: true },
     });
 
-    const componentPaid: ComponentPaid = { tuition: 0, hostel: 0, transport: 0, others: 0 };
+    const componentPaid: ComponentPaid = { tuition: 0, admission: 0, bookBank: 0, hostel: 0, transport: 0, others: 0 };
 
     for (const p of payments) {
         switch (p.component) {
@@ -221,8 +229,13 @@ const fetchComponentPaid = async (studentId: string): Promise<{ componentPaid: C
                 break;
             case PaymentComponent.TUITION:
             case PaymentComponent.SCHOLARSHIP_TOKEN:
-            case PaymentComponent.ADMISSION:
                 componentPaid.tuition += p.amount;
+                break;
+            case PaymentComponent.ADMISSION:
+                componentPaid.admission += p.amount;
+                break;
+            case PaymentComponent.BOOK_BANK:
+                componentPaid.bookBank += p.amount;
                 break;
             case PaymentComponent.HOSTEL:
             case PaymentComponent.HOSTEL_ACCOMMODATION:
@@ -237,9 +250,9 @@ const fetchComponentPaid = async (studentId: string): Promise<{ componentPaid: C
         }
     }
 
-    const totalPaid = componentPaid.tuition + componentPaid.hostel + componentPaid.transport + componentPaid.others;
+    const totalPaid = componentPaid.tuition + componentPaid.admission + componentPaid.bookBank + componentPaid.hostel + componentPaid.transport + componentPaid.others;
 
-    logger.info(`[fetchComponentPaid] Student=${studentId} Tuition=${componentPaid.tuition} Hostel=${componentPaid.hostel} Transport=${componentPaid.transport} Others=${componentPaid.others} Total=${totalPaid}`);
+    logger.info(`[fetchComponentPaid] Student=${studentId} Tuition=${componentPaid.tuition} Admission=${componentPaid.admission} BookBank=${componentPaid.bookBank} Hostel=${componentPaid.hostel} Transport=${componentPaid.transport} Others=${componentPaid.others} Total=${totalPaid}`);
 
     return { componentPaid, totalPaid };
 };
@@ -268,6 +281,8 @@ const _generateCancellationReceipt = async (request: any, now: Date): Promise<st
     const comp: any = request.componentPaid ?? {};
     const items: { description: string; amount: number }[] = [];
     if ((comp.tuition   ?? 0) > 0) items.push({ description: 'Tuition Fee Paid',   amount: comp.tuition });
+    if ((comp.admission ?? 0) > 0) items.push({ description: 'Admission Fee Paid', amount: comp.admission });
+    if ((comp.bookBank  ?? 0) > 0) items.push({ description: 'Book Bank Fee Paid', amount: comp.bookBank });
     if ((comp.hostel    ?? 0) > 0) items.push({ description: 'Hostel Fee Paid',    amount: comp.hostel });
     if ((comp.transport ?? 0) > 0) items.push({ description: 'Transport Fee Paid', amount: comp.transport });
     if ((comp.others    ?? 0) > 0) items.push({ description: 'Other Fees Paid',    amount: comp.others });

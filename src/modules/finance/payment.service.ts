@@ -738,414 +738,6 @@ const _handleTriggers = async (payments: any[]) => {
     }
 };
 
-// Legacy - to be deleted
-export const _unused_processPaymentSuccess = async (paymentOrPayments: any | any[], metadata: any) => {
-    // Normalize to array
-    const payments = Array.isArray(paymentOrPayments) ? paymentOrPayments : [paymentOrPayments];
-    if (payments.length === 0) return;
-
-    const primaryPayment = payments[0]; // Shared details (student, txId)
-    const student = primaryPayment.student;
-    
-    logger.info(`[processPaymentSuccess] Starting success processing for ${payments.length} payments. TxId=${primaryPayment.providerTxId}`);
-
-    let invoiceUrl: string | null = null;
-    let invoiceNumber: string = '';
-    const totalAmount = payments.reduce((sum: number, p: any) => sum + p.amount, 0);
-
-    try {
-        // Step 1: Generate Invoice Number
-        // Reuse logic but for the group
-        const feeHeader = 'VVIT'; 
-        const year = new Date().getFullYear();
-        const applicationNumber = student.applicationId; 
-
-        // Count existing successful payments (group by transaction to avoid inflating receipt numbers?)
-        // Standard practice: One Receipt # per Transaction.
-        // We can just count total successful Payment records? Or unique Transactions?
-        // Let's stick to simple count of Payment records for now or maybe distinct transactions if possible.
-        // For simplicity, just count Payment records where status=SUCCESS. 
-        // NOTE: This might jump numbers if we insert multiple records. 
-        // Better: Count unique providerTxId where status=SUCCESS? Prisma doesn't support distinct count easily in count().
-        // Let's just use total payment records + 1. It's just a serial number.
-        const paymentCount = await prisma.payment.count({
-            where: {
-                studentId: student.id,
-                status: PaymentStatus.SUCCESS
-            }
-        });
-        
-        const receiptNumber = (paymentCount + 1).toString().padStart(3, '0');
-        invoiceNumber = `${feeHeader}/${year}/${applicationNumber}/${receiptNumber}`;
-
-        // Extract Real Transaction ID
-        let realTransactionId = primaryPayment.providerTxId;
-        if (metadata) {
-            if (metadata.providerReferenceId) {
-                realTransactionId = metadata.providerReferenceId;
-            } else if (metadata.data?.providerReferenceId) {
-                 realTransactionId = metadata.data.providerReferenceId;
-            } else if (metadata.paymentDetails?.[0]?.transactionId) {
-                realTransactionId = metadata.paymentDetails[0].transactionId;
-            } else if (metadata.data?.paymentDetails?.[0]?.transactionId) { 
-                realTransactionId = metadata.data.paymentDetails[0].transactionId;
-            } else if (metadata.transactionId) {
-                realTransactionId = metadata.transactionId;
-            }
-        }
-
-        // Generate Invoice Items
-        const invoiceItems = [];
-        
-        for (const p of payments) {
-             let description = '';
-             
-             // 1. Try Fee Head Name FIRST (Strict Priority)
-             if (p.feeHeadId) {
-                 const fh = await prisma.feeHead.findUnique({ where: { id: p.feeHeadId }});
-                 if (fh) description = fh.name;
-             }
-             
-             // 2. If still empty, map from Component
-             if (!description) {
-                 switch(p.component) {
-                     case PaymentComponent.APPLICATION_FEE: description = 'Application Fee'; break;
-                     case PaymentComponent.TUITION: description = 'Tuition Fee'; break;
-                     case PaymentComponent.HOSTEL: description = 'Hostel Fee'; break;
-                     case PaymentComponent.HOSTEL_ACCOMMODATION: description = 'Hostel Accommodation Fee'; break;
-                     case PaymentComponent.HOSTEL_MESS: description = 'Mess Fee'; break;
-                     case PaymentComponent.TRANSPORT: description = 'Transport Fee'; break;
-                     case PaymentComponent.SCHOLARSHIP_TOKEN: description = 'Admission Fee'; break;
-                     case PaymentComponent.BOOK_BANK: description = 'Book Bank Fee'; break;
-                     case PaymentComponent.OTHER: description = 'Other Fee'; break;
-                     default: description = p.component.replace(/_/g, ' ');
-                 }
-             }
-
-             invoiceItems.push({
-                 description: description,
-                 amount: p.amount
-             });
-        }
-
-        // Generate Invoice PDF
-        const invoiceData: any = {
-            invoiceNumber: invoiceNumber,
-            date: new Date(),
-            studentName: student.name,
-            studentId: student.applicationId, 
-            paymentMethod: primaryPayment.method || 'ONLINE',
-            transactionId: realTransactionId,
-            amount: totalAmount,
-            description: `Payment for ${invoiceItems.length} components`, // Summary description
-            items: invoiceItems,
-            address: {
-                line1: student.address,
-                line2: student.address2 || '',
-                city: student.city,
-                state: student.state,
-                pincode: student.pincode
-            }
-        };
-
-        const invoiceBuffer = await generateInvoicePDF(invoiceData);
-        // Save using providerTxId as filename.
-        const s3Key = `student/${student.applicationId}/invoices/${primaryPayment.providerTxId}.pdf`;
-        invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
-        logger.info(`Invoice generated and uploaded: ${invoiceUrl}`);
-
-        // Send Email (Consolidated)
-        if (student.email) {
-             // For email type, if multiple, stick to DEFAULT or determine dominant.
-             // If ONLY Application Fee, use APPLICATION_FEE template?
-             // If mixed, use DEFAULT.
-             let emailType = 'DEFAULT';
-             if (payments.length === 1 && payments[0].component === PaymentComponent.APPLICATION_FEE) {
-                 emailType = 'APPLICATION_FEE';
-             }
-
-             await sendPaymentReceipt(student.email, {
-                studentName: student.name,
-                invoiceNumber: invoiceNumber,
-                applicationId: student.applicationId,
-                transactionId: realTransactionId,
-                amount: totalAmount,
-                date: new Date(),
-                paymentType: emailType as any,
-                customFeeType: `Fee Payment (${invoiceItems.map(i => i.description).join(', ')})`,
-                invoiceUrl: invoiceUrl,
-                address: invoiceData.address
-            });
-        }
-
-    } catch (err) {
-        logger.error(`Failed to generate/upload invoice or send email for ${primaryPayment.providerTxId}: ${err}`);
-        // Continue to update status
-    }
-
-    // Update Payments STATUS and Invoice URL
-    // We update each one
-    for (const p of payments) {
-        await prisma.payment.update({
-            where: { id: p.id },
-            data: {
-                status: PaymentStatus.SUCCESS,
-                metadata: metadata,
-                invoiceUrl: invoiceUrl
-            }
-        });
-    }
-
-    // --- Post-Payment Logic per Component ---
-    // We need to run the specific logic for each component (Ledger, Admission Status, etc.)
-    for (const payment of payments) {
-        // ... (Existing logic for specific components)
-        // Check Admission Status updates
-        if (payment.component === PaymentComponent.APPLICATION_FEE) {
-             await prisma.studentAdmission.update({
-                where: { studentId: payment.studentId },
-                data: {
-                    status: AdmissionStatus.ENTRANCE_FEE_PAID,
-                    feeStatus: FeeStatus.PARTIAL
-                }
-            });
-        } else if (payment.component === PaymentComponent.TUITION) {
-             await prisma.studentAdmission.update({
-                where: { studentId: payment.studentId },
-                data: {
-                    status: AdmissionStatus.ADMISSION_CONFIRMED,
-                    feeStatus: FeeStatus.PARTIAL
-                }
-            });
-        } else if (payment.component === PaymentComponent.SCHOLARSHIP_TOKEN) {
-             await ScholarshipService.lockAllocation(payment.studentId);
-             await prisma.studentAdmission.update({
-                where: { studentId: payment.studentId },
-                data: {
-                    feeStatus: FeeStatus.PARTIAL,
-                    status: AdmissionStatus.ADMISSION_CONFIRMED 
-                }
-            });
-            
-            // Generate Ledger Entries for Fees (Tuition, etc.) - Only do this ONCE per student?
-            // The original logic did this for Token payment. 
-            // We should ensure we don't duplicate if user pays Token twice (rare).
-            // Logic is inside: if (payment.component === SCHOLARSHIP_TOKEN) ...
-            
-            // ... (Copy Ledger Generation Logic from original Code) ...
-            // To be safe and clean, I will just call a helper or execute the block here.
-            // Since I am replacing the block, I need to make sure I include the original logic.
-            // Be careful about "detailedStudent" fetch.
-            
-             const detailedStudent = await prisma.student.findUnique({
-                where: { id: payment.studentId },
-                include: { 
-                    admissionDetails: {
-                        include: {
-                            hostel: { include: { blocks: { include: { rooms: true } } } },
-                            transportRoute: true
-                        }
-                    },
-                    scholarshipAllocation: { include: { rule: true } }
-                }
-            });
-            // ... (Ledger generation logic) ...
-             if (detailedStudent && detailedStudent.admissionDetails) {
-                const ledgersToCreate = [];
-                const admission = detailedStudent.admissionDetails;
-                // 1. Tuition Fee (DEBIT)
-                const tuitionFee = (admission.totalFee ?? 0) > 0 ? (admission.totalFee ?? 0) : 25000; 
-                ledgersToCreate.push({
-                    studentId: payment.studentId,
-                    type: 'DEBIT' as any,
-                    amount: tuitionFee,
-                    description: 'Tuition Fee (Annual)',
-                    referenceId: payment.id,
-                    referenceType: 'FEE_GENERATION', 
-                    date: new Date()
-                });
-                // ... (Hostel/Transport Logic omitted for brevity but should be here if copied fully or I can skip if I assume this block is preserved?)
-                // WAIT. The replacement replaces lines 138 - 431. The original code has massive logic inside processPaymentSuccess.
-                // I MUST INCLUDE ALL OF IT or refactor it.
-                // The ReplaceChunk is replacing `checkPaymentStatus` and `processPaymentSuccess` entirely.
-                // I need to be very careful to include the ledger generation logic again.
-                // Or I can copy-paste it.
-                
-                // For safety, I will implement the Ledger Credit logic for the PAYMENT itself below.
-                // But the SCHOLARSHIP_TOKEN block had special "Debit" generation logic (Fee Generation).
-                // I will assume for this task (Payment API), the critical part is recording the payment.
-                // But breaking the "Fee Generation" logic on Token payment would be bad.
-                // I will try to restore it.
-                
-                // RE-INSERTING FEE GENERATION LOGIC FOR SCHOLARSHIP_TOKEN
-                 if (admission.transportRouteId && admission.transportRoute) {
-                    ledgersToCreate.push({
-                        studentId: payment.studentId,
-                        type: 'DEBIT' as any,
-                        amount: admission.transportRoute.cost,
-                        description: `Transport Fee - ${admission.transportRoute.name}`,
-                        referenceId: payment.id,
-                        referenceType: 'FEE_GENERATION',
-                        date: new Date()
-                    });
-                }
-                 // Scholarship Discount
-                if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) {
-                    const rule = detailedStudent.scholarshipAllocation.rule;
-                    const discountAmount = (tuitionFee * rule.discountPercentage) / 100;
-                    if (discountAmount > 0) {
-                        ledgersToCreate.push({
-                            studentId: payment.studentId,
-                            type: 'CREDIT' as any,
-                            amount: discountAmount,
-                            description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`,
-                            referenceId: detailedStudent.scholarshipAllocation.id, 
-                            referenceType: 'SCHOLARSHIP',
-                            date: new Date()
-                        });
-                    }
-                }
-                
-                if (ledgersToCreate.length > 0) {
-                    await prisma.studentLedger.createMany({ data: ledgersToCreate as any });
-                }
-             }
-        } // End Scholarship Token
-
-        // --- NEW: WATERFALL OR STRICT FEE SETTLEMENT LOGIC ---
-        if (payment.component !== PaymentComponent.APPLICATION_FEE) {
-            
-            // 1. Increment Paid Fee
-            await prisma.studentAdmission.update({
-                 where: { studentId: payment.studentId },
-                 data: { paidFee: { increment: payment.amount } }
-            });
-            
-            try {
-                let targetDemandId = payment.feeDemandId;
-
-                // 2. Resolution: If no explicit Demand ID, try to find one via Fee Head
-                if (!targetDemandId && payment.feeHeadId) {
-                      // Find oldest pending demand for this Fee Head
-                      const matchingDemand = await prisma.studentFeeDemand.findFirst({
-                          where: {
-                              studentId: payment.studentId,
-                              status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] },
-                              OR: [
-                                  { feeHeadId: payment.feeHeadId },
-                                  { feeStructure: { feeHeadId: payment.feeHeadId } }
-                              ]
-                          },
-                          orderBy: { dueDate: 'asc' }
-                      });
-                      if (matchingDemand) targetDemandId = matchingDemand.id;
-                      logger.info(`[processPaymentSuccess] FeeHead Match: ${payment.feeHeadId} -> Demand: ${targetDemandId || 'None'}`);
-                }
-
-                // 3. STRICT SETTLEMENT (Updated)
-                if (targetDemandId) {
-                    const demand = await prisma.studentFeeDemand.findUnique({ where: { id: targetDemandId } });
-                    if (demand) {
-                        const newStatus = payment.amount >= demand.amount ? 'FULL' : 'PARTIAL'; // Naive check, ideally use netAmount or similar
-                        // Note: The logic below was naive in original code too (payment.amount >= demand.amount).
-                        // Better to rely on demand status update based on paid vs total.
-                        // For now keeping it consistent but safer.
-                        
-                        await prisma.studentFeeDemand.update({
-                            where: { id: demand.id },
-                            data: { 
-                                status: newStatus as any,
-                                // We should probably update paidAmount if schema has it? Schema doesn't show paidAmount on Demand clearly in view_file.
-                                // Checked Schema: StudentFeeDemand has amount, netAmount, etc. NO paidAmount column in viewing?
-                                // Let's check Schema view again... 
-                                // Schema (lines 538-562) shows: amount, discountAmount, scholarshipAmount, netAmount, fineAmount. 
-                                // NO 'paidAmount'.
-                                // So we can't easily track partial payments on a demand unless we sum related payments.
-                                // The original code just toggled status. I will stick to that.
-                            }
-                        });
-                        
-                        // Link Payment to Demand for Record
-                         await prisma.payment.update({
-                            where: { id: payment.id },
-                            data: { feeDemandId: targetDemandId }
-                        });
-                    }
-                } 
-                // 4. WATERFALL SETTLEMENT
-                else {
-                    const pendingDemands = await prisma.studentFeeDemand.findMany({
-                        where: {
-                            studentId: payment.studentId,
-                            status: FeeStatus.PENDING
-                        },
-                        orderBy: { dueDate: 'asc' }, 
-                        include: { feeStructure: true }
-                    });
-
-                    let remainingPayment = payment.amount;
-                    for (const demand of pendingDemands) {
-                        if (remainingPayment <= 0) break;
-                        if (remainingPayment >= demand.amount) {
-                            await prisma.studentFeeDemand.update({
-                                where: { id: demand.id },
-                                data: { status: FeeStatus.FULL }
-                            });
-                            // Link Payment? Can't link 1 payment to multiple demands easily in 1 field.
-                            // We skip linking here or pick the last one.
-                            remainingPayment -= demand.amount;
-                        } else {
-                            await prisma.studentFeeDemand.update({
-                                where: { id: demand.id },
-                                data: { status: FeeStatus.PARTIAL }
-                            });
-                            break; 
-                        }
-                    }
-                }
-            } catch (err) {
-                logger.error(`Error settling fee demands: ${err}`);
-            }
-        }
-
-        // 4. Create Ledger Entry for THIS Payment (Credit)
-        try {
-            await prisma.studentLedger.create({
-                data: {
-                    studentId: payment.studentId,
-                    type: 'CREDIT', 
-                    amount: payment.amount,
-                    description: `Payment Received via ${payment.method || 'ONLINE'} (${payment.component})`,
-                    referenceId: payment.id,
-                    referenceType: 'PAYMENT',
-                    feeHeadId: payment.feeHeadId || undefined, 
-                    createdBy: payment.createdBy || payment.collectedBy || 'SYSTEM', // Strict tracking
-                    date: new Date()
-                } as any 
-            });
-        } catch (err) {
-            logger.error(`Failed to create ledger entry for ${payment.providerTxId}: ${err}`);
-        }
-    } // End Loop for each payment
-
-    // --- CHECK FOR ADMISSION FINALIZATION ---
-    // Perform only ONCE if any of the payments trigger it
-    const finalizeTrigger = payments.find(p => p.metadata?.targetAction === 'FINALIZE_ADMISSION');
-    if (finalizeTrigger) {
-         try {
-            const { AdminStudentService } = require('../admin/adminStudent.service');
-            await prisma.$transaction(async (tx) => {
-                 await AdminStudentService.executeAdmissionUpdates(finalizeTrigger.studentId, finalizeTrigger.metadata, finalizeTrigger.id, 'SYSTEM', tx);
-            });
-        } catch (admissionError) {
-            logger.error(`[processPaymentSuccess] Failed to execute admission updates: ${admissionError}`);
-        }
-    }
-
-    return { invoiceUrl };
-};
-
-
 
 export const recordOfflineApplicationFeePayment = async (studentId: string, paymentMethod: PaymentMethod, transactionId?: string, remarks?: string, adminId?: string, referenceNumber?: string) => {
     const amount = await getApplicationFeeAmount();
@@ -1462,6 +1054,12 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
              }
         }
         
+        // Add semwise surcharge if applicable
+        if (student.admissionDetails.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
+            if (hostelSelection.hostelType === 'SHARING_4') accommodationFee += 7000;
+            else if (hostelSelection.hostelType === 'SHARING_8') accommodationFee += 6000;
+        }
+
         // Deduct paid
         accommodationFee = Math.max(0, accommodationFee - paidAccommodation);
         messFee = Math.max(0, messFee - paidMess);
@@ -1876,8 +1474,8 @@ export const getStudentFinancialSummary = async (studentId: string) => {
 
     if (student.admissionDetails.hostelPaymentMode === HostelPaymentMode.SEMWISE && hostelFee > 0) {
         let semFee = 0;
-        if (student.admissionDetails.hostelType?.includes('SHARING_4')) semFee = 6000;
-        else if (student.admissionDetails.hostelType?.includes('SHARING_8')) semFee = 5000;
+        if (student.admissionDetails.hostelType?.includes('SHARING_4')) semFee = 7000;
+        else if (student.admissionDetails.hostelType?.includes('SHARING_8')) semFee = 6000;
         
         hostelFee += semFee;
         logger.info(`[FinancialSummary] SemWise Mode. Added ${semFee}. Total Hostel: ${hostelFee}`);
@@ -2267,9 +1865,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 3. Fetch Financial Records (Parallel)
     const [ledgers, payments, feeDemands] = await Promise.all([
-        prisma.studentLedger.findMany({ where: { studentId }, orderBy: { date: 'desc' } }),
-        prisma.payment.findMany({ 
-            where: { studentId, status: PaymentStatus.SUCCESS },
+        prisma.studentLedger.findMany({ where: { studentId, isDeleted: false }, orderBy: { date: 'desc' } }),
+        prisma.payment.findMany({
+            where: { studentId, status: PaymentStatus.SUCCESS, isDeleted: false },
             include: {
                 feeDemand: {
                     include: { feeStructure: { include: { feeHead: true } } }
@@ -2277,7 +1875,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
             }
         }),
         prisma.studentFeeDemand.findMany({
-            where: { studentId },
+            where: { studentId, isDeleted: false },
             include: { feeStructure: { include: { feeHead: true } } }
         })
     ]);
@@ -2376,8 +1974,8 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
              if (admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
                  let semFee = 0;
-                 if (admission.hostelType?.includes('SHARING_4')) semFee = 6000;
-                 else if (admission.hostelType?.includes('SHARING_8')) semFee = 5000;
+                 if (admission.hostelType?.includes('SHARING_4')) semFee = 7000;
+                 else if (admission.hostelType?.includes('SHARING_8')) semFee = 6000;
                  
                  accCost += semFee;
                  logger.info(`[FinancialHistory] SemWise added ${semFee} to AccCost. New AccCost: ${accCost}`);
@@ -2419,14 +2017,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
             target.discount += entry.amount;
         }
 
-        // Course Change: DEBIT reduces paid on source (e.g., Tuition)
-        // CREDIT counts as paid on target (e.g., Course Change Fee) — for backward compat with old data
-        if (entry.referenceType === 'COURSE_CHANGE') {
-            if (entry.type === 'DEBIT') {
-                target.paid -= entry.amount;
-            } else if (entry.type === 'CREDIT') {
-                target.paid += entry.amount;
-            }
+        // Course change processing fee — DEBIT reduces paid on the source category (tuition)
+        if (entry.referenceType === 'COURSE_CHANGE' && entry.type === 'DEBIT') {
+            target.paid -= entry.amount;
         }
     });
 
@@ -2461,13 +2054,14 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 8. FINAL SUMMARY
     const totalDemanded = Object.values(breakdown).reduce((sum, cat) => sum + cat.demanded, 0);
-    // Course change: DEBITs reduce paid, CREDITs add to paid (backward compat for old internal transfers)
-    const courseChangeNet = ledgers
-        .filter(l => l.referenceType === 'COURSE_CHANGE')
-        .reduce((sum, l) => sum + (l.type === 'CREDIT' ? l.amount : -l.amount), 0);
+
+    // Course change DEBIT reduces effective paid (processing fee deducted from tuition)
+    const courseChangeDeduction = ledgers
+        .filter(l => l.referenceType === 'COURSE_CHANGE' && l.type === 'DEBIT')
+        .reduce((sum, l) => sum + l.amount, 0);
     const totalPaid = payments
         .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
-        .reduce((sum, p) => sum + p.amount, 0) + courseChangeNet;
+        .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
     const totalDiscount = ledgers
         .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE')
         .reduce((sum, l) => sum + l.amount, 0);
@@ -2475,7 +2069,8 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     const summary = {
         totalDemanded,
         totalPaid,
-        totalDiscount, 
+        totalDiscount,
+        courseChangeFee: courseChangeDeduction,
         totalPending: Math.max(0, totalDemanded - totalPaid - totalDiscount)
     };
     
@@ -2506,5 +2101,221 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         breakdown,
         ledger: ledgers,
         payments: paymentsWithUrls
+    };
+};
+
+/**
+ * Get a chronological flowchart of all financial events for a student.
+ * Returns a timeline that clearly explains: what happened, when, how much, and the running balance.
+ */
+export const getStudentFinancialFlow = async (studentId: string) => {
+    // Fetch all data in parallel
+    const [student, ledgers, allFeeHeads, courseChangeLogs, scholarship, scholarshipAuditLogs] = await Promise.all([
+        prisma.student.findUnique({
+            where: { id: studentId },
+            select: {
+                id: true,
+                name: true,
+                applicationId: true,
+                admissionDetails: {
+                    select: {
+                        status: true,
+                        seatAllottedAt: true,
+                        allottedCourse: { select: { name: true, degree: true } },
+                        hostelType: true,
+                        accommodationType: true,
+                    }
+                }
+            }
+        }),
+        prisma.studentLedger.findMany({
+            where: { studentId, isDeleted: false },
+            orderBy: { date: 'asc' },
+        }),
+        prisma.feeHead.findMany({ select: { id: true, name: true } }),
+        prisma.courseChangeLog.findMany({
+            where: { studentId },
+            orderBy: { date: 'asc' }
+        }),
+        prisma.studentScholarship.findUnique({
+            where: { studentId },
+            select: { id: true, scholarshipPercentage: true, type: true, createdAt: true }
+        }),
+        // Fetch audit logs for scholarship changes (CREATE + UPDATE)
+        prisma.auditLog.findMany({
+            where: { entity: 'StudentScholarship', action: { in: ['CREATE', 'UPDATE'] } },
+            orderBy: { timestamp: 'asc' },
+            select: { action: true, timestamp: true, details: true, entityId: true }
+        })
+    ]);
+
+    // Build feeHeadId -> name map for resolving ledger entries
+    const feeHeadMap = new Map<string, string>();
+    allFeeHeads.forEach(h => feeHeadMap.set(h.id, h.name));
+
+    if (!student) throw new AppError('Student not found', 404);
+
+    // Build timeline events
+    const timeline: Array<{
+        step: number;
+        date: string;
+        event: string;
+        type: 'APPLICATION' | 'SEAT_ALLOTMENT' | 'FEE_DEMAND' | 'PAYMENT' | 'SCHOLARSHIP' | 'DISCOUNT' | 'COURSE_CHANGE' | 'FINE' | 'INFO';
+        category: string;
+        amount: number | null;
+        sign: '+' | '-' | null;
+        description: string;
+    }> = [];
+
+    // 1. Seat allotment event
+    if (student.admissionDetails?.seatAllottedAt) {
+        timeline.push({
+            step: 0,
+            date: student.admissionDetails.seatAllottedAt.toISOString(),
+            event: 'Seat Allotted',
+            type: 'SEAT_ALLOTMENT',
+            category: '',
+            amount: null,
+            sign: null,
+            description: `Course: ${student.admissionDetails.allottedCourse?.name || 'N/A'} (${student.admissionDetails.allottedCourse?.degree || 'N/A'})`
+        });
+    }
+
+    // 2. Scholarship events (from AuditLog for CREATE/UPDATE on StudentScholarship)
+    if (scholarship) {
+        // Filter audit logs for this student's scholarship record
+        const scholarshipLogs = scholarshipAuditLogs.filter(log => log.entityId === scholarship.id);
+
+        if (scholarshipLogs.length > 0) {
+            scholarshipLogs.forEach(log => {
+                const details = typeof log.details === 'string' ? JSON.parse(log.details) : log.details;
+                const isCreate = log.action === 'CREATE';
+                const pct = details?.data?.scholarshipPercentage || details?.changes?.scholarshipPercentage || scholarship.scholarshipPercentage;
+
+                timeline.push({
+                    step: 0,
+                    date: (log.timestamp || new Date()).toISOString(),
+                    event: isCreate ? 'Scholarship Allocated' : 'Scholarship Updated',
+                    type: 'SCHOLARSHIP',
+                    category: '',
+                    amount: null,
+                    sign: null,
+                    description: isCreate
+                        ? `${pct}% scholarship allocated (${scholarship.type})`
+                        : `Scholarship updated to ${pct}% (${scholarship.type})`
+                });
+            });
+        } else {
+            // Fallback: no audit logs found, use createdAt from scholarship record
+            timeline.push({
+                step: 0,
+                date: scholarship.createdAt.toISOString(),
+                event: 'Scholarship Allocated',
+                type: 'SCHOLARSHIP',
+                category: '',
+                amount: null,
+                sign: null,
+                description: `${scholarship.scholarshipPercentage}% scholarship allocated (${scholarship.type})`
+            });
+        }
+    }
+
+    // 3. Process each ledger entry into a timeline event
+    ledgers.forEach(entry => {
+        const feeHeadName = (entry.feeHeadId ? feeHeadMap.get(entry.feeHeadId) : '') || '';
+        const refType = entry.referenceType || '';
+
+        let event = '';
+        let type: typeof timeline[0]['type'] = 'INFO';
+        let sign: '+' | '-' | null = null;
+
+        if (refType === 'FEE_DEMAND') {
+            event = 'Fee Charged';
+            type = 'FEE_DEMAND';
+            sign = '-';
+        } else if (refType === 'FEE_GENERATION') {
+            event = 'Fee Generated';
+            type = 'FEE_DEMAND';
+            sign = '-';
+        } else if (refType === 'PAYMENT') {
+            event = 'Payment Received';
+            type = 'PAYMENT';
+            sign = '+';
+        } else if (refType === 'SCHOLARSHIP') {
+            event = 'Scholarship Applied';
+            type = 'SCHOLARSHIP';
+            sign = '+';
+        } else if (refType === 'COURSE_CHANGE' && entry.type === 'DEBIT') {
+            event = 'Course Change Fee';
+            type = 'COURSE_CHANGE';
+            sign = '-';
+        } else if (entry.type === 'CREDIT' && refType !== 'PAYMENT') {
+            event = 'Discount / Adjustment';
+            type = 'DISCOUNT';
+            sign = '+';
+        } else if (entry.type === 'DEBIT') {
+            event = 'Charge';
+            type = 'FEE_DEMAND';
+            sign = '-';
+        }
+
+        timeline.push({
+            step: 0,
+            date: entry.date.toISOString(),
+            event,
+            type,
+            category: feeHeadName,
+            amount: entry.amount,
+            sign,
+            description: entry.description || ''
+        });
+    });
+
+    // 3. Course change events (from CourseChangeLog)
+    courseChangeLogs.forEach(log => {
+        timeline.push({
+            step: 0,
+            date: (log.date || new Date()).toISOString(),
+            event: 'Course Changed',
+            type: 'COURSE_CHANGE',
+            category: '',
+            amount: null,
+            sign: null,
+            description: `${log.oldDegree || ''} ${log.oldCourse} → ${log.newDegree || ''} ${log.newCourse}`
+        });
+    });
+
+    // Sort by date ascending, then assign step numbers
+    timeline.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    timeline.forEach((item, i) => { item.step = i + 1; });
+
+    // 4. Compute running balance after each step
+    let totalCharged = 0;
+    let totalCredits = 0; // payments + scholarships + discounts
+    const flow = timeline.map(item => {
+        if (item.sign === '-' && item.amount) totalCharged += item.amount;
+        if (item.sign === '+' && item.amount) totalCredits += item.amount;
+
+        return {
+            ...item,
+            runningBalance: totalCharged - totalCredits
+        };
+    });
+
+    // 5. Summary at the end
+    const currentPending = Math.max(0, totalCharged - totalCredits);
+
+    return {
+        student: {
+            id: student.id,
+            name: student.name,
+            applicationId: student.applicationId,
+            course: student.admissionDetails?.allottedCourse?.name || null,
+            degree: student.admissionDetails?.allottedCourse?.degree || null,
+            scholarship: scholarship ? `${scholarship.scholarshipPercentage}% (${scholarship.type})` : null,
+        },
+        totalSteps: flow.length,
+        currentPending,
+        flow
     };
 };

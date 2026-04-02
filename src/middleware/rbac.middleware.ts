@@ -88,7 +88,8 @@ export const authorizePermission = (requiredPermission: string | string[]) => {
 
         if (!hasPermission) {
             logger.warn(`[RBAC] Permission DENIED for user=${req.user.userId} required=${JSON.stringify(requiredPermission)}`);
-            return next(new AppError(`Permission denied`, 403));
+            const required = Array.isArray(requiredPermission) ? requiredPermission.join(', ') : requiredPermission;
+            return next(new AppError(`Permission denied. Required: ${required}`, 403));
         }
 
         next();

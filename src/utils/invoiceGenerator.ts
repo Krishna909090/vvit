@@ -25,6 +25,7 @@ export interface InvoiceData {
   isCancellation?: boolean
   reason?: string
   academicYear?: string
+  courseName?: string
   counterName?: string
   address: {
     line1: string
@@ -82,8 +83,8 @@ function drawInvoiceInstance(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY
     drawHeader(doc, offsetY)
     drawWatermark(doc, copyLabel, offsetY)
     drawInfoGrid(doc, data, offsetY)
-    drawSubjectBar(doc, data, offsetY)
-    drawItemsTable(doc, data, offsetY)
+    const subjectBarHeight = drawSubjectBar(doc, data, offsetY)
+    drawItemsTable(doc, data, offsetY, subjectBarHeight)
     drawFooter(doc, offsetY, data)
 }
 
@@ -191,6 +192,8 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
 /* ================= SUBJECT BAR ================= */
 
 function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
+  const hasCourse = !!data.courseName
+  const barHeight = hasCourse ? 44 : 32
   const y = offsetY + 195
   const barX = 30
   const barWidth = 535
@@ -199,16 +202,30 @@ function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: num
   // Draw background
   doc
     .save()
-    .roundedRect(barX, y, barWidth, 32, 6)
+    .roundedRect(barX, y, barWidth, barHeight, 6)
     .fill('#f8f9fa')
     .restore()
+
+  let textY = y + 8
+
+  // Course Name (above subject)
+  if (hasCourse) {
+    doc
+      .fillColor('#333')
+      .font('Helvetica-Bold')
+      .fontSize(8)
+      .text(`Course: ${data.courseName}`, barX + padding, textY, {
+        width: barWidth - 120
+      })
+    textY += 14
+  }
 
   // Subject (left)
   doc
     .fillColor('#000')
     .font('Helvetica-Bold')
     .fontSize(9)
-    .text(`Subject: ${data.description}`, barX + padding, y + 10, {
+    .text(`Subject: ${data.description}`, barX + padding, textY, {
       width: barWidth - 120 // reserve space for amount
     })
 
@@ -224,15 +241,17 @@ function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: num
     .text(
       totalStr,
       barX + barWidth - padding - textWidth,
-      y + 9
+      y + barHeight / 2 - 5
     )
+
+  return barHeight
 }
 
 
 /* ================= ITEMS TABLE ================= */
 
-function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
-  let y = offsetY + 240
+function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number, subjectBarHeight: number) {
+  let y = offsetY + 195 + subjectBarHeight + 13
 
   drawLine(doc, y)
   y += 6

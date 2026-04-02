@@ -430,3 +430,21 @@ export const addStudentDiscount = catchAsync(async (req: Request, res: Response,
         data: result
     });
 });
+
+export const changeAccommodationType = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId, newType, hostelId, hostelType, transportRouteId, reason } = req.body;
+    const adminId = req.user!.userId;
+
+    const result = await FeeService.changeAccommodationType(
+        { studentId, newType, hostelId, hostelType, transportRouteId, reason },
+        adminId
+    );
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: `Accommodation changed from ${result.oldType} to ${result.newType}`,
+        data: result
+    });
+});
