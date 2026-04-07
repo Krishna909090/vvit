@@ -523,6 +523,53 @@ export const CancellationService = {
                     });
                 }
 
+                // Reset scholarship allocation
+                await (tx.scholarshipAllocation as any).updateMany({
+                    where: { studentId: request.studentId },
+                    data:  { status: 'EXPIRED' },
+                });
+
+                // Reset student scholarship eligibility
+                await (tx.studentScholarship as any).updateMany({
+                    where: { studentId: request.studentId },
+                    data:  { isEligible: 'NO', remarks: 'Cancelled — seat cancellation' },
+                });
+
+                // Clear scholarship fields on student
+                await tx.student.update({
+                    where: { id: request.studentId },
+                    data:  {
+                        eligibleScholarshipRuleId: null,
+                        scholarshipVerified: false,
+                        scholarshipVerifiedAt: null,
+                        scholarshipVerifiedBy: null,
+                        scholarshipRemarks: 'Cancelled — seat cancellation',
+                    },
+                });
+
+                // Fetch total scholarship amount before deleting fee demands
+                const scholarshipAggregate = await (tx.studentFeeDemand as any).aggregate({
+                    where: { studentId: request.studentId },
+                    _sum: { scholarshipAmount: true },
+                });
+                const totalScholarshipAmount = scholarshipAggregate._sum?.scholarshipAmount ?? 0;
+
+                // Ledger: reverse scholarship amount (DEBIT)
+                if (totalScholarshipAmount > 0) {
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId:     request.studentId,
+                            type:          'DEBIT' as any,
+                            amount:        totalScholarshipAmount,
+                            description:   `Scholarship Reversed - Seat Cancellation (${request.conditionType})`,
+                            referenceId:   request.id,
+                            referenceType: 'CANCELLATION',
+                            createdBy:     adminId,
+                            date:          now,
+                        } as any,
+                    });
+                }
+
                 // Mark payments as REFUNDED and unlink feeDemandId (audit trail — not deleted)
                 await tx.payment.updateMany({
                     where: {
