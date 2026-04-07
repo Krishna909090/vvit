@@ -378,9 +378,12 @@ export const CancellationService = {
         // Auto-fetch real paid amounts from Payment records — admin cannot manipulate these
         const { componentPaid, totalPaid } = await fetchComponentPaid(data.studentId);
 
-        const adjustment = calculateFeeAdjustment({ ...data, componentPaid, totalPaid, cancellationFee: data.cancellationFee });
+        // If recommended by management, force cancellation fee to 0
+        const effectiveFee = data.recommendedByManagement ? 0 : (data.cancellationFee ?? DEFAULT_DEDUCTION);
 
-        logger.info(`[CancellationService.createCancellationRequest] Student=${data.studentId}, ConditionType=${data.conditionType}`);
+        const adjustment = calculateFeeAdjustment({ ...data, componentPaid, totalPaid, cancellationFee: effectiveFee });
+
+        logger.info(`[CancellationService.createCancellationRequest] Student=${data.studentId}, ConditionType=${data.conditionType}, RecommendedByMgmt=${data.recommendedByManagement}, Fee=${effectiveFee}`);
 
         return await prisma.cancellationRequest.create({
             data: {
@@ -400,7 +403,7 @@ export const CancellationService = {
                 remarks:                 data.remarks,
                 fileUrl:                 data.fileUrl,
                 recommendedByManagement: data.recommendedByManagement ?? false,
-                cancellationFee:         data.cancellationFee ?? DEFAULT_DEDUCTION,
+                cancellationFee:         effectiveFee,
                 status:                  CancellationStatus.REQUESTED,
                 createdBy:               adminId,
             },
@@ -472,7 +475,9 @@ export const CancellationService = {
 
             if (approved) {
                 // ── APPROVE (fresh or re-approve after rejection) ──────────────
-                // Cancel admission & clear seat allocation
+                const admission = request.student.admissionDetails;
+
+                // Cancel admission & clear seat + hostel/transport allocation
                 await tx.studentAdmission.update({
                     where: { studentId: request.studentId },
                     data:  {
@@ -482,14 +487,39 @@ export const CancellationService = {
                         seatAllottedAt: null,
                         paidFee: 0,
                         totalFee: 0,
+                        accommodationType: 'NONE',
+                        hostelId: null,
+                        hostelType: null,
+                        transportRouteId: null,
+                        roomNumber: null,
                     },
                 });
 
-                // Free up seat
-                if (request.student.admissionDetails?.allottedCourseId) {
+                // Free up course seat
+                if (admission?.allottedCourseId) {
                     await tx.course.update({
-                        where: { id: request.student.admissionDetails.allottedCourseId },
+                        where: { id: admission.allottedCourseId },
                         data:  { filledSeats: { decrement: 1 } },
+                    });
+                }
+
+                // Vacate hostel allocation & decrement hostel filled count
+                if (admission?.hostelId) {
+                    await (tx.hostelAllocation as any).updateMany({
+                        where: { studentId: request.studentId, status: 'ACTIVE' },
+                        data:  { status: 'VACATED' },
+                    });
+                    await tx.hostel.update({
+                        where: { id: admission.hostelId },
+                        data:  { filled: { decrement: 1 } },
+                    });
+                }
+
+                // Cancel transport allocation
+                if (admission?.transportRouteId) {
+                    await (tx.transportAllocation as any).updateMany({
+                        where: { studentId: request.studentId, status: 'ACTIVE' },
+                        data:  { status: 'CANCELLED' },
                     });
                 }
 
@@ -520,36 +550,58 @@ export const CancellationService = {
                     });
                 }
 
-                // Ledger: deduction entry (DEBIT)
-                if ((request.deductionAmount ?? 0) > 0) {
-                    await tx.studentLedger.create({
-                        data: {
-                            studentId:     request.studentId,
-                            type:          'DEBIT' as any,
-                            amount:        request.deductionAmount!,
-                            description:   `Cancellation Deduction (${request.conditionType})`,
-                            referenceId:   request.id,
-                            referenceType: 'CANCELLATION',
-                            createdBy:     adminId,
-                            date:          now,
-                        } as any,
-                    });
-                }
+                // Ledger: component-wise deduction (DEBIT) and refund (CREDIT) entries
+                const componentBreakdown = request.componentPaid ?? {};
+                const componentLabels: Record<string, string> = {
+                    tuition: 'Tuition', admission: 'Admission', bookBank: 'Book Bank',
+                    hostel: 'Hostel', transport: 'Transport', others: 'Others',
+                };
 
-                // Ledger: refund entry (CREDIT)
-                if ((request.refundAmount ?? 0) > 0) {
-                    await tx.studentLedger.create({
-                        data: {
-                            studentId:     request.studentId,
-                            type:          'CREDIT' as any,
-                            amount:        request.refundAmount!,
-                            description:   `Refund Approved (${request.conditionType})`,
-                            referenceId:   request.id,
-                            referenceType: 'CANCELLATION',
-                            createdBy:     adminId,
-                            date:          now,
-                        } as any,
-                    });
+                // Recalculate breakdown for ledger
+                const ledgerAdjustment = calculateFeeAdjustment({
+                    conditionType:   request.conditionType,
+                    totalPaid:       request.totalPaid ?? 0,
+                    componentPaid:   componentBreakdown,
+                    oldQuotaFee:     request.oldQuotaFee,
+                    newQuotaFee:     request.newQuotaFee,
+                    cancellationFee: request.cancellationFee,
+                });
+
+                for (const [key, label] of Object.entries(componentLabels)) {
+                    const bd = ledgerAdjustment.componentBreakdown[key as keyof typeof ledgerAdjustment.componentBreakdown];
+                    if (!bd) continue;
+
+                    // DEBIT: deduction per component
+                    if (bd.deducted > 0) {
+                        await tx.studentLedger.create({
+                            data: {
+                                studentId:     request.studentId,
+                                type:          'DEBIT' as any,
+                                amount:        bd.deducted,
+                                description:   `Cancellation Deduction - ${label} (${request.conditionType})`,
+                                referenceId:   request.id,
+                                referenceType: 'CANCELLATION',
+                                createdBy:     adminId,
+                                date:          now,
+                            } as any,
+                        });
+                    }
+
+                    // CREDIT: refund per component
+                    if (bd.refund > 0) {
+                        await tx.studentLedger.create({
+                            data: {
+                                studentId:     request.studentId,
+                                type:          'CREDIT' as any,
+                                amount:        bd.refund,
+                                description:   `Refund - ${label} (${request.conditionType})`,
+                                referenceId:   request.id,
+                                referenceType: 'CANCELLATION',
+                                createdBy:     adminId,
+                                date:          now,
+                            } as any,
+                        });
+                    }
                 }
 
             } else {
