@@ -46,13 +46,16 @@ export const requestCancellation = catchAsync(async (req: Request, res: Response
         oldQuotaFee,
         newQuotaFee,
         remarks,
+        fileUrl,
+        recommendedByManagement,
+        cancellationFee,
     } = req.body;
 
     const adminId = req.user?.userId;
     if (!adminId) throw new AppError('Unauthorized', 401);
 
     const result = await CancellationService.createCancellationRequest(
-        { studentId, reason, conditionType, oldQuotaFee, newQuotaFee, remarks },
+        { studentId, reason, conditionType, oldQuotaFee, newQuotaFee, remarks, fileUrl, recommendedByManagement, cancellationFee },
         adminId,
     );
 
