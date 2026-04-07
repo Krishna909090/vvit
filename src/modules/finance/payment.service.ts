@@ -1995,6 +1995,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 6. LEDGER ADJUSTMENTS (Discounts, Scholarships)
     ledgers.forEach(entry => {
+        // Skip cancellation entries — they should not affect financial history
+        if (entry.referenceType === 'CANCELLATION') return;
+
         let category = 'OTHER';
         if (entry.feeHeadId && feeHeadCategoryMap.has(entry.feeHeadId)) {
             category = feeHeadCategoryMap.get(entry.feeHeadId) || 'OTHER';
@@ -2011,7 +2014,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         const target = breakdown[key];
 
         // Fines (Skipped as per existing logic logic if in Deamnd)
-        
+
         // Credits (Discounts/Scholarships)
         if (entry.type === 'CREDIT' && entry.referenceType !== 'PAYMENT' && entry.referenceType !== 'COURSE_CHANGE') {
             target.discount += entry.amount;
@@ -2063,7 +2066,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
         .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
     const totalDiscount = ledgers
-        .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE')
+        .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE' && l.referenceType !== 'CANCELLATION')
         .reduce((sum, l) => sum + l.amount, 0);
 
     const summary = {
