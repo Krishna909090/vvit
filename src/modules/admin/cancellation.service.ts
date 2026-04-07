@@ -554,7 +554,7 @@ export const CancellationService = {
                 });
                 const totalScholarshipAmount = scholarshipAggregate._sum?.scholarshipAmount ?? 0;
 
-                // Ledger: reverse scholarship amount (DEBIT)
+                // Ledger: reverse scholarship amount (DEBIT with SCHOLARSHIP type so it nets out with original SCHOLARSHIP CREDIT)
                 if (totalScholarshipAmount > 0) {
                     await tx.studentLedger.create({
                         data: {
@@ -563,7 +563,7 @@ export const CancellationService = {
                             amount:        totalScholarshipAmount,
                             description:   `Scholarship Reversed - Seat Cancellation (${request.conditionType})`,
                             referenceId:   request.id,
-                            referenceType: 'CANCELLATION',
+                            referenceType: 'SCHOLARSHIP',
                             createdBy:     adminId,
                             date:          now,
                         } as any,

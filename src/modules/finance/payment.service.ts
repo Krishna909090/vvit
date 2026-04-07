@@ -2020,6 +2020,11 @@ export const getStudentFinancialHistory = async (studentId: string) => {
             target.discount += entry.amount;
         }
 
+        // Scholarship reversal DEBIT — reduces discount
+        if (entry.type === 'DEBIT' && entry.referenceType === 'SCHOLARSHIP') {
+            target.discount -= entry.amount;
+        }
+
         // Course change processing fee — DEBIT reduces paid on the source category (tuition)
         if (entry.referenceType === 'COURSE_CHANGE' && entry.type === 'DEBIT') {
             target.paid -= entry.amount;
@@ -2065,9 +2070,13 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     const totalPaid = payments
         .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
         .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
-    const totalDiscount = ledgers
+    const scholarshipCredits = ledgers
         .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE' && l.referenceType !== 'CANCELLATION')
         .reduce((sum, l) => sum + l.amount, 0);
+    const scholarshipReversals = ledgers
+        .filter(l => l.type === 'DEBIT' && l.referenceType === 'SCHOLARSHIP')
+        .reduce((sum, l) => sum + l.amount, 0);
+    const totalDiscount = Math.max(0, scholarshipCredits - scholarshipReversals);
 
     const summary = {
         totalDemanded,
