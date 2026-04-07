@@ -724,7 +724,11 @@ model CancellationRequest {
   balanceDue       Float?
   finalStatus      String?
   conditionRemarks String?
-  remarks          String?
+  remarks                  String?
+  // Cancellation letter & management flag
+  fileUrl                  String?
+  recommendedByManagement  Boolean?  @default(false)
+  cancellationFee          Float?    @default(10000)
   // Invoice
   invoiceUrl       String?
   // Timestamps

@@ -6,7 +6,7 @@ import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, convertToPresignedUrl } from '../../utils/s3Utils';
 import { sendCancellationReceipt } from '../../utils/emailService';
 
-const STANDARD_DEDUCTION = 10_000;
+const DEFAULT_DEDUCTION = 10_000;
 
 export type CancellationConditionType =
     | 'OTHER_COLLEGE_CANCEL'
@@ -33,11 +33,12 @@ export interface ComponentPaid {
 }
 
 export interface AdjustmentInput {
-    conditionType: CancellationConditionType;
-    totalPaid:     number;
-    componentPaid: ComponentPaid;
-    oldQuotaFee?:  number;
-    newQuotaFee?:  number;
+    conditionType:   CancellationConditionType;
+    totalPaid:       number;
+    componentPaid:   ComponentPaid;
+    oldQuotaFee?:    number;
+    newQuotaFee?:    number;
+    cancellationFee?: number;
 }
 
 export interface ComponentBreakdown {
@@ -69,7 +70,8 @@ export interface AdjustmentResult {
 // Pure calculation — no DB access
 // ─────────────────────────────────────────────────────────────
 export const calculateFeeAdjustment = (input: AdjustmentInput): AdjustmentResult => {
-    const { conditionType, totalPaid, componentPaid, newQuotaFee = 0 } = input;
+    const { conditionType, totalPaid, componentPaid, newQuotaFee = 0, cancellationFee } = input;
+    const deductionFee = cancellationFee ?? DEFAULT_DEDUCTION;
 
     const comp = {
         tuition:   componentPaid.tuition   ?? 0,
@@ -104,10 +106,10 @@ export const calculateFeeAdjustment = (input: AdjustmentInput): AdjustmentResult
 
         case 'OTHER_COLLEGE_CANCEL':
         case 'NORMAL_SEAT_CANCEL': {
-            // Deduct ₹10,000 from Tuition (capped at what was paid in Tuition)
-            const tuitionDeduction = Math.min(STANDARD_DEDUCTION, comp.tuition);
-            // If Tuition alone didn't cover ₹10k, take remainder from others in order
-            let remainingDeduction = STANDARD_DEDUCTION - tuitionDeduction;
+            // Deduct cancellation fee from Tuition (capped at what was paid in Tuition)
+            const tuitionDeduction = Math.min(deductionFee, comp.tuition);
+            // If Tuition alone didn't cover it, take remainder from others in order
+            let remainingDeduction = deductionFee - tuitionDeduction;
 
             breakdown.tuition.deducted = tuitionDeduction;
             deductionAmount += tuitionDeduction;
@@ -349,12 +351,15 @@ const _generateCancellationReceipt = async (request: any, now: Date): Promise<st
 export const CancellationService = {
 
     async createCancellationRequest(data: {
-        studentId:     string;
-        reason:        string;
-        remarks?:      string;
-        conditionType: CancellationConditionType;
-        oldQuotaFee?:  number;
-        newQuotaFee?:  number;
+        studentId:               string;
+        reason:                  string;
+        remarks?:                string;
+        conditionType:           CancellationConditionType;
+        oldQuotaFee?:            number;
+        newQuotaFee?:            number;
+        fileUrl?:                string;
+        recommendedByManagement?: boolean;
+        cancellationFee?:        number;
     }, adminId: string) {
         const student = await prisma.student.findUnique({ where: { id: data.studentId } });
         if (!student) throw new AppError('Student not found', 404);
@@ -373,7 +378,7 @@ export const CancellationService = {
         // Auto-fetch real paid amounts from Payment records — admin cannot manipulate these
         const { componentPaid, totalPaid } = await fetchComponentPaid(data.studentId);
 
-        const adjustment = calculateFeeAdjustment({ ...data, componentPaid, totalPaid });
+        const adjustment = calculateFeeAdjustment({ ...data, componentPaid, totalPaid, cancellationFee: data.cancellationFee });
 
         logger.info(`[CancellationService.createCancellationRequest] Student=${data.studentId}, ConditionType=${data.conditionType}`);
 
@@ -392,16 +397,19 @@ export const CancellationService = {
                 balanceDue:       adjustment.balanceDue,
                 finalStatus:      adjustment.finalStatus,
                 conditionRemarks: adjustment.conditionRemarks,
-                remarks:          data.remarks,
-                status:           CancellationStatus.REQUESTED,
-                createdBy:        adminId,
+                remarks:                 data.remarks,
+                fileUrl:                 data.fileUrl,
+                recommendedByManagement: data.recommendedByManagement ?? false,
+                cancellationFee:         data.cancellationFee ?? DEFAULT_DEDUCTION,
+                status:                  CancellationStatus.REQUESTED,
+                createdBy:               adminId,
             },
             include: { student: { select: { name: true, applicationId: true } } },
         });
     },
 
 
-    async approveCancellation(requestId: string, approved: boolean, adminId: string, remarks?: string) {
+    async approveCancellation(requestId: string, approved: boolean, adminId: string, remarks?: string, cancellationFee?: number) {
         const request = await prisma.cancellationRequest.findUnique({
             where: { id: requestId },
             include: { student: { include: { admissionDetails: true } } },
@@ -418,28 +426,63 @@ export const CancellationService = {
             throw new AppError(`This cancellation request is already ${label}. No changes made.`, 400);
         }
 
+        // Recalculate if admin changed the cancellation fee at approval time
+        if (approved && cancellationFee !== undefined && cancellationFee !== request.cancellationFee) {
+            const adjustment = calculateFeeAdjustment({
+                conditionType:   request.conditionType,
+                totalPaid:       request.totalPaid ?? 0,
+                componentPaid:   request.componentPaid ?? { tuition: 0, admission: 0, bookBank: 0, hostel: 0, transport: 0, others: 0 },
+                oldQuotaFee:     request.oldQuotaFee,
+                newQuotaFee:     request.newQuotaFee,
+                cancellationFee,
+            });
+            request.cancellationFee  = cancellationFee;
+            request.deductionAmount  = adjustment.deductionAmount;
+            request.refundAmount     = adjustment.refundAmount;
+            request.transferAmount   = adjustment.transferAmount;
+            request.balanceDue       = adjustment.balanceDue;
+            request.finalStatus      = adjustment.finalStatus;
+            request.conditionRemarks = adjustment.conditionRemarks;
+        }
+
         const now = new Date();
         const isReversal = currentStatus !== CancellationStatus.REQUESTED; // toggling an already-processed request
 
         await prisma.$transaction(async (tx) => {
-            // Update the request status
+            // Update the request status (+ recalculated fields if fee changed)
             await tx.cancellationRequest.update({
                 where: { id: requestId },
                 data: {
-                    status:     newStatus,
-                    approvedBy: adminId,
-                    approvedAt: approved ? now : undefined,
-                    rejectedAt: !approved ? now : undefined,
-                    remarks:    remarks ?? request.remarks,
+                    status:           newStatus,
+                    approvedBy:       adminId,
+                    approvedAt:       approved ? now : undefined,
+                    rejectedAt:       !approved ? now : undefined,
+                    remarks:          remarks ?? request.remarks,
+                    ...(approved && cancellationFee !== undefined ? {
+                        cancellationFee:  request.cancellationFee,
+                        deductionAmount:  request.deductionAmount,
+                        refundAmount:     request.refundAmount,
+                        transferAmount:   request.transferAmount,
+                        balanceDue:       request.balanceDue,
+                        finalStatus:      request.finalStatus,
+                        conditionRemarks: request.conditionRemarks,
+                    } : {}),
                 },
             });
 
             if (approved) {
                 // ── APPROVE (fresh or re-approve after rejection) ──────────────
-                // Cancel admission
+                // Cancel admission & clear seat allocation
                 await tx.studentAdmission.update({
                     where: { studentId: request.studentId },
-                    data:  { status: AdmissionStatus.CANCELLED },
+                    data:  {
+                        status: AdmissionStatus.CANCELLED,
+                        allottedCourseId: null,
+                        seatAllotedBy: null,
+                        seatAllottedAt: null,
+                        paidFee: 0,
+                        totalFee: 0,
+                    },
                 });
 
                 // Free up seat
@@ -449,6 +492,26 @@ export const CancellationService = {
                         data:  { filledSeats: { decrement: 1 } },
                     });
                 }
+
+                // Mark payments as REFUNDED and unlink feeDemandId (audit trail — not deleted)
+                await tx.payment.updateMany({
+                    where: {
+                        studentId: request.studentId,
+                        status: PaymentStatus.SUCCESS,
+                        component: { not: PaymentComponent.APPLICATION_FEE },
+                    },
+                    data: { status: PaymentStatus.REFUNDED, feeDemandId: null },
+                });
+
+                // Delete fee demands (safe now — feeDemandId unlinked above)
+                await (tx.studentFeeDemand as any).deleteMany({
+                    where: { studentId: request.studentId },
+                });
+
+                // Remove allotment order document
+                await (tx.studentDocument as any).deleteMany({
+                    where: { studentId: request.studentId, documentKey: 'ALLOTMENT_ORDER' },
+                });
 
                 // Delete any existing ledger entries from a prior approval (avoid duplicates on re-approve)
                 if (isReversal) {
@@ -492,7 +555,7 @@ export const CancellationService = {
             } else {
                 // ── REJECT (fresh or re-reject after approval) ─────────────────
                 if (isReversal) {
-                    // Restore admission back to ENROLLED
+                    // Restore admission back to ENROLLED with original course
                     await tx.studentAdmission.update({
                         where: { studentId: request.studentId },
                         data:  { status: AdmissionStatus.ENROLLED },
@@ -505,6 +568,16 @@ export const CancellationService = {
                             data:  { filledSeats: { increment: 1 } },
                         });
                     }
+
+                    // Restore payments back to SUCCESS
+                    await tx.payment.updateMany({
+                        where: {
+                            studentId: request.studentId,
+                            status: PaymentStatus.REFUNDED,
+                            component: { not: PaymentComponent.APPLICATION_FEE },
+                        },
+                        data: { status: PaymentStatus.SUCCESS },
+                    });
 
                     // Remove ledger entries that were created during approval
                     await (tx.studentLedger as any).deleteMany({

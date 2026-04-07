@@ -28,20 +28,24 @@ export const previewAdjustmentSchema = z.object({
 
 export const requestCancellationSchema = z.object({
     body: z.object({
-        studentId:      z.string().uuid('studentId must be a valid UUID'),
-        reason:         z.string().min(1, 'Reason is required'),
-        conditionType:  conditionTypeEnum,
-        oldQuotaFee:    z.number().min(0).optional(),
-        newQuotaFee:    z.number().min(0).optional(),
-        remarks:        z.string().optional(),
+        studentId:               z.string().uuid('studentId must be a valid UUID'),
+        reason:                  z.string().min(1, 'Reason is required'),
+        conditionType:           conditionTypeEnum,
+        oldQuotaFee:             z.number().min(0).optional(),
+        newQuotaFee:             z.number().min(0).optional(),
+        remarks:                 z.string().optional(),
+        fileUrl:                 z.string().optional(),
+        recommendedByManagement: z.boolean().optional().default(false),
+        cancellationFee:         z.number().min(0).optional(),
     }),
 });
 
 export const approveCancellationSchema = z.object({
     body: z.object({
-        requestId: z.string().uuid('requestId must be a valid UUID'),
-        approved:  z.boolean(),
-        remarks:   z.string().optional(),
+        requestId:       z.string().uuid('requestId must be a valid UUID'),
+        approved:        z.boolean(),
+        remarks:         z.string().optional(),
+        cancellationFee: z.number().min(0).optional(),
     }),
 });
 

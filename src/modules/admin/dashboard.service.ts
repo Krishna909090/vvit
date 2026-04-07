@@ -263,13 +263,14 @@ export const DashboardService = {
                 }
             }),
 
-            // Count students with ANY approved document
+            // Count students with ANY approved document (excluding ALLOTMENT_ORDER)
             prisma.student.count({
                 where: {
                     ...whereDate,
                     documents: {
                         some: {
-                            status: StudentDocumentStatus.APPROVED
+                            status: StudentDocumentStatus.APPROVED,
+                            documentKey: { not: 'ALLOTMENT_ORDER' }
                         }
                     }
                 }
