@@ -855,10 +855,20 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             }
         });
 
+        // Don't downgrade status if already at a higher stage
+        const protectedStatuses: AdmissionStatus[] = [
+            AdmissionStatus.SEAT_ALLOTTED,
+            AdmissionStatus.ADMISSION_CONFIRMED,
+            AdmissionStatus.ENROLLED,
+            AdmissionStatus.CANCELLED
+        ];
+        const currentAdmission = await tx.studentAdmission.findUnique({ where: { studentId } });
+        const shouldUpdateStatus = !currentAdmission || !protectedStatuses.includes(currentAdmission.status as AdmissionStatus);
+
         await tx.studentAdmission.upsert({
             where: { studentId },
             update: {
-                status: AdmissionStatus.EXAM_SCHEDULED,
+                ...(shouldUpdateStatus ? { status: AdmissionStatus.EXAM_SCHEDULED } : {}),
             },
             create: {
                 studentId,
