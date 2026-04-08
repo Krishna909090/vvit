@@ -1402,8 +1402,25 @@ export const AdminStudentService = {
                     logger.info(`[approveCourseChange] FeeCorrection created for student ${request.studentId}. Refund amount: ${excessAmount}, carryForward: true`);
                 }
 
-                // 4. BRANCH CHANGE FEE — collected separately if recommendedByManagement
-                // No deduction from existing paid amount. Fee is collected as a separate payment.
+                // 4. BRANCH CHANGE FEE — DEBIT ledger entry if fee applies
+                const reqData = request as any;
+                const changeFee = reqData.branchChangeFee || (branchChangeFee ?? 0);
+                if (changeFee > 0) {
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId: request.studentId,
+                            type: LedgerTransactionType.DEBIT,
+                            amount: changeFee,
+                            description: `Branch change fee: ${request.fromCourse} → ${request.toCourse}`,
+                            referenceType: 'BRANCH_CHANGE_FEE',
+                            referenceId: requestId,
+                            academicYearId,
+                            createdBy: adminId
+                        }
+                    });
+
+                    logger.info(`[approveCourseChange] Branch change fee ledger DEBIT created for student ${request.studentId}. Amount: ${changeFee}`);
+                }
 
                 logger.info(`[approveCourseChange] Full reconciliation for Student ${student.id} to Course ${request.toCourse}. TotalPaid: ${totalPaidAcrossAll}`);
             }
