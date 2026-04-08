@@ -1358,7 +1358,51 @@ export const AdminStudentService = {
                     }
                 }
 
-                // 3. COURSE CHANGE PROCESSING FEE — Student pays ₹10,000 separately (cash/UPI)
+                // 3. REFUND / CORRECTION — if student overpaid (old course fee > new course fee), create a FeeCorrection
+                const updatedDemands = await tx.studentFeeDemand.findMany({
+                    where: { studentId: request.studentId },
+                    include: { payments: { where: { status: 'SUCCESS' } } }
+                });
+
+                const totalNewNet = updatedDemands.reduce((sum, d) => sum + (d.netAmount || d.amount), 0);
+                const totalPaidNow = updatedDemands.reduce((sum, d) => sum + d.payments.reduce((ps, p) => ps + p.amount, 0), 0);
+                const excessAmount = totalPaidNow - totalNewNet;
+
+                if (excessAmount > 0 && academicYearId) {
+                    await tx.feeCorrection.create({
+                        data: {
+                            studentId: request.studentId,
+                            academicYearId,
+                            amount: excessAmount,
+                            reason: `Branch change refund: ${request.fromCourse} → ${request.toCourse}. Excess amount after fee reconciliation.`,
+                            type: 'BRANCH_CHANGE_REFUND',
+                            referenceId: requestId,
+                            referenceType: 'COURSE_CHANGE_REQUEST',
+                            remarks: `Old total paid: ${totalPaidNow}, New net due: ${totalNewNet}, Refund: ${excessAmount}`,
+                            carryForward: true,
+                            isSettled: false,
+                            createdBy: adminId
+                        }
+                    });
+
+                    // Also add a CREDIT ledger entry for the correction
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId: request.studentId,
+                            type: LedgerTransactionType.CREDIT,
+                            amount: excessAmount,
+                            description: `Branch change refund correction (carry forward). ${request.fromCourse} → ${request.toCourse}`,
+                            referenceType: 'FEE_CORRECTION',
+                            referenceId: requestId,
+                            academicYearId,
+                            createdBy: adminId
+                        }
+                    });
+
+                    logger.info(`[approveCourseChange] FeeCorrection created for student ${request.studentId}. Refund amount: ${excessAmount}, carryForward: true`);
+                }
+
+                // 4. BRANCH CHANGE FEE — collected separately if recommendedByManagement
                 // No deduction from existing paid amount. Fee is collected as a separate payment.
 
                 logger.info(`[approveCourseChange] Full reconciliation for Student ${student.id} to Course ${request.toCourse}. TotalPaid: ${totalPaidAcrossAll}`);

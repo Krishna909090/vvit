@@ -145,6 +145,7 @@ model AcademicYear {
   studentFeeDemands StudentFeeDemand[]
   payments          Payment[]
   ledgerEntries     StudentLedger[]
+  feeCorrections    FeeCorrection[]
 }
 
 model StudentEnrollment {
@@ -241,6 +242,7 @@ model Student {
   studentScholarship        StudentScholarship?
   transportAllocation       TransportAllocation?
   waitingListEntries        WaitingList[]
+  feeCorrections            FeeCorrection[]
 
   proId                     String?
   proCommissionAmount       Float?                  @default(0)
@@ -873,6 +875,34 @@ model CourseChangeRequest {
   student                 Student        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
+model FeeCorrection {
+  id                    String         @id @default(dbgenerated("gen_random_uuid()"))
+  studentId             String
+  academicYearId        String
+  amount                Float
+  reason                String
+  type                  FeeCorrectionType
+  referenceId           String?
+  referenceType         String?
+  remarks               String?
+  carryForward          Boolean?       @default(true)
+  carriedForwardToYearId String?
+  isSettled             Boolean?       @default(false)
+  settledAt             DateTime?
+  settledBy             String?
+  createdAt             DateTime?      @default(now())
+  updatedAt             DateTime       @updatedAt
+  createdBy             String?
+  updatedBy             String?
+
+  student               Student        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear          AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([studentId])
+  @@index([studentId, academicYearId])
+  @@index([carryForward, isSettled])
+}
+
 model AgentCommission {
   id        String                 @id @default(dbgenerated("gen_random_uuid()"))
   agentId   String
@@ -1387,6 +1417,13 @@ enum PaymentMethod {
 enum LedgerTransactionType {
   CREDIT
   DEBIT
+}
+
+enum FeeCorrectionType {
+  REFUND
+  ADJUSTMENT
+  BRANCH_CHANGE_REFUND
+  CARRY_FORWARD
 }
 
 enum EmailStatus {
