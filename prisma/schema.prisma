@@ -853,22 +853,24 @@ model SeatAllocation {
 }
 
 model CourseChangeRequest {
-  id          String         @id @default(dbgenerated("gen_random_uuid()"))
-  studentId   String
-  fromCourse  String
-  toCourse    String
-  fromDegree  String?
-  toDegree    String?
-  reason      String
-  status      RequestStatus? @default(REQUESTED)
-  forwardedTo String?
-  actionedBy  String?
-  actionedAt  DateTime?
-  createdAt   DateTime?      @default(now())
-  updatedAt   DateTime       @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  student     Student        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                      String         @id @default(dbgenerated("gen_random_uuid()"))
+  studentId               String
+  fromCourse              String
+  toCourse                String
+  fromDegree              String?
+  toDegree                String?
+  reason                  String
+  status                  RequestStatus? @default(REQUESTED)
+  forwardedTo             String?
+  actionedBy              String?
+  actionedAt              DateTime?
+  recommendedByManagement Boolean?       @default(false)
+  branchChangeFee         Float?         @default(0)
+  createdAt               DateTime?      @default(now())
+  updatedAt               DateTime       @updatedAt
+  createdBy               String?
+  updatedBy               String?
+  student                 Student        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model AgentCommission {

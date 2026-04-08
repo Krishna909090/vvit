@@ -984,7 +984,7 @@ export const AdminStudentService = {
      * Request a BRANCH change — same degree program, different branch/specialization.
      * e.g. B.Tech CSE → B.Tech ECE
      */
-    async requestBranchChange(studentId: string, newCourseId: string, reason: string) {
+    async requestBranchChange(studentId: string, newCourseId: string, reason: string, recommendedByManagement: boolean = false, branchChangeFee: number = 0) {
         if (!studentId || !newCourseId || !reason) {
             throw new AppError('studentId, newCourseId and reason are required', 400);
         }
@@ -1023,6 +1023,8 @@ export const AdminStudentService = {
                 fromDegree: oldCourse?.degree,
                 toDegree: newCourse.degree,
                 reason,
+                recommendedByManagement,
+                branchChangeFee: recommendedByManagement ? branchChangeFee : 0,
                 status: RequestStatus.FORWARDED,
                 forwardedTo: 'SUPER_ADMIN'
             } as any
@@ -1132,7 +1134,7 @@ export const AdminStudentService = {
     },
 
 
-    async approveCourseChange(requestId: string, approved: boolean, adminRole: string | undefined, adminId: string | undefined) {
+    async approveCourseChange(requestId: string, approved: boolean, adminRole: string | undefined, adminId: string | undefined, recommendedByManagement?: boolean, branchChangeFee?: number) {
         if (adminRole !== Role.SUPER_ADMIN) {
             throw new AppError(MESSAGES.ERROR.ONLY_SUPER_ADMIN_APPROVE_COURSE, 403);
         }
@@ -1144,14 +1146,23 @@ export const AdminStudentService = {
 
         const status = approved ? RequestStatus.APPROVED : RequestStatus.REJECTED;
 
+        // Build update data for the request
+        const updateData: any = {
+            status,
+            actionedBy: adminId,
+            actionedAt: new Date()
+        };
+        if (recommendedByManagement !== undefined) {
+            updateData.recommendedByManagement = recommendedByManagement;
+        }
+        if (branchChangeFee !== undefined) {
+            updateData.branchChangeFee = branchChangeFee;
+        }
+
         await prisma.$transaction(async (tx) => {
             await tx.courseChangeRequest.update({
                 where: { id: requestId },
-                data: {
-                    status,
-                    actionedBy: adminId,
-                    actionedAt: new Date()
-                }
+                data: updateData
             });
 
             if (approved) {

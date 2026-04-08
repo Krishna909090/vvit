@@ -26,6 +26,7 @@ import {
     requestBranchChange,
     requestProgramChange,
     assignPro,
+    editPro,
     updateSeatAllotedBy,
     getFinancialApplications,
     exportApplicationsCsv,
@@ -37,7 +38,7 @@ import {
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
-    verifyAndAllotSeatSchema, changeCourseSchema, approveCourseChangeSchema,
+    verifyAndAllotSeatSchema, changeCourseSchema, branchChangeSchema, approveCourseChangeSchema,
     updateAdmissionDetailsSchema, studentIdParamSchema,
     setEligibleScholarshipSchema,
     updateStudentPersonalDetailsSchema,
@@ -47,6 +48,7 @@ import {
     verifyPaymentSchema,
     getApplicationsExtendedSchema,
     assignProSchema,
+    editProSchema,
     updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
 
@@ -157,7 +159,7 @@ router.post('/change-course', authenticate, authorizePermission(['student.update
  * Body: { studentId: uuid, newCourseId: uuid, reason: string }
  * Response: { status, data: CourseChangeRequest }
  */
-router.post('/change-branch', authenticate, authorizePermission(['student.update.all']), validateRequest(changeCourseSchema), requestBranchChange);
+router.post('/change-branch', authenticate, authorizePermission(['student.update.all']), validateRequest(branchChangeSchema), requestBranchChange);
 
 /**
  * POST /admin/student/change-program
@@ -499,6 +501,15 @@ router.post('/reverse-admission-payment', authenticate, authorizePermission(['st
  * Response: { status, data: { studentId, proId, proNumber } }
  */
 router.post('/assign-pro', authenticate, authorizePermission(['student.update.all']), validateRequest(assignProSchema), assignPro);
+
+/**
+ * PATCH /admin/student/edit-pro
+ * Edits or removes the PRO assignment for a student.
+ * Send proNumber to change PRO, omit it to remove the current PRO.
+ * Body: { studentId: uuid, proNumber?: string }
+ * Response: { status, data: { studentId, proId, proNumber } }
+ */
+router.patch('/edit-pro', authenticate, authorizePermission(['pro.update.all']), validateRequest(editProSchema), editPro);
 
 router.patch('/seat-alloted-by', authenticate, authorizePermission(['student.update.all']), validateRequest(updateSeatAllotedBySchema), updateSeatAllotedBy);
 

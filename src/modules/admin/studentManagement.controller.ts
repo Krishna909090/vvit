@@ -182,9 +182,9 @@ export const requestCourseChange = catchAsync(async (req: Request, res: Response
 export const requestBranchChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestBranchChange] by=${req.user?.userId || 'anonymous'}`);
 
-    const { studentId, newCourseId, reason } = req.body;
+    const { studentId, newCourseId, reason, recommendedByManagement, branchChangeFee } = req.body;
 
-    const request = await AdminStudentService.requestBranchChange(studentId, newCourseId, reason);
+    const request = await AdminStudentService.requestBranchChange(studentId, newCourseId, reason, recommendedByManagement, branchChangeFee);
 
     sendResponse({
         res,
@@ -216,9 +216,9 @@ export const requestProgramChange = catchAsync(async (req: Request, res: Respons
 export const approveCourseChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[approveCourseChange] by=${req.user?.userId || 'anonymous'}`);
 
-    const { requestId, approved } = req.body;
-    
-    await AdminStudentService.approveCourseChange(requestId, approved, req.user?.role, req.user?.userId);
+    const { requestId, approved, recommendedByManagement, branchChangeFee } = req.body;
+
+    await AdminStudentService.approveCourseChange(requestId, approved, req.user?.role, req.user?.userId, recommendedByManagement, branchChangeFee);
 
     sendResponse({
         res,
@@ -703,6 +703,49 @@ export const assignPro = catchAsync(async (req: Request, res: Response, next: Ne
         statusCode: 200,
         success: true,
         message: 'PRO assigned to student successfully',
+        data: { studentId: updatedStudent.id, proId: updatedStudent.proId, proNumber }
+    });
+});
+
+export const editPro = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId, proNumber } = req.body;
+
+    const student = await prisma.student.findUnique({ where: { id: studentId } });
+    if (!student) {
+        throw new AppError('Student not found', 404);
+    }
+
+    if (!proNumber) {
+        // Remove PRO assignment
+        const updatedStudent = await prisma.student.update({
+            where: { id: studentId },
+            data: { proId: null }
+        });
+
+        return sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            message: 'PRO removed from student successfully',
+            data: { studentId: updatedStudent.id, proId: null, proNumber: null }
+        });
+    }
+
+    const proRecord = await prisma.pRO.findUnique({ where: { proNumber } });
+    if (!proRecord) {
+        throw new AppError('PRO not found with the given proNumber', 404);
+    }
+
+    const updatedStudent = await prisma.student.update({
+        where: { id: studentId },
+        data: { proId: proRecord.id }
+    });
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'PRO updated for student successfully',
         data: { studentId: updatedStudent.id, proId: updatedStudent.proId, proNumber }
     });
 });
