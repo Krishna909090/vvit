@@ -217,23 +217,17 @@ const _spreadRefundProportionally = (
 // Fetch real paid amounts per component from Payment table
 // ─────────────────────────────────────────────────────────────
 const fetchComponentPaid = async (studentId: string): Promise<{ componentPaid: ComponentPaid; totalPaid: number }> => {
-    const [payments, courseChangeDeductions] = await Promise.all([
-        prisma.payment.findMany({
-            where: { studentId, status: PaymentStatus.SUCCESS },
-            select: { component: true, amount: true },
-        }),
-        // Fetch course change processing fee deductions from ledger
-        prisma.studentLedger.findMany({
-            where: { studentId, referenceType: 'COURSE_CHANGE', type: 'DEBIT' as any, isDeleted: false },
-            select: { amount: true },
-        }),
-    ]);
+    const payments = await prisma.payment.findMany({
+        where: { studentId, status: PaymentStatus.SUCCESS },
+        select: { component: true, amount: true },
+    });
 
     const componentPaid: ComponentPaid = { tuition: 0, admission: 0, bookBank: 0, hostel: 0, transport: 0, others: 0 };
 
     for (const p of payments) {
         switch (p.component) {
             case PaymentComponent.APPLICATION_FEE:
+            case PaymentComponent.COURSE_CHANGE_FEE:
                 // Non-refundable — excluded from cancellation adjustment
                 break;
             case PaymentComponent.TUITION:
@@ -257,13 +251,6 @@ const fetchComponentPaid = async (studentId: string): Promise<{ componentPaid: C
             default:
                 componentPaid.others += p.amount;
         }
-    }
-
-    // Subtract course change processing fee from tuition (non-refundable)
-    const totalCourseChangeFee = courseChangeDeductions.reduce((sum, l) => sum + l.amount, 0);
-    if (totalCourseChangeFee > 0) {
-        componentPaid.tuition = Math.max(0, componentPaid.tuition - totalCourseChangeFee);
-        logger.info(`[fetchComponentPaid] CourseChangeFee=${totalCourseChangeFee} deducted from tuition`);
     }
 
     const totalPaid = componentPaid.tuition + componentPaid.admission + componentPaid.bookBank + componentPaid.hostel + componentPaid.transport + componentPaid.others;

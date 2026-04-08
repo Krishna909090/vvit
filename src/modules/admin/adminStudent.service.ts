@@ -1347,53 +1347,21 @@ export const AdminStudentService = {
                     }
                 }
 
-                // 3. COURSE CHANGE PROCESSING FEE (10,000 DEDUCTION FROM PAID)
-                // This is an internal deduction from the student's already-paid amount,
-                // NOT a new fee demand. We only record a DEBIT ledger entry on the source head
-                // and adjust the tuition demand's paid tracking accordingly.
-                const DEDUCTION_AMOUNT = 10000;
-                const actualDeduction = Math.min(totalPaidAcrossAll, DEDUCTION_AMOUNT);
+                // 3. COURSE CHANGE PROCESSING FEE — Student pays ₹10,000 separately (cash/UPI)
+                // No deduction from existing paid amount. Fee is collected as a separate payment.
 
-                if (actualDeduction > 0) {
-                    const sourceHeadId = tuitionHeadId || studentDemands[0]?.feeHeadId;
-
-                    if (sourceHeadId) {
-                        // Debit from student's paid amount (e.g., Tuition)
-                        await tx.studentLedger.create({
-                            data: {
-                                studentId: request.studentId,
-                                feeHeadId: sourceHeadId,
-                                type: LedgerTransactionType.DEBIT,
-                                amount: actualDeduction,
-                                description: `Course change processing fee deducted from paid amount`,
-                                referenceType: 'COURSE_CHANGE',
-                                referenceId: request.id,
-                                createdBy: adminId
-                            }
-                        });
-
-                        // Update the source demand to reflect reduced effective payment
-                        const sourceDemand = studentDemands.find(d => d.feeHeadId === sourceHeadId);
-                        if (sourceDemand) {
-                            const paidOnSource = sourceDemand.payments.reduce((sum, p) => sum + p.amount, 0);
-                            const effectivePaid = paidOnSource - actualDeduction;
-                            const netAmount = sourceDemand.netAmount ?? (sourceDemand.amount - (sourceDemand.discountAmount || 0));
-                            const pending = netAmount - effectivePaid;
-
-                            await tx.studentFeeDemand.update({
-                                where: { id: sourceDemand.id },
-                                data: {
-                                    status: pending <= 0 ? FeeStatus.FULL : (effectivePaid > 0 ? FeeStatus.PARTIAL : FeeStatus.PENDING),
-                                    remarks: (sourceDemand.remarks || '') + ` | Course change fee: ${actualDeduction} deducted from paid`
-                                }
-                            });
-                        }
-                    }
-                }
-
-                logger.info(`[approveCourseChange] Full reconciliation for Student ${student.id} to Course ${request.toCourse}. Deduction: ${actualDeduction} from paid: ${totalPaidAcrossAll}`);
+                logger.info(`[approveCourseChange] Full reconciliation for Student ${student.id} to Course ${request.toCourse}. TotalPaid: ${totalPaidAcrossAll}`);
             }
         });
+
+        // Regenerate allotment order with new course details (outside transaction)
+        try {
+            const { generateAndSaveAllotmentOrder } = await import('../finance/payment.service');
+            await generateAndSaveAllotmentOrder(request.studentId);
+            logger.info(`[approveCourseChange] Allotment order regenerated for student ${request.studentId}`);
+        } catch (err) {
+            logger.error(`[approveCourseChange] Failed to regenerate allotment order: ${err}`);
+        }
     },
 
     async updateAdmissionDetails(data: any, adminId: string | undefined) {
