@@ -2447,6 +2447,20 @@ export const AdminStudentService = {
      */
     async processPaymentSuccess(payment: any, adminId: string | undefined, tx: any) {
         const resolvedAdminId = adminId || 'SYSTEM';
+
+        // Guard: skip if ledger entry already exists for this payment (prevents duplicate from race condition)
+        const existingLedger = await tx.studentLedger.findFirst({
+            where: {
+                referenceId: payment.id,
+                referenceType: 'PAYMENT',
+                studentId: payment.studentId
+            }
+        });
+        if (existingLedger) {
+            logger.warn(`[processPaymentSuccess] Ledger already exists for payment ${payment.id}. Skipping duplicate.`);
+            return;
+        }
+
         // 1. Create Ledger Entry
         await tx.studentLedger.create({
             data: {

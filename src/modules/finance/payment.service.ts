@@ -595,18 +595,25 @@ const _processComponentLogic = async (payment: any) => {
     } else if (component === PaymentComponent.TUITION || component === PaymentComponent.ADMISSION || component === PaymentComponent.SCHOLARSHIP_TOKEN) {
         if ((component === PaymentComponent.SCHOLARSHIP_TOKEN || component === PaymentComponent.TUITION) && currentStatus?.status !== AdmissionStatus.ADMISSION_CONFIRMED && currentStatus?.status !== AdmissionStatus.ENROLLED) {
              await ScholarshipService.lockAllocation(studentId);
-             const detailedStudent = await prisma.student.findUnique({ where: { id: studentId }, include: { admissionDetails: { include: { hostel: true, transportRoute: true } }, scholarshipAllocation: { include: { rule: true } } }});
-             if (detailedStudent?.admissionDetails) {
-                 const ledgers: any[] = [];
-                 const admission = detailedStudent.admissionDetails;
-                 const tuitionFee = admission.totalFee ?? 0;
-                 if (tuitionFee <= 0) {
-                     logger.warn(`[_processComponentLogic] totalFee is ${tuitionFee} for student=${studentId} — skipping tuition ledger entry`);
+
+             // Skip FEE_GENERATION ledger if fee demands already exist (finalize admission flow handles this)
+             const existingDemands = await prisma.studentFeeDemand.count({ where: { studentId } });
+             if (existingDemands === 0) {
+                 const detailedStudent = await prisma.student.findUnique({ where: { id: studentId }, include: { admissionDetails: { include: { hostel: true, transportRoute: true } }, scholarshipAllocation: { include: { rule: true } } }});
+                 if (detailedStudent?.admissionDetails) {
+                     const ledgers: any[] = [];
+                     const admission = detailedStudent.admissionDetails;
+                     const tuitionFee = admission.totalFee ?? 0;
+                     if (tuitionFee <= 0) {
+                         logger.warn(`[_processComponentLogic] totalFee is ${tuitionFee} for student=${studentId} — skipping tuition ledger entry`);
+                     }
+                     if (tuitionFee > 0) ledgers.push({ studentId, type: 'DEBIT', amount: tuitionFee, description: 'Tuition Fee (Annual)', referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() });
+                     if (admission.transportRouteId && admission.transportRoute) { ledgers.push({ studentId, type: 'DEBIT', amount: admission.transportRoute.cost, description: `Transport Fee - ${admission.transportRoute.name}`, referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() }); }
+                     if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) { const rule = detailedStudent.scholarshipAllocation.rule; const discount = (tuitionFee * rule.discountPercentage) / 100; if (discount > 0) { ledgers.push({ studentId, type: 'CREDIT', amount: discount, description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`, referenceId: detailedStudent.scholarshipAllocation.id, referenceType: 'SCHOLARSHIP', date: new Date() }); } }
+                     if (ledgers.length > 0) await prisma.studentLedger.createMany({ data: ledgers });
                  }
-                 if (tuitionFee > 0) ledgers.push({ studentId, type: 'DEBIT', amount: tuitionFee, description: 'Tuition Fee (Annual)', referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() });
-                 if (admission.transportRouteId && admission.transportRoute) { ledgers.push({ studentId, type: 'DEBIT', amount: admission.transportRoute.cost, description: `Transport Fee - ${admission.transportRoute.name}`, referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() }); }
-                 if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) { const rule = detailedStudent.scholarshipAllocation.rule; const discount = (tuitionFee * rule.discountPercentage) / 100; if (discount > 0) { ledgers.push({ studentId, type: 'CREDIT', amount: discount, description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`, referenceId: detailedStudent.scholarshipAllocation.id, referenceType: 'SCHOLARSHIP', date: new Date() }); } }
-                 if (ledgers.length > 0) await prisma.studentLedger.createMany({ data: ledgers });
+             } else {
+                 logger.info(`[_processComponentLogic] Skipping FEE_GENERATION for student=${studentId} — ${existingDemands} fee demands already exist`);
              }
         }
         await prisma.studentAdmission.update({
