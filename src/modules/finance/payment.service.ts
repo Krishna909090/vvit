@@ -2022,8 +2022,8 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
         // Fines (Skipped as per existing logic logic if in Deamnd)
 
-        // Credits (Discounts/Scholarships)
-        if (entry.type === 'CREDIT' && entry.referenceType !== 'PAYMENT' && entry.referenceType !== 'COURSE_CHANGE') {
+        // Credits (Discounts/Scholarships) — FEE_CORRECTION is carry-forward adjustment, not a discount
+        if (entry.type === 'CREDIT' && entry.referenceType !== 'PAYMENT' && entry.referenceType !== 'COURSE_CHANGE' && entry.referenceType !== 'FEE_CORRECTION') {
             target.discount += entry.amount;
         }
 
@@ -2078,7 +2078,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
         .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
     const scholarshipCredits = ledgers
-        .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE' && l.referenceType !== 'CANCELLATION')
+        .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE' && l.referenceType !== 'CANCELLATION' && l.referenceType !== 'FEE_CORRECTION')
         .reduce((sum, l) => sum + l.amount, 0);
     const scholarshipReversals = ledgers
         .filter(l => l.type === 'DEBIT' && l.referenceType === 'SCHOLARSHIP')

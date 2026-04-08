@@ -1358,7 +1358,7 @@ export const AdminStudentService = {
                     }
                 }
 
-                // 3. FEE CORRECTION — track fee reductions per head as adjustments (carry forward to next year)
+                // 3. FEE CORRECTION — track overpaid amount per head (carry forward to next year)
                 let totalCorrectionAmount = 0;
 
                 for (const struct of newCourseStructures) {
@@ -1367,34 +1367,35 @@ export const AdminStudentService = {
 
                     const oldFee = existingDemand.amount;
                     const newFee = struct.amount;
-                    const feeReduction = oldFee - newFee;
+                    const currentPaid = existingDemand.payments.reduce((sum, p) => sum + p.amount, 0);
+                    const excessPaid = currentPaid - newFee;
 
-                    if (feeReduction > 0 && academicYearId) {
+                    if (excessPaid > 0 && academicYearId) {
                         const headName = struct.feeHead?.name || struct.feeHeadId;
 
                         await tx.feeCorrection.create({
                             data: {
                                 studentId: request.studentId,
                                 academicYearId,
-                                amount: feeReduction,
-                                reason: `Branch change adjustment: ${headName} reduced from ${oldFee} to ${newFee}`,
+                                amount: excessPaid,
+                                reason: `Branch change refund: ${headName}. Old fee: ${oldFee}, New fee: ${newFee}, Paid: ${currentPaid}, Excess: ${excessPaid}`,
                                 type: 'BRANCH_CHANGE_REFUND',
                                 referenceId: requestId,
                                 referenceType: 'COURSE_CHANGE_REQUEST',
-                                remarks: `Fee head: ${headName}, Old: ${oldFee}, New: ${newFee}, Reduction: ${feeReduction}`,
+                                remarks: `Fee head: ${headName}, Old: ${oldFee}, New: ${newFee}, Paid: ${currentPaid}, Refund: ${excessPaid}`,
                                 carryForward: true,
                                 isSettled: false,
                                 createdBy: adminId
                             }
                         });
 
-                        // CREDIT ledger entry for each fee head correction
+                        // CREDIT ledger entry for the overpaid correction
                         await tx.studentLedger.create({
                             data: {
                                 studentId: request.studentId,
                                 type: LedgerTransactionType.CREDIT,
-                                amount: feeReduction,
-                                description: `Branch change fee correction: ${headName} (${oldFee} → ${newFee}). Carry forward.`,
+                                amount: excessPaid,
+                                description: `Branch change refund: ${headName}. Paid ${currentPaid} against new fee ${newFee}. Carry forward.`,
                                 referenceType: 'FEE_CORRECTION',
                                 referenceId: requestId,
                                 feeHeadId: struct.feeHeadId,
@@ -1403,12 +1404,12 @@ export const AdminStudentService = {
                             }
                         });
 
-                        totalCorrectionAmount += feeReduction;
+                        totalCorrectionAmount += excessPaid;
                     }
                 }
 
                 if (totalCorrectionAmount > 0) {
-                    logger.info(`[approveCourseChange] FeeCorrections created for student ${request.studentId}. Total adjustment: ${totalCorrectionAmount}, carryForward: true`);
+                    logger.info(`[approveCourseChange] FeeCorrections created for student ${request.studentId}. Total refund: ${totalCorrectionAmount}, carryForward: true`);
                 }
 
                 // 4. BRANCH CHANGE FEE — DEBIT ledger entry if fee applies
