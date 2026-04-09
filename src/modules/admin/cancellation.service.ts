@@ -773,17 +773,19 @@ export const CancellationService = {
             prisma.cancellationRequest.count({ where }),
         ]);
 
-        const mappedData = data.map(req => {
+        const mappedData = await Promise.all(data.map(async req => {
             const { admissionDetails, ...studentRest } = req.student;
             return {
                 ...req,
+                fileUrl: await convertToPresignedUrl(req.fileUrl),
+                invoiceUrl: await convertToPresignedUrl(req.invoiceUrl),
                 student: {
                     ...studentRest,
                     allottedCourseId: admissionDetails?.allottedCourseId || null,
                     allottedCourseName: admissionDetails?.allottedCourse?.name || null,
                 }
             };
-        });
+        }));
 
         return { data: mappedData, total, page, limit, totalPages: Math.ceil(total / limit) };
     },
@@ -814,6 +816,8 @@ export const CancellationService = {
         const { admissionDetails, ...studentRest } = request.student;
         return {
             ...request,
+            fileUrl: await convertToPresignedUrl(request.fileUrl),
+            invoiceUrl: await convertToPresignedUrl(request.invoiceUrl),
             student: {
                 ...studentRest,
                 allottedCourseId: admissionDetails?.allottedCourseId || null,

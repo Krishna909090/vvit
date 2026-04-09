@@ -1891,9 +1891,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 2. Initialize Breakdown
     const categories = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'OTHER'];
-    const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number, feeHeadId: string }> = {};
+    const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number, scholarshipAmount: number, feeHeadId: string }> = {};
     categories.forEach(cat => {
-        breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0, feeHeadId: '' };
+        breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0, scholarshipAmount: 0, feeHeadId: '' };
     });
 
     // 3. Helper: Map Fee Head Name to Category
@@ -1935,6 +1935,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         const target = breakdown[targetKey];
         
         target.demanded += demand.amount;
+        if (demand.scholarshipAmount) target.scholarshipAmount += demand.scholarshipAmount;
         if (demand.fineAmount) target.fine += demand.fineAmount;
         if (headId && !target.feeHeadId) target.feeHeadId = headId;
     });

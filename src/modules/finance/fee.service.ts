@@ -5,6 +5,7 @@ import { Role, RoleType } from '../../constants/roles';
 import { MESSAGES } from '../../constants/messages';
 import logger from '../../utils/logger';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
+import { getHostelCostTx } from '../../utils/hostelPricing';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';
@@ -1319,7 +1320,8 @@ export const FeeService = {
                     where: { id: admission.hostelId },
                     data: { filled: { decrement: 1 } }
                 });
-                oldCost = admission.hostel?.cost || 0;
+                const oldPricing = await getHostelCostTx(admission.hostelType, tx);
+                oldCost = oldPricing.totalPrice;
                 oldLabel = `Hostel (${admission.hostel?.name || admission.hostelId})`;
             } else if (oldType === 'TRANSPORT' && admission.transportRouteId) {
                 await tx.transportRoute.update({
@@ -1340,7 +1342,8 @@ export const FeeService = {
                     where: { id: hostelId },
                     data: { filled: { increment: 1 } }
                 });
-                newCost = hostel.cost || 0;
+                const newPricing = await getHostelCostTx(hostelType, tx);
+                newCost = newPricing.totalPrice;
                 newLabel = `Hostel (${hostel.name})`;
             } else if (newType === 'TRANSPORT') {
                 const route = await tx.transportRoute.findUnique({ where: { id: transportRouteId } });

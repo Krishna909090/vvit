@@ -430,6 +430,7 @@ model HostelPriceCategory {
   metadata           Json?
   accommodationPrice Float?         @default(0)
   messPrice          Float?         @default(0)
+  semwiseSurcharge   Float?         @default(0)
 
   @@unique([sharing, roomType])
 }
@@ -1423,6 +1424,7 @@ enum FeeCorrectionType {
   REFUND
   ADJUSTMENT
   BRANCH_CHANGE_REFUND
+  ACCOMMODATION_CHANGE_REFUND
   CARRY_FORWARD
 }
 
