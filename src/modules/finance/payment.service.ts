@@ -321,7 +321,8 @@ export const initiateMultiComponentPayment = async (
         PaymentComponent.OTHER,
         PaymentComponent.HOSTEL_ACCOMMODATION,
         PaymentComponent.HOSTEL_MESS,
-        PaymentComponent.HOSTEL
+        PaymentComponent.HOSTEL,
+        PaymentComponent.COURSE_CHANGE_FEE
     ];
 
     for (const item of components) {
@@ -1741,7 +1742,8 @@ export const processUnifiedPayment = async (data: any) => {
         PaymentComponent.HOSTEL_ACCOMMODATION,
         PaymentComponent.HOSTEL_MESS,
         PaymentComponent.TRANSPORT,
-        PaymentComponent.OTHER
+        PaymentComponent.OTHER,
+        PaymentComponent.COURSE_CHANGE_FEE
     ];
 
     if (!feeHeadId && !exemptFromFeeHead.includes(component)) {
