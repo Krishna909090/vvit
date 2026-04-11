@@ -701,8 +701,11 @@ export const DashboardService = {
                     select: {
                         allottedStudents: {
                             where: {
-                                status: { not: 'CANCELLED' },
-                                allottedCourseId: { not: null }
+                                allottedCourseId: { not: null },
+                                OR: [
+                                    { status: null },
+                                    { status: { not: 'CANCELLED' } }
+                                ]
                             }
                         }
                     }
