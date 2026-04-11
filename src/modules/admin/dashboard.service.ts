@@ -689,8 +689,7 @@ export const DashboardService = {
      * Get Course Statistics (Seats Filled vs Total)
      */
     async getCourseSeatStats() {
-        // Fetch courses with their allotted student count
-        // We use the relation 'allottedStudents' in Course model
+        // Fetch courses with their allotted student count — exclude CANCELLED students
         const courses = await prisma.course.findMany({
             where: { isDeleted: false },
             select: {
@@ -698,16 +697,21 @@ export const DashboardService = {
                 code: true,
                 name: true,
                 totalSeats: true,
-                filledSeats: true, // This field exists but might not be auto-synced, good to double check via relation count if needed
+                filledSeats: true,
                 _count: {
-                    select: { allottedStudents: true }
+                    select: {
+                        allottedStudents: {
+                            where: {
+                                status: { not: 'CANCELLED' },
+                                allottedCourseId: { not: null }
+                            }
+                        }
+                    }
                 }
             },
             orderBy: { name: 'asc' }
         });
 
-        // Map to simpler format and ensure 'filled' is accurate based on actual count if preferred, 
-        // or strictly follow existing logic. Ideally, we trust the DB count of relations.
         return courses.map(c => {
             const actualFilled = c._count.allottedStudents;
             const total = c.totalSeats || 0;
