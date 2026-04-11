@@ -3,7 +3,7 @@ import { authenticate, authorizePermission } from '../../middleware/rbac.middlew
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     getAllApplications, uploadBulkApplications, requestCancellation, approveCancellation,
-    verifyAndAllotSeat, verifyStudentDocument, reUploadDocument, requestCourseChange, approveCourseChange, getCourseChangeRequests,
+    verifyAndAllotSeat, verifyStudentDocument, reUploadDocument, requestCourseChange, approveCourseChange, getCourseChangeRequests, debugCourseAllotments,
     updateAdmissionDetails, getStudentCertificates, downloadStudentDocuments, updateRollNumber,
     updateStudentStatus,
     setScholarshipEligibility,
@@ -178,6 +178,14 @@ router.post('/change-program', authenticate, authorizePermission(['student.updat
  * Response: { status, data: CourseChangeRequest[] }
  */
 router.get('/course-change-requests', authenticate, authorizePermission(['student.read.all']), getCourseChangeRequests);
+
+/**
+ * GET /admin/student/debug/course-allotments/:courseId
+ * Debug helper — returns ALL StudentAdmission records for a course (no filters),
+ * the cached Course.filledSeats counter, and a status breakdown.
+ * Use this to diagnose seat count discrepancies.
+ */
+router.get('/debug/course-allotments/:courseId', authenticate, authorizePermission(['student.read.all']), debugCourseAllotments);
 
 /**
  * POST /admin/student/approve-course-change

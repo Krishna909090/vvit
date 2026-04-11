@@ -3531,6 +3531,59 @@ export const AdminStudentService = {
         return { success: true };
     },
 
+    async debugCourseAllotments(courseId: string) {
+        if (!courseId) throw new AppError('courseId is required', 400);
+
+        const course = await prisma.course.findUnique({
+            where: { id: courseId },
+            select: { id: true, code: true, name: true, totalSeats: true, filledSeats: true }
+        });
+        if (!course) throw new AppError('Course not found', 404);
+
+        // Raw query: ALL StudentAdmission records pointing to this course (no filters)
+        const allAdmissions = await prisma.studentAdmission.findMany({
+            where: { allottedCourseId: courseId },
+            select: {
+                id: true,
+                studentId: true,
+                status: true,
+                allottedCourseId: true,
+                createdAt: true,
+                student: {
+                    select: {
+                        applicationId: true,
+                        name: true,
+                        phone: true
+                    }
+                }
+            },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        // Apply same filter as the seat counting query
+        const activeAdmissions = allAdmissions.filter(a =>
+            a.allottedCourseId !== null && a.status !== 'CANCELLED'
+        );
+
+        // Group by status
+        const byStatus: Record<string, number> = {};
+        for (const a of allAdmissions) {
+            const key = a.status || 'NULL';
+            byStatus[key] = (byStatus[key] || 0) + 1;
+        }
+
+        return {
+            course,
+            counts: {
+                totalAdmissionsForCourse: allAdmissions.length,
+                activeAdmissions: activeAdmissions.length,
+                cachedFilledSeatsCounter: course.filledSeats,
+                byStatus
+            },
+            allAdmissions
+        };
+    },
+
     async getCourseChangeRequests(filters: any) {
         const { status, studentId, applicationId, page = 1, limit = 10 } = filters;
         const pageNum = Math.max(1, parseInt(page));

@@ -228,6 +228,20 @@ export const approveCourseChange = catchAsync(async (req: Request, res: Response
     });
 });
 
+// Debug: Inspect raw allotments for a course
+export const debugCourseAllotments = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[debugCourseAllotments] by=${req.user?.userId || 'anonymous'}`);
+    const { courseId } = req.params;
+    const result = await AdminStudentService.debugCourseAllotments(courseId);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Debug data fetched',
+        data: result
+    });
+});
+
 // Get Course Change Requests
 export const getCourseChangeRequests = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getCourseChangeRequests] by=${req.user?.userId || 'anonymous'}`);
