@@ -3562,9 +3562,27 @@ export const AdminStudentService = {
         const courseIds = [...new Set(requests.flatMap((r: any) => [r.fromCourse, r.toCourse].filter(Boolean)))];
         const courses = await prisma.course.findMany({
             where: { id: { in: courseIds } },
-            select: { id: true, name: true, filledSeats: true, totalSeats: true }
+            select: {
+                id: true,
+                name: true,
+                totalSeats: true,
+                _count: {
+                    select: {
+                        allottedStudents: {
+                            where: {
+                                status: { not: 'CANCELLED' },
+                                allottedCourseId: { not: null }
+                            }
+                        }
+                    }
+                }
+            }
         });
-        const courseMap = Object.fromEntries(courses.map(c => [c.id, c]));
+        const courseMap = Object.fromEntries(courses.map(c => [c.id, {
+            name: c.name,
+            totalSeats: c.totalSeats,
+            filledSeats: c._count.allottedStudents
+        }]));
 
         const data = requests.map((r: any) => {
             const fromCourse = courseMap[r.fromCourse];

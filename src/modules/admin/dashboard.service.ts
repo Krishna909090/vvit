@@ -689,8 +689,7 @@ export const DashboardService = {
      * Get Course Statistics (Seats Filled vs Total)
      */
     async getCourseSeatStats() {
-        // Use the Course.filledSeats counter column (same as course-change-requests API)
-        // This counter is updated atomically on admission, branch change, and cancellation
+        // Compute filled seats dynamically from StudentAdmission, excluding CANCELLED students
         const courses = await prisma.course.findMany({
             where: { isDeleted: false },
             select: {
@@ -698,13 +697,22 @@ export const DashboardService = {
                 code: true,
                 name: true,
                 totalSeats: true,
-                filledSeats: true,
+                _count: {
+                    select: {
+                        allottedStudents: {
+                            where: {
+                                status: { not: 'CANCELLED' },
+                                allottedCourseId: { not: null }
+                            }
+                        }
+                    }
+                }
             },
             orderBy: { name: 'asc' }
         });
 
         return courses.map(c => {
-            const filled = c.filledSeats ?? 0;
+            const filled = c._count.allottedStudents;
             const total = c.totalSeats || 0;
             return {
                 id: c.id,
