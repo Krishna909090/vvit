@@ -458,9 +458,6 @@ export const AdminStudentService = {
                 aadharNumber: maskAadhaar(student.aadharNumber),
                 profilePhotoUrl,
                 documents: documentsWithPresignedUrls,
-                // Removed flattened fields to match requested JSON structure
-                // allottedCourseName, pref1CourseName etc. are removed
-                // pendingDocs, s3FolderKey etc. are removed
             };
         }));
 
@@ -2126,6 +2123,10 @@ export const AdminStudentService = {
                 },
                 payments: true,
                 courseChangeLogs: true,
+                courseChangeRequests: {
+                    where: { status: { in: ['REQUESTED', 'FORWARDED'] } },
+                    orderBy: { createdAt: 'desc' }
+                },
                 discountRequests: true,
                 ledgerEntries: true,
                 enrollments: {
@@ -2208,6 +2209,10 @@ export const AdminStudentService = {
                 },
                 payments: true,
                 courseChangeLogs: true,
+                courseChangeRequests: {
+                    where: { status: { in: ['REQUESTED', 'FORWARDED'] } },
+                    orderBy: { createdAt: 'desc' }
+                },
                 discountRequests: true,
                 ledgerEntries: true,
                 enrollments: {
@@ -3555,14 +3560,25 @@ export const AdminStudentService = {
         ]);
 
         const courseIds = [...new Set(requests.flatMap((r: any) => [r.fromCourse, r.toCourse].filter(Boolean)))];
-        const courses = await prisma.course.findMany({ where: { id: { in: courseIds } }, select: { id: true, name: true } });
-        const courseMap = Object.fromEntries(courses.map(c => [c.id, c.name]));
+        const courses = await prisma.course.findMany({
+            where: { id: { in: courseIds } },
+            select: { id: true, name: true, filledSeats: true, totalSeats: true }
+        });
+        const courseMap = Object.fromEntries(courses.map(c => [c.id, c]));
 
-        const data = requests.map((r: any) => ({
-            ...r,
-            fromCourseName: courseMap[r.fromCourse] || null,
-            toCourseName: courseMap[r.toCourse] || null
-        }));
+        const data = requests.map((r: any) => {
+            const fromCourse = courseMap[r.fromCourse];
+            const toCourse = courseMap[r.toCourse];
+            return {
+                ...r,
+                fromCourseName: fromCourse?.name || null,
+                toCourseName: toCourse?.name || null,
+                fromCourseFilledSeats: fromCourse?.filledSeats ?? null,
+                fromCourseTotalSeats: fromCourse?.totalSeats ?? null,
+                toCourseFilledSeats: toCourse?.filledSeats ?? null,
+                toCourseTotalSeats: toCourse?.totalSeats ?? null,
+            };
+        });
 
         return {
             data,
