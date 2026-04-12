@@ -172,12 +172,12 @@ export const DashboardService = {
         ] = await Promise.all([
             prisma.student.count({
                 where: {
-                    ...whereDate,
                     admissionDetails: { status: { not: 'CANCELLED' } },
                     payments: {
                         some: {
                             component: PaymentComponent.TUITION,
-                            status: PaymentStatus.SUCCESS
+                            status: PaymentStatus.SUCCESS,
+                            ...(dateFilter ? { createdAt: dateFilter } : {})
                         }
                     }
                 }
@@ -223,17 +223,19 @@ export const DashboardService = {
             }),
             prisma.discountRequest.aggregate({
                 where: {
-                    ...whereDate,
-                    status: 'APPROVED'
+                    status: 'APPROVED',
+                    ...(dateFilter ? { approvedAt: dateFilter } : {})
                 },
-                _count: { studentId: true },
                 _sum: { approvedAmount: true }
             })
         ]);
 
-        // Unique approved discount students (aggregate _count counts rows, not unique)
+        // Unique approved discount students
         const approvedDiscountStudents = await prisma.discountRequest.findMany({
-            where: { ...whereDate, status: 'APPROVED' },
+            where: {
+                status: 'APPROVED',
+                ...(dateFilter ? { approvedAt: dateFilter } : {})
+            },
             select: { studentId: true },
             distinct: ['studentId']
         });
