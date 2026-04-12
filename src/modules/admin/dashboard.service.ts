@@ -167,10 +167,20 @@ export const DashboardService = {
             totalHostelSelected,
             totalTransportSelected,
             totalScholarshipEligible,
-            totalScholarshipNotEligible
+            totalScholarshipNotEligible,
+            discountStats
         ] = await Promise.all([
             prisma.student.count({
-                where: { ...whereDate, admissionDetails: { allottedCourseId: { not: null } } }
+                where: {
+                    ...whereDate,
+                    admissionDetails: { status: { not: 'CANCELLED' } },
+                    payments: {
+                        some: {
+                            component: PaymentComponent.TUITION,
+                            status: PaymentStatus.SUCCESS
+                        }
+                    }
+                }
             }),
             prisma.student.count({ where: { ...whereDate, quotaType: QuotaType.MANAGEMENT } }),
             prisma.student.count({ where: { ...whereDate, quotaType: QuotaType.CONVENOR } }),
@@ -205,13 +215,28 @@ export const DashboardService = {
                     admissionDetails: { allottedCourseId: { not: null } }
                 } 
             }),
-            prisma.student.count({ 
-                where: { 
-                    ...whereDate, 
-                    studentScholarship: { isEligible: 'NO' } 
-                } 
+            prisma.student.count({
+                where: {
+                    ...whereDate,
+                    studentScholarship: { isEligible: 'NO' }
+                }
+            }),
+            prisma.discountRequest.aggregate({
+                where: {
+                    ...whereDate,
+                    status: 'APPROVED'
+                },
+                _count: { studentId: true },
+                _sum: { approvedAmount: true }
             })
         ]);
+
+        // Unique approved discount students (aggregate _count counts rows, not unique)
+        const approvedDiscountStudents = await prisma.discountRequest.findMany({
+            where: { ...whereDate, status: 'APPROVED' },
+            select: { studentId: true },
+            distinct: ['studentId']
+        });
 
         return {
             totalSeatAllocated,
@@ -220,7 +245,9 @@ export const DashboardService = {
             totalHostelSelected,
             totalTransportSelected,
             totalScholarshipEligible,
-            totalScholarshipNotEligible
+            totalScholarshipNotEligible,
+            totalApprovedDiscountStudents: approvedDiscountStudents.length,
+            totalApprovedDiscountAmount: discountStats._sum.approvedAmount || 0
         };
     },
 
