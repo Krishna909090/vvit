@@ -1,5 +1,5 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, Payment, ApplicationMode, QuotaType, AccommodationType } from '@prisma/client';
+import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, Payment, ApplicationMode, QuotaType, AccommodationType, Prisma } from '@prisma/client';
 
 const getDateCondition = (range?: string, startDate?: string, endDate?: string) => {
     const now = new Date();
@@ -168,7 +168,9 @@ export const DashboardService = {
             totalTransportSelected,
             totalScholarshipEligible,
             totalScholarshipNotEligible,
-            discountStats
+            discountStats,
+            totalSeatCancellationsApproved,
+            totalBranchChangeApproved
         ] = await Promise.all([
             prisma.student.count({
                 where: {
@@ -227,7 +229,23 @@ export const DashboardService = {
                     ...(dateFilter ? { approvedAt: dateFilter } : {})
                 },
                 _sum: { approvedAmount: true }
-            })
+            }),
+            prisma.cancellationRequest.count({
+                where: {
+                    status: 'APPROVED',
+                    ...(dateFilter ? { approvedAt: dateFilter } : {})
+                }
+            }),
+            prisma.$queryRaw<{ count: bigint }[]>`
+                SELECT COUNT(*)::bigint AS count
+                FROM "CourseChangeRequest"
+                WHERE "status" = 'APPROVED'
+                  AND "fromDegree" IS NOT NULL
+                  AND "toDegree" IS NOT NULL
+                  AND UPPER(TRIM("fromDegree")) = UPPER(TRIM("toDegree"))
+                  ${dateFilter?.gte ? Prisma.sql`AND "actionedAt" >= ${dateFilter.gte}` : Prisma.empty}
+                  ${dateFilter?.lte ? Prisma.sql`AND "actionedAt" <= ${dateFilter.lte}` : Prisma.empty}
+            `
         ]);
 
         // Unique approved discount students
@@ -249,7 +267,54 @@ export const DashboardService = {
             totalScholarshipEligible,
             totalScholarshipNotEligible,
             totalApprovedDiscountStudents: approvedDiscountStudents.length,
-            totalApprovedDiscountAmount: discountStats._sum.approvedAmount || 0
+            totalApprovedDiscountAmount: discountStats._sum.approvedAmount || 0,
+            totalSeatCancellationsApproved,
+            totalBranchChangeApproved: Number(totalBranchChangeApproved?.[0]?.count ?? 0)
+        };
+    },
+
+    /**
+     * Scholarship Statistics — with optional degreeType filter
+     */
+    async getScholarshipStats(
+        range?: string,
+        startDate?: string,
+        endDate?: string,
+        degreeType?: string
+    ) {
+        const dateFilter = getDateCondition(range, startDate, endDate);
+        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
+        const degreeWhere = degreeType ? { degreeType } : {};
+
+        const baseWhere = { ...whereDate, ...degreeWhere };
+
+        const [totalEligible, totalNotEligible, totalApplicants] = await Promise.all([
+            prisma.student.count({
+                where: {
+                    ...baseWhere,
+                    studentScholarship: { isEligible: 'YES' },
+                    admissionDetails: { allottedCourseId: { not: null } }
+                }
+            }),
+            prisma.student.count({
+                where: {
+                    ...baseWhere,
+                    studentScholarship: { isEligible: 'NO' }
+                }
+            }),
+            prisma.student.count({
+                where: {
+                    ...baseWhere,
+                    studentScholarship: { isNot: null }
+                }
+            })
+        ]);
+
+        return {
+            degreeType: degreeType || 'ALL',
+            totalScholarshipApplicants: totalApplicants,
+            totalScholarshipEligible: totalEligible,
+            totalScholarshipNotEligible: totalNotEligible
         };
     },
 

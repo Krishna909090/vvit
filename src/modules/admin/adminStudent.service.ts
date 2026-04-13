@@ -46,16 +46,18 @@ const buildApplicationFilters = async (query: any): Promise<any> => {
         where.applicationId = String(applicationId);
     }
 
-    if (status) {
+    if (status && status !== AdmissionStatus.CANCELLED) {
         where.admissionDetails = {
             status: status
         };
-    } else {
-        // Exclude CANCELLED by default
-        where.admissionDetails = {
-            status: { not: AdmissionStatus.CANCELLED }
-        };
     }
+
+    // Always exclude students whose admission has been CANCELLED — irrespective of
+    // any other filter the caller passes in.
+    where.NOT = [
+        ...(Array.isArray(where.NOT) ? where.NOT : []),
+        { admissionDetails: { status: AdmissionStatus.CANCELLED } }
+    ];
 
     if (quotaType) {
         where.quotaType = quotaType;
