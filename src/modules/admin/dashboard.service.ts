@@ -293,19 +293,30 @@ export const DashboardService = {
                 where: {
                     ...baseWhere,
                     studentScholarship: { isEligible: 'YES' },
-                    admissionDetails: { allottedCourseId: { not: null } }
+                    admissionDetails: {
+                        allottedCourseId: { not: null },
+                        status: { not: 'CANCELLED' }
+                    }
                 }
             }),
             prisma.student.count({
                 where: {
                     ...baseWhere,
-                    studentScholarship: { isEligible: 'NO' }
+                    studentScholarship: { isEligible: 'NO' },
+                    admissionDetails: {
+                        allottedCourseId: { not: null },
+                        status: { not: 'CANCELLED' }
+                    }
                 }
             }),
             prisma.student.count({
                 where: {
                     ...baseWhere,
-                    studentScholarship: { isNot: null }
+                    studentScholarship: { isNot: null },
+                    admissionDetails: {
+                        allottedCourseId: { not: null },
+                        status: { not: 'CANCELLED' }
+                    }
                 }
             })
         ]);
