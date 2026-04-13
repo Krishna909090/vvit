@@ -312,7 +312,7 @@ export const DashboardService = {
             prisma.student.count({
                 where: {
                     ...baseWhere,
-                    studentScholarship: { isNot: null },
+                    studentScholarship: { isEligible: { in: ['YES', 'NO'] } },
                     admissionDetails: {
                         allottedCourseId: { not: null },
                         status: { not: 'CANCELLED' }
