@@ -37,6 +37,22 @@ export const DashboardController = {
         });
     }),
 
+    getScholarshipStats: catchAsync(async (req: Request, res: Response) => {
+        const { range, startDate, endDate, degreeType } = req.query;
+        const stats = await DashboardService.getScholarshipStats(
+            range as string,
+            startDate as string,
+            endDate as string,
+            degreeType as string
+        );
+        sendResponse({
+            res,
+            statusCode: 200,
+            success: true,
+            data: stats
+        });
+    }),
+
     getExamStats: catchAsync(async (req: Request, res: Response) => {
         const { range, startDate, endDate } = req.query;
         const stats = await DashboardService.getExamStats(range as string, startDate as string, endDate as string);

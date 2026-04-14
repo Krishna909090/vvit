@@ -46,13 +46,16 @@ export const requestCancellation = catchAsync(async (req: Request, res: Response
         oldQuotaFee,
         newQuotaFee,
         remarks,
+        fileUrl,
+        recommendedByManagement,
+        cancellationFee,
     } = req.body;
 
     const adminId = req.user?.userId;
     if (!adminId) throw new AppError('Unauthorized', 401);
 
     const result = await CancellationService.createCancellationRequest(
-        { studentId, reason, conditionType, oldQuotaFee, newQuotaFee, remarks },
+        { studentId, reason, conditionType, oldQuotaFee, newQuotaFee, remarks, fileUrl, recommendedByManagement, cancellationFee },
         adminId,
     );
 
@@ -72,12 +75,12 @@ export const requestCancellation = catchAsync(async (req: Request, res: Response
 export const approveCancellation = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[approveCancellation] by=${req.user?.userId || 'anonymous'}`);
 
-    const { requestId, approved, remarks } = req.body;
+    const { requestId, approved, remarks, cancellationFee } = req.body;
 
     const adminId = req.user?.userId;
     if (!adminId) throw new AppError('Unauthorized', 401);
 
-    const result = await CancellationService.approveCancellation(requestId, approved, adminId, remarks);
+    const result = await CancellationService.approveCancellation(requestId, approved, adminId, remarks, cancellationFee);
 
     sendResponse({
         res,

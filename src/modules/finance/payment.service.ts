@@ -321,7 +321,8 @@ export const initiateMultiComponentPayment = async (
         PaymentComponent.OTHER,
         PaymentComponent.HOSTEL_ACCOMMODATION,
         PaymentComponent.HOSTEL_MESS,
-        PaymentComponent.HOSTEL
+        PaymentComponent.HOSTEL,
+        PaymentComponent.COURSE_CHANGE_FEE
     ];
 
     for (const item of components) {
@@ -595,18 +596,25 @@ const _processComponentLogic = async (payment: any) => {
     } else if (component === PaymentComponent.TUITION || component === PaymentComponent.ADMISSION || component === PaymentComponent.SCHOLARSHIP_TOKEN) {
         if ((component === PaymentComponent.SCHOLARSHIP_TOKEN || component === PaymentComponent.TUITION) && currentStatus?.status !== AdmissionStatus.ADMISSION_CONFIRMED && currentStatus?.status !== AdmissionStatus.ENROLLED) {
              await ScholarshipService.lockAllocation(studentId);
-             const detailedStudent = await prisma.student.findUnique({ where: { id: studentId }, include: { admissionDetails: { include: { hostel: true, transportRoute: true } }, scholarshipAllocation: { include: { rule: true } } }});
-             if (detailedStudent?.admissionDetails) {
-                 const ledgers: any[] = [];
-                 const admission = detailedStudent.admissionDetails;
-                 const tuitionFee = admission.totalFee ?? 0;
-                 if (tuitionFee <= 0) {
-                     logger.warn(`[_processComponentLogic] totalFee is ${tuitionFee} for student=${studentId} — skipping tuition ledger entry`);
+
+             // Skip FEE_GENERATION ledger if fee demands already exist (finalize admission flow handles this)
+             const existingDemands = await prisma.studentFeeDemand.count({ where: { studentId } });
+             if (existingDemands === 0) {
+                 const detailedStudent = await prisma.student.findUnique({ where: { id: studentId }, include: { admissionDetails: { include: { hostel: true, transportRoute: true } }, scholarshipAllocation: { include: { rule: true } } }});
+                 if (detailedStudent?.admissionDetails) {
+                     const ledgers: any[] = [];
+                     const admission = detailedStudent.admissionDetails;
+                     const tuitionFee = admission.totalFee ?? 0;
+                     if (tuitionFee <= 0) {
+                         logger.warn(`[_processComponentLogic] totalFee is ${tuitionFee} for student=${studentId} — skipping tuition ledger entry`);
+                     }
+                     if (tuitionFee > 0) ledgers.push({ studentId, type: 'DEBIT', amount: tuitionFee, description: 'Tuition Fee (Annual)', referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() });
+                     if (admission.transportRouteId && admission.transportRoute) { ledgers.push({ studentId, type: 'DEBIT', amount: admission.transportRoute.cost, description: `Transport Fee - ${admission.transportRoute.name}`, referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() }); }
+                     if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) { const rule = detailedStudent.scholarshipAllocation.rule; const discount = (tuitionFee * rule.discountPercentage) / 100; if (discount > 0) { ledgers.push({ studentId, type: 'CREDIT', amount: discount, description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`, referenceId: detailedStudent.scholarshipAllocation.id, referenceType: 'SCHOLARSHIP', date: new Date() }); } }
+                     if (ledgers.length > 0) await prisma.studentLedger.createMany({ data: ledgers });
                  }
-                 if (tuitionFee > 0) ledgers.push({ studentId, type: 'DEBIT', amount: tuitionFee, description: 'Tuition Fee (Annual)', referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() });
-                 if (admission.transportRouteId && admission.transportRoute) { ledgers.push({ studentId, type: 'DEBIT', amount: admission.transportRoute.cost, description: `Transport Fee - ${admission.transportRoute.name}`, referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() }); }
-                 if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) { const rule = detailedStudent.scholarshipAllocation.rule; const discount = (tuitionFee * rule.discountPercentage) / 100; if (discount > 0) { ledgers.push({ studentId, type: 'CREDIT', amount: discount, description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`, referenceId: detailedStudent.scholarshipAllocation.id, referenceType: 'SCHOLARSHIP', date: new Date() }); } }
-                 if (ledgers.length > 0) await prisma.studentLedger.createMany({ data: ledgers });
+             } else {
+                 logger.info(`[_processComponentLogic] Skipping FEE_GENERATION for student=${studentId} — ${existingDemands} fee demands already exist`);
              }
         }
         await prisma.studentAdmission.update({
@@ -1734,7 +1742,8 @@ export const processUnifiedPayment = async (data: any) => {
         PaymentComponent.HOSTEL_ACCOMMODATION,
         PaymentComponent.HOSTEL_MESS,
         PaymentComponent.TRANSPORT,
-        PaymentComponent.OTHER
+        PaymentComponent.OTHER,
+        PaymentComponent.COURSE_CHANGE_FEE
     ];
 
     if (!feeHeadId && !exemptFromFeeHead.includes(component)) {
@@ -1884,9 +1893,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 2. Initialize Breakdown
     const categories = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'OTHER'];
-    const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number, feeHeadId: string }> = {};
+    const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number, scholarshipAmount: number, feeHeadId: string }> = {};
     categories.forEach(cat => {
-        breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0, feeHeadId: '' };
+        breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0, scholarshipAmount: 0, feeHeadId: '' };
     });
 
     // 3. Helper: Map Fee Head Name to Category
@@ -1928,6 +1937,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         const target = breakdown[targetKey];
         
         target.demanded += demand.amount;
+        if (demand.scholarshipAmount) target.scholarshipAmount += demand.scholarshipAmount;
         if (demand.fineAmount) target.fine += demand.fineAmount;
         if (headId && !target.feeHeadId) target.feeHeadId = headId;
     });
@@ -1995,6 +2005,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
     // 6. LEDGER ADJUSTMENTS (Discounts, Scholarships)
     ledgers.forEach(entry => {
+        // Skip cancellation entries — they should not affect financial history
+        if (entry.referenceType === 'CANCELLATION') return;
+
         let category = 'OTHER';
         if (entry.feeHeadId && feeHeadCategoryMap.has(entry.feeHeadId)) {
             category = feeHeadCategoryMap.get(entry.feeHeadId) || 'OTHER';
@@ -2011,10 +2024,15 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         const target = breakdown[key];
 
         // Fines (Skipped as per existing logic logic if in Deamnd)
-        
-        // Credits (Discounts/Scholarships)
-        if (entry.type === 'CREDIT' && entry.referenceType !== 'PAYMENT' && entry.referenceType !== 'COURSE_CHANGE') {
+
+        // Credits (Discounts/Scholarships) — FEE_CORRECTION is carry-forward adjustment, not a discount
+        if (entry.type === 'CREDIT' && entry.referenceType !== 'PAYMENT' && entry.referenceType !== 'COURSE_CHANGE' && entry.referenceType !== 'FEE_CORRECTION') {
             target.discount += entry.amount;
+        }
+
+        // Scholarship reversal DEBIT — reduces discount
+        if (entry.type === 'DEBIT' && entry.referenceType === 'SCHOLARSHIP') {
+            target.discount -= entry.amount;
         }
 
         // Course change processing fee — DEBIT reduces paid on the source category (tuition)
@@ -2062,9 +2080,13 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     const totalPaid = payments
         .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
         .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
-    const totalDiscount = ledgers
-        .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE')
+    const scholarshipCredits = ledgers
+        .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE' && l.referenceType !== 'CANCELLATION' && l.referenceType !== 'FEE_CORRECTION')
         .reduce((sum, l) => sum + l.amount, 0);
+    const scholarshipReversals = ledgers
+        .filter(l => l.type === 'DEBIT' && l.referenceType === 'SCHOLARSHIP')
+        .reduce((sum, l) => sum + l.amount, 0);
+    const totalDiscount = Math.max(0, scholarshipCredits - scholarshipReversals);
 
     const summary = {
         totalDemanded,

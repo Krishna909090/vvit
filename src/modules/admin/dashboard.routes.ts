@@ -29,6 +29,15 @@ router.get('/application-stats', DashboardController.getApplicationStats);
  */
 router.get('/admission-stats', DashboardController.getAdmissionStats);
 
+/**
+ * @route   GET /scholarship-stats
+ * @desc    Scholarship counts (applicants, eligible-with-seat, not-eligible).
+ *          Supports optional `degreeType` filter plus standard date filters
+ *          (`range`, `startDate`, `endDate`).
+ * @access  Requires `admin.read.all` permission.
+ */
+router.get('/scholarship-stats', DashboardController.getScholarshipStats);
+
 // ═══════════════════════════════════════════════════════════
 //  FINANCIAL STATISTICS
 // ═══════════════════════════════════════════════════════════

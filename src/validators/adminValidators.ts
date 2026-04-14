@@ -36,10 +36,22 @@ export const changeCourseSchema = z.object({
     }),
 });
 
+export const branchChangeSchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid(),
+        newCourseId: z.string().uuid("Invalid Course ID"),
+        reason: z.string().min(1, "Reason is required"),
+        recommendedByManagement: z.boolean().optional().default(false),
+        branchChangeFee: z.number().min(0).optional().default(0),
+    }),
+});
+
 export const approveCourseChangeSchema = z.object({
     body: z.object({
         requestId: z.string().uuid(),
         approved: z.boolean(),
+        recommendedByManagement: z.boolean().optional(),
+        branchChangeFee: z.number().min(0).optional(),
     }),
 });
 
@@ -570,6 +582,13 @@ export const assignProSchema = z.object({
     body: z.object({
         studentId: z.string().uuid('Invalid student ID'),
         proNumber: z.string().min(1, 'PRO number is required'),
+    }),
+});
+
+export const editProSchema = z.object({
+    body: z.object({
+        studentId: z.string().uuid('Invalid student ID'),
+        proNumber: z.string().optional(),
     }),
 });
 

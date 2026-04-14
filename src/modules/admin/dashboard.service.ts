@@ -1,5 +1,5 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, Payment, ApplicationMode, QuotaType, AccommodationType } from '@prisma/client';
+import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, Payment, ApplicationMode, QuotaType, AccommodationType, Prisma } from '@prisma/client';
 
 const getDateCondition = (range?: string, startDate?: string, endDate?: string) => {
     const now = new Date();
@@ -167,10 +167,22 @@ export const DashboardService = {
             totalHostelSelected,
             totalTransportSelected,
             totalScholarshipEligible,
-            totalScholarshipNotEligible
+            totalScholarshipNotEligible,
+            discountStats,
+            totalSeatCancellationsApproved,
+            totalBranchChangeApproved
         ] = await Promise.all([
             prisma.student.count({
-                where: { ...whereDate, admissionDetails: { allottedCourseId: { not: null } } }
+                where: {
+                    admissionDetails: { status: { not: 'CANCELLED' } },
+                    payments: {
+                        some: {
+                            component: PaymentComponent.TUITION,
+                            status: PaymentStatus.SUCCESS,
+                            ...(dateFilter ? { createdAt: dateFilter } : {})
+                        }
+                    }
+                }
             }),
             prisma.student.count({ where: { ...whereDate, quotaType: QuotaType.MANAGEMENT } }),
             prisma.student.count({ where: { ...whereDate, quotaType: QuotaType.CONVENOR } }),
@@ -205,13 +217,46 @@ export const DashboardService = {
                     admissionDetails: { allottedCourseId: { not: null } }
                 } 
             }),
-            prisma.student.count({ 
-                where: { 
-                    ...whereDate, 
-                    studentScholarship: { isEligible: 'NO' } 
-                } 
-            })
+            prisma.student.count({
+                where: {
+                    ...whereDate,
+                    studentScholarship: { isEligible: 'NO' }
+                }
+            }),
+            prisma.discountRequest.aggregate({
+                where: {
+                    status: 'APPROVED',
+                    ...(dateFilter ? { approvedAt: dateFilter } : {})
+                },
+                _sum: { approvedAmount: true }
+            }),
+            prisma.cancellationRequest.count({
+                where: {
+                    status: 'APPROVED',
+                    ...(dateFilter ? { approvedAt: dateFilter } : {})
+                }
+            }),
+            prisma.$queryRaw<{ count: bigint }[]>`
+                SELECT COUNT(*)::bigint AS count
+                FROM "CourseChangeRequest"
+                WHERE "status" = 'APPROVED'
+                  AND "fromDegree" IS NOT NULL
+                  AND "toDegree" IS NOT NULL
+                  AND UPPER(TRIM("fromDegree")) = UPPER(TRIM("toDegree"))
+                  ${dateFilter?.gte ? Prisma.sql`AND "actionedAt" >= ${dateFilter.gte}` : Prisma.empty}
+                  ${dateFilter?.lte ? Prisma.sql`AND "actionedAt" <= ${dateFilter.lte}` : Prisma.empty}
+            `
         ]);
+
+        // Unique approved discount students
+        const approvedDiscountStudents = await prisma.discountRequest.findMany({
+            where: {
+                status: 'APPROVED',
+                ...(dateFilter ? { approvedAt: dateFilter } : {})
+            },
+            select: { studentId: true },
+            distinct: ['studentId']
+        });
 
         return {
             totalSeatAllocated,
@@ -220,7 +265,67 @@ export const DashboardService = {
             totalHostelSelected,
             totalTransportSelected,
             totalScholarshipEligible,
-            totalScholarshipNotEligible
+            totalScholarshipNotEligible,
+            totalApprovedDiscountStudents: approvedDiscountStudents.length,
+            totalApprovedDiscountAmount: discountStats._sum.approvedAmount || 0,
+            totalSeatCancellationsApproved,
+            totalBranchChangeApproved: Number(totalBranchChangeApproved?.[0]?.count ?? 0)
+        };
+    },
+
+    /**
+     * Scholarship Statistics — with optional degreeType filter
+     */
+    async getScholarshipStats(
+        range?: string,
+        startDate?: string,
+        endDate?: string,
+        degreeType?: string
+    ) {
+        const dateFilter = getDateCondition(range, startDate, endDate);
+        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
+        const degreeWhere = degreeType ? { degreeType } : {};
+
+        const baseWhere = { ...whereDate, ...degreeWhere };
+
+        const [totalEligible, totalNotEligible, totalApplicants] = await Promise.all([
+            prisma.student.count({
+                where: {
+                    ...baseWhere,
+                    studentScholarship: { isEligible: 'YES' },
+                    admissionDetails: {
+                        allottedCourseId: { not: null },
+                        status: { not: 'CANCELLED' }
+                    }
+                }
+            }),
+            prisma.student.count({
+                where: {
+                    ...baseWhere,
+                    studentScholarship: { isEligible: 'NO' },
+                    admissionDetails: {
+                        allottedCourseId: { not: null },
+                        status: { not: 'CANCELLED' }
+                    }
+                }
+            }),
+            prisma.student.count({
+                where: {
+                    ...baseWhere,
+                    studentScholarship: { isEligible: { in: ['YES', 'NO'] } },
+                    admissionDetails: {
+                        allottedCourseId: { not: null },
+                        status: { not: 'CANCELLED' }
+                    }
+                }
+            })
+        ]);
+
+        return {
+            degreeType: degreeType || 'ALL',
+            totalScholarshipApplicants: totalApplicants,
+            totalScholarshipEligible: totalEligible,
+            totalScholarshipNotEligible: totalNotEligible
         };
     },
 
@@ -263,13 +368,14 @@ export const DashboardService = {
                 }
             }),
 
-            // Count students with ANY approved document
+            // Count students with ANY approved document (excluding ALLOTMENT_ORDER)
             prisma.student.count({
                 where: {
                     ...whereDate,
                     documents: {
                         some: {
-                            status: StudentDocumentStatus.APPROVED
+                            status: StudentDocumentStatus.APPROVED,
+                            documentKey: { not: 'ALLOTMENT_ORDER' }
                         }
                     }
                 }
@@ -688,8 +794,7 @@ export const DashboardService = {
      * Get Course Statistics (Seats Filled vs Total)
      */
     async getCourseSeatStats() {
-        // Fetch courses with their allotted student count
-        // We use the relation 'allottedStudents' in Course model
+        // Compute filled seats dynamically from StudentAdmission, excluding CANCELLED students
         const courses = await prisma.course.findMany({
             where: { isDeleted: false },
             select: {
@@ -697,26 +802,33 @@ export const DashboardService = {
                 code: true,
                 name: true,
                 totalSeats: true,
-                filledSeats: true, // This field exists but might not be auto-synced, good to double check via relation count if needed
                 _count: {
-                    select: { allottedStudents: true }
+                    select: {
+                        allottedStudents: {
+                            where: {
+                                allottedCourseId: { not: null },
+                                OR: [
+                                    { status: null },
+                                    { status: { not: 'CANCELLED' } }
+                                ]
+                            }
+                        }
+                    }
                 }
             },
             orderBy: { name: 'asc' }
         });
 
-        // Map to simpler format and ensure 'filled' is accurate based on actual count if preferred, 
-        // or strictly follow existing logic. Ideally, we trust the DB count of relations.
         return courses.map(c => {
-            const actualFilled = c._count.allottedStudents;
+            const filled = c._count.allottedStudents;
             const total = c.totalSeats || 0;
             return {
                 id: c.id,
                 code: c.code,
                 name: c.name,
                 totalSeats: total,
-                filledSeats: actualFilled,
-                remainingSeats: Math.max(0, total - actualFilled)
+                filledSeats: filled,
+                remainingSeats: Math.max(0, total - filled)
             };
         });
     }

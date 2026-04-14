@@ -219,7 +219,8 @@ export const InvoiceService = {
         
         // Upload S3
         // Key format: student/APPID/invoices/TXID.pdf to match existing pattern
-        const s3Key = `student/${applicationNumber}/invoices/${realTransactionId}.pdf`;
+        const sanitizedTxId = realTransactionId.replace(/[^a-zA-Z0-9_\-]/g, '_');
+        const s3Key = `student/${applicationNumber}/invoices/${sanitizedTxId}.pdf`;
         const invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
         
         logger.info(`[InvoiceService] Valid URL generated: ${invoiceUrl}. Updating ${allPayments.length} payment records.`);

@@ -145,6 +145,7 @@ model AcademicYear {
   studentFeeDemands StudentFeeDemand[]
   payments          Payment[]
   ledgerEntries     StudentLedger[]
+  feeCorrections    FeeCorrection[]
 }
 
 model StudentEnrollment {
@@ -241,6 +242,7 @@ model Student {
   studentScholarship        StudentScholarship?
   transportAllocation       TransportAllocation?
   waitingListEntries        WaitingList[]
+  feeCorrections            FeeCorrection[]
 
   proId                     String?
   proCommissionAmount       Float?                  @default(0)
@@ -428,6 +430,7 @@ model HostelPriceCategory {
   metadata           Json?
   accommodationPrice Float?         @default(0)
   messPrice          Float?         @default(0)
+  semwiseSurcharge   Float?         @default(0)
 
   @@unique([sharing, roomType])
 }
@@ -724,7 +727,11 @@ model CancellationRequest {
   balanceDue       Float?
   finalStatus      String?
   conditionRemarks String?
-  remarks          String?
+  remarks                  String?
+  // Cancellation letter & management flag
+  fileUrl                  String?
+  recommendedByManagement  Boolean?  @default(false)
+  cancellationFee          Float?    @default(10000)
   // Invoice
   invoiceUrl       String?
   // Timestamps
@@ -849,22 +856,52 @@ model SeatAllocation {
 }
 
 model CourseChangeRequest {
-  id          String         @id @default(dbgenerated("gen_random_uuid()"))
-  studentId   String
-  fromCourse  String
-  toCourse    String
-  fromDegree  String?
-  toDegree    String?
-  reason      String
-  status      RequestStatus? @default(REQUESTED)
-  forwardedTo String?
-  actionedBy  String?
-  actionedAt  DateTime?
-  createdAt   DateTime?      @default(now())
-  updatedAt   DateTime       @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  student     Student        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                      String         @id @default(dbgenerated("gen_random_uuid()"))
+  studentId               String
+  fromCourse              String
+  toCourse                String
+  fromDegree              String?
+  toDegree                String?
+  reason                  String
+  status                  RequestStatus? @default(REQUESTED)
+  forwardedTo             String?
+  actionedBy              String?
+  actionedAt              DateTime?
+  recommendedByManagement Boolean?       @default(false)
+  branchChangeFee         Float?         @default(0)
+  createdAt               DateTime?      @default(now())
+  updatedAt               DateTime       @updatedAt
+  createdBy               String?
+  updatedBy               String?
+  student                 Student        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model FeeCorrection {
+  id                    String         @id @default(dbgenerated("gen_random_uuid()"))
+  studentId             String
+  academicYearId        String
+  amount                Float
+  reason                String
+  type                  FeeCorrectionType
+  referenceId           String?
+  referenceType         String?
+  remarks               String?
+  carryForward          Boolean?       @default(true)
+  carriedForwardToYearId String?
+  isSettled             Boolean?       @default(false)
+  settledAt             DateTime?
+  settledBy             String?
+  createdAt             DateTime?      @default(now())
+  updatedAt             DateTime       @updatedAt
+  createdBy             String?
+  updatedBy             String?
+
+  student               Student        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear          AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([studentId])
+  @@index([studentId, academicYearId])
+  @@index([carryForward, isSettled])
 }
 
 model AgentCommission {
@@ -1239,6 +1276,7 @@ enum PaymentComponent {
   SKILL_DEVELOPMENT
   HOSTEL_ACCOMMODATION
   HOSTEL_MESS
+  COURSE_CHANGE_FEE
 }
 
 enum AccommodationType {
@@ -1380,6 +1418,14 @@ enum PaymentMethod {
 enum LedgerTransactionType {
   CREDIT
   DEBIT
+}
+
+enum FeeCorrectionType {
+  REFUND
+  ADJUSTMENT
+  BRANCH_CHANGE_REFUND
+  ACCOMMODATION_CHANGE_REFUND
+  CARRY_FORWARD
 }
 
 enum EmailStatus {

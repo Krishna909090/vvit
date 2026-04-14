@@ -14,6 +14,7 @@ import { FeeService } from '../finance/fee.service';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { maskAadhaar } from '../../utils/mask';
 import { generateApplicationPDF } from '../../utils/applicationPdfGenerator';
+import { getHostelCostTx, getSemwiseSurchargeTx } from '../../utils/hostelPricing';
 import { getEnv } from '../../config/envValidator';
 import { sendAdmissionFeeReceipt, sendPaymentReceipt, sendScholarshipUpdateEmail } from '../../utils/emailService';
 // @ts-ignore
@@ -45,11 +46,18 @@ const buildApplicationFilters = async (query: any): Promise<any> => {
         where.applicationId = String(applicationId);
     }
 
-    if (status) {
+    if (status && status !== AdmissionStatus.CANCELLED) {
         where.admissionDetails = {
             status: status
         };
     }
+
+    // Always exclude students whose admission has been CANCELLED — irrespective of
+    // any other filter the caller passes in.
+    where.NOT = [
+        ...(Array.isArray(where.NOT) ? where.NOT : []),
+        { admissionDetails: { status: AdmissionStatus.CANCELLED } }
+    ];
 
     if (quotaType) {
         where.quotaType = quotaType;
@@ -452,9 +460,6 @@ export const AdminStudentService = {
                 aadharNumber: maskAadhaar(student.aadharNumber),
                 profilePhotoUrl,
                 documents: documentsWithPresignedUrls,
-                // Removed flattened fields to match requested JSON structure
-                // allottedCourseName, pref1CourseName etc. are removed
-                // pendingDocs, s3FolderKey etc. are removed
             };
         }));
 
@@ -984,7 +989,7 @@ export const AdminStudentService = {
      * Request a BRANCH change — same degree program, different branch/specialization.
      * e.g. B.Tech CSE → B.Tech ECE
      */
-    async requestBranchChange(studentId: string, newCourseId: string, reason: string) {
+    async requestBranchChange(studentId: string, newCourseId: string, reason: string, recommendedByManagement: boolean = false, branchChangeFee: number = 0) {
         if (!studentId || !newCourseId || !reason) {
             throw new AppError('studentId, newCourseId and reason are required', 400);
         }
@@ -1023,6 +1028,8 @@ export const AdminStudentService = {
                 fromDegree: oldCourse?.degree,
                 toDegree: newCourse.degree,
                 reason,
+                recommendedByManagement,
+                branchChangeFee: recommendedByManagement ? branchChangeFee : 0,
                 status: RequestStatus.FORWARDED,
                 forwardedTo: 'SUPER_ADMIN'
             } as any
@@ -1132,7 +1139,7 @@ export const AdminStudentService = {
     },
 
 
-    async approveCourseChange(requestId: string, approved: boolean, adminRole: string | undefined, adminId: string | undefined) {
+    async approveCourseChange(requestId: string, approved: boolean, adminRole: string | undefined, adminId: string | undefined, recommendedByManagement?: boolean, branchChangeFee?: number) {
         if (adminRole !== Role.SUPER_ADMIN) {
             throw new AppError(MESSAGES.ERROR.ONLY_SUPER_ADMIN_APPROVE_COURSE, 403);
         }
@@ -1142,19 +1149,40 @@ export const AdminStudentService = {
         const request = await prisma.courseChangeRequest.findUnique({ where: { id: requestId } });
         if (!request) throw new AppError(MESSAGES.ERROR.REQUEST_NOT_FOUND, 404);
 
+        // #2 FIX: Prevent double-processing
+        if (request.status === RequestStatus.APPROVED || request.status === RequestStatus.REJECTED) {
+            throw new AppError(`This request has already been ${request.status.toLowerCase()}`, 400);
+        }
+
         const status = approved ? RequestStatus.APPROVED : RequestStatus.REJECTED;
+
+        // Build update data for the request
+        const updateData: any = {
+            status,
+            actionedBy: adminId,
+            actionedAt: new Date()
+        };
+        if (recommendedByManagement !== undefined) {
+            updateData.recommendedByManagement = recommendedByManagement;
+        }
+        if (branchChangeFee !== undefined) {
+            updateData.branchChangeFee = branchChangeFee;
+        }
 
         await prisma.$transaction(async (tx) => {
             await tx.courseChangeRequest.update({
                 where: { id: requestId },
-                data: {
-                    status,
-                    actionedBy: adminId,
-                    actionedAt: new Date()
-                }
+                data: updateData
             });
 
             if (approved) {
+                // #7 FIX: Check seat capacity before incrementing
+                const toCourse = await tx.course.findUnique({ where: { id: request.toCourse } });
+                if (!toCourse) throw new AppError('Target course not found', 404);
+                if ((toCourse.filledSeats ?? 0) >= (toCourse.totalSeats ?? 0)) {
+                    throw new AppError(`Target course "${toCourse.code || toCourse.name}" is fully booked (${toCourse.filledSeats}/${toCourse.totalSeats}). Cannot process branch change.`, 400);
+                }
+
                 // 1. Update Admission & Seats
                 await tx.studentAdmission.update({
                     where: { studentId: request.studentId },
@@ -1194,20 +1222,20 @@ export const AdminStudentService = {
                     where: { id: request.studentId },
                     include: { admissionDetails: true }
                 });
-                
+
                 if (!student) return;
 
                 // Find ALL demands for this student and their successful payments
                 const studentDemands = await tx.studentFeeDemand.findMany({
                     where: { studentId: request.studentId },
-                    include: { 
+                    include: {
                         feeHead: true,
                         payments: { where: { status: 'SUCCESS' } }
                     }
                 });
 
                 // Determine Academic Year for reconciliation
-                const academicYearId = studentDemands.find(d => (d.feeHead?.name || '').toLowerCase().includes('tuition'))?.academicYearId 
+                const academicYearId = studentDemands.find(d => (d.feeHead?.name || '').toLowerCase().includes('tuition'))?.academicYearId
                                         || student.admissionDetails?.academicYearId;
 
                 if (!academicYearId) {
@@ -1223,6 +1251,9 @@ export const AdminStudentService = {
                     },
                     include: { feeHead: true }
                 });
+
+                // Track which fee heads exist in new course (for orphan cleanup)
+                const newCourseHeadIds = new Set(newCourseStructures.map(s => s.feeHeadId));
 
                 let tuitionHeadId: string | null = null;
                 const totalPaidAcrossAll = studentDemands.reduce((sum, d) => sum + d.payments.reduce((ps, p) => ps + p.amount, 0), 0);
@@ -1254,6 +1285,7 @@ export const AdminStudentService = {
                         const newNetAmount = newFee - newDiscountTotal;
                         const pending = newNetAmount - currentPaid;
 
+                        // #3 FIX: Replace remarks instead of appending
                         await tx.studentFeeDemand.update({
                             where: { id: existingDemand.id },
                             data: {
@@ -1262,7 +1294,9 @@ export const AdminStudentService = {
                                 discountAmount: isTuition ? newDiscountTotal : undefined,
                                 netAmount: newNetAmount,
                                 status: pending <= 0 ? FeeStatus.FULL : (currentPaid > 0 ? FeeStatus.PARTIAL : FeeStatus.PENDING),
-                                remarks: (existingDemand.remarks || '') + ` | Course Change: Fee updated from ${oldFee} to ${newFee}`
+                                remarks: oldFee !== newFee
+                                    ? `Course Change: Fee updated from ${oldFee} to ${newFee}`
+                                    : existingDemand.remarks
                             }
                         });
 
@@ -1278,11 +1312,13 @@ export const AdminStudentService = {
                             });
 
                             if (existingDemandLedger) {
+                                // #3 FIX: Clean ledger description instead of appending
+                                const baseName = (struct.feeHead?.name || 'Fee');
                                 await tx.studentLedger.update({
                                     where: { id: existingDemandLedger.id },
                                     data: {
                                         amount: newFee,
-                                        description: `${existingDemandLedger.description} (Updated: ${oldFee} → ${newFee})`,
+                                        description: `Fee: ${baseName} (Updated: ${oldFee} → ${newFee})`,
                                     }
                                 });
                             }
@@ -1347,53 +1383,170 @@ export const AdminStudentService = {
                     }
                 }
 
-                // 3. COURSE CHANGE PROCESSING FEE (10,000 DEDUCTION FROM PAID)
-                // This is an internal deduction from the student's already-paid amount,
-                // NOT a new fee demand. We only record a DEBIT ledger entry on the source head
-                // and adjust the tuition demand's paid tracking accordingly.
-                const DEDUCTION_AMOUNT = 10000;
-                const actualDeduction = Math.min(totalPaidAcrossAll, DEDUCTION_AMOUNT);
+                // #4 FIX: Soft-delete orphaned demands (fee heads in old course but not in new course)
+                for (const demand of studentDemands) {
+                    if (demand.feeHeadId && !newCourseHeadIds.has(demand.feeHeadId)) {
+                        const headName = demand.feeHead?.name || demand.feeHeadId;
+                        const paidOnDemand = demand.payments.reduce((sum, p) => sum + p.amount, 0);
 
-                if (actualDeduction > 0) {
-                    const sourceHeadId = tuitionHeadId || studentDemands[0]?.feeHeadId;
+                        await tx.studentFeeDemand.update({
+                            where: { id: demand.id },
+                            data: {
+                                isDeleted: true,
+                                deletedAt: new Date(),
+                                deletedBy: adminId,
+                                remarks: `Removed during course change: ${headName} not in new course structure`
+                            }
+                        });
 
-                    if (sourceHeadId) {
-                        // Debit from student's paid amount (e.g., Tuition)
-                        await tx.studentLedger.create({
+                        // Soft-delete the corresponding ledger entry
+                        await tx.studentLedger.updateMany({
+                            where: {
+                                studentId: request.studentId,
+                                feeHeadId: demand.feeHeadId,
+                                referenceType: 'FEE_DEMAND',
+                                type: 'DEBIT',
+                                isDeleted: false
+                            },
+                            data: { isDeleted: true, deletedAt: new Date(), deletedBy: adminId }
+                        });
+
+                        logger.info(`[approveCourseChange] Orphaned demand removed: ${headName} (paid: ${paidOnDemand}) for student ${request.studentId}`);
+                    }
+                }
+
+                // 3a. SETTLE existing unsettled corrections (previous branch change refunds no longer valid)
+                const existingCorrections = await tx.feeCorrection.findMany({
+                    where: {
+                        studentId: request.studentId,
+                        isSettled: false,
+                        type: 'BRANCH_CHANGE_REFUND'
+                    }
+                });
+
+                if (existingCorrections.length > 0) {
+                    const settledIds = existingCorrections.map((c: any) => c.id);
+                    const settledTotal = existingCorrections.reduce((sum: number, c: any) => sum + c.amount, 0);
+
+                    await tx.feeCorrection.updateMany({
+                        where: { id: { in: settledIds } },
+                        data: {
+                            isSettled: true,
+                            settledAt: new Date(),
+                            settledBy: adminId,
+                            // #6 FIX: Handle null remarks
+                            remarks: `Settled: reversed by new branch change ${request.fromCourse} → ${request.toCourse}`
+                        }
+                    });
+
+                    // Reverse the old CREDIT ledger entries by adding a DEBIT
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId: request.studentId,
+                            type: LedgerTransactionType.DEBIT,
+                            amount: settledTotal,
+                            description: `Previous branch change corrections reversed (${existingCorrections.length} entries, total: ${settledTotal})`,
+                            referenceType: 'FEE_CORRECTION_REVERSAL',
+                            referenceId: requestId,
+                            academicYearId,
+                            createdBy: adminId
+                        }
+                    });
+
+                    logger.info(`[approveCourseChange] Settled ${existingCorrections.length} previous corrections for student ${request.studentId}. Reversed: ${settledTotal}`);
+                }
+
+                // 3b. FEE CORRECTION — track overpaid amount per head (carry forward to next year)
+                let totalCorrectionAmount = 0;
+
+                // Re-fetch demands after updates to get accurate amounts
+                const updatedDemands = await tx.studentFeeDemand.findMany({
+                    where: { studentId: request.studentId, isDeleted: false },
+                    include: {
+                        feeHead: true,
+                        payments: { where: { status: 'SUCCESS' } }
+                    }
+                });
+
+                for (const demand of updatedDemands) {
+                    const newFee = demand.amount;
+                    const currentPaid = demand.payments.reduce((sum, p) => sum + p.amount, 0);
+                    const excessPaid = currentPaid - newFee;
+
+                    if (excessPaid > 0 && academicYearId) {
+                        const headName = demand.feeHead?.name || demand.feeHeadId || 'Unknown';
+
+                        await tx.feeCorrection.create({
                             data: {
                                 studentId: request.studentId,
-                                feeHeadId: sourceHeadId,
-                                type: LedgerTransactionType.DEBIT,
-                                amount: actualDeduction,
-                                description: `Course change processing fee deducted from paid amount`,
-                                referenceType: 'COURSE_CHANGE',
-                                referenceId: request.id,
+                                academicYearId,
+                                amount: excessPaid,
+                                reason: `Branch change refund: ${headName}. Fee: ${newFee}, Paid: ${currentPaid}, Excess: ${excessPaid}`,
+                                type: 'BRANCH_CHANGE_REFUND',
+                                referenceId: requestId,
+                                referenceType: 'COURSE_CHANGE_REQUEST',
+                                remarks: `Fee head: ${headName}, Fee: ${newFee}, Paid: ${currentPaid}, Refund: ${excessPaid}`,
+                                carryForward: true,
+                                isSettled: false,
                                 createdBy: adminId
                             }
                         });
 
-                        // Update the source demand to reflect reduced effective payment
-                        const sourceDemand = studentDemands.find(d => d.feeHeadId === sourceHeadId);
-                        if (sourceDemand) {
-                            const paidOnSource = sourceDemand.payments.reduce((sum, p) => sum + p.amount, 0);
-                            const effectivePaid = paidOnSource - actualDeduction;
-                            const netAmount = sourceDemand.netAmount ?? (sourceDemand.amount - (sourceDemand.discountAmount || 0));
-                            const pending = netAmount - effectivePaid;
+                        // CREDIT ledger entry for the overpaid correction
+                        await tx.studentLedger.create({
+                            data: {
+                                studentId: request.studentId,
+                                type: LedgerTransactionType.CREDIT,
+                                amount: excessPaid,
+                                description: `Branch change refund: ${headName}. Paid ${currentPaid} against fee ${newFee}. Carry forward.`,
+                                referenceType: 'FEE_CORRECTION',
+                                referenceId: requestId,
+                                feeHeadId: demand.feeHeadId,
+                                academicYearId,
+                                createdBy: adminId
+                            }
+                        });
 
-                            await tx.studentFeeDemand.update({
-                                where: { id: sourceDemand.id },
-                                data: {
-                                    status: pending <= 0 ? FeeStatus.FULL : (effectivePaid > 0 ? FeeStatus.PARTIAL : FeeStatus.PENDING),
-                                    remarks: (sourceDemand.remarks || '') + ` | Course change fee: ${actualDeduction} deducted from paid`
-                                }
-                            });
-                        }
+                        totalCorrectionAmount += excessPaid;
                     }
                 }
 
-                logger.info(`[approveCourseChange] Full reconciliation for Student ${student.id} to Course ${request.toCourse}. Deduction: ${actualDeduction} from paid: ${totalPaidAcrossAll}`);
+                if (totalCorrectionAmount > 0) {
+                    logger.info(`[approveCourseChange] FeeCorrections created for student ${request.studentId}. Total refund: ${totalCorrectionAmount}, carryForward: true`);
+                }
+
+                // 4. BRANCH CHANGE FEE — DEBIT ledger entry if fee applies
+                // #1 FIX: Use admin-provided value first, then fall back to request value
+                const changeFee = branchChangeFee ?? (request as any).branchChangeFee ?? 0;
+                if (changeFee > 0) {
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId: request.studentId,
+                            type: LedgerTransactionType.DEBIT,
+                            amount: changeFee,
+                            description: `Branch change fee: ${request.fromCourse} → ${request.toCourse}`,
+                            referenceType: 'BRANCH_CHANGE_FEE',
+                            referenceId: requestId,
+                            academicYearId,
+                            createdBy: adminId
+                        }
+                    });
+
+                    logger.info(`[approveCourseChange] Branch change fee ledger DEBIT created for student ${request.studentId}. Amount: ${changeFee}`);
+                }
+
+                logger.info(`[approveCourseChange] Full reconciliation for Student ${student.id} to Course ${request.toCourse}. TotalPaid: ${totalPaidAcrossAll}`);
             }
         });
+
+        // Regenerate allotment order with new course details (outside transaction)
+        try {
+            const { generateAndSaveAllotmentOrder } = await import('../finance/payment.service');
+            await generateAndSaveAllotmentOrder(request.studentId);
+            logger.info(`[approveCourseChange] Allotment order regenerated for student ${request.studentId}`);
+        } catch (err) {
+            logger.error(`[approveCourseChange] Failed to regenerate allotment order: ${err}`);
+        }
     },
 
     async updateAdmissionDetails(data: any, adminId: string | undefined) {
@@ -1410,32 +1563,46 @@ export const AdminStudentService = {
         }
 
         const admission = student.admissionDetails;
+        const oldAccType = admission.accommodationType;
         // Initialize adjustment delta
         let feeAdjustment = 0;
+        let oldCost = 0;
+        let newCost = 0;
+        let oldDescription = '';
+        let newDescription = '';
 
         await prisma.$transaction(async (tx) => {
             // Release previous allocation and calculate subtraction from Total Fee
             if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelId) {
                 if (accommodationType !== AccommodationType.HOSTEL || hostelId !== admission.hostelId) {
-                    await tx.hostel.update({
-                        where: { id: admission.hostelId },
-                        data: { filled: { decrement: 1 }, updatedBy: adminId }
-                    });
-                    
-                    // Subtract old hostel cost
                     const oldHostel = await tx.hostel.findUnique({ where: { id: admission.hostelId } });
-                    if (oldHostel) feeAdjustment -= (oldHostel.cost || 0);
+                    if (oldHostel) {
+                        if ((oldHostel.filled ?? 0) > 0) {
+                            await tx.hostel.update({
+                                where: { id: admission.hostelId },
+                                data: { filled: { decrement: 1 }, updatedBy: adminId }
+                            });
+                        }
+                        const oldPricing = await getHostelCostTx(admission.hostelType, tx);
+                        oldCost = oldPricing.totalPrice;
+                        oldDescription = `Hostel: ${oldHostel.name || admission.hostelId}`;
+                        feeAdjustment -= oldCost;
+                    }
                 }
             } else if (admission.accommodationType === AccommodationType.TRANSPORT && admission.transportRouteId) {
                 if (accommodationType !== AccommodationType.TRANSPORT || transportRouteId !== admission.transportRouteId) {
-                    await tx.transportRoute.update({
-                        where: { id: admission.transportRouteId },
-                        data: { filled: { decrement: 1 }, updatedBy: adminId }
-                    });
-                    
-                    // Subtract old transport cost
                     const oldRoute = await tx.transportRoute.findUnique({ where: { id: admission.transportRouteId } });
-                    if (oldRoute) feeAdjustment -= (oldRoute.cost || 0);
+                    if (oldRoute) {
+                        if ((oldRoute.filled ?? 0) > 0) {
+                            await tx.transportRoute.update({
+                                where: { id: admission.transportRouteId },
+                                data: { filled: { decrement: 1 }, updatedBy: adminId }
+                            });
+                        }
+                        oldCost = oldRoute.cost || 0;
+                        oldDescription = `Transport: ${oldRoute.name || admission.transportRouteId}`;
+                        feeAdjustment -= oldCost;
+                    }
                 }
             }
 
@@ -1453,11 +1620,11 @@ export const AdminStudentService = {
                         where: { id: hostelId },
                         data: { filled: { increment: 1 }, updatedBy: adminId }
                     });
-                    
-                    // Add new hostel cost
-                    feeAdjustment += (hostel.cost || 0);
-                } else {
-                     // Same hostel, no fee change unless we assume cost changed (unlikely for admission update flow)
+
+                    const newPricing = await getHostelCostTx(hostelType, tx);
+                    newCost = newPricing.totalPrice;
+                    newDescription = `Hostel: ${hostel.name || hostelId}`;
+                    feeAdjustment += newCost;
                 }
             }
             else if (accommodationType === AccommodationType.TRANSPORT) {
@@ -1473,31 +1640,28 @@ export const AdminStudentService = {
                         where: { id: transportRouteId },
                         data: { filled: { increment: 1 }, updatedBy: adminId }
                     });
-                    
-                    // Add new transport cost
-                    feeAdjustment += (route.cost || 0);
-                } else {
-                    // Same route
+
+                    newCost = route.cost || 0;
+                    newDescription = `Transport: ${route.name || transportRouteId}`;
+                    feeAdjustment += newCost;
                 }
             }
-            
+
             // Handle Hostel Payment Mode Adjustment
             if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                const oldSemFee = admission.hostelType?.includes('SHARING_4') ? 7000 : admission.hostelType?.includes('SHARING_8') ? 6000 : 0;
+                const oldSemFee = await getSemwiseSurchargeTx(admission.hostelType, tx);
+                oldCost += oldSemFee;
                 feeAdjustment -= oldSemFee;
             }
             if (accommodationType === AccommodationType.HOSTEL && hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                const newSemFee = hostelType?.includes('SHARING_4') ? 7000 : hostelType?.includes('SHARING_8') ? 6000 : 0;
+                const newSemFee = await getSemwiseSurchargeTx(hostelType, tx);
+                newCost += newSemFee;
                 feeAdjustment += newSemFee;
             }
 
             const currentPaid = (admission.paidFee ?? 0) + Number(paidAmount || 0);
-            
-            // Calculate final fee status
-            // Note: We use increment for totalFee, but to check status we need the PREDICTED new total.
-            // Current DB total might be X. New total = X + feeAdjustment.
             const newTotalFee = (admission.totalFee ?? 0) + feeAdjustment;
-            
+
             let feeStatus: FeeStatus = FeeStatus.PENDING;
             if (currentPaid >= newTotalFee && newTotalFee > 0) feeStatus = FeeStatus.FULL;
             else if (currentPaid > 0) feeStatus = FeeStatus.PARTIAL;
@@ -1515,6 +1679,97 @@ export const AdminStudentService = {
                     hostelPaymentMode: accommodationType === AccommodationType.HOSTEL ? hostelPaymentMode : null,
                 }
             });
+
+            // --- LEDGER & FEE CORRECTION ---
+            const academicYearId = admission.academicYearId;
+            const changeDescription = oldDescription && newDescription
+                ? `Accommodation change: ${oldDescription} → ${newDescription}`
+                : oldDescription
+                    ? `Accommodation removed: ${oldDescription}`
+                    : newDescription
+                        ? `Accommodation added: ${newDescription}`
+                        : 'Accommodation updated';
+
+            // Calculate how much student paid on the old accommodation type
+            const isRealChange = oldAccType && oldAccType !== AccommodationType.NONE && (oldCost > 0 || feeAdjustment !== 0);
+            if (isRealChange && academicYearId) {
+                const oldComponents = oldAccType === AccommodationType.HOSTEL
+                    ? [PaymentComponent.HOSTEL, PaymentComponent.HOSTEL_ACCOMMODATION, PaymentComponent.HOSTEL_MESS]
+                    : [PaymentComponent.TRANSPORT];
+
+                const paidOnOld = await tx.payment.aggregate({
+                    where: {
+                        studentId,
+                        status: PaymentStatus.SUCCESS,
+                        component: { in: oldComponents }
+                    },
+                    _sum: { amount: true }
+                });
+                const totalPaidOnOld = (paidOnOld._sum as any)?.amount || 0;
+
+                // Effective new cost: if same type change (hostel→hostel), use newCost; if type changed or NONE, it's 0
+                const effectiveNewCost = (accommodationType === oldAccType) ? newCost : 0;
+                const excessPaid = totalPaidOnOld - effectiveNewCost;
+
+                if (excessPaid > 0) {
+                    // Settle any previous accommodation corrections first
+                    const prevCorrections = await tx.feeCorrection.findMany({
+                        where: { studentId, isSettled: false, type: 'ACCOMMODATION_CHANGE_REFUND' }
+                    });
+                    if (prevCorrections.length > 0) {
+                        const prevTotal = prevCorrections.reduce((sum: number, c: any) => sum + c.amount, 0);
+                        await tx.feeCorrection.updateMany({
+                            where: { id: { in: prevCorrections.map((c: any) => c.id) } },
+                            data: { isSettled: true, settledAt: new Date(), settledBy: adminId, remarks: `Settled: reversed by new accommodation change` }
+                        });
+                        await tx.studentLedger.create({
+                            data: {
+                                studentId,
+                                type: LedgerTransactionType.DEBIT,
+                                amount: prevTotal,
+                                description: `Previous accommodation corrections reversed (${prevCorrections.length} entries, total: ${prevTotal})`,
+                                referenceType: 'FEE_CORRECTION_REVERSAL',
+                                academicYearId,
+                                createdBy: adminId
+                            }
+                        });
+                        logger.info(`[updateAdmissionDetails] Settled ${prevCorrections.length} previous accommodation corrections for student ${studentId}. Reversed: ${prevTotal}`);
+                    }
+
+                    // Create new correction
+                    const oldLabel = oldAccType === AccommodationType.HOSTEL ? 'Hostel' : 'Transport';
+                    await tx.feeCorrection.create({
+                        data: {
+                            studentId,
+                            academicYearId,
+                            amount: excessPaid,
+                            reason: `Accommodation change refund: ${oldLabel}. Paid: ${totalPaidOnOld}, New cost: ${effectiveNewCost}, Excess: ${excessPaid}`,
+                            type: 'ACCOMMODATION_CHANGE_REFUND',
+                            referenceType: 'ACCOMMODATION_CHANGE',
+                            remarks: `${changeDescription}. Paid: ${totalPaidOnOld}, Refund: ${excessPaid}`,
+                            carryForward: true,
+                            isSettled: false,
+                            createdBy: adminId
+                        }
+                    });
+
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId,
+                            type: LedgerTransactionType.CREDIT,
+                            amount: excessPaid,
+                            description: `Accommodation change refund: ${oldLabel}. Paid ${totalPaidOnOld} against new cost ${effectiveNewCost}. Carry forward.`,
+                            referenceType: 'FEE_CORRECTION',
+                            academicYearId,
+                            createdBy: adminId
+                        }
+                    });
+
+                    logger.info(`[updateAdmissionDetails] FeeCorrection created for student ${studentId}. Refund: ${excessPaid}, carryForward: true`);
+                }
+            }
+
+            logger.info(`[updateAdmissionDetails] Accommodation updated for student ${studentId}. ${oldAccType} → ${accommodationType}. Fee adjustment: ${feeAdjustment}`);
         });
     },
 
@@ -1870,6 +2125,10 @@ export const AdminStudentService = {
                 },
                 payments: true,
                 courseChangeLogs: true,
+                courseChangeRequests: {
+                    where: { status: { in: ['REQUESTED', 'FORWARDED'] } },
+                    orderBy: { createdAt: 'desc' }
+                },
                 discountRequests: true,
                 ledgerEntries: true,
                 enrollments: {
@@ -1952,6 +2211,10 @@ export const AdminStudentService = {
                 },
                 payments: true,
                 courseChangeLogs: true,
+                courseChangeRequests: {
+                    where: { status: { in: ['REQUESTED', 'FORWARDED'] } },
+                    orderBy: { createdAt: 'desc' }
+                },
                 discountRequests: true,
                 ledgerEntries: true,
                 enrollments: {
@@ -2398,6 +2661,20 @@ export const AdminStudentService = {
      */
     async processPaymentSuccess(payment: any, adminId: string | undefined, tx: any) {
         const resolvedAdminId = adminId || 'SYSTEM';
+
+        // Guard: skip if ledger entry already exists for this payment (prevents duplicate from race condition)
+        const existingLedger = await tx.studentLedger.findFirst({
+            where: {
+                referenceId: payment.id,
+                referenceType: 'PAYMENT',
+                studentId: payment.studentId
+            }
+        });
+        if (existingLedger) {
+            logger.warn(`[processPaymentSuccess] Ledger already exists for payment ${payment.id}. Skipping duplicate.`);
+            return;
+        }
+
         // 1. Create Ledger Entry
         await tx.studentLedger.create({
             data: {
@@ -2549,39 +2826,32 @@ export const AdminStudentService = {
 
             // --- Calculate Accommodation Cost Delta ---
             let accCostDelta = 0;
-            
+
             // 1. Subtract Old Cost
             if (oldAdmission) {
                  if (oldAdmission.accommodationType === AccommodationType.HOSTEL && oldAdmission.hostelId) {
-                     const h = await tx.hostel.findUnique({ where: { id: oldAdmission.hostelId } });
-                     if (h) accCostDelta -= (h.cost || 0);
+                     const oldPricing = await getHostelCostTx(oldAdmission.hostelType, tx);
+                     accCostDelta -= oldPricing.totalPrice;
+                     if (oldAdmission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
+                         accCostDelta -= oldPricing.semwiseSurcharge;
+                     }
                  } else if (oldAdmission.accommodationType === AccommodationType.TRANSPORT && oldAdmission.transportRouteId) {
                      const r = await tx.transportRoute.findUnique({ where: { id: oldAdmission.transportRouteId } });
                      if (r) accCostDelta -= (r.cost || 0);
-                 }
-                 
-                 // Subtract semwise extra if applicable
-                 if (oldAdmission.accommodationType === AccommodationType.HOSTEL && oldAdmission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                     const oldSemFee = oldAdmission.hostelType?.includes('SHARING_4') ? 7000 : oldAdmission.hostelType?.includes('SHARING_8') ? 6000 : 0;
-                     accCostDelta -= oldSemFee;
                  }
             }
 
             // 2. Add New Cost
             if (allocation.type === AccommodationType.HOSTEL && allocation.hostelId) {
-                 // Already verified existence in flow usually, but safe access
-                 const h = await tx.hostel.findUnique({ where: { id: allocation.hostelId } });
-                 if (h) accCostDelta += (h.cost || 0);
+                 const newPricing = await getHostelCostTx(allocation.hostelType, tx);
+                 accCostDelta += newPricing.totalPrice;
+                 if (allocation.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
+                     accCostDelta += newPricing.semwiseSurcharge;
+                 }
              } else if (allocation.type === AccommodationType.TRANSPORT && allocation.transportRouteId) {
                  const r = await tx.transportRoute.findUnique({ where: { id: allocation.transportRouteId } });
                  if (r) accCostDelta += (r.cost || 0);
              }
-            
-             // Add semwise extra if applicable
-            if (allocation.type === AccommodationType.HOSTEL && allocation.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                 const newSemFee = allocation.hostelType?.includes('SHARING_4') ? 7000 : allocation.hostelType?.includes('SHARING_8') ? 6000 : 0;
-                 accCostDelta += newSemFee;
-            }
             
             logger.debug(`[executeAdmissionUpdates] Total Fee Adjustment: ${accCostDelta}`);
 
@@ -3263,6 +3533,59 @@ export const AdminStudentService = {
         return { success: true };
     },
 
+    async debugCourseAllotments(courseId: string) {
+        if (!courseId) throw new AppError('courseId is required', 400);
+
+        const course = await prisma.course.findUnique({
+            where: { id: courseId },
+            select: { id: true, code: true, name: true, totalSeats: true, filledSeats: true }
+        });
+        if (!course) throw new AppError('Course not found', 404);
+
+        // Raw query: ALL StudentAdmission records pointing to this course (no filters)
+        const allAdmissions = await prisma.studentAdmission.findMany({
+            where: { allottedCourseId: courseId },
+            select: {
+                id: true,
+                studentId: true,
+                status: true,
+                allottedCourseId: true,
+                createdAt: true,
+                student: {
+                    select: {
+                        applicationId: true,
+                        name: true,
+                        phone: true
+                    }
+                }
+            },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        // Apply same filter as the seat counting query
+        const activeAdmissions = allAdmissions.filter(a =>
+            a.allottedCourseId !== null && a.status !== 'CANCELLED'
+        );
+
+        // Group by status
+        const byStatus: Record<string, number> = {};
+        for (const a of allAdmissions) {
+            const key = a.status || 'NULL';
+            byStatus[key] = (byStatus[key] || 0) + 1;
+        }
+
+        return {
+            course,
+            counts: {
+                totalAdmissionsForCourse: allAdmissions.length,
+                activeAdmissions: activeAdmissions.length,
+                cachedFilledSeatsCounter: course.filledSeats,
+                byStatus
+            },
+            allAdmissions
+        };
+    },
+
     async getCourseChangeRequests(filters: any) {
         const { status, studentId, applicationId, page = 1, limit = 10 } = filters;
         const pageNum = Math.max(1, parseInt(page));
@@ -3292,14 +3615,46 @@ export const AdminStudentService = {
         ]);
 
         const courseIds = [...new Set(requests.flatMap((r: any) => [r.fromCourse, r.toCourse].filter(Boolean)))];
-        const courses = await prisma.course.findMany({ where: { id: { in: courseIds } }, select: { id: true, name: true } });
-        const courseMap = Object.fromEntries(courses.map(c => [c.id, c.name]));
+        const courses = await prisma.course.findMany({
+            where: { id: { in: courseIds } },
+            select: {
+                id: true,
+                name: true,
+                totalSeats: true,
+                _count: {
+                    select: {
+                        allottedStudents: {
+                            where: {
+                                allottedCourseId: { not: null },
+                                OR: [
+                                    { status: null },
+                                    { status: { not: 'CANCELLED' } }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        const courseMap = Object.fromEntries(courses.map(c => [c.id, {
+            name: c.name,
+            totalSeats: c.totalSeats,
+            filledSeats: c._count.allottedStudents
+        }]));
 
-        const data = requests.map((r: any) => ({
-            ...r,
-            fromCourseName: courseMap[r.fromCourse] || null,
-            toCourseName: courseMap[r.toCourse] || null
-        }));
+        const data = requests.map((r: any) => {
+            const fromCourse = courseMap[r.fromCourse];
+            const toCourse = courseMap[r.toCourse];
+            return {
+                ...r,
+                fromCourseName: fromCourse?.name || null,
+                toCourseName: toCourse?.name || null,
+                fromCourseFilledSeats: fromCourse?.filledSeats ?? null,
+                fromCourseTotalSeats: fromCourse?.totalSeats ?? null,
+                toCourseFilledSeats: toCourse?.filledSeats ?? null,
+                toCourseTotalSeats: toCourse?.totalSeats ?? null,
+            };
+        });
 
         return {
             data,
@@ -3690,6 +4045,17 @@ export const AdminStudentService = {
             prisma.student.count({ where })
         ]);
 
+        // Preload hostel price categories for cost lookup
+        const allHostelPrices = await prisma.hostelPriceCategory.findMany();
+        const getHostelTotalByType = (hostelType: string | null | undefined): number => {
+            if (!hostelType) return 0;
+            const match = hostelType.match(/SHARING_(\d+)/);
+            if (!match) return 0;
+            const sharing = parseInt(match[1]);
+            const pc = allHostelPrices.find(p => p.sharing === sharing);
+            return pc ? ((pc.accommodationPrice ?? pc.price ?? 0) + (pc.messPrice ?? 0)) : 0;
+        };
+
         const applications = students.map((student: any) => {
             const demands = student.feeDemands as { netAmount: number | null; amount: number; feeHead: { name: string } | null }[];
             const credits = student.ledgerEntries as { amount: number; description: string | null }[];
@@ -3725,7 +4091,7 @@ export const AdminStudentService = {
                 })
                 .reduce((sum, c) => sum + (c.amount ?? 0), 0);
 
-            const hostelTotal = student.admissionDetails?.hostel?.cost ?? 0;
+            const hostelTotal = getHostelTotalByType(student.admissionDetails?.hostelType);
 
             const transportPaid = credits
                 .filter((c) => getFeeKeyword(c.description) === 'TRANSPORT')
