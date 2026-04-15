@@ -2340,7 +2340,7 @@ export const AdminStudentService = {
              if (updateProps.score !== undefined) updateProps.score = Number(updateProps.score);
              if (updateProps.scholarshipPercentage !== undefined) {
                  updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
-                 if (updateProps.scholarshipPercentage > 0) updateProps.isEligible = 'Yes';
+                 if (updateProps.scholarshipPercentage > 0) updateProps.isEligible = 'YES';
              }
 
              // Check qualification existence if updating it
@@ -2382,6 +2382,20 @@ export const AdminStudentService = {
                          newPercentage: newPct,
                      }).catch(err => logger.warn(`[updateStudentScholarship] Email failed (non-fatal): ${err}`));
                  }
+
+                 // Regenerate allotment order only if student has an allotted course
+                 try {
+                     const adm = await prisma.studentAdmission.findUnique({
+                         where: { studentId },
+                         select: { allottedCourseId: true }
+                     });
+                     if (adm?.allottedCourseId) {
+                         await generateAndSaveAllotmentOrder(studentId);
+                         logger.info(`[updateStudentScholarship] Allotment order regenerated for student ${studentId}`);
+                     }
+                 } catch (err) {
+                     logger.error(`[updateStudentScholarship] Failed to regenerate allotment order: ${err}`);
+                 }
              }
 
              return updated;
@@ -2397,7 +2411,7 @@ export const AdminStudentService = {
                  remarks,
                  scholarshipPercentage: scholarshipPercentage !== undefined ? Number(scholarshipPercentage) : undefined,
                  qualificationId,
-                 isEligible: (scholarshipPercentage !== undefined && Number(scholarshipPercentage) > 0) ? 'Yes' : isEligible,
+                 isEligible: (scholarshipPercentage !== undefined && Number(scholarshipPercentage) > 0) ? 'YES' : isEligible,
                  createdBy: adminId,
                  updatedBy: adminId
              }
@@ -2422,6 +2436,20 @@ export const AdminStudentService = {
                      oldPercentage: 0,
                      newPercentage: newPct,
                  }).catch(err => logger.warn(`[updateStudentScholarship] Email failed (non-fatal): ${err}`));
+             }
+
+             // Regenerate allotment order only if student has an allotted course
+             try {
+                 const adm = await prisma.studentAdmission.findUnique({
+                     where: { studentId },
+                     select: { allottedCourseId: true }
+                 });
+                 if (adm?.allottedCourseId) {
+                     await generateAndSaveAllotmentOrder(studentId);
+                     logger.info(`[updateStudentScholarship] Allotment order regenerated for student ${studentId}`);
+                 }
+             } catch (err) {
+                 logger.error(`[updateStudentScholarship] Failed to regenerate allotment order: ${err}`);
              }
          }
 
@@ -2495,6 +2523,20 @@ export const AdminStudentService = {
                     oldPercentage: oldPct,
                     newPercentage: newPct,
                 }).catch(err => logger.warn(`[editStudentScholarship] Email failed (non-fatal): ${err}`));
+            }
+
+            // Regenerate allotment order only if student has an allotted course
+            try {
+                const adm = await prisma.studentAdmission.findUnique({
+                    where: { studentId: updatedScholarship.studentId },
+                    select: { allottedCourseId: true }
+                });
+                if (adm?.allottedCourseId) {
+                    await generateAndSaveAllotmentOrder(updatedScholarship.studentId);
+                    logger.info(`[editStudentScholarship] Allotment order regenerated for student ${updatedScholarship.studentId}`);
+                }
+            } catch (err) {
+                logger.error(`[editStudentScholarship] Failed to regenerate allotment order: ${err}`);
             }
         }
 
