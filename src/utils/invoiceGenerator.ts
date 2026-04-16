@@ -11,6 +11,7 @@ export interface InvoiceItem {
 }
 
 export interface InvoiceData {
+  receiptNumber?: string
   invoiceNumber: string
   date: Date
   studentName: string
@@ -146,8 +147,10 @@ function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
 function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
   const top = offsetY + 95
 
+  const hasReceipt = !!(data as any).receiptNumber;
+  const boxHeight = (data.academicYear ? 97 : 85) + (hasReceipt ? 12 : 0);
   doc
-    .roundedRect(30, top, 535, data.academicYear ? 97 : 85, 6)
+    .roundedRect(30, top, 535, boxHeight, 6)
     .strokeColor('#eaeaea')
     .stroke()
 
@@ -177,11 +180,16 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
       doc.font('Helvetica').fontSize(9).fillColor('#333')
     }
     const ayOffset = data.academicYear ? 12 : 0;
-    doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, y + ayOffset)
-    doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, y + ayOffset + 12)
+    let detailY = y + ayOffset;
+    if (data.receiptNumber) {
+      doc.text(`Receipt No: ${data.receiptNumber}`, rightX, detailY)
+      detailY += 12;
+    }
+    doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, detailY)
+    doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, detailY + 12)
 
-    const utrOffset = 24 + ayOffset
-    const payOffset = 36 + ayOffset
+    const utrOffset = (detailY - y) + 24
+    const payOffset = (detailY - y) + 36
     const utrDisplay = (data.referenceId && data.referenceId !== data.transactionId) ? data.referenceId : 'N/A';
     doc.text(`UTR: ${utrDisplay}`, rightX, y + utrOffset)
 
