@@ -18,13 +18,33 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
 
     // Verify Aadhaar BEFORE masking
     if (data.aadharNumber) {
-        // If data is already masked (starts with XXXX), skip verification? 
-        // Or assume input is always raw from client.
-        // Proceeding with verification of raw number.
         const isValidAadhar = await verifyAadhar(data.aadharNumber);
         if (!isValidAadhar) {
             throw new AppError(MESSAGES.ERROR.INVALID_AADHAR, 400);
         }
+
+        // Duplicate check: last 4 digits of Aadhaar + DOB
+        if (dobDate) {
+            const last4 = data.aadharNumber.toString().trim().replace(/\s/g, '').slice(-4);
+            const maskedPattern = `XXXX XXXX ${last4}`;
+            const dobStart = new Date(dobDate.getFullYear(), dobDate.getMonth(), dobDate.getDate());
+            const dobEnd = new Date(dobDate.getFullYear(), dobDate.getMonth(), dobDate.getDate(), 23, 59, 59, 999);
+
+            const duplicateStudent = await prisma.student.findFirst({
+                where: {
+                    aadharNumber: maskedPattern,
+                    dob: { gte: dobStart, lte: dobEnd }
+                }
+            });
+
+            if (duplicateStudent) {
+                throw new AppError(
+                    `A student with the same Aadhaar and date of birth is already registered (Application ID: ${duplicateStudent.applicationId || 'N/A'})`,
+                    409
+                );
+            }
+        }
+
         // Mask Aadhaar for storage
         data.aadharNumber = maskAadhaar(data.aadharNumber);
     }
