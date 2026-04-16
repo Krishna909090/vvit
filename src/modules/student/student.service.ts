@@ -39,7 +39,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
 
             if (duplicateStudent) {
                 throw new AppError(
-                    `A student with the same Aadhaar and date of birth is already registered (Application ID: ${duplicateStudent.applicationId || 'N/A'})`,
+                    `Student Record Already Exist`,
                     409
                 );
             }
