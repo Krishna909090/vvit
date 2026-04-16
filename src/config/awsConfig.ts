@@ -20,8 +20,13 @@ export const secretsManagerClient = new SecretsManagerClient({
 
 export const s3Client = new S3Client({
     region: REGION,
-    credentials: AWS_CREDENTIALS
-});
+    credentials: AWS_CREDENTIALS,
+    // Disable default checksum validation on GET requests — AWS SDK v3.729+ adds
+    // `x-amz-checksum-mode=ENABLED` to presigned URLs which breaks browser access
+    // due to CORS/signature mismatch.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED'
+} as any);
 
 export const getDatabaseSecret = async (secretName: string) => {
     try {

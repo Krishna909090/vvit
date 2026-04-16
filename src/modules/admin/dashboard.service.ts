@@ -288,7 +288,7 @@ export const DashboardService = {
 
         const baseWhere = { ...whereDate, ...degreeWhere };
 
-        const [totalEligible, totalNotEligible, totalApplicants] = await Promise.all([
+        const [totalEligible, totalNotEligible, totalApplicants, percentageGroups] = await Promise.all([
             prisma.student.count({
                 where: {
                     ...baseWhere,
@@ -318,14 +318,35 @@ export const DashboardService = {
                         status: { not: 'CANCELLED' }
                     }
                 }
+            }),
+            prisma.studentScholarship.groupBy({
+                by: ['scholarshipPercentage'],
+                where: {
+                    scholarshipPercentage: { gt: 0 },
+                    ...(degreeType ? { degreeType } : {}),
+                    student: {
+                        admissionDetails: {
+                            allottedCourseId: { not: null },
+                            status: { not: 'CANCELLED' }
+                        }
+                    }
+                },
+                _count: { studentId: true },
+                orderBy: { scholarshipPercentage: 'desc' }
             })
         ]);
+
+        const percentageBreakdown = percentageGroups.map(g => ({
+            percentage: g.scholarshipPercentage ?? 0,
+            count: g._count.studentId
+        }));
 
         return {
             degreeType: degreeType || 'ALL',
             totalScholarshipApplicants: totalApplicants,
             totalScholarshipEligible: totalEligible,
-            totalScholarshipNotEligible: totalNotEligible
+            totalScholarshipNotEligible: totalNotEligible,
+            percentageBreakdown
         };
     },
 
