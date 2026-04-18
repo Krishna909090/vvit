@@ -364,8 +364,8 @@ export const initiateMultiComponentPayment = async (
     const paymentStatus = PaymentStatus.PENDING;
     const paymentMode = isOffline ? PaymentMode.OFFLINE : PaymentMode.ONLINE;
 
-    // 3. Duplicate check for offline payments with reference numbers
-    if (isOffline && referenceNumber) {
+    // 3. Duplicate check for offline payments with reference numbers (skip for CASH)
+    if (isOffline && referenceNumber && paymentMethod !== PaymentMethod.CASH) {
         const existingPayment = await prisma.payment.findFirst({
             where: { referenceNumber, studentId, status: PaymentStatus.SUCCESS }
         });
@@ -379,8 +379,8 @@ export const initiateMultiComponentPayment = async (
     const createdPayments: any[] = [];
 
     await prisma.$transaction(async (tx) => {
-        // Double-check inside transaction to prevent race condition
-        if (isOffline && referenceNumber) {
+        // Double-check inside transaction to prevent race condition (skip for CASH)
+        if (isOffline && referenceNumber && paymentMethod !== PaymentMethod.CASH) {
             const duplicate = await tx.payment.findFirst({
                 where: { referenceNumber, studentId, status: { in: [PaymentStatus.SUCCESS, PaymentStatus.PENDING] } }
             });
@@ -1712,8 +1712,8 @@ export const processUnifiedPayment = async (data: any) => {
         throw new AppError('Reference Number is required for OFFLINE payments', 400);
     }
 
-    // Check for Duplicate Reference Number (OFFLINE ONLY)
-    if (mode === PaymentMode.OFFLINE && referenceNumber) {
+    // Check for Duplicate Reference Number (OFFLINE ONLY, skip for CASH)
+    if (mode === PaymentMode.OFFLINE && referenceNumber && data.method !== PaymentMethod.CASH) {
         const existingRef = await prisma.payment.findFirst({
             where: { referenceNumber: referenceNumber }
         });
@@ -1721,7 +1721,8 @@ export const processUnifiedPayment = async (data: any) => {
             throw new AppError(`Payment with Reference Number '${referenceNumber}' already exists`, 409);
         }
     }
-   
+
+
 
     // 1. Validate Student
     logger.debug(`[processUnifiedPayment] Looking up student: ${studentId}`);
