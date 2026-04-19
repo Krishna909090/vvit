@@ -645,44 +645,79 @@ export const DashboardService = {
         // === TYPE FILTER CONDITION ===
         let typeCondition: any = {};
 
+        // "Not allocated" — allottedCourseId null AND status NOT in (CANCELLED, ENROLLED)
+        // AND student must have at least one APPROVED academic qualification
+        const notAllocatedAdmissionFilter = {
+            academicQualifications: {
+                some: { verificationStatus: 'APPROVED' }
+            },
+            OR: [
+                { admissionDetails: null },
+                {
+                    admissionDetails: {
+                        allottedCourseId: null,
+                        OR: [
+                            { status: null },
+                            { status: { notIn: [AdmissionStatus.CANCELLED, AdmissionStatus.ENROLLED] } }
+                        ]
+                    }
+                }
+            ]
+        };
+
+        // "Allocated" — allottedCourseId not null AND status NOT in (CANCELLED, ENROLLED)
+        const allocatedAdmissionFilter = {
+            admissionDetails: {
+                allottedCourseId: { not: null },
+                OR: [
+                    { status: null },
+                    { status: { notIn: [AdmissionStatus.CANCELLED, AdmissionStatus.ENROLLED] } }
+                ]
+            }
+        };
+
         if (type === 'not_allocated') {
             typeCondition = {
-                OR: [
-                    { admissionDetails: null },
-                    { admissionDetails: { allottedCourseId: null } }
-                ],
+                ...notAllocatedAdmissionFilter,
                 studentScholarship: { isNot: null }
             };
         } else if (type === 'allocated') {
-            typeCondition = { admissionDetails: { allottedCourseId: { not: null } } };
+            typeCondition = allocatedAdmissionFilter;
         } else if (type === 'not_allocated_eligible') {
             typeCondition = {
-                OR: [
-                    { admissionDetails: null },
-                    { admissionDetails: { allottedCourseId: null } }
-                ],
+                ...notAllocatedAdmissionFilter,
                 studentScholarship: { isEligible: 'YES' }
             };
         } else if (type === 'not_allocated_not_eligible') {
             typeCondition = {
-                OR: [
-                    { admissionDetails: null },
-                    { admissionDetails: { allottedCourseId: null } }
-                ],
+                ...notAllocatedAdmissionFilter,
                 studentScholarship: { isEligible: 'NO' }
             };
         } else if (type === 'allocated_eligible') {
             typeCondition = {
-                admissionDetails: { allottedCourseId: { not: null } },
+                ...allocatedAdmissionFilter,
                 studentScholarship: { isEligible: 'YES' }
             };
         } else if (type === 'allocated_not_eligible') {
             typeCondition = {
-                admissionDetails: { allottedCourseId: { not: null } },
+                ...allocatedAdmissionFilter,
                 studentScholarship: { isEligible: 'NO' }
             };
         } else if (type === 'all') {
-            typeCondition = { studentScholarship: { isNot: null } };
+            typeCondition = {
+                studentScholarship: { isNot: null },
+                OR: [
+                    { admissionDetails: null },
+                    {
+                        admissionDetails: {
+                            OR: [
+                                { status: null },
+                                { status: { notIn: [AdmissionStatus.CANCELLED, AdmissionStatus.ENROLLED] } }
+                            ]
+                        }
+                    }
+                ]
+            };
         }
 
         // === COMBINE: use AND so search OR and type OR never collide ===
@@ -767,34 +802,49 @@ export const DashboardService = {
      */
     async getSeatAllocationCounts(filter?: string) {
         const result: any = {};
-        // 1. Not Allocated
+        // 1. Not Allocated (exclude CANCELLED + ENROLLED admissions, require APPROVED qualification)
         if (!filter || filter === 'not_allocated') {
             result.notAllocated = await prisma.student.count({
                 where: {
+                    academicQualifications: {
+                        some: { verificationStatus: 'APPROVED' }
+                    },
                     OR: [
                         { admissionDetails: null },
-                        { admissionDetails: { allottedCourseId: null } }
+                        {
+                            admissionDetails: {
+                                allottedCourseId: null,
+                                OR: [
+                                    { status: null },
+                                    { status: { notIn: [AdmissionStatus.CANCELLED, AdmissionStatus.ENROLLED] } }
+                                ]
+                            }
+                        }
                     ],
                     studentScholarship: { isNot: null }
                 }
             });
         }
 
-        // 2. Allocated - Breakdown by Eligibility
+        // 2. Allocated - Breakdown by Eligibility (exclude CANCELLED + ENROLLED, allow null status)
         if (!filter || filter === 'allocated') {
              const allocatedCondition = {
-                admissionDetails: { allottedCourseId: { not: null } }
+                admissionDetails: {
+                    allottedCourseId: { not: null },
+                    OR: [
+                        { status: null },
+                        { status: { notIn: [AdmissionStatus.CANCELLED, AdmissionStatus.ENROLLED] } }
+                    ]
+                }
             };
 
             const [eligible, notEligible] = await Promise.all([
-                // Eligible: YES
                 prisma.student.count({
                     where: {
                         ...allocatedCondition,
                         studentScholarship: { isEligible: 'YES' }
                     }
                 }),
-                // Eligible: NO
                 prisma.student.count({
                     where: {
                         ...allocatedCondition,

@@ -30,7 +30,7 @@ const PHONEPE_ENV = process.env.PHONEPE_ENV === 'PROD' ? Env.PRODUCTION : Env.SA
 const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://localhost:5173';
 
 const buildApplicationFilters = async (query: any): Promise<any> => {
-    const { search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate, seatAllotedBy, proCode } = query;
+    const { search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, examStartDate, examEndDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate, seatAllotedBy, proCode, proReq } = query;
 
     const where: any = {};
     if (search) {
@@ -107,6 +107,12 @@ const buildApplicationFilters = async (query: any): Promise<any> => {
         where.admissionDetails.seatAllotedBy = String(seatAllotedBy);
     }
 
+    // proReq=true: only students with a linked PRO whose proNumber is not '0'
+    if (proReq === 'true' || proReq === true) {
+        where.proId = { not: null };
+        where.pro = { proNumber: { not: '0' } };
+    }
+
     if (proCode) {
         const pro = await prisma.pRO.findUnique({ where: { proNumber: String(proCode) } });
         if (pro) {
@@ -135,7 +141,21 @@ const buildApplicationFilters = async (query: any): Promise<any> => {
         where.pref3 = values.length === 1 ? values[0] : { in: values };
     }
 
-    if (examDate) {
+    // Exam date range: supports examStartDate + examEndDate (range), or examDate (single day)
+    if (examStartDate || examEndDate) {
+        const testDateFilter: any = {};
+        if (examStartDate) {
+            const start = new Date(String(examStartDate));
+            start.setHours(0, 0, 0, 0);
+            testDateFilter.gte = start;
+        }
+        if (examEndDate) {
+            const end = new Date(String(examEndDate));
+            end.setHours(23, 59, 59, 999);
+            testDateFilter.lte = end;
+        }
+        where.examDetails = { testDate: testDateFilter };
+    } else if (examDate) {
         const start = new Date(String(examDate));
         start.setHours(0, 0, 0, 0);
         const end = new Date(String(examDate));

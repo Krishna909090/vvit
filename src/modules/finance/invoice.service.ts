@@ -56,26 +56,68 @@ export const InvoiceService = {
 
         const primaryPayment = allPayments[0]; // Use first as primary for metadata (dates, student, etc)
 
-        // Logic copied/adapted from payment.service.ts to match Entrance Fee format
-        // Format: VVITU/YEAR/APP_ID/RECEIPT_NO
-        const feeHeader = 'VVITU';  
         const year = new Date().getFullYear();
-        const applicationNumber = primaryPayment.student.applicationId || primaryPayment.studentId.substring(0,8).toUpperCase(); 
+        const applicationNumber = primaryPayment.student.applicationId || primaryPayment.studentId.substring(0,8).toUpperCase();
 
-        // Count existing successful payments for this student to generate serial number
-        // Optimization: Checking how many payments exist BEFORE this one to get stable number
-        // We count *transactions* (unique timestamps or groups) ideally, but counting rows is safer for uniqueness.
-        const priorPayments = await prisma.payment.count({
+        // --- RECEIPT NUMBER (global per category per year) ---
+        // Categories:
+        //   ADMISSION group: TUITION, ADMISSION, BOOK_BANK, APPLICATION_FEE, COURSE_CHANGE_FEE, SCHOLARSHIP_TOKEN → VVITU/YEAR/001
+        //   HOSTEL group:    HOSTEL, HOSTEL_ACCOMMODATION, TRANSPORT → SET/YEAR/001
+        //   MESS group:      HOSTEL_MESS → LLP/SET/YEAR/001
+        const admissionComponents = [
+            PaymentComponent.TUITION, PaymentComponent.ADMISSION, PaymentComponent.BOOK_BANK,
+            PaymentComponent.APPLICATION_FEE, PaymentComponent.COURSE_CHANGE_FEE, PaymentComponent.SCHOLARSHIP_TOKEN,
+            PaymentComponent.SKILL_DEVELOPMENT, PaymentComponent.OTHER
+        ];
+        const hostelComponents = [
+            PaymentComponent.HOSTEL, PaymentComponent.HOSTEL_ACCOMMODATION, PaymentComponent.TRANSPORT
+        ];
+        const messComponents = [PaymentComponent.HOSTEL_MESS];
+
+        const component = primaryPayment.component;
+        let receiptPrefix: string;
+        let receiptCategory: string;
+
+        if (messComponents.includes(component)) {
+            receiptPrefix = 'LLP/SET';
+            receiptCategory = 'MESS';
+        } else if (hostelComponents.includes(component)) {
+            receiptPrefix = 'SET';
+            receiptCategory = 'HOSTEL';
+        } else {
+            receiptPrefix = 'VVITU';
+            receiptCategory = 'ADMISSION';
+        }
+
+        // Count prior receipts in same category for this year to get next serial
+        const yearStart = new Date(year, 0, 1);
+        const yearEnd = new Date(year, 11, 31, 23, 59, 59, 999);
+
+        const componentList = receiptCategory === 'MESS' ? messComponents
+            : receiptCategory === 'HOSTEL' ? hostelComponents
+            : admissionComponents;
+
+        const priorReceiptsInCategory = await prisma.payment.count({
+            where: {
+                status: PaymentStatus.SUCCESS,
+                component: { in: componentList },
+                createdAt: { gte: yearStart, lte: yearEnd },
+                id: { not: primaryPayment.id }
+            }
+        });
+        const receiptSerial = (priorReceiptsInCategory + 1).toString().padStart(3, '0');
+        const receiptNumber = `${receiptPrefix}/${year}/${receiptSerial}`;
+
+        // Invoice number (per student): PREFIX/YEAR/APP_ID/SERIAL
+        const priorStudentPayments = await prisma.payment.count({
             where: {
                 studentId: primaryPayment.studentId,
                 status: PaymentStatus.SUCCESS,
                 createdAt: { lt: primaryPayment.createdAt || new Date() }
             }
         });
-        const receiptNo = priorPayments + 1;
-
-        const receiptNumberStr = receiptNo.toString().padStart(3, '0');
-        const invoiceNumber = `${feeHeader}/${year}/${applicationNumber}/${receiptNumberStr}`;
+        const invoiceSerial = (priorStudentPayments + 1).toString().padStart(3, '0');
+        const invoiceNumber = `${receiptPrefix}/${year}/${applicationNumber}/${invoiceSerial}`;
 
         // Real TX ID (Internal)
         const internalTxId = primaryPayment.providerTxId || primaryPayment.id;
@@ -191,6 +233,7 @@ export const InvoiceService = {
         const courseName = primaryPayment.student.admissionDetails?.allottedCourse?.name || undefined;
 
         const invoiceData: any = {
+            receiptNumber: receiptNumber,
             invoiceNumber: invoiceNumber,
             date: primaryPayment.createdAt || new Date(),
             studentName: primaryPayment.student.name,
@@ -361,6 +404,6 @@ export const InvoiceService = {
             });
         }
         
-        return { success: true, invoiceUrl, invoiceNumber };
+        return { success: true, invoiceUrl, invoiceNumber, receiptNumber, realTransactionId, invoiceData, invoiceItems };
     }
 };
