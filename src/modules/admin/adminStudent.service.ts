@@ -1029,6 +1029,15 @@ export const AdminStudentService = {
             throw new AppError('studentId, newCourseId and reason are required', 400);
         }
 
+        // Prevent duplicate pending requests
+        const pendingRequest = await prisma.courseChangeRequest.findFirst({
+            where: { studentId, status: { in: [RequestStatus.REQUESTED, RequestStatus.FORWARDED] } },
+            select: { id: true }
+        });
+        if (pendingRequest) {
+            throw new AppError(`A course/branch change request is already pending for this student (ID: ${pendingRequest.id}). Approve or reject it before raising a new one.`, 409);
+        }
+
         const student = await prisma.student.findUnique({
             where: { id: studentId },
             include: { admissionDetails: { include: { allottedCourse: true } } }
@@ -1079,6 +1088,15 @@ export const AdminStudentService = {
     async requestProgramChange(studentId: string, newCourseId: string, reason: string) {
         if (!studentId || !newCourseId || !reason) {
             throw new AppError('studentId, newCourseId and reason are required', 400);
+        }
+
+        // Prevent duplicate pending requests
+        const pendingRequest = await prisma.courseChangeRequest.findFirst({
+            where: { studentId, status: { in: [RequestStatus.REQUESTED, RequestStatus.FORWARDED] } },
+            select: { id: true }
+        });
+        if (pendingRequest) {
+            throw new AppError(`A course/branch change request is already pending for this student (ID: ${pendingRequest.id}). Approve or reject it before raising a new one.`, 409);
         }
 
         // Allowed cross-program transfers (bidirectional)
@@ -1144,6 +1162,15 @@ export const AdminStudentService = {
 
     async requestCourseChange(studentId: string, newCourseId: string, reason: string) {
         if (!studentId || !newCourseId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_NEWCOURSE_REASON_REQUIRED, 400);
+
+        // Prevent duplicate pending requests
+        const pendingRequest = await prisma.courseChangeRequest.findFirst({
+            where: { studentId, status: { in: [RequestStatus.REQUESTED, RequestStatus.FORWARDED] } },
+            select: { id: true }
+        });
+        if (pendingRequest) {
+            throw new AppError(`A course/branch change request is already pending for this student (ID: ${pendingRequest.id}). Approve or reject it before raising a new one.`, 409);
+        }
 
         const student = await prisma.student.findUnique({
             where: { id: studentId },
