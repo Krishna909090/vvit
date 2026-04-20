@@ -542,21 +542,40 @@ export const verifyDocument = async (studentId: string, documentKey: string, sta
 
 
 export const addAcademicDetails = async (studentId: string, details: any[], currentUserId: string | null) => {
-    // Validate student exists and check admission status
-    const student = await prisma.student.findUnique({ 
+    // 1. Validate student exists
+    const student = await prisma.student.findUnique({
         where: { id: studentId },
-        include: { 
+        include: {
             admissionDetails: true,
-            examDetails: true 
+            examDetails: true
         }
     });
-    
+
     if (!student) {
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
-    // Requirement Update: Allow adding academic details at any stage (Online/Offline/SeatBooking)
-    // Exam attendance/qualification checks removed.
+    // 2. Check duplicate levels WITHIN the submitted payload (case-insensitive)
+    const incomingLevels = details.map(d => String(d.level).trim().toLowerCase());
+    const seen = new Set<string>();
+    for (const lvl of incomingLevels) {
+        if (seen.has(lvl)) {
+            throw new AppError(`Duplicate level "${lvl}" in the submitted details. Each academic level must be unique.`, 400);
+        }
+        seen.add(lvl);
+    }
+
+    // 3. Check duplicate levels against EXISTING qualifications in DB (case-insensitive)
+    const existingQualifications = await prisma.academicQualification.findMany({
+        where: { studentId },
+        select: { level: true }
+    });
+    const existingLevelsLower = new Set(existingQualifications.map(q => q.level.trim().toLowerCase()));
+    for (const lvl of incomingLevels) {
+        if (existingLevelsLower.has(lvl)) {
+            throw new AppError(`Academic qualification for level "${lvl}" already exists for this student.`, 409);
+        }
+    }
 
     // Use transaction to create multiple records
     const result = await prisma.$transaction(
