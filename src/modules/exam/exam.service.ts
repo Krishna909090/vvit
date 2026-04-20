@@ -876,14 +876,29 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             }
         });
 
-        const hallTicket = await tx.hallTicket.create({
-            data: {
-                studentId,
-                qrHash: encryptedContent,
-                url: null, // Will be updated after upload
-                createdBy: userId,
-            },
+        // Reuse existing hall ticket record if one exists (prevents duplicates on rebook/retry)
+        const existingHallTicket = await tx.hallTicket.findFirst({
+            where: { studentId },
+            orderBy: { generatedAt: 'desc' }
         });
+
+        const hallTicket = existingHallTicket
+            ? await tx.hallTicket.update({
+                where: { id: existingHallTicket.id },
+                data: {
+                    qrHash: encryptedContent,
+                    url: null,
+                    updatedBy: userId,
+                }
+            })
+            : await tx.hallTicket.create({
+                data: {
+                    studentId,
+                    qrHash: encryptedContent,
+                    url: null,
+                    createdBy: userId,
+                },
+            });
 
         return {
             slot,

@@ -154,15 +154,28 @@ export const FeeService = {
             throw new AppError(`No courses found for degree: ${degree}`, 404);
         }
 
-        // 2. Create entries for each course
+        // 2. Create entries for each course (skip if duplicate exists)
         const createdStructures = [];
-        // Sequential creation to avoid race conditions with simple create, or use createMany if confident
+        const skippedCourses: string[] = [];
+
         for (const course of courses) {
-            // Check if exists to avoid duplicates? 
-            // Unique constraint is composite [courseId, academicYearId, feeHeadId] (Wait, schema index is just course, academicYear)
-            // Ideally we need checks. Assuming clean slate or upsert logic.
-            // Let's do simple create for now as per request "how to add".
-            
+            const existing = await prisma.feeStructure.findFirst({
+                where: {
+                    courseId: course.id,
+                    feeHeadId,
+                    academicYearId,
+                    quotaType: quotaType ?? null,
+                    courseType: courseType ?? null,
+                    yearOfStudy: yearOfStudy ?? null,
+                    isDeleted: false
+                }
+            });
+
+            if (existing) {
+                skippedCourses.push(course.name || course.id);
+                continue;
+            }
+
             const structure = await prisma.feeStructure.create({
                 data: {
                     courseId: course.id,
@@ -170,7 +183,6 @@ export const FeeService = {
                     amount,
                     academicYearId,
                     quotaType,
-
                     courseType,
                     yearOfStudy,
                     dueDate,
@@ -181,7 +193,16 @@ export const FeeService = {
             createdStructures.push(structure);
         }
 
-        return createdStructures;
+        if (createdStructures.length === 0) {
+            throw new AppError(`Fee structures already exist for all ${courses.length} course(s) in degree "${degree}". Nothing created.`, 409);
+        }
+
+        return {
+            created: createdStructures,
+            createdCount: createdStructures.length,
+            skippedCount: skippedCourses.length,
+            skippedCourses
+        };
     },
 
     getFeeStructures: async (filters?: { courseId?: string, academicYearId?: string, feeHeadId?: string, search?: string }) => {

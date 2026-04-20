@@ -1174,9 +1174,21 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
 // [Removed initiateAdminOnlinePayment] - Use processUnifiedPayment instead
 
 export const requestDiscount = async (studentId: string, reason: string, amount: number, documentUrl?: string, userId?: string | null) => {
+     // Prevent duplicate pending discount requests
+     const pendingRequest = await prisma.discountRequest.findFirst({
+         where: {
+             studentId,
+             status: { in: [DiscountStatus.REQUESTED, DiscountStatus.FORWARDED_TO_SUPER_ADMIN] }
+         },
+         select: { id: true }
+     });
+     if (pendingRequest) {
+         throw new AppError(`A discount request is already pending for this student (ID: ${pendingRequest.id}). Approve or reject it before raising a new one.`, 409);
+     }
+
      // Default item structure for legacy requestDiscount
      const items = [{ component: 'OTHER', amount: Number(amount) }];
-     
+
      return prisma.discountRequest.create({
             data: {
                 studentId,

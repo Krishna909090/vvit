@@ -76,14 +76,15 @@ export const createBulkFeeStructure = catchAsync(async (req: Request, res: Respo
 
     if (!degreeType) throw new AppError('Degree type is required', 400);
 
-    const feeStructures = await FeeService.createFeeStructureForDegree(degreeType, feeHeadId, amount, academicYearId, adminId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined);
-    
+    const result = await FeeService.createFeeStructureForDegree(degreeType, feeHeadId, amount, academicYearId, adminId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined);
+
+    const skipMsg = result.skippedCount > 0 ? ` (${result.skippedCount} skipped due to existing structures: ${result.skippedCourses.join(', ')})` : '';
     sendResponse({
         res,
         statusCode: 201,
         success: true,
-        message: `Fee structures created for ${feeStructures.length} courses under ${degreeType}`,
-        data: feeStructures
+        message: `Fee structures created for ${result.createdCount} courses under ${degreeType}${skipMsg}`,
+        data: result
     });
 });
 
