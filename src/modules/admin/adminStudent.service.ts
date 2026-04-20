@@ -368,7 +368,8 @@ const buildApplicationFilters = async (query: any): Promise<any> => {
         };
     }
 
-    // createdAt date range filter
+    // Date range filter — applies to `seatAllottedAt` when seatStatus=ALLOTTED,
+    // otherwise to `createdAt` (student registration date)
     if (dateRange) {
         const now = new Date();
         const startOfDayFn = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
@@ -382,6 +383,11 @@ const buildApplicationFilters = async (query: any): Promise<any> => {
         if (val === 'today') {
             gte = startOfDayFn(now);
             lte = endOfDayFn(now);
+        } else if (val === 'yesterday') {
+            const d = new Date(now);
+            d.setDate(now.getDate() - 1);
+            gte = startOfDayFn(d);
+            lte = endOfDayFn(d);
         } else if (val === '7d') {
             const d = new Date(now);
             d.setDate(now.getDate() - 7);
@@ -403,7 +409,16 @@ const buildApplicationFilters = async (query: any): Promise<any> => {
         }
 
         if (gte && lte) {
-            where.createdAt = { gte, lte };
+            const seatStatusUpper = seatStatus ? String(seatStatus).toUpperCase() : null;
+            if (seatStatusUpper === 'ALLOTTED') {
+                // Filter by seat allotment date
+                where.admissionDetails = {
+                    ...where.admissionDetails,
+                    seatAllottedAt: { gte, lte }
+                };
+            } else {
+                where.createdAt = { gte, lte };
+            }
         }
     }
 
