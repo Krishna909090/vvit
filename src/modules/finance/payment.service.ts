@@ -1173,6 +1173,98 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
 
 // [Removed initiateAdminOnlinePayment] - Use processUnifiedPayment instead
 
+/**
+ * Admin: List all SUCCESS payments with pagination and optional filters.
+ * Filters: applicationId (student), component, method, mode, startDate, endDate.
+ */
+export const getAllSuccessPayments = async (query: any) => {
+    const page = Math.max(1, parseInt(String(query.page || 1)));
+    const limit = Math.min(100, Math.max(1, parseInt(String(query.limit || 25))));
+    const skip = (page - 1) * limit;
+
+    const where: any = {
+        status: PaymentStatus.SUCCESS,
+        isDeleted: false
+    };
+
+    // Search by applicationId (name/phone fallback)
+    if (query.applicationId) {
+        where.student = {
+            OR: [
+                { applicationId: { contains: String(query.applicationId), mode: 'insensitive' } },
+                { name: { contains: String(query.applicationId), mode: 'insensitive' } },
+                { phone: { contains: String(query.applicationId) } }
+            ]
+        };
+    }
+
+    if (query.component) where.component = String(query.component);
+    if (query.method) where.method = String(query.method);
+    if (query.mode) where.mode = String(query.mode);
+
+    if (query.startDate || query.endDate) {
+        where.createdAt = {};
+        if (query.startDate) {
+            const s = new Date(String(query.startDate));
+            s.setHours(0, 0, 0, 0);
+            where.createdAt.gte = s;
+        }
+        if (query.endDate) {
+            const e = new Date(String(query.endDate));
+            e.setHours(23, 59, 59, 999);
+            where.createdAt.lte = e;
+        }
+    }
+
+    const [total, payments] = await Promise.all([
+        prisma.payment.count({ where }),
+        prisma.payment.findMany({
+            where,
+            skip,
+            take: limit,
+            orderBy: { createdAt: 'desc' },
+            include: {
+                student: {
+                    select: {
+                        id: true,
+                        applicationId: true,
+                        name: true,
+                        phone: true,
+                        email: true,
+                        degreeType: true
+                    }
+                },
+                feeHead: { select: { id: true, name: true } }
+            }
+        })
+    ]);
+
+    // Convert invoice URLs to presigned
+    const paymentsWithUrls = await Promise.all(payments.map(async p => ({
+        ...p,
+        invoiceUrl: await convertToPresignedUrl(p.invoiceUrl)
+    })));
+
+    // Total amount of the current filter set (full sum, not just page)
+    const totalSum = await prisma.payment.aggregate({
+        where,
+        _sum: { amount: true }
+    });
+
+    return {
+        data: paymentsWithUrls,
+        pagination: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit)
+        },
+        summary: {
+            totalAmount: totalSum._sum.amount || 0
+        }
+    };
+};
+
 export const requestDiscount = async (studentId: string, reason: string, amount: number, documentUrl?: string, userId?: string | null) => {
      // Prevent duplicate pending discount requests
      const pendingRequest = await prisma.discountRequest.findFirst({

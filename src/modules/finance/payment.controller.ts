@@ -17,8 +17,21 @@ import {
     initiateTokenPayment,
     recordOfflineApplicationFeePayment,
     processUnifiedPayment,
-    initiateMultiComponentPayment
+    initiateMultiComponentPayment,
+    getAllSuccessPayments
 } from './payment.service';
+
+export const getAllSuccessPaymentsController = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getAllSuccessPayments] by=${req.user?.userId || 'anonymous'}`);
+    const result = await getAllSuccessPayments(req.query);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Payment transactions fetched successfully',
+        data: result
+    });
+});
 
 export const payMultiComponentFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const currentUserId = req.user?.userId || 'anonymous';

@@ -1,6 +1,6 @@
 import express from 'express';
 import { handlePaymentCallback, handleNewWebhook } from './payment.service';
-import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, getFinancialFlow, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment, payFeeComponent, payMultiComponentFee } from './payment.controller';
+import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, getFinancialFlow, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment, payFeeComponent, payMultiComponentFee, getAllSuccessPaymentsController } from './payment.controller';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
@@ -92,6 +92,14 @@ router.post('/admin-initiate', authenticate, paymentRateLimiter, authorizePermis
  * Response: { status, data: { redirectUrl? | invoiceUrl?, paymentId, transactionId } }
  */
 router.post('/pay-component', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all', 'finance.create.own']), validateRequest(payFeeComponentSchema), payFeeComponent);
+
+/**
+ * GET /finance/transactions
+ * Admin: List all SUCCESS payments with pagination and filters.
+ * Query: page, limit, applicationId (searches applicationId/name/phone), component, method, mode, startDate, endDate
+ * Response: { data: [...], pagination: { page, limit, total, totalPages }, summary: { totalAmount } }
+ */
+router.get('/transactions', authenticate, authorizePermission(['finance.read.all']), getAllSuccessPaymentsController);
 
 /**
  * POST /finance/multi-component
