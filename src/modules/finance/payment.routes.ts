@@ -1,6 +1,6 @@
 import express from 'express';
 import { handlePaymentCallback, handleNewWebhook } from './payment.service';
-import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, getFinancialFlow, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment, payFeeComponent, payMultiComponentFee } from './payment.controller';
+import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, getFinancialFlow, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment, payFeeComponent, payMultiComponentFee, getAllSuccessPaymentsController, getPaymentCreatorsController, getPaymentComponentsController, exportSuccessPaymentsCsvController } from './payment.controller';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
@@ -92,6 +92,36 @@ router.post('/admin-initiate', authenticate, paymentRateLimiter, authorizePermis
  * Response: { status, data: { redirectUrl? | invoiceUrl?, paymentId, transactionId } }
  */
 router.post('/pay-component', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all', 'finance.create.own']), validateRequest(payFeeComponentSchema), payFeeComponent);
+
+/**
+ * GET /finance/transactions
+ * Admin: List all SUCCESS payments with pagination and filters.
+ * Query: page, limit, search (applicationId/name/phone), component|feeType, method, mode,
+ *        createdBy, dateRange (today|yesterday|7d|15d|30d|custom), startDate, endDate
+ * Response: { data: [...], pagination: { page, limit, total, totalPages }, summary: { totalTransactions, totalAmount } }
+ */
+router.get('/transactions', authenticate, authorizePermission(['finance.read.all']), getAllSuccessPaymentsController);
+
+/**
+ * GET /finance/transactions/creators
+ * Admin: Distinct users who have recorded SUCCESS payments (for "Created By" dropdown).
+ * Response: { data: [{ id, name, role }] }
+ */
+router.get('/transactions/creators', authenticate, authorizePermission(['finance.read.all']), getPaymentCreatorsController);
+
+/**
+ * GET /finance/transactions/components
+ * Admin: Distinct payment components (fee types) that have SUCCESS payments — for "Select Fee Type" dropdown.
+ * Response: { data: ['APPLICATION_FEE', 'TUITION', 'HOSTEL', ...] }
+ */
+router.get('/transactions/components', authenticate, authorizePermission(['finance.read.all']), getPaymentComponentsController);
+
+/**
+ * GET /finance/transactions/export
+ * Admin: Export filtered SUCCESS payments as CSV (same filters as /transactions).
+ * Response: text/csv download
+ */
+router.get('/transactions/export', authenticate, authorizePermission(['finance.read.all']), exportSuccessPaymentsCsvController);
 
 /**
  * POST /finance/multi-component

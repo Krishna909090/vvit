@@ -61,8 +61,8 @@ export const AdminService = {
         };
     },
 
-    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: any; password?: string; groupIds?: string[] }, currentUserId?: string) {
-        const { phone, name, email, role, password, groupIds } = data;
+    async addAdmin(data: { phone?: string; name?: string; email?: string; role?: any; password?: string; groupIds?: string[]; proNumber?: string }, currentUserId?: string) {
+        const { phone, name, email, role, password, groupIds, proNumber } = data;
 
         if (!phone) {
             throw new AppError("Phone number is required", 400);
@@ -70,6 +70,32 @@ export const AdminService = {
 
         const normalizedPhone = phone.trim();
         const normalizedEmail = email?.trim().toLowerCase();
+
+        // If role is PRO, proNumber is mandatory and must exist
+        if (role === 'PRO') {
+            if (!proNumber) {
+                throw new AppError('PRO Number is required when role is PRO', 400);
+            }
+            const pro = await prisma.pRO.findUnique({ where: { proNumber: String(proNumber).trim() } });
+            if (!pro) {
+                throw new AppError(`PRO with proNumber "${proNumber}" not found. Create the PRO record first.`, 404);
+            }
+            if (pro.userId) {
+                throw new AppError(`PRO "${proNumber}" is already linked to another user account`, 409);
+            }
+
+            // Also check if this phone is already linked to a different PRO
+            const existingUser = await prisma.user.findUnique({ where: { phone: normalizedPhone } });
+            if (existingUser) {
+                const existingPro = await prisma.pRO.findUnique({ where: { userId: existingUser.id } });
+                if (existingPro && existingPro.proNumber !== String(proNumber).trim()) {
+                    throw new AppError(
+                        `This phone number is already linked to PRO "${existingPro.proNumber}". Unlink first before assigning to "${proNumber}".`,
+                        409
+                    );
+                }
+            }
+        }
 
         logger.info(
             `[addAdmin] request: phone=${maskPhone(normalizedPhone)}, email=${maskEmail(normalizedEmail)}, role=${role}`
@@ -139,6 +165,22 @@ export const AdminService = {
                      logger.error(`[addAdmin] Failed to assign group ${ug.groupId} to user ${user!.id}: ${e}`);
                 }
             }
+        }
+
+        // Link User → PRO record if role is PRO
+        if (role === 'PRO' && proNumber) {
+            const proNumberTrimmed = String(proNumber).trim();
+            await prisma.pRO.update({
+                where: { proNumber: proNumberTrimmed },
+                data: {
+                    userId: user.id,
+                    name: name ?? undefined,
+                    phone: normalizedPhone,
+                    email: normalizedEmail ?? undefined,
+                    updatedBy: currentUserId
+                }
+            });
+            logger.info(`[addAdmin] Linked User ${user.id} to PRO ${proNumberTrimmed}`);
         }
 
         logger.info(

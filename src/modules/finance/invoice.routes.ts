@@ -18,4 +18,14 @@ const router = express.Router();
  */
 router.post('/generate-invoice', authenticate, InvoiceController.generateInvoice);
 
+/**
+ * @route   POST /regenerate-invoice
+ * @desc    Regenerate an existing invoice PDF with latest student/course data (e.g. after branch change).
+ *          Overwrites the previous invoice URL on S3 while preserving all other payment data.
+ * @access  Authenticated users only.
+ * @body    { paymentId: string }
+ * @returns {{ success: boolean, data: { invoiceUrl, invoiceNumber, receiptNumber } }}
+ */
+router.post('/regenerate-invoice', authenticate, InvoiceController.regenerateInvoice);
+
 export default router;

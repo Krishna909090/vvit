@@ -24,6 +24,7 @@ import rbacRoutes from './modules/rbac/routes/rbac.routes';
 import invoiceRoutes from './modules/finance/invoice.routes';
 import feeRoutes from './modules/finance/fee.routes';
 import cancellationRoutes from './modules/admin/cancellation.routes';
+import proRoutes from './modules/pro/pro.routes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middlewares/errorMiddleware';
 import { generalRateLimiter } from './middlewares/rateLimitMiddleware';
@@ -116,6 +117,7 @@ app.use('/rbac', rbacRoutes);
 app.use('/admin/finance', invoiceRoutes);
 app.use('/admin/cancellation', cancellationRoutes);
 app.use('/finance', feeRoutes);
+app.use('/pro', proRoutes);
 
 
 

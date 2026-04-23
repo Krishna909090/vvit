@@ -17,8 +17,55 @@ import {
     initiateTokenPayment,
     recordOfflineApplicationFeePayment,
     processUnifiedPayment,
-    initiateMultiComponentPayment
+    initiateMultiComponentPayment,
+    getAllSuccessPayments,
+    getPaymentCreators,
+    getPaymentComponents,
+    exportSuccessPaymentsCsv
 } from './payment.service';
+
+export const getAllSuccessPaymentsController = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getAllSuccessPayments] by=${req.user?.userId || 'anonymous'}`);
+    const result = await getAllSuccessPayments(req.query);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Payment transactions fetched successfully',
+        data: result
+    });
+});
+
+export const getPaymentCreatorsController = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const creators = await getPaymentCreators();
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Payment creators fetched',
+        data: creators
+    });
+});
+
+export const getPaymentComponentsController = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const components = await getPaymentComponents();
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Payment components fetched',
+        data: components
+    });
+});
+
+export const exportSuccessPaymentsCsvController = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[exportSuccessPaymentsCsv] by=${req.user?.userId || 'anonymous'}`);
+    const csv = await exportSuccessPaymentsCsv(req.query);
+    const filename = `payment-transactions-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+});
 
 export const payMultiComponentFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const currentUserId = req.user?.userId || 'anonymous';

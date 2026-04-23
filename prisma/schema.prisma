@@ -27,6 +27,7 @@ model User {
   userGroups          UserGroup[]
   otps                UserOtp[]
   permissionOverrides UserPermissionOverride[]
+  proProfile          PRO?                     @relation("ProUser")
 }
 
 model UserOtp {
@@ -1460,13 +1461,18 @@ enum ServiceRequestType {
 }
 
 model PRO {
-  id        String @id @default(dbgenerated("gen_random_uuid()"))
-  proNumber String @unique
+  id        String  @id @default(dbgenerated("gen_random_uuid()"))
+  proNumber String  @unique
+  name      String?
+  phone     String?
+  email     String?
+  userId    String? @unique
 
   createdAt DateTime? @default(now())
   updatedAt DateTime  @updatedAt
   createdBy String?
   updatedBy String?
 
+  user     User?     @relation("ProUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students Student[]
 }

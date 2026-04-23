@@ -1173,6 +1173,228 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
 
 // [Removed initiateAdminOnlinePayment] - Use processUnifiedPayment instead
 
+/**
+ * Admin: List all SUCCESS payments with pagination and filters.
+ * Filters: search (applicationId/name/phone), component (feeType), mode,
+ *          method, createdBy, dateRange (today|yesterday|7d|15d|30d|custom),
+ *          startDate + endDate (if dateRange=custom), page, limit.
+ */
+export const getAllSuccessPayments = async (query: any) => {
+    const page = Math.max(1, parseInt(String(query.page || 1)));
+    const limit = Math.min(100, Math.max(1, parseInt(String(query.limit || 25))));
+    const skip = (page - 1) * limit;
+
+    const where: any = {
+        status: PaymentStatus.SUCCESS,
+        isDeleted: false
+    };
+
+    // Global search — applicationId OR name OR phone
+    const searchTerm = query.search || query.applicationId;
+    if (searchTerm) {
+        where.student = {
+            OR: [
+                { applicationId: { contains: String(searchTerm), mode: 'insensitive' } },
+                { name: { contains: String(searchTerm), mode: 'insensitive' } },
+                { phone: { contains: String(searchTerm) } }
+            ]
+        };
+    }
+
+    // Fee type / Component filter (supports comma-separated values, validate against enum)
+    if (query.component || query.feeType) {
+        const val = String(query.component || query.feeType);
+        const values = val.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+        const allowed = Object.values(PaymentComponent);
+        const invalid = values.filter(v => !allowed.includes(v as PaymentComponent));
+        if (invalid.length > 0) {
+            throw new AppError(`Invalid fee type: ${invalid.join(', ')}. Allowed: ${allowed.join(', ')}`, 400);
+        }
+        where.component = values.length > 1 ? { in: values as PaymentComponent[] } : values[0] as PaymentComponent;
+    }
+
+    if (query.mode) {
+        const v = String(query.mode).toUpperCase();
+        if (!Object.values(PaymentMode).includes(v as PaymentMode)) {
+            throw new AppError(`Invalid payment mode: ${v}. Allowed: ${Object.values(PaymentMode).join(', ')}`, 400);
+        }
+        where.mode = v;
+    }
+
+    if (query.method) {
+        const v = String(query.method).toUpperCase();
+        if (!Object.values(PaymentMethod).includes(v as PaymentMethod)) {
+            throw new AppError(`Invalid payment method: ${v}. Allowed: ${Object.values(PaymentMethod).join(', ')}`, 400);
+        }
+        where.method = v;
+    }
+
+    if (query.createdBy) where.createdBy = String(query.createdBy);
+
+    // Date range — preset or custom
+    const dateRange = query.dateRange ? String(query.dateRange).toLowerCase() : null;
+    if (dateRange && dateRange !== 'custom' && dateRange !== 'all') {
+        const now = new Date();
+        const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+        const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+        let gte: Date | undefined, lte: Date | undefined;
+
+        if (dateRange === 'today') {
+            gte = startOfDay(now); lte = endOfDay(now);
+        } else if (dateRange === 'yesterday') {
+            const y = new Date(now); y.setDate(now.getDate() - 1);
+            gte = startOfDay(y); lte = endOfDay(y);
+        } else if (dateRange === '7d') {
+            const d = new Date(now); d.setDate(now.getDate() - 7);
+            gte = startOfDay(d); lte = endOfDay(now);
+        } else if (dateRange === '15d') {
+            const d = new Date(now); d.setDate(now.getDate() - 15);
+            gte = startOfDay(d); lte = endOfDay(now);
+        } else if (dateRange === '30d') {
+            const d = new Date(now); d.setDate(now.getDate() - 30);
+            gte = startOfDay(d); lte = endOfDay(now);
+        }
+        if (gte && lte) where.createdAt = { gte, lte };
+    } else if (query.startDate || query.endDate) {
+        where.createdAt = {};
+        if (query.startDate) {
+            const s = new Date(String(query.startDate));
+            s.setHours(0, 0, 0, 0);
+            where.createdAt.gte = s;
+        }
+        if (query.endDate) {
+            const e = new Date(String(query.endDate));
+            e.setHours(23, 59, 59, 999);
+            where.createdAt.lte = e;
+        }
+    }
+
+    const [total, payments, totalSum] = await Promise.all([
+        prisma.payment.count({ where }),
+        prisma.payment.findMany({
+            where,
+            skip,
+            take: limit,
+            orderBy: { createdAt: 'desc' },
+            include: {
+                student: {
+                    select: {
+                        id: true,
+                        applicationId: true,
+                        name: true,
+                        phone: true,
+                        email: true,
+                        degreeType: true
+                    }
+                },
+                feeHead: { select: { id: true, name: true } }
+            }
+        }),
+        prisma.payment.aggregate({ where, _sum: { amount: true } })
+    ]);
+
+    // Resolve createdBy user names in a single query
+    const creatorIds = [...new Set(payments.map(p => p.createdBy).filter(Boolean) as string[])];
+    const creators = creatorIds.length > 0
+        ? await prisma.user.findMany({ where: { id: { in: creatorIds } }, select: { id: true, name: true } })
+        : [];
+    const creatorMap = Object.fromEntries(creators.map(c => [c.id, c.name]));
+
+    // Convert invoice URLs to presigned + attach creator name
+    const paymentsWithUrls = await Promise.all(payments.map(async p => ({
+        ...p,
+        invoiceUrl: await convertToPresignedUrl(p.invoiceUrl),
+        createdByName: p.createdBy ? (creatorMap[p.createdBy] || null) : null
+    })));
+
+    return {
+        data: paymentsWithUrls,
+        pagination: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit)
+        },
+        summary: {
+            totalTransactions: total,
+            totalAmount: totalSum._sum.amount || 0
+        }
+    };
+};
+
+/**
+ * Admin: Distinct payment components that actually have SUCCESS payments (for fee type dropdown).
+ */
+export const getPaymentComponents = async () => {
+    const rows = await prisma.payment.findMany({
+        where: { status: PaymentStatus.SUCCESS, isDeleted: false },
+        select: { component: true },
+        distinct: ['component']
+    });
+    return rows
+        .map(r => r.component)
+        .filter(Boolean)
+        .sort();
+};
+
+/**
+ * Admin: Get distinct list of users who have recorded SUCCESS payments (for filter dropdown).
+ */
+export const getPaymentCreators = async () => {
+    const creatorIds = await prisma.payment.findMany({
+        where: { status: PaymentStatus.SUCCESS, isDeleted: false, createdBy: { not: null } },
+        select: { createdBy: true },
+        distinct: ['createdBy']
+    });
+    const ids = creatorIds.map(c => c.createdBy!).filter(Boolean);
+    if (ids.length === 0) return [];
+    return prisma.user.findMany({
+        where: {
+            id: { in: ids },
+            role: { not: 'STUDENT' }
+        },
+        select: { id: true, name: true, role: true },
+        orderBy: { name: 'asc' }
+    });
+};
+
+/**
+ * Admin: Export SUCCESS payments to CSV (respects same filters as getAllSuccessPayments).
+ */
+export const exportSuccessPaymentsCsv = async (query: any) => {
+    // Fetch all matching (no pagination)
+    const result = await getAllSuccessPayments({ ...query, page: 1, limit: 100000 });
+    const rows = result.data;
+
+    const headers = [
+        'UTR No', 'Application No', 'Full Name', 'Phone',
+        'Fee Type', 'Mode', 'Method', 'Amount',
+        'Date & Time', 'Created By', 'Remarks'
+    ];
+
+    const escape = (v: any) => {
+        if (v === null || v === undefined) return '';
+        const s = String(v).replace(/"/g, '""');
+        return /[",\n]/.test(s) ? `"${s}"` : s;
+    };
+
+    const csvRows = rows.map((p: any) => [
+        p.referenceNumber || p.providerTxId || '',
+        p.student?.applicationId || '',
+        p.student?.name || '',
+        p.student?.phone || '',
+        p.component || '',
+        p.mode || '',
+        p.method || '',
+        p.amount,
+        p.createdAt ? new Date(p.createdAt).toISOString() : '',
+        p.createdByName || '',
+        (p.metadata as any)?.remarks || ''
+    ].map(escape).join(','));
+
+    return [headers.join(','), ...csvRows].join('\n');
+};
+
 export const requestDiscount = async (studentId: string, reason: string, amount: number, documentUrl?: string, userId?: string | null) => {
      // Prevent duplicate pending discount requests
      const pendingRequest = await prisma.discountRequest.findFirst({
