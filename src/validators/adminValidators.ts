@@ -252,7 +252,11 @@ export const addAdminSchema = z.object({
       .optional()
       .transform((val) => val ? val.toUpperCase() : val),
     groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
-  }),
+    proNumber: z.string().trim().optional(),
+  }).refine(
+    (data) => data.role !== 'PRO' || (data.proNumber !== undefined && data.proNumber.length > 0),
+    { message: 'PRO Number is required when role is PRO', path: ['proNumber'] }
+  ),
 });
 
 export const addInvigilatorSchema = z.object({

@@ -31,6 +31,7 @@ export const addAdmin = catchAsync(async (req: Request, res: Response, next: Nex
         email?: string;
         role?: RoleType;
         groupIds?: string[];
+        proNumber?: string;
     }, req.user?.userId);
 
     sendResponse({

@@ -6,6 +6,7 @@ export const Role = {
   INVIGILATOR: 'INVIGILATOR',
   STAFF: 'STAFF',
   VERIFICATION_OFFICER: 'VERIFICATION_OFFICER',
+  PRO: 'PRO',
 } as const;
 
 export type RoleType = keyof typeof Role;
