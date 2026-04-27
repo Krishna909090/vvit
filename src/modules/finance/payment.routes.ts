@@ -35,10 +35,12 @@ router.get('/:paymentId/invoice', authenticate, authorizePermission(['finance.re
 /**
  * POST /finance/initiate-entrance-fee
  * Initiates entrance/application fee payment (₹500) via PhonePe.
+ * @deprecated Since 2026-04. Use POST /finance/pay-component with
+ *   { component: 'APPLICATION_FEE', mode: 'ONLINE', method: 'UPI', amount, studentId }.
+ *   Kept active for FE backward compatibility — emits a Warning header.
+ *
  * Flow: Create PENDING payment → Call PhonePe SDK → Return redirect URL.
  * Reuses fresh PENDING payments (< 20 min) to avoid duplicates.
- * On PhonePe success: status → SUCCESS, invoice generated, email sent.
- * Rate limited: 5 requests per 15 minutes.
  * Body: { studentId }
  * Response: { status, data: { redirectUrl, paymentId } }
  */
@@ -46,21 +48,20 @@ router.post('/initiate-entrance-fee', authenticate, paymentRateLimiter, authoriz
 
 /**
  * POST /finance/offline-entrance-fee
- * Records an offline (cash/cheque/DD) application fee payment.
- * Admin enters payment details manually. Payment is immediately marked SUCCESS.
- * Generates invoice, creates ledger entry, updates admission status.
- * Rate limited: 5 requests per 15 minutes.
- * Body: { studentId, amount, method, referenceNumber?, remarks? }
- * Response: { status, data: { payment, invoiceUrl } }
+ *
+ * @deprecated Since 2026-04. Use POST /finance/pay-component with
+ *   { component: 'APPLICATION_FEE', mode: 'OFFLINE', method, referenceNumber, amount, studentId }.
+ *
+ * Records an offline application fee payment. Body: { studentId, amount, method, referenceNumber?, remarks? }
  */
 router.post('/offline-entrance-fee', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all', 'finance.create.own']), payOfflineApplicationFee);
 
 /**
  * POST /finance/initiate-college-fee
- * Initiates college fee payment (tuition + hostel + transport bundle) via PhonePe.
- * Can include multiple fee components in a single PhonePe transaction.
- * On success: generates allotment order, invoice, settles fee demands, creates ledger entries.
- * Rate limited: 5 requests per 15 minutes.
+ *
+ * NOT deprecated — has unique server-side logic that pay-component does not duplicate:
+ *   "if tuition is unpaid pay tuition; else hostel; else mess; else transport"
+ *
  * Body: { studentId, hostelSelection?, transportSelection?, paymentDetails: { amount } }
  * Response: { status, data: { redirectUrl, paymentId } }
  */
@@ -68,27 +69,35 @@ router.post('/initiate-college-fee', authenticate, paymentRateLimiter, authorize
 
 /**
  * POST /finance/admin-initiate
- * Admin-initiated payment for a student. Supports both online (PhonePe) and offline methods.
- * Used when admin processes payments on behalf of the student.
- * Offline methods (cash, cheque, DD, NEFT): immediately SUCCESS + invoice generated.
- * Online methods (UPI): returns PhonePe redirect URL.
- * Rate limited: 5 requests per 15 minutes.
- * Body: { studentId, components: [{ component, amount, feeHeadId? }], method, referenceNumber?, remarks? }
- * Response: { status, data: { redirectUrl? (online) | invoiceUrl? (offline), paymentIds, transactionId } }
+ *
+ * @deprecated Since 2026-04. This is a thin wrapper around processUnifiedPayment with
+ *   `mode: 'ONLINE', method: 'UPI'` hardcoded. Use POST /finance/pay-component instead with
+ *   explicit mode/method — gives the admin full control of the payment context.
+ *
+ * Body: { studentId, amount, component, feeHeadId?, remarks? }
  */
 router.post('/admin-initiate', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all']), initiateAdminPayment);
 
 // ═══════════════════════════════════════════════════════════
-// UNIFIED PAYMENT (Single & Multi-component)
+// CANONICAL PAYMENT API
+//   - /pay-component   → single component, any mode/method (replaces 3 deprecated routes above)
+//   - /multi-component → bundle multiple components into ONE PhonePe transaction
+//                        (hostel/mess/laundry/registration/transport are restricted from
+//                        bundling — they each route through different bank merchants)
 // ═══════════════════════════════════════════════════════════
 
 /**
- * POST /finance/pay-component
- * Pays a single fee component (tuition, hostel, transport, etc.).
- * Supports both online (PhonePe) and offline (cash, cheque, DD, NEFT) methods.
- * Validates fee head ID, checks for duplicate reference numbers on offline payments.
- * Rate limited: 5 requests per 15 minutes.
- * Body: { studentId, component, amount, feeHeadId?, method, referenceNumber?, remarks? }
+ * POST /finance/pay-component  ⭐ CANONICAL
+ *
+ * Pays a single fee component. Supports every value in the PaymentComponent enum:
+ *   APPLICATION_FEE, TUITION, ADMISSION, BOOK_BANK, SKILL_DEVELOPMENT,
+ *   HOSTEL, HOSTEL_ACCOMMODATION, HOSTEL_MESS, HOSTEL_LAUNDRY, HOSTEL_REGISTRATION,
+ *   TRANSPORT, COURSE_CHANGE_FEE, SCHOLARSHIP_TOKEN, OTHER.
+ *
+ * Hostel sub-components route to the correct PhonePe merchant via
+ * resolvePhonePeClientType() reading the per-hostel banking config (TRUST/LLP).
+ *
+ * Body: { studentId, component, amount, mode, method, feeHeadId?, referenceNumber?, remarks? }
  * Response: { status, data: { redirectUrl? | invoiceUrl?, paymentId, transactionId } }
  */
 router.post('/pay-component', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all', 'finance.create.own']), validateRequest(payFeeComponentSchema), payFeeComponent);

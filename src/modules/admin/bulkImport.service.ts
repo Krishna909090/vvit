@@ -322,7 +322,10 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
             data: { studentId: student.id }
         });
 
-        // Create Payment Record (Token)
+        // Create Payment Record (Token).
+        // academicYearId is not set on the admission in this flow, so skip it on the payment too
+        // (no source of truth — would be guessing). yearOfStudy=1 since this is a new admission.
+        const tokenTxnId = `OFF_TOK_${Date.now()}_${student.applicationId}`;
         await tx.payment.create({
             data: {
                 studentId: student.id,
@@ -330,7 +333,9 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 status: PaymentStatus.SUCCESS,
                 component: PaymentComponent.SCHOLARSHIP_TOKEN, // Mapping to Token
                 method: PaymentMethod.CASH, // or OFFLINE
-                providerTxId: `OFF_TOK_${Date.now()}_${student.applicationId}`,
+                providerTxId: tokenTxnId,
+                idempotencyKey: `${tokenTxnId}_SCHOLARSHIP_TOKEN`,
+                yearOfStudy: 1,
                 metadata: { notes: 'Bulk Upload Seat Booking' }
             }
         });
@@ -371,9 +376,11 @@ export const verifyOfflinePayment = async (studentId: string, amount: number, ty
     
     const component = type === 'ENTRANCE' ? PaymentComponent.APPLICATION_FEE : PaymentComponent.SCHOLARSHIP_TOKEN;
     const nextStatus = type === 'ENTRANCE' ? AdmissionStatus.ENTRANCE_FEE_PAID : AdmissionStatus.ADMISSION_CONFIRMED;
+    const academicYearId = student.admissionDetails.academicYearId ?? undefined;
 
     return await prisma.$transaction(async (tx) => {
         // Create Payment
+        const verifyTxnId = `OFF_${type}_${Date.now()}`;
         const payment = await tx.payment.create({
             data: {
                 studentId,
@@ -381,7 +388,10 @@ export const verifyOfflinePayment = async (studentId: string, amount: number, ty
                 status: PaymentStatus.SUCCESS,
                 component,
                 method: PaymentMethod.CASH,
-                providerTxId: `OFF_${type}_${Date.now()}`,
+                providerTxId: verifyTxnId,
+                idempotencyKey: `${verifyTxnId}_${component}`,
+                academicYearId,
+                yearOfStudy: 1,
                 metadata: { verifiedBy: adminId }
             }
         });
@@ -656,6 +666,7 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                     }
                 });
 
+                const appTxnId = `OFF_APP_${Date.now()}_${data.applicationId}`;
                 const payment = await tx.payment.create({
                     data: {
                         studentId: student.id,
@@ -663,7 +674,10 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                         status: PaymentStatus.SUCCESS,
                         component: PaymentComponent.APPLICATION_FEE,
                         method: PaymentMethod.CASH,
-                        providerTxId: `OFF_APP_${Date.now()}_${data.applicationId}`,
+                        providerTxId: appTxnId,
+                        idempotencyKey: `${appTxnId}_APPLICATION_FEE`,
+                        academicYearId: activeAcademicYear?.id,
+                        yearOfStudy: 1,
                         metadata: { notes: 'Offline Application - Bulk Import', verifiedBy: adminId }
                     }
                 });

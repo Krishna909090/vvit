@@ -96,8 +96,10 @@ export const payMultiComponentFee = catchAsync(async (req: Request, res: Respons
 });
 
 // Phase 1: Pay Test Fee
+// @deprecated — use POST /finance/pay-component { component: 'APPLICATION_FEE', mode: 'ONLINE', ... }
 export const payTestFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[payTestFee] by=${req.user?.userId || 'anonymous'}`);
+    res.setHeader('Warning', `299 - "Deprecated: use POST /finance/pay-component { component: 'APPLICATION_FEE', mode: 'ONLINE' }"`);
+    logger.warn(`[payTestFee] DEPRECATED endpoint hit by=${req.user?.userId || 'anonymous'} — migrate FE to /pay-component`);
     logger.debug && logger.debug(`[payTestFee] params=${JSON.stringify(req.params)}`);
 
     let { studentId } = req.params;
@@ -328,8 +330,10 @@ export const getFinancialSummary = catchAsync(async (req: Request, res: Response
     });
 });
 
+// @deprecated — use POST /finance/pay-component { component: 'APPLICATION_FEE', mode: 'OFFLINE', method, referenceNumber, ... }
 export const payOfflineApplicationFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[payOfflineApplicationFee] by=${req.user?.userId || 'anonymous'}`);
+    res.setHeader('Warning', `299 - "Deprecated: use POST /finance/pay-component { component: 'APPLICATION_FEE', mode: 'OFFLINE' }"`);
+    logger.warn(`[payOfflineApplicationFee] DEPRECATED endpoint hit by=${req.user?.userId || 'anonymous'} — migrate FE to /pay-component`);
     const { studentId, paymentMethod, transactionId, remarks, referenceNumber } = req.body;
 
     if (!studentId || !paymentMethod) throw new AppError("Student ID and Payment Method are required", 400);
@@ -345,8 +349,10 @@ export const payOfflineApplicationFee = catchAsync(async (req: Request, res: Res
     });
 });
 
+// @deprecated — thin wrapper around processUnifiedPayment. Use POST /finance/pay-component instead.
 export const initiateAdminPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[initiateAdminPayment] by=${req.user?.userId}`);
+    res.setHeader('Warning', `299 - "Deprecated: use POST /finance/pay-component"`);
+    logger.warn(`[initiateAdminPayment] DEPRECATED endpoint hit by=${req.user?.userId} — migrate FE to /pay-component`);
     const { studentId, amount, component, feeHeadId, remarks } = req.body;
 
     if (!studentId || !amount || !component) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);

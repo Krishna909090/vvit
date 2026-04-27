@@ -7,12 +7,8 @@ import { sendResponse } from '../../utils/response';
 import { HostelService } from './hostel.service';
 
 export const createHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { name, type, capacity } = req.body;
-    
-    if (!name || !type || !capacity) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
-
     const hostel = await HostelService.createHostel(req.body, req.user?.userId);
-    
+
     sendResponse({
         res,
         statusCode: 201,
@@ -59,8 +55,8 @@ export const updateHostel = catchAsync(async (req: Request, res: Response, next:
 });
 
 export const deleteHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { id } = req.params;
-    await HostelService.deleteHostel(id);
+    const { hostelId } = req.params;
+    await HostelService.deleteHostel(hostelId);
     sendResponse({
         res,
         statusCode: 200,
@@ -70,17 +66,6 @@ export const deleteHostel = catchAsync(async (req: Request, res: Response, next:
 });
 
 // Hostel (Detailed)
-export const createHostelBlock = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const block = await HostelService.createHostelBlock(req.body, req.user?.userId);
-    sendResponse({
-        res,
-        statusCode: 201,
-        success: true,
-        message: MESSAGES.SUCCESS.HOSTEL_BLOCK_CREATED,
-        data: block
-    });
-});
-
 export const createHostelRoom = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const room = await HostelService.createHostelRoom(req.body, req.user?.userId);
     sendResponse({
@@ -92,35 +77,27 @@ export const createHostelRoom = catchAsync(async (req: Request, res: Response, n
     });
 });
 
-// Hostel Block
-export const getHostelBlocks = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { hostelId } = req.query;
-    const blocks = await HostelService.getHostelBlocks(hostelId as string);
-    sendResponse({ res, statusCode: 200, success: true, data: blocks });
-});
-
-export const getHostelBlockById = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { id } = req.params;
-    const block = await HostelService.getHostelBlockById(id);
-    sendResponse({ res, statusCode: 200, success: true, data: block });
-});
-
-export const updateHostelBlock = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { id } = req.params;
-    const updatedBlock = await HostelService.updateHostelBlock(id, req.body, req.user?.userId);
-    sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.HOSTEL_BLOCK_UPDATED, data: updatedBlock });
-});
-
-export const deleteHostelBlock = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { id } = req.params;
-    await HostelService.deleteHostelBlock(id);
-    sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.HOSTEL_BLOCK_DELETED });
+export const createHostelRoomsBulk = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const result = await HostelService.createHostelRoomsBulk(req.body, req.user?.userId);
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: `Created ${result.createdCount} rooms successfully`,
+        data: result
+    });
 });
 
 // Hostel Room
 export const getHostelRooms = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { blockId } = req.query;
-    const rooms = await HostelService.getHostelRooms(blockId as string);
+    const { blockId, hostelId, floor, includeBeds } = req.query;
+    const truthy = (v: any) => v === true || v === 'true' || v === '1';
+    const rooms = await HostelService.getHostelRooms({
+        blockId: blockId as string,
+        hostelId: hostelId as string,
+        floor: floor !== undefined ? Number(floor) : undefined,
+        includeBeds: truthy(includeBeds)
+    });
     sendResponse({ res, statusCode: 200, success: true, data: rooms });
 });
 

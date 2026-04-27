@@ -15,6 +15,16 @@ import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { maskAadhaar } from '../../utils/mask';
 import { generateApplicationPDF } from '../../utils/applicationPdfGenerator';
 import { getHostelCostTx, getSemwiseSurchargeTx } from '../../utils/hostelPricing';
+import { assertHostelHasCapacity } from '../infrastructure/hostel.service';
+import {
+    getStudentContext,
+    getStudentYearOfStudy,
+    assertActiveAdmission,
+    assertHostelAccommodation,
+    assertNoBedAllocated,
+    resolveFeeHeadsByComponent,
+    resolveFeeDemandContext
+} from '../../utils/studentContext';
 import { getEnv } from '../../config/envValidator';
 import { sendAdmissionFeeReceipt, sendPaymentReceipt, sendScholarshipUpdateEmail } from '../../utils/emailService';
 // @ts-ignore
@@ -1434,9 +1444,11 @@ export const AdminStudentService = {
                             data: {
                                 studentId: request.studentId,
                                 feeHeadId: struct.feeHeadId,
+                                feeStructureId: struct.id,
                                 amount: struct.amount,
                                 netAmount: struct.amount,
                                 academicYearId,
+                                yearOfStudy: struct.yearOfStudy ?? undefined,
                                 dueDate: new Date(),
                                 status: FeeStatus.PENDING,
                                 remarks: `Added during course change to new course structure`
@@ -1611,6 +1623,865 @@ export const AdminStudentService = {
         }
     },
 
+    /**
+     * List vacant beds in a hostel, optionally filtered by sharing/roomType/floor.
+     * Used by the assignment-UI dropdown.
+     */
+    async getAvailableBeds(hostelId: string, filters: { sharing?: number; roomType?: string; floor?: number }) {
+        const hostel = await prisma.hostel.findUnique({ where: { id: hostelId } });
+        if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+        if (hostel.isDeleted) throw new AppError('Hostel is deleted', 400);
+
+        const roomWhere: any = { hostelId, isDeleted: false };
+        if (filters.sharing !== undefined) roomWhere.capacity = filters.sharing;
+        if (filters.roomType !== undefined) roomWhere.type = filters.roomType;
+        if (filters.floor !== undefined) roomWhere.floor = filters.floor;
+
+        const rooms = await prisma.hostelRoom.findMany({
+            where: roomWhere,
+            include: {
+                beds: {
+                    where: { allocation: null },
+                    orderBy: { number: 'asc' }
+                }
+            },
+            orderBy: [{ floor: 'asc' }, { number: 'asc' }]
+        });
+
+        const beds = rooms.flatMap(room =>
+            room.beds.map(bed => ({
+                bedId: bed.id,
+                bedNumber: bed.number,
+                roomId: room.id,
+                roomNumber: room.number,
+                floor: room.floor,
+                capacity: room.capacity,
+                roomType: room.type
+            }))
+        );
+
+        return { hostelId, count: beds.length, beds };
+    },
+
+    /**
+     * Allocate a specific bed to a student who already has accommodationType=HOSTEL.
+     * Atomically:
+     *   - Validates student + bed eligibility
+     *   - Updates StudentAdmission { hostelType, roomNumber }
+     *   - Creates HostelAllocation row, marks bed occupied
+     *   - Snapshots pricing into StudentAccommodationPricing
+     *   - Creates StudentFeeDemand rows (one per fee component)
+     *   - Increments StudentAdmission.totalFee
+     */
+    async allocateBed(studentId: string, bedId: string, academicYearIdInput: string | undefined, adminId: string | undefined) {
+        const ctx = await getStudentContext(studentId);
+        assertActiveAdmission(ctx.admission, 'allocate bed');
+        assertHostelAccommodation(ctx.admission, 'Run assign-hostel first.');
+        assertNoBedAllocated(ctx.accommodationPricing, 'Use re-allocation flow.');
+        const admission = ctx.admission!;
+        if (!admission.hostelId) {
+            throw new AppError('Student has no hostel assigned', 400);
+        }
+
+        const bed = await prisma.hostelBed.findUnique({
+            where: { id: bedId },
+            include: { room: true, allocation: true }
+        });
+        if (!bed) throw new AppError('Bed not found', 404);
+        if (bed.allocation) throw new AppError('Bed is already allocated to another student', 409);
+        if (bed.room.isDeleted) throw new AppError('Cannot allocate a bed in a deleted room', 400);
+        if (bed.room.hostelId !== admission.hostelId) {
+            throw new AppError('Bed does not belong to the student\'s assigned hostel', 400);
+        }
+
+        const sharing = bed.room.capacity;
+        const roomType = bed.room.type;
+
+        // Look up price tier
+        const priceCategory = await prisma.hostelPriceCategory.findFirst({
+            where: { sharing, roomType: roomType as any, isActive: true }
+        });
+        if (!priceCategory) {
+            throw new AppError(
+                `No active price tier found for sharing=${sharing}, roomType=${roomType}. Create one in HostelPriceCategory first.`,
+                400
+            );
+        }
+
+        const isSemwise = admission.hostelPaymentMode === HostelPaymentMode.SEMWISE;
+        const accommodationPrice = (isSemwise ? priceCategory.accommodationSemwise : priceCategory.accommodationYearwise) ?? 0;
+        const messPrice = (isSemwise ? priceCategory.messSemwise : priceCategory.messYearwise) ?? 0;
+        const laundryPrice = (isSemwise ? priceCategory.laundrySemwise : priceCategory.laundryYearwise) ?? 0;
+        const registrationFee = priceCategory.registrationFee ?? 0;
+        const effectiveTotal = accommodationPrice + messPrice + laundryPrice + registrationFee;
+
+        // Resolve hostelType enum from sharing tier (now supports 2/4/6/8/10)
+        const hostelType = `SHARING_${sharing}` as HostelType;
+
+        // Resolve academic year (caller-provided or fall back to admission's existing one)
+        const academicYearId = academicYearIdInput ?? admission.academicYearId ?? undefined;
+
+        // Look up FeeHeads via explicit `component` tag (with name-keyword fallback for legacy heads)
+        const feeHeadMap = await resolveFeeHeadsByComponent([
+            PaymentComponent.HOSTEL_ACCOMMODATION,
+            PaymentComponent.HOSTEL_MESS,
+            PaymentComponent.HOSTEL_LAUNDRY,
+            PaymentComponent.HOSTEL_REGISTRATION,
+        ]);
+        const accHead = feeHeadMap.get(PaymentComponent.HOSTEL_ACCOMMODATION);
+        const messHead = feeHeadMap.get(PaymentComponent.HOSTEL_MESS);
+        const laundryHead = feeHeadMap.get(PaymentComponent.HOSTEL_LAUNDRY);
+        const regHead = feeHeadMap.get(PaymentComponent.HOSTEL_REGISTRATION);
+
+        return await prisma.$transaction(async (tx) => {
+            // 1. Create allocation
+            await (tx.hostelAllocation as any).create({
+                data: {
+                    studentId,
+                    bedId,
+                    startDate: new Date(),
+                    status: 'ACTIVE',
+                    createdBy: adminId
+                }
+            });
+
+            // 2. Mark bed occupied
+            await tx.hostelBed.update({
+                where: { id: bedId },
+                data: { isOccupied: true, updatedBy: adminId }
+            });
+
+            // 3. Update admission
+            await tx.studentAdmission.update({
+                where: { studentId },
+                data: {
+                    hostelType,
+                    roomNumber: bed.room.number,
+                    totalFee: { increment: effectiveTotal }
+                }
+            });
+
+            // 4. Snapshot pricing
+            await (tx.studentAccommodationPricing as any).create({
+                data: {
+                    studentId,
+                    academicYearId,
+                    sharing,
+                    roomType,
+                    paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
+                    hostelId: admission.hostelId,
+                    accommodationPrice,
+                    messPrice,
+                    laundryPrice,
+                    registrationFee,
+                    effectiveTotal,
+                    pricingSource: 'CONFIG',
+                    createdBy: adminId
+                }
+            });
+
+            // 5. Create fee demands (skip components without a matching FeeHead)
+            const dueDate = new Date();
+            dueDate.setDate(dueDate.getDate() + 30);
+            const demands: { feeHeadId: string; amount: number; label: string }[] = [];
+            if (accHead && accommodationPrice > 0) demands.push({ feeHeadId: accHead.id, amount: accommodationPrice, label: 'accommodation' });
+            if (messHead && messPrice > 0)         demands.push({ feeHeadId: messHead.id, amount: messPrice, label: 'mess' });
+            if (laundryHead && laundryPrice > 0)   demands.push({ feeHeadId: laundryHead.id, amount: laundryPrice, label: 'laundry' });
+            if (regHead && registrationFee > 0)    demands.push({ feeHeadId: regHead.id, amount: registrationFee, label: 'registration' });
+
+            for (const d of demands) {
+                await tx.studentFeeDemand.create({
+                    data: {
+                        studentId,
+                        feeHeadId: d.feeHeadId,
+                        amount: d.amount,
+                        netAmount: d.amount,
+                        academicYearId,
+                        yearOfStudy: ctx.yearOfStudy,
+                        dueDate,
+                        status: FeeStatus.PENDING,
+                        remarks: `Hostel ${d.label} (${hostelType}, ${roomType}, ${isSemwise ? 'SEMWISE' : 'YEARWISE'})`,
+                        createdBy: adminId
+                    }
+                });
+            }
+
+            const componentPrices: Record<string, number> = {
+                accommodation: accommodationPrice,
+                mess: messPrice,
+                laundry: laundryPrice,
+                registration: registrationFee
+            };
+            const skipped = Object.keys(componentPrices).filter(
+                l => !demands.find(d => d.label === l) && (componentPrices[l] ?? 0) > 0
+            );
+
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'BED_ALLOCATED',
+                    entity: 'StudentAdmission',
+                    entityId: studentId,
+                    details: {
+                        bedId, bedNumber: bed.number,
+                        roomId: bed.room.id, roomNumber: bed.room.number,
+                        hostelId: admission.hostelId,
+                        hostelType,
+                        sharing, roomType,
+                        paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
+                        effectiveTotal,
+                        feeDemandsCreated: demands.length,
+                    }
+                }
+            });
+
+            return {
+                allocation: { studentId, bedId, roomNumber: bed.room.number, hostelType },
+                pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal, paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE' },
+                feeDemandsCreated: demands.length,
+                skippedComponents: skipped.length > 0 ? `Missing FeeHead for: ${skipped.join(', ')} — create those FeeHeads to bill these components` : null
+            };
+        });
+    },
+
+    /**
+     * Bulk-allocate vacant beds in ONE room to a list of students.
+     *
+     * Use case: admin picks a room with N vacant beds + provides up to N student IDs.
+     * System fills the beds in order (`bed.number` ASC).
+     *
+     * Pre-validates everyone first, then executes the whole batch atomically.
+     * If ANY student fails validation, NONE are allocated — admin fixes the input list and retries.
+     *
+     * Each successful student gets:
+     *   - StudentAdmission updated (accommodationType=HOSTEL, hostelId, hostelType, roomNumber, paymentMode, totalFee+=effectiveTotal)
+     *   - HostelAllocation row created (status=ACTIVE)
+     *   - HostelBed marked occupied
+     *   - StudentAccommodationPricing snapshot created
+     *   - StudentFeeDemand rows created (per available FeeHead)
+     */
+    async bulkAllocateRoomBeds(
+        roomId: string,
+        studentIds: string[],
+        hostelPaymentMode: 'YEARWISE' | 'SEMWISE',
+        academicYearIdInput: string | undefined,
+        adminId: string | undefined
+    ) {
+        // 1. Validate room
+        const room = await prisma.hostelRoom.findUnique({
+            where: { id: roomId },
+            include: {
+                hostel: true,
+                beds: {
+                    where: { allocation: null },
+                    orderBy: { number: 'asc' },
+                    include: { allocation: true }
+                }
+            }
+        });
+        if (!room) throw new AppError('Room not found', 404);
+        if (room.isDeleted) throw new AppError('Cannot allocate beds in a deleted room', 400);
+        if (room.hostel.isDeleted) throw new AppError("Cannot allocate beds in a deleted hostel", 400);
+
+        const vacantBeds = room.beds;
+        if (vacantBeds.length === 0) {
+            throw new AppError('No vacant beds in this room', 400);
+        }
+        if (studentIds.length > vacantBeds.length) {
+            throw new AppError(
+                `Room has ${vacantBeds.length} vacant bed(s) but ${studentIds.length} students supplied. Reduce the list or pick another room.`,
+                400
+            );
+        }
+
+        const hostelId = room.hostelId;
+        const sharing = room.capacity;
+        const roomType = room.type;
+
+        // 2. Validate price tier
+        const priceCategory = await prisma.hostelPriceCategory.findFirst({
+            where: { sharing, roomType: roomType as any, isActive: true }
+        });
+        if (!priceCategory) {
+            throw new AppError(
+                `No active price tier for sharing=${sharing}, roomType=${roomType}. Create one in HostelPriceCategory first.`,
+                400
+            );
+        }
+
+        const isSemwise = hostelPaymentMode === 'SEMWISE';
+        const accommodationPrice = ((priceCategory as any)[isSemwise ? 'accommodationSemwise' : 'accommodationYearwise']) ?? 0;
+        const messPrice = ((priceCategory as any)[isSemwise ? 'messSemwise' : 'messYearwise']) ?? 0;
+        const laundryPrice = ((priceCategory as any)[isSemwise ? 'laundrySemwise' : 'laundryYearwise']) ?? 0;
+        const registrationFee = (priceCategory as any).registrationFee ?? 0;
+        const effectiveTotal = accommodationPrice + messPrice + laundryPrice + registrationFee;
+        const hostelType = `SHARING_${sharing}` as HostelType;
+
+        // 3. Validate every student up-front
+        const students = await prisma.student.findMany({
+            where: { id: { in: studentIds } },
+            include: { admissionDetails: true, accommodationPricing: true } as any
+        }) as any[];
+
+        const studentMap = new Map(students.map(s => [s.id, s]));
+        const validationErrors: { studentId: string; reason: string }[] = [];
+
+        for (const sid of studentIds) {
+            const s = studentMap.get(sid);
+            if (!s) { validationErrors.push({ studentId: sid, reason: 'Student not found' }); continue; }
+            if (!s.admissionDetails) {
+                validationErrors.push({ studentId: sid, reason: 'No admission record' });
+                continue;
+            }
+            if (s.admissionDetails.status === AdmissionStatus.CANCELLED) {
+                validationErrors.push({ studentId: sid, reason: 'Admission is cancelled' });
+                continue;
+            }
+            // Acceptable starting states:
+            //  - NONE → flip to HOSTEL
+            //  - HOSTEL with no bed yet (no snapshot) and matching hostelId (or no hostelId yet) → allocate
+            // Reject if has bed already, or if accommodationType is TRANSPORT/other.
+            if (s.accommodationPricing) {
+                validationErrors.push({ studentId: sid, reason: 'Already has a bed allocated' });
+                continue;
+            }
+            if (s.admissionDetails.accommodationType !== AccommodationType.NONE
+                && s.admissionDetails.accommodationType !== AccommodationType.HOSTEL) {
+                validationErrors.push({
+                    studentId: sid,
+                    reason: `accommodationType is ${s.admissionDetails.accommodationType}, expected NONE or HOSTEL`
+                });
+                continue;
+            }
+            if (s.admissionDetails.accommodationType === AccommodationType.HOSTEL
+                && s.admissionDetails.hostelId
+                && s.admissionDetails.hostelId !== hostelId) {
+                validationErrors.push({
+                    studentId: sid,
+                    reason: `Already assigned to a different hostel (${s.admissionDetails.hostelId}). Reassign first.`
+                });
+                continue;
+            }
+        }
+
+        if (validationErrors.length > 0) {
+            return {
+                success: false,
+                phase: 'PRE_VALIDATION',
+                roomId,
+                roomNumber: room.number,
+                hostelId,
+                requested: studentIds.length,
+                vacantBedsAvailable: vacantBeds.length,
+                allocated: 0,
+                errors: validationErrors,
+                message: 'No students were allocated. Fix the validation errors above and retry.'
+            };
+        }
+
+        // 4. Resolve FeeHeads via component tag (with name-keyword fallback)
+        const feeHeadMap = await resolveFeeHeadsByComponent([
+            PaymentComponent.HOSTEL_ACCOMMODATION,
+            PaymentComponent.HOSTEL_MESS,
+            PaymentComponent.HOSTEL_LAUNDRY,
+            PaymentComponent.HOSTEL_REGISTRATION,
+        ]);
+        const accHead = feeHeadMap.get(PaymentComponent.HOSTEL_ACCOMMODATION);
+        const messHead = feeHeadMap.get(PaymentComponent.HOSTEL_MESS);
+        const laundryHead = feeHeadMap.get(PaymentComponent.HOSTEL_LAUNDRY);
+        const regHead = feeHeadMap.get(PaymentComponent.HOSTEL_REGISTRATION);
+
+        // Pair students with beds (in input order)
+        const pairs = studentIds.map((sid, idx) => ({
+            studentId: sid,
+            bed: vacantBeds[idx]
+        }));
+
+        // 5. Execute the batch atomically
+        const dueDate = new Date();
+        dueDate.setDate(dueDate.getDate() + 30);
+
+        // Pre-resolve year-of-study for each student (one query per student, outside the tx)
+        const yearOfStudyMap = new Map<string, number>();
+        for (const sid of studentIds) {
+            yearOfStudyMap.set(sid, await getStudentYearOfStudy(sid));
+        }
+
+        const allocated: any[] = [];
+        await prisma.$transaction(async (tx) => {
+            for (const { studentId, bed } of pairs) {
+                const student = studentMap.get(studentId)!;
+                const academicYearId = academicYearIdInput
+                    ?? (student.admissionDetails as any)?.academicYearId
+                    ?? undefined;
+                const yearOfStudy = yearOfStudyMap.get(studentId) ?? 1;
+
+                // a. Update admission
+                await tx.studentAdmission.update({
+                    where: { studentId },
+                    data: {
+                        accommodationType: AccommodationType.HOSTEL,
+                        hostelId,
+                        hostelType,
+                        roomNumber: room.number,
+                        hostelPaymentMode: isSemwise ? HostelPaymentMode.SEMWISE : HostelPaymentMode.YEARWISE,
+                        totalFee: { increment: effectiveTotal }
+                    }
+                });
+
+                // b. Create allocation
+                await (tx.hostelAllocation as any).create({
+                    data: {
+                        studentId,
+                        bedId: bed.id,
+                        startDate: new Date(),
+                        status: 'ACTIVE',
+                        createdBy: adminId
+                    }
+                });
+
+                // c. Mark bed occupied
+                await tx.hostelBed.update({
+                    where: { id: bed.id },
+                    data: { isOccupied: true, updatedBy: adminId }
+                });
+
+                // d. Snapshot pricing
+                await (tx.studentAccommodationPricing as any).create({
+                    data: {
+                        studentId,
+                        academicYearId,
+                        sharing,
+                        roomType,
+                        paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
+                        hostelId,
+                        accommodationPrice,
+                        messPrice,
+                        laundryPrice,
+                        registrationFee,
+                        effectiveTotal,
+                        pricingSource: 'CONFIG',
+                        createdBy: adminId
+                    }
+                });
+
+                // e. Create fee demands (skip components without matching FeeHead)
+                const components = [
+                    { head: accHead, amount: accommodationPrice, label: 'accommodation' },
+                    { head: messHead, amount: messPrice, label: 'mess' },
+                    { head: laundryHead, amount: laundryPrice, label: 'laundry' },
+                    { head: regHead, amount: registrationFee, label: 'registration' }
+                ];
+                for (const c of components) {
+                    if (!c.head || c.amount <= 0) continue;
+                    await tx.studentFeeDemand.create({
+                        data: {
+                            studentId,
+                            feeHeadId: c.head.id,
+                            amount: c.amount,
+                            netAmount: c.amount,
+                            academicYearId,
+                            yearOfStudy,
+                            dueDate,
+                            status: FeeStatus.PENDING,
+                            remarks: `Hostel ${c.label} (bulk-allocated to ${room.number}, ${hostelType}, ${hostelPaymentMode})`,
+                            createdBy: adminId
+                        }
+                    });
+                }
+
+                await tx.auditLog.create({
+                    data: {
+                        userId: adminId,
+                        action: 'BED_ALLOCATED_BULK',
+                        entity: 'StudentAdmission',
+                        entityId: studentId,
+                        details: {
+                            bedId: bed.id, bedNumber: bed.number,
+                            roomId, roomNumber: room.number,
+                            hostelId,
+                            hostelType,
+                            sharing, roomType,
+                            paymentMode: hostelPaymentMode,
+                            effectiveTotal,
+                            batchSize: pairs.length,
+                        }
+                    }
+                });
+
+                allocated.push({
+                    studentId,
+                    studentName: student.name,
+                    bedId: bed.id,
+                    bedNumber: bed.number,
+                });
+            }
+        }, { timeout: 60000 }); // 60s ceiling — typical 50-student batch finishes well under this
+
+        const skippedComponents: string[] = [];
+        if (!accHead && accommodationPrice > 0) skippedComponents.push('accommodation');
+        if (!messHead && messPrice > 0) skippedComponents.push('mess');
+        if (!laundryHead && laundryPrice > 0) skippedComponents.push('laundry');
+        if (!regHead && registrationFee > 0) skippedComponents.push('registration');
+
+        return {
+            success: true,
+            phase: 'COMPLETED',
+            roomId,
+            roomNumber: room.number,
+            hostelId,
+            hostelType,
+            paymentMode: hostelPaymentMode,
+            requested: studentIds.length,
+            allocated: allocated.length,
+            remainingVacantInRoom: vacantBeds.length - allocated.length,
+            pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal },
+            allocations: allocated,
+            skippedComponents: skippedComponents.length > 0
+                ? `Missing FeeHead for: ${skippedComponents.join(', ')} — those components were not billed`
+                : null
+        };
+    },
+
+    /**
+     * Re-assign a student to a different hostel/bed AFTER initial bed allocation.
+     * Atomically:
+     *   - Vacates old bed (HostelAllocation status flips to ACTIVE on new bed; old bed isOccupied=false)
+     *   - Updates StudentAdmission (hostelId, hostelType, roomNumber, paymentMode, totalFee delta)
+     *   - Replaces StudentAccommodationPricing snapshot
+     *   - Soft-deletes outstanding hostel fee demands (paid history preserved)
+     *   - Creates new fee demands for new pricing
+     *   - Writes a StudentLedger entry for the audit trail
+     */
+    async reassignHostel(
+        studentId: string,
+        args: { hostelId: string; bedId: string; hostelPaymentMode: 'YEARWISE' | 'SEMWISE'; reason: string },
+        adminId: string | undefined
+    ) {
+        // 1. Validate student
+        const ctx = await getStudentContext(studentId);
+        assertActiveAdmission(ctx.admission, 'reassign hostel');
+        assertHostelAccommodation(ctx.admission, 'Use assign-hostel + allocate-bed first.');
+        const admission = ctx.admission!;
+        const oldPricing = ctx.accommodationPricing;
+        if (!oldPricing) {
+            throw new AppError('Student has no allocated bed yet. Use allocate-bed first.', 400);
+        }
+
+        // 2. Find old allocation
+        const oldAllocation = await (prisma.hostelAllocation as any).findUnique({
+            where: { studentId },
+            include: { bed: { include: { room: true } } }
+        });
+        if (!oldAllocation) throw new AppError('No active bed allocation found', 404);
+
+        // 3. Validate new bed
+        const newBed = await prisma.hostelBed.findUnique({
+            where: { id: args.bedId },
+            include: { room: true, allocation: true }
+        });
+        if (!newBed) throw new AppError('New bed not found', 404);
+        if (newBed.room.isDeleted) throw new AppError('Cannot allocate a bed in a deleted room', 400);
+        if (newBed.room.hostelId !== args.hostelId) {
+            throw new AppError('Bed does not belong to the selected hostel', 400);
+        }
+        // Allow same bed (paymentMode-only change), but block if different student holds it
+        if (newBed.allocation && (newBed.allocation as any).status === 'ACTIVE' && newBed.id !== oldAllocation.bedId) {
+            throw new AppError('New bed is already allocated to another student', 409);
+        }
+
+        // 4. Validate new hostel
+        const newHostel = await prisma.hostel.findUnique({ where: { id: args.hostelId } });
+        if (!newHostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+        if (newHostel.isDeleted) throw new AppError('Cannot reassign to a deleted hostel', 400);
+
+        // Capacity check only if moving to a different hostel
+        if (args.hostelId !== oldPricing.hostelId) {
+            await assertHostelHasCapacity(args.hostelId);
+        }
+
+        // 5. Compute new pricing
+        const sharing = newBed.room.capacity;
+        const roomType = newBed.room.type;
+        const priceCategory = await prisma.hostelPriceCategory.findFirst({
+            where: { sharing, roomType: roomType as any, isActive: true }
+        });
+        if (!priceCategory) {
+            throw new AppError(`No active price tier found for sharing=${sharing}, roomType=${roomType}.`, 400);
+        }
+
+        const isSemwise = args.hostelPaymentMode === 'SEMWISE';
+        const accommodationPrice = ((priceCategory as any)[isSemwise ? 'accommodationSemwise' : 'accommodationYearwise']) ?? 0;
+        const messPrice = ((priceCategory as any)[isSemwise ? 'messSemwise' : 'messYearwise']) ?? 0;
+        const laundryPrice = ((priceCategory as any)[isSemwise ? 'laundrySemwise' : 'laundryYearwise']) ?? 0;
+        const registrationFee = (priceCategory as any).registrationFee ?? 0;
+        const newEffectiveTotal = accommodationPrice + messPrice + laundryPrice + registrationFee;
+
+        const newHostelType = `SHARING_${sharing}` as HostelType;
+        const oldEffectiveTotal = oldPricing.effectiveTotal ?? 0;
+        const totalFeeDelta = newEffectiveTotal - oldEffectiveTotal;
+        const academicYearId = oldPricing.academicYearId ?? admission.academicYearId ?? undefined;
+
+        // 6. Resolve hostel-related FeeHeads via component tag (with name-keyword fallback)
+        const feeHeadMap = await resolveFeeHeadsByComponent([
+            PaymentComponent.HOSTEL_ACCOMMODATION,
+            PaymentComponent.HOSTEL_MESS,
+            PaymentComponent.HOSTEL_LAUNDRY,
+            PaymentComponent.HOSTEL_REGISTRATION,
+        ]);
+        const accHead = feeHeadMap.get(PaymentComponent.HOSTEL_ACCOMMODATION);
+        const messHead = feeHeadMap.get(PaymentComponent.HOSTEL_MESS);
+        const laundryHead = feeHeadMap.get(PaymentComponent.HOSTEL_LAUNDRY);
+        const regHead = feeHeadMap.get(PaymentComponent.HOSTEL_REGISTRATION);
+
+        const hostelHeadIds = [accHead?.id, messHead?.id, laundryHead?.id, regHead?.id].filter(Boolean) as string[];
+
+        // 7. Atomic transition
+        return await prisma.$transaction(async (tx) => {
+            // a. Vacate old bed (only if changing beds)
+            if (newBed.id !== oldAllocation.bedId) {
+                await tx.hostelBed.update({
+                    where: { id: oldAllocation.bedId },
+                    data: { isOccupied: false, updatedBy: adminId }
+                });
+                await tx.hostelBed.update({
+                    where: { id: newBed.id },
+                    data: { isOccupied: true, updatedBy: adminId }
+                });
+            }
+
+            // b. Update HostelAllocation in place (studentId is @unique, so we update not insert)
+            await (tx.hostelAllocation as any).update({
+                where: { studentId },
+                data: {
+                    bedId: newBed.id,
+                    startDate: new Date(),
+                    status: 'ACTIVE',
+                    updatedBy: adminId
+                }
+            });
+
+            // c. Update admission
+            await tx.studentAdmission.update({
+                where: { studentId },
+                data: {
+                    hostelId: args.hostelId,
+                    hostelType: newHostelType,
+                    roomNumber: newBed.room.number,
+                    hostelPaymentMode: isSemwise ? HostelPaymentMode.SEMWISE : HostelPaymentMode.YEARWISE,
+                    totalFee: { increment: totalFeeDelta }
+                }
+            });
+
+            // d. Replace pricing snapshot in place (studentId is @unique)
+            await (tx.studentAccommodationPricing as any).update({
+                where: { studentId },
+                data: {
+                    sharing,
+                    roomType,
+                    paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
+                    hostelId: args.hostelId,
+                    accommodationPrice,
+                    messPrice,
+                    laundryPrice,
+                    registrationFee,
+                    effectiveTotal: newEffectiveTotal,
+                    pricingSource: 'CONFIG',
+                    updatedBy: adminId
+                }
+            });
+
+            // e. Soft-delete outstanding hostel fee demands (PENDING). Paid demands stay as audit.
+            let supersededDemands = 0;
+            if (hostelHeadIds.length > 0) {
+                const result = await tx.studentFeeDemand.updateMany({
+                    where: {
+                        studentId,
+                        isDeleted: false,
+                        status: FeeStatus.PENDING,
+                        feeHeadId: { in: hostelHeadIds }
+                    },
+                    data: {
+                        isDeleted: true,
+                        deletedAt: new Date(),
+                        deletedBy: adminId,
+                        remarks: `Superseded by hostel re-assignment to ${newHostelType} ${args.hostelPaymentMode}`
+                    }
+                });
+                supersededDemands = result.count;
+            }
+
+            // f. Create new demands for the new pricing
+            const dueDate = new Date();
+            dueDate.setDate(dueDate.getDate() + 30);
+            const components: { head: typeof accHead; amount: number; label: string }[] = [
+                { head: accHead, amount: accommodationPrice, label: 'accommodation' },
+                { head: messHead, amount: messPrice, label: 'mess' },
+                { head: laundryHead, amount: laundryPrice, label: 'laundry' },
+                { head: regHead, amount: registrationFee, label: 'registration' }
+            ];
+            const createdDemands: string[] = [];
+            const skippedComponents: string[] = [];
+            for (const c of components) {
+                if (!c.head) { if (c.amount > 0) skippedComponents.push(c.label); continue; }
+                if (c.amount <= 0) continue;
+                const d = await tx.studentFeeDemand.create({
+                    data: {
+                        studentId,
+                        feeHeadId: c.head.id,
+                        amount: c.amount,
+                        netAmount: c.amount,
+                        academicYearId,
+                        yearOfStudy: ctx.yearOfStudy,
+                        dueDate,
+                        status: FeeStatus.PENDING,
+                        remarks: `Hostel ${c.label} (re-assigned: ${newHostelType}, ${args.hostelPaymentMode})`,
+                        createdBy: adminId
+                    }
+                });
+                createdDemands.push(d.id);
+            }
+
+            // g. Audit ledger entry (financial)
+            await tx.studentLedger.create({
+                data: {
+                    studentId,
+                    date: new Date(),
+                    type: totalFeeDelta >= 0 ? LedgerTransactionType.DEBIT : LedgerTransactionType.CREDIT,
+                    amount: Math.abs(totalFeeDelta),
+                    description: `Hostel re-assigned: ${oldAllocation.bed.room.number} → ${newBed.room.number} (${newHostelType}, ${args.hostelPaymentMode}). Reason: ${args.reason}`,
+                    referenceType: 'HOSTEL_REASSIGNMENT',
+                    referenceId: studentId,
+                    createdBy: adminId
+                }
+            });
+
+            // g2. Audit log entry (admin-action trace)
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'HOSTEL_REASSIGNED',
+                    entity: 'StudentAdmission',
+                    entityId: studentId,
+                    details: {
+                        previousHostelId: oldPricing.hostelId,
+                        previousRoomNumber: oldAllocation.bed.room.number,
+                        previousBedId: oldAllocation.bedId,
+                        previousPaymentMode: oldPricing.paymentMode,
+                        previousEffectiveTotal: oldEffectiveTotal,
+                        newHostelId: args.hostelId,
+                        newRoomNumber: newBed.room.number,
+                        newBedId: newBed.id,
+                        newPaymentMode: args.hostelPaymentMode,
+                        newEffectiveTotal,
+                        feeDelta: totalFeeDelta,
+                        reason: args.reason,
+                    }
+                }
+            });
+
+            return {
+                previous: {
+                    hostelId: oldPricing.hostelId,
+                    hostelType: `SHARING_${oldPricing.sharing}`,
+                    roomNumber: oldAllocation.bed.room.number,
+                    bedNumber: oldAllocation.bed.number,
+                    paymentMode: oldPricing.paymentMode,
+                    effectiveTotal: oldEffectiveTotal,
+                },
+                current: {
+                    hostelId: args.hostelId,
+                    hostelType: newHostelType,
+                    roomNumber: newBed.room.number,
+                    bedNumber: newBed.number,
+                    paymentMode: args.hostelPaymentMode,
+                    effectiveTotal: newEffectiveTotal,
+                },
+                feeDelta: totalFeeDelta,
+                supersededDemands,
+                newDemandsCreated: createdDemands.length,
+                skippedComponents: skippedComponents.length > 0
+                    ? `Missing FeeHead for: ${skippedComponents.join(', ')}`
+                    : null,
+                reason: args.reason
+            };
+        });
+    },
+
+    /**
+     * Set or update a student's hostel assignment (pre-bed-allocation).
+     *
+     * Allowed transitions:
+     *   - NONE → HOSTEL (initial assignment)
+     *   - HOSTEL → HOSTEL (change hostelId/paymentMode BEFORE bed is allocated)
+     *
+     * Locked once a bed is allocated (= StudentAccommodationPricing exists).
+     * After bed allocation, use the re-assignment flow which handles vacating
+     * the old bed and computing fee adjustments.
+     */
+    async assignHostel(
+        studentId: string,
+        hostelId: string,
+        hostelPaymentMode: 'YEARWISE' | 'SEMWISE',
+        adminId?: string
+    ) {
+        const ctx = await getStudentContext(studentId);
+        assertActiveAdmission(ctx.admission, 'assign hostel');
+        const admission = ctx.admission!;
+
+        // TRANSPORT/other → HOSTEL is a different flow. Block it.
+        if (
+            admission.accommodationType !== AccommodationType.NONE &&
+            admission.accommodationType !== AccommodationType.HOSTEL
+        ) {
+            throw new AppError(
+                `Student has accommodation type "${admission.accommodationType}". Use the change-accommodation flow to switch to HOSTEL.`,
+                409
+            );
+        }
+
+        // Already in HOSTEL — only allow if no bed is allocated yet
+        if (admission.accommodationType === AccommodationType.HOSTEL) {
+            assertNoBedAllocated(ctx.accommodationPricing, 'Use the re-assignment flow to change hostel.');
+        }
+
+        const hostel = await prisma.hostel.findUnique({ where: { id: hostelId } });
+        if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+        if (hostel.isDeleted) throw new AppError('Cannot assign to a deleted hostel', 400);
+
+        // Skip capacity check when just changing payment mode on the same hostel
+        if (hostelId !== admission.hostelId) {
+            await assertHostelHasCapacity(hostelId);
+        }
+
+        const updated = await prisma.studentAdmission.update({
+            where: { studentId },
+            data: {
+                accommodationType: AccommodationType.HOSTEL,
+                hostelId,
+                hostelPaymentMode: hostelPaymentMode as HostelPaymentMode,
+            }
+        });
+
+        await prisma.auditLog.create({
+            data: {
+                userId: adminId,
+                action: 'HOSTEL_ASSIGNED',
+                entity: 'StudentAdmission',
+                entityId: studentId,
+                details: {
+                    previousHostelId: admission.hostelId,
+                    previousAccommodationType: admission.accommodationType,
+                    newHostelId: hostelId,
+                    newPaymentMode: hostelPaymentMode,
+                    hostelName: hostel.name,
+                }
+            }
+        });
+
+        return updated;
+    },
+
     async updateAdmissionDetails(data: any, adminId: string | undefined) {
         const { studentId, accommodationType, hostelType, hostelId, transportRouteId, paidAmount, hostelPaymentMode } = data;
 
@@ -1639,12 +2510,6 @@ export const AdminStudentService = {
                 if (accommodationType !== AccommodationType.HOSTEL || hostelId !== admission.hostelId) {
                     const oldHostel = await tx.hostel.findUnique({ where: { id: admission.hostelId } });
                     if (oldHostel) {
-                        if ((oldHostel.filled ?? 0) > 0) {
-                            await tx.hostel.update({
-                                where: { id: admission.hostelId },
-                                data: { filled: { decrement: 1 }, updatedBy: adminId }
-                            });
-                        }
                         const oldPricing = await getHostelCostTx(admission.hostelType, tx);
                         oldCost = oldPricing.totalPrice;
                         oldDescription = `Hostel: ${oldHostel.name || admission.hostelId}`;
@@ -1676,12 +2541,7 @@ export const AdminStudentService = {
                     const hostel = await tx.hostel.findUnique({ where: { id: hostelId } });
                     if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
 
-                    if ((hostel.filled ?? 0) >= hostel.capacity) throw new AppError(MESSAGES.ERROR.HOSTEL_FULL, 400);
-
-                    await tx.hostel.update({
-                        where: { id: hostelId },
-                        data: { filled: { increment: 1 }, updatedBy: adminId }
-                    });
+                    await assertHostelHasCapacity(hostelId, tx);
 
                     const newPricing = await getHostelCostTx(hostelType, tx);
                     newCost = newPricing.totalPrice;
@@ -2199,7 +3059,7 @@ export const AdminStudentService = {
                          section: { include: { batch: true } }
                      }
                 },
-                hostelAllocation: { include: { bed: { include: { room: { include: { block: { include: { hostel: true } } } } } } } },
+                hostelAllocation: { include: { bed: { include: { room: { include: { hostel: true } } } } } },
                 transportAllocation: { include: { route: true, stop: true } },
                 convenorDetails: true,
                 pro: true,
@@ -2285,7 +3145,7 @@ export const AdminStudentService = {
                          section: { include: { batch: true } }
                      }
                 },
-                hostelAllocation: { include: { bed: { include: { room: { include: { block: { include: { hostel: true } } } } } } } },
+                hostelAllocation: { include: { bed: { include: { room: { include: { hostel: true } } } } } },
                 transportAllocation: { include: { route: true, stop: true } },
                 convenorDetails: true,
                 pro: true,
@@ -2692,13 +3552,10 @@ export const AdminStudentService = {
             }
         });
 
-        // Filter for Tuition/College fees by checking the resolved Fee Head name
+        // Filter to demands tied to the TUITION component (strict — no name keyword match)
         const tuitionDemands = demands.filter((d: any) => {
             const head = d.feeHead || d.feeStructure?.feeHead;
-            if (!head) return false;
-            
-            const name = head.name.toLowerCase();
-            return ['tuition', 'college', 'academic'].some(key => name.includes(key));
+            return head?.component === 'TUITION';
         });
 
         for (const demand of tuitionDemands) {
@@ -2886,10 +3743,6 @@ export const AdminStudentService = {
 
             // Release old seats if any
             if (oldAdmission) {
-                if (oldAdmission.hostelId && (oldAdmission.hostelId !== allocation.hostelId || allocation.type !== AccommodationType.HOSTEL)) {
-                     logger.debug(`[executeAdmissionUpdates] Releasing old hostel seat: ${oldAdmission.hostelId}`);
-                     await tx.hostel.update({ where: { id: oldAdmission.hostelId }, data: { filled: { decrement: 1 } } });
-                }
                 if (oldAdmission.transportRouteId && (oldAdmission.transportRouteId !== allocation.transportRouteId || allocation.type !== AccommodationType.TRANSPORT)) {
                      logger.debug(`[executeAdmissionUpdates] Releasing old transport seat: ${oldAdmission.transportRouteId}`);
                      await tx.transportRoute.update({ where: { id: oldAdmission.transportRouteId }, data: { filled: { decrement: 1 } } });
@@ -2901,11 +3754,8 @@ export const AdminStudentService = {
                 }
             }
 
-            // Assign New Accommodation
-            if (allocation.type === AccommodationType.HOSTEL) {
-                logger.debug(`[executeAdmissionUpdates] Assigning new hostel seat: ${allocation.hostelId}`);
-                await tx.hostel.update({ where: { id: allocation.hostelId }, data: { filled: { increment: 1 } } });
-            } else if (allocation.type === AccommodationType.TRANSPORT) {
+            // Assign New Accommodation (hostel "filled" is computed on-demand from StudentAdmission.hostelId)
+            if (allocation.type === AccommodationType.TRANSPORT) {
                 logger.debug(`[executeAdmissionUpdates] Assigning new transport seat: ${allocation.transportRouteId}`);
                 await tx.transportRoute.update({ where: { id: allocation.transportRouteId }, data: { filled: { increment: 1 } } });
             }
@@ -2934,11 +3784,9 @@ export const AdminStudentService = {
             // 1. Subtract Old Cost
             if (oldAdmission) {
                  if (oldAdmission.accommodationType === AccommodationType.HOSTEL && oldAdmission.hostelId) {
-                     const oldPricing = await getHostelCostTx(oldAdmission.hostelType, tx);
+                     const oldMode = oldAdmission.hostelPaymentMode === HostelPaymentMode.SEMWISE ? 'SEMWISE' : 'YEARWISE';
+                     const oldPricing = await getHostelCostTx(oldAdmission.hostelType, tx, oldMode);
                      accCostDelta -= oldPricing.totalPrice;
-                     if (oldAdmission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                         accCostDelta -= oldPricing.semwiseSurcharge;
-                     }
                  } else if (oldAdmission.accommodationType === AccommodationType.TRANSPORT && oldAdmission.transportRouteId) {
                      const r = await tx.transportRoute.findUnique({ where: { id: oldAdmission.transportRouteId } });
                      if (r) accCostDelta -= (r.cost || 0);
@@ -2947,11 +3795,9 @@ export const AdminStudentService = {
 
             // 2. Add New Cost
             if (allocation.type === AccommodationType.HOSTEL && allocation.hostelId) {
-                 const newPricing = await getHostelCostTx(allocation.hostelType, tx);
+                 const newMode = allocation.hostelPaymentMode === HostelPaymentMode.SEMWISE ? 'SEMWISE' : 'YEARWISE';
+                 const newPricing = await getHostelCostTx(allocation.hostelType, tx, newMode);
                  accCostDelta += newPricing.totalPrice;
-                 if (allocation.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                     accCostDelta += newPricing.semwiseSurcharge;
-                 }
              } else if (allocation.type === AccommodationType.TRANSPORT && allocation.transportRouteId) {
                  const r = await tx.transportRoute.findUnique({ where: { id: allocation.transportRouteId } });
                  if (r) accCostDelta += (r.cost || 0);
@@ -3186,6 +4032,7 @@ export const AdminStudentService = {
                  // ------------------------------------------------------------------
                  logger.info(`[finalizeAdmission][Online] Step 1: Creating PENDING payment record`);
                  const merchantTransactionId = `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
+                 const yearCtx = await resolveFeeDemandContext(feeDemandId, itx);
 
                  return itx.payment.create({
                      data: {
@@ -3196,8 +4043,11 @@ export const AdminStudentService = {
                          status: PaymentStatus.PENDING,
                          component: targetComponent,
                          providerTxId: merchantTransactionId,
+                         idempotencyKey: `${merchantTransactionId}_${targetComponent}`,
                          feeHeadId: payment.feeHeadId,
                          feeDemandId: feeDemandId || undefined,
+                         academicYearId: yearCtx.academicYearId,
+                         yearOfStudy: yearCtx.yearOfStudy,
                          collectedBy: adminId,
                          createdBy: adminId,
                          metadata: {
@@ -3293,6 +4143,8 @@ export const AdminStudentService = {
                  // Create a payment record with status SUCCESS.
                  // ------------------------------------------------------------------
                  // 1. Create Successful Payment
+                 const yearCtx = await resolveFeeDemandContext(resolvedFeeDemandId, tx);
+                 const _refForKey = payment.referenceNumber || `OFF_${Date.now()}`;
                  const newPayment = await tx.payment.create({
                     data: {
                         studentId,
@@ -3303,6 +4155,9 @@ export const AdminStudentService = {
                         component: feeComponent,
                         feeHeadId: payment.feeHeadId,
                         feeDemandId: resolvedFeeDemandId || undefined,
+                        academicYearId: yearCtx.academicYearId,
+                        yearOfStudy: yearCtx.yearOfStudy,
+                        idempotencyKey: `${_refForKey}_${feeComponent}`,
                         referenceNumber: (() => {
                             if (!payment.referenceNumber) {
                                 const autoRef = `REF-${Date.now()}`;
@@ -3836,7 +4691,6 @@ export const AdminStudentService = {
         const paidAmount = payment.amount;
         const allottedCourseId = admission?.allottedCourseId ?? meta?.course?.allottedCourseId;
         const accommodationType = admission?.accommodationType;
-        const hostelId = admission?.hostelId;
         const transportRouteId = admission?.transportRouteId;
 
         // 2. Atomic rollback transaction
@@ -3883,13 +4737,8 @@ export const AdminStudentService = {
                 logger.info(`[reverseAdmissionPayment] Decremented filledSeats for course=${allottedCourseId}`);
             }
 
-            // 2f. Release hostel / transport seat
-            if (accommodationType === AccommodationType.HOSTEL && hostelId) {
-                await tx.hostel.update({
-                    where: { id: hostelId },
-                    data: { filled: { decrement: 1 } }
-                });
-            } else if (accommodationType === AccommodationType.TRANSPORT && transportRouteId) {
+            // 2f. Release transport seat (hostel "filled" is computed on-demand from StudentAdmission.hostelId)
+            if (accommodationType === AccommodationType.TRANSPORT && transportRouteId) {
                 await tx.transportRoute.update({
                     where: { id: transportRouteId },
                     data: { filled: { decrement: 1 } }
@@ -4117,9 +4966,6 @@ export const AdminStudentService = {
                             allottedCourse: {
                                 select: { name: true, degree: true }
                             },
-                            hostel: {
-                                select: { cost: true }
-                            },
                             transportRoute: {
                                 select: { cost: true }
                             }
@@ -4157,7 +5003,7 @@ export const AdminStudentService = {
             if (!match) return 0;
             const sharing = parseInt(match[1]);
             const pc = allHostelPrices.find(p => p.sharing === sharing);
-            return pc ? ((pc.accommodationPrice ?? pc.price ?? 0) + (pc.messPrice ?? 0)) : 0;
+            return pc ? ((pc.accommodationYearwise ?? 0) + (pc.messYearwise ?? 0) + (pc.laundryYearwise ?? 0) + (pc.registrationFee ?? 0)) : 0;
         };
 
         const applications = students.map((student: any) => {

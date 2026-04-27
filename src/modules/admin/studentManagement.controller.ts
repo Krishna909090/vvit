@@ -271,6 +271,122 @@ export const updateAdmissionDetails = catchAsync(async (req: Request, res: Respo
     });
 });
 
+// Bulk-allocate vacant beds in a single room to a list of students
+export const bulkAllocateRoomBeds = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { roomId, studentIds, hostelPaymentMode, academicYearId } = req.body;
+    logger.info(`[bulkAllocateRoomBeds] roomId=${roomId} count=${studentIds?.length} mode=${hostelPaymentMode} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot bulk-allocate beds', 403);
+    }
+
+    const result = await AdminStudentService.bulkAllocateRoomBeds(
+        roomId, studentIds, hostelPaymentMode, academicYearId, req.user?.userId
+    );
+
+    sendResponse({
+        res,
+        statusCode: result.success ? 200 : 400,
+        success: result.success,
+        message: result.success
+            ? `Allocated ${result.allocated} student(s) to room ${result.roomNumber}`
+            : 'Pre-validation failed — no students were allocated',
+        data: result
+    });
+});
+
+// Re-assign a student to a different hostel/bed AFTER initial bed allocation
+export const reassignHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { hostelId, bedId, hostelPaymentMode, reason } = req.body;
+    logger.info(`[reassignHostel] studentId=${studentId} hostelId=${hostelId} bedId=${bedId} mode=${hostelPaymentMode} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot reassign their own hostel', 403);
+    }
+
+    const result = await AdminStudentService.reassignHostel(
+        studentId,
+        { hostelId, bedId, hostelPaymentMode, reason },
+        req.user?.userId
+    );
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Hostel re-assigned successfully',
+        data: result
+    });
+});
+
+// Allocate a specific bed to a student already assigned to a hostel
+export const allocateBed = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { bedId, academicYearId } = req.body;
+    logger.info(`[allocateBed] studentId=${studentId} bedId=${bedId} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot allocate their own bed', 403);
+    }
+
+    const result = await AdminStudentService.allocateBed(studentId, bedId, academicYearId, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Bed allocated successfully',
+        data: result
+    });
+});
+
+// List vacant beds in a hostel for the assignment-UI dropdown
+export const getAvailableBeds = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { hostelId } = req.params;
+    const { sharing, roomType, floor } = req.query as any;
+
+    const result = await AdminStudentService.getAvailableBeds(hostelId, {
+        sharing: sharing !== undefined ? Number(sharing) : undefined,
+        roomType: roomType ? String(roomType).toUpperCase() : undefined,
+        floor: floor !== undefined ? Number(floor) : undefined
+    });
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        data: result
+    });
+});
+
+// Assign hostel — flips accommodationType from NONE to HOSTEL
+export const assignHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { hostelId, hostelPaymentMode } = req.body;
+    logger.info(`[assignHostel] studentId=${studentId} hostelId=${hostelId} mode=${hostelPaymentMode} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
+
+    // Students cannot self-assign hostel
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot assign their own hostel', 403);
+    }
+
+    const updated = await AdminStudentService.assignHostel(
+        studentId,
+        hostelId,
+        hostelPaymentMode,
+        req.user?.userId
+    );
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Hostel assigned successfully',
+        data: updated
+    });
+});
+
 // Get Student Certificates
 export const getStudentCertificates = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;

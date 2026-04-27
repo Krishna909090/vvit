@@ -10,11 +10,11 @@ import { Role, RoleType } from '../../constants/roles';
 
 // Fee Head
 export const createFeeHead = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { name, description } = req.body;
+    const { name, description, component } = req.body;
     const adminId = req.user!.userId;
 
-    const feeHead = await FeeService.createFeeHead(name, description, adminId);
-    
+    const feeHead = await FeeService.createFeeHead(name, description, adminId, component);
+
     sendResponse({
         res,
         statusCode: 201,
@@ -39,10 +39,10 @@ export const getCourseFeeHeads = catchAsync(async (req: Request, res: Response, 
 
 export const updateFeeHead = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { name, description } = req.body;
-    
-    const updatedFeeHead = await FeeService.updateFeeHead(id, name, description, req.user!.userId);
-    
+    const { name, description, component } = req.body;
+
+    const updatedFeeHead = await FeeService.updateFeeHead(id, name, description, req.user!.userId, component);
+
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.FEE_HEAD_UPDATED, data: updatedFeeHead });
 });
 

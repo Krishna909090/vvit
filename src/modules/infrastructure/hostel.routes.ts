@@ -3,13 +3,10 @@ import { authenticate, authorizePermission } from '../../middleware/rbac.middlew
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     createHostel, getHostels, getHostelById, updateHostel, deleteHostel,
-    createHostelBlock, getHostelBlocks, getHostelBlockById, updateHostelBlock, deleteHostelBlock,
-    createHostelRoom, getHostelRooms, getHostelRoomById, updateHostelRoom, deleteHostelRoom
+    createHostelRoom, getHostelRooms, getHostelRoomById, updateHostelRoom, deleteHostelRoom,
+    createHostelRoomsBulk
 } from './hostel.controller';
-import {
-    createHostelBlockSchema, createHostelRoomSchema
-} from '../../validators/adminValidators';
-import { createHostelSchema, updateHostelSchema } from '../../validators/hostelValidators';
+import { createHostelSchema, updateHostelSchema, createHostelRoomsBulkSchema, createHostelRoomSchema, updateHostelRoomSchema, hostelIdParamSchema, roomIdParamSchema } from '../../validators/hostelValidators';
 
 const router = Router();
 
@@ -35,55 +32,6 @@ router.post('/', authenticate, authorizePermission('hostel.create.all'), validat
 router.get('/', authenticate, authorizePermission(['hostel.read.all', 'student.create.own', 'student.create.all']), getHostels);
 
 // ═══════════════════════════════════════════════════════════
-//  HOSTEL BLOCK MANAGEMENT
-// ═══════════════════════════════════════════════════════════
-
-/**
- * @route   POST /block
- * @desc    Create a new hostel block within a hostel.
- * @access  Requires `hostel.create.all` permission.
- * @body    { hostelId, blockName, ... } — validated against createHostelBlockSchema.
- * @returns {{ success: boolean, data: HostelBlock }} The newly created block.
- */
-router.post('/block', authenticate, authorizePermission('hostel.create.all'), validateRequest(createHostelBlockSchema), createHostelBlock);
-
-/**
- * @route   GET /block
- * @desc    Retrieve all hostel blocks. Used by admins and students selecting accommodation.
- * @access  Requires `hostel.read.all`, `student.create.own`, or `student.create.all` permission.
- * @returns {{ success: boolean, data: HostelBlock[] }} Array of hostel block records.
- */
-router.get('/block', authenticate, authorizePermission(['hostel.read.all', 'student.create.own', 'student.create.all']), getHostelBlocks);
-
-/**
- * @route   GET /block/:id
- * @desc    Retrieve a single hostel block by its ID.
- * @access  Requires `hostel.read.all`, `student.create.own`, or `student.create.all` permission.
- * @param   {string} id — The hostel block ID.
- * @returns {{ success: boolean, data: HostelBlock }} The matching block record.
- */
-router.get('/block/:id', authenticate, authorizePermission(['hostel.read.all', 'student.create.own', 'student.create.all']), getHostelBlockById);
-
-/**
- * @route   PUT /block/:id
- * @desc    Update an existing hostel block.
- * @access  Requires `hostel.update.all` permission.
- * @param   {string} id — The hostel block ID.
- * @body    Fields to update (blockName, status, etc.).
- * @returns {{ success: boolean, data: HostelBlock }} The updated block record.
- */
-router.put('/block/:id', authenticate, authorizePermission('hostel.update.all'), updateHostelBlock);
-
-/**
- * @route   DELETE /block/:id
- * @desc    Delete a hostel block. Side-effect: may cascade-delete associated rooms.
- * @access  Requires `hostel.delete.all` permission.
- * @param   {string} id — The hostel block ID.
- * @returns {{ success: boolean, message: string }}
- */
-router.delete('/block/:id', authenticate, authorizePermission('hostel.delete.all'), deleteHostelBlock);
-
-// ═══════════════════════════════════════════════════════════
 //  HOSTEL ROOM MANAGEMENT
 // ═══════════════════════════════════════════════════════════
 
@@ -95,6 +43,16 @@ router.delete('/block/:id', authenticate, authorizePermission('hostel.delete.all
  * @returns {{ success: boolean, data: HostelRoom }} The newly created room record.
  */
 router.post('/room', authenticate, authorizePermission('hostel.create.all'), validateRequest(createHostelRoomSchema), createHostelRoom);
+
+/**
+ * @route   POST /room/bulk
+ * @desc    Create multiple rooms at once by specifying a number range (e.g. A-101 to A-110).
+ *          Auto-creates beds based on capacity.
+ * @access  Requires `hostel.create.all` permission.
+ * @body    { hostelId, floor, roomRangeStart, roomRangeEnd, capacity, type? }
+ * @returns {{ success: boolean, data: { createdCount, rooms: HostelRoom[] } }}
+ */
+router.post('/room/bulk', authenticate, authorizePermission('hostel.create.all'), validateRequest(createHostelRoomsBulkSchema), createHostelRoomsBulk);
 
 /**
  * @route   GET /room
@@ -121,7 +79,7 @@ router.get('/room/:id', authenticate, authorizePermission(['hostel.read.all', 's
  * @body    Fields to update.
  * @returns {{ success: boolean, data: HostelRoom }} The updated room record.
  */
-router.put('/room/:id', authenticate, authorizePermission('hostel.update.all'), updateHostelRoom);
+router.put('/room/:id', authenticate, authorizePermission('hostel.update.all'), validateRequest(updateHostelRoomSchema), updateHostelRoom);
 
 /**
  * @route   DELETE /room/:id
@@ -130,7 +88,7 @@ router.put('/room/:id', authenticate, authorizePermission('hostel.update.all'), 
  * @param   {string} id — The hostel room ID.
  * @returns {{ success: boolean, message: string }}
  */
-router.delete('/room/:id', authenticate, authorizePermission('hostel.delete.all'), deleteHostelRoom);
+router.delete('/room/:id', authenticate, authorizePermission('hostel.delete.all'), validateRequest(roomIdParamSchema), deleteHostelRoom);
 
 // ═══════════════════════════════════════════════════════════
 //  HOSTEL — ID-SPECIFIC ROUTES (placed last to prevent path shadowing)
@@ -162,6 +120,6 @@ router.put('/:hostelId', authenticate, authorizePermission('hostel.update.all'),
  * @param   {string} hostelId — The hostel ID.
  * @returns {{ success: boolean, message: string }}
  */
-router.delete('/:hostelId', authenticate, authorizePermission('hostel.delete.all'), deleteHostel);
+router.delete('/:hostelId', authenticate, authorizePermission('hostel.delete.all'), validateRequest(hostelIdParamSchema), deleteHostel);
 
 export default router;

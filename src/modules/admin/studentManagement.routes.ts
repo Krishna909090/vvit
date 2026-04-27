@@ -34,7 +34,12 @@ import {
     getWaitingList,
     getStudentWaitingList,
     allotFromWaitingList,
-    removeFromWaitingList
+    removeFromWaitingList,
+    assignHostel,
+    allocateBed,
+    getAvailableBeds,
+    reassignHostel,
+    bulkAllocateRoomBeds
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -51,6 +56,7 @@ import {
     editProSchema,
     updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
+import { assignHostelSchema, allocateBedSchema, availableBedsQuerySchema, reassignHostelSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
 
 import upload from '../../config/multer';
 import {
@@ -208,6 +214,52 @@ router.post('/approve-course-change', authenticate, authorizePermission(['studen
  * Response: { status, message }
  */
 router.post('/update-admission', authenticate, authorizePermission(['student.update.all']), validateRequest(updateAdmissionDetailsSchema), updateAdmissionDetails);
+
+/**
+ * POST /admin/student/:studentId/assign-hostel
+ * Flips student's accommodationType from NONE to HOSTEL.
+ * Captures hostelId + hostelPaymentMode. Bed allocation + price snapshot
+ * happen separately (downstream).
+ * Body: { hostelId: uuid, hostelPaymentMode: 'YEARWISE' | 'SEMWISE' }
+ * Response: { status, message, data: StudentAdmission }
+ */
+router.post('/:studentId/assign-hostel', authenticate, authorizePermission(['student.update.all']), validateRequest(assignHostelSchema), assignHostel);
+
+/**
+ * POST /admin/student/:studentId/allocate-bed
+ * Allocates a specific bed to a student already assigned to a hostel.
+ * Snapshots pricing, creates HostelAllocation row, fee demands, and updates totalFee.
+ * Body: { bedId: uuid, academicYearId?: uuid }
+ * Response: { status, data: { allocation, pricing, feeDemandsCreated, skippedComponents } }
+ */
+router.post('/:studentId/allocate-bed', authenticate, authorizePermission(['student.update.all']), validateRequest(allocateBedSchema), allocateBed);
+
+/**
+ * POST /admin/student/:studentId/reassign-hostel
+ * Re-assigns a student to a different hostel/bed AFTER initial bed allocation.
+ * Vacates old bed, soft-deletes outstanding old demands, snapshots new pricing,
+ * creates new demands, writes audit ledger entry. All atomic.
+ * Body: { hostelId: uuid, bedId: uuid, hostelPaymentMode: 'YEARWISE'|'SEMWISE', reason: string }
+ * Response: { status, data: { previous, current, feeDelta, supersededDemands, newDemandsCreated, ... } }
+ */
+router.post('/:studentId/reassign-hostel', authenticate, authorizePermission(['student.update.all']), validateRequest(reassignHostelSchema), reassignHostel);
+
+/**
+ * POST /admin/student/bulk-allocate-room
+ * Bulk-allocates vacant beds in a single room to a list of students.
+ * Pre-validates everyone first; if any student fails validation, NONE are allocated.
+ * Body: { roomId: uuid, studentIds: uuid[], hostelPaymentMode: 'YEARWISE'|'SEMWISE', academicYearId?: uuid }
+ * Response: { success, allocated, requested, allocations[], skippedComponents }
+ */
+router.post('/bulk-allocate-room', authenticate, authorizePermission(['student.update.all']), validateRequest(bulkAllocateRoomSchema), bulkAllocateRoomBeds);
+
+/**
+ * GET /admin/student/available-beds/:hostelId
+ * Lists vacant beds in a hostel (filterable by sharing/roomType/floor) for assignment-UI dropdown.
+ * Query: ?sharing=4&roomType=AC&floor=1
+ * Response: { status, data: { hostelId, count, beds: [{ bedId, bedNumber, roomNumber, floor, capacity, roomType }] } }
+ */
+router.get('/available-beds/:hostelId', authenticate, authorizePermission(['student.read.all']), validateRequest(availableBedsQuerySchema), getAvailableBeds);
 
 /**
  * POST /admin/student/finalize-admission

@@ -36,7 +36,7 @@ module.exports = {
             exec_mode: 'fork',
             autorestart: true,
             watch: true,
-            ignore_watch: ["node_modules", "logs"],
+            ignore_watch: ["node_modules", "logs", ".git", "dist", "uploads", "tmp", "*.log"],
             max_memory_restart: '500M',
             env: {
                 NODE_ENV: 'development',
@@ -51,7 +51,7 @@ module.exports = {
             exec_mode: 'fork',
             autorestart: true,
             watch: true,
-            ignore_watch: ["node_modules", "logs"],
+            ignore_watch: ["node_modules", "logs", ".git", "dist", "uploads", "tmp", "*.log"],
             max_memory_restart: '300M',
             env: {
                 NODE_ENV: 'local',

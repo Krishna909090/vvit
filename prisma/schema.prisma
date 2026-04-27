@@ -244,6 +244,7 @@ model Student {
   transportAllocation       TransportAllocation?
   waitingListEntries        WaitingList[]
   feeCorrections            FeeCorrection[]
+  accommodationPricing      StudentAccommodationPricing?
 
   proId                     String?
   proCommissionAmount       Float?                  @default(0)
@@ -367,73 +368,104 @@ model Specialization {
 }
 
 model Hostel {
-  id                String             @id @default(dbgenerated("gen_random_uuid()"))
-  name              String
-  type              String?
-  wardenName        String?
-  capacity          Int
-  filled            Int?               @default(0)
-  blockName         String?
-  roomNumber        String?
-  isDeleted         Boolean?           @default(false)
-  cost              Float?             @default(0)
-  createdAt         DateTime?          @default(now())
-  updatedAt         DateTime           @updatedAt
-  createdBy         String?
-  updatedBy         String?
-  accommodationCost Float?             @default(0)
-  messCost          Float?             @default(0)
-  blocks            HostelBlock[]
-  studentAdmissions StudentAdmission[]
-}
-
-model HostelBlock {
-  id        String       @id @default(dbgenerated("gen_random_uuid()"))
-  hostelId  String
-  name      String
-  type      String
-  createdAt DateTime?    @default(now())
-  updatedAt DateTime     @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean?     @default(false)
-  hostel    Hostel       @relation(fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  rooms     HostelRoom[]
+  id                  String             @id @default(dbgenerated("gen_random_uuid()"))
+  name                String
+  type                String?
+  wardenName          String?
+  floors              Int?
+  totalRooms          Int?
+  photoUrl            String?
+  // Bank routing — different hostels can route fees to different bank accounts
+  accommodationBank   String?            // 'TRUST' | 'LLP'
+  messBank            String?            @default("LLP")
+  laundryBank         String?
+  registrationBank    String?
+  isDeleted           Boolean?           @default(false)
+  createdAt           DateTime?          @default(now())
+  updatedAt           DateTime           @updatedAt
+  createdBy           String?
+  updatedBy           String?
+  rooms               HostelRoom[]       @relation("HostelRooms")
+  studentAdmissions   StudentAdmission[]
 }
 
 model HostelRoom {
-  id                String      @id @default(dbgenerated("gen_random_uuid()"))
-  blockId           String
+  id                String       @id @default(dbgenerated("gen_random_uuid()"))
+  hostelId          String
+  floor             Int
   number            String
   capacity          Int
   type              String
-  cost              Float?      @default(0)
-  createdAt         DateTime?   @default(now())
-  updatedAt         DateTime    @updatedAt
+  isDeleted         Boolean?     @default(false)
+  createdAt         DateTime?    @default(now())
+  updatedAt         DateTime     @updatedAt
   createdBy         String?
   updatedBy         String?
-  isDeleted         Boolean?    @default(false)
-  accommodationCost Float?      @default(0)
-  messCost          Float?      @default(0)
   beds              HostelBed[]
-  block             HostelBlock @relation(fields: [blockId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  hostel            Hostel       @relation("HostelRooms", fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model HostelPriceCategory {
   id                 String         @id @default(dbgenerated("gen_random_uuid()"))
   sharing            Int
   roomType           HostelRoomType
-  price              Float
-  createdAt          DateTime?      @default(now())
-  updatedAt          DateTime       @updatedAt
-  createdBy          String?
-  updatedBy          String?
-  metadata           Json?
-  accommodationPrice Float?         @default(0)
-  messPrice          Float?         @default(0)
-  semwiseSurcharge   Float?         @default(0)
+
+  // Yearwise (Single Instalment) prices
+  accommodationYearwise Float?      @default(0)
+  messYearwise          Float?      @default(0)
+  laundryYearwise       Float?      @default(0)
+
+  // Semwise (Two Instalment) prices — total amount paid across both instalments
+  accommodationSemwise  Float?      @default(0)
+  messSemwise           Float?      @default(0)
+  laundrySemwise        Float?      @default(0)
+
+  // One-time, non-refundable
+  registrationFee       Float?      @default(0)
+
+  // Free-form for future extensions (e.g. promotional discounts)
+  metadata              Json?
+
+  isActive              Boolean?    @default(true)
+  createdAt             DateTime?   @default(now())
+  updatedAt             DateTime    @updatedAt
+  createdBy             String?
+  updatedBy             String?
 
   @@unique([sharing, roomType])
+}
+
+// Per-student frozen pricing snapshot — captures what THIS student owes,
+// independent of future config changes. Created when admin assigns hostel.
+model StudentAccommodationPricing {
+  id                    String        @id @default(dbgenerated("gen_random_uuid()"))
+  studentId             String        @unique
+  academicYearId        String?
+
+  sharing               Int
+  roomType              String
+  paymentMode           String        // 'YEARWISE' | 'SEMWISE'
+  hostelId              String?
+
+  accommodationPrice    Float
+  messPrice             Float
+  laundryPrice          Float?        @default(0)
+  registrationFee       Float
+
+  adjustmentAmount      Float?        @default(0)
+  adjustmentReason      String?
+  effectiveTotal        Float
+
+  pricingSource         String?       // 'CONFIG' | 'CUSTOM'
+  createdBy             String?
+  updatedBy             String?
+  createdAt             DateTime?     @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  student               Student       @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([studentId])
+  @@index([hostelId])
 }
 
 model HostelBed {
@@ -535,6 +567,9 @@ model FeeHead {
   id                String             @id @default(dbgenerated("gen_random_uuid()"))
   name              String
   description       String?
+  // Explicit link to the PaymentComponent enum — kills name-keyword matching across the codebase.
+  // Optional for backward compat with legacy heads (fall back to name keywords until backfill).
+  component         PaymentComponent?
   isDeleted         Boolean?           @default(false)
   createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
@@ -608,6 +643,10 @@ model Payment {
   status          PaymentStatus?    @default(PENDING)
   mode            PaymentMode?      @default(ONLINE)
   method_legacy   String?
+  /// De-duplication key set at Payment.create. Unique at DB level so concurrent webhooks
+  /// or accidental double-submits fail with P2002 instead of creating phantom rows.
+  /// Convention: providerTxId for online, referenceNumber for offline non-CASH, fallback to id.
+  idempotencyKey  String?           @unique
   providerTxId    String?
   merchantOrderId String?
   signature       String?
@@ -1277,6 +1316,8 @@ enum PaymentComponent {
   SKILL_DEVELOPMENT
   HOSTEL_ACCOMMODATION
   HOSTEL_MESS
+  HOSTEL_LAUNDRY
+  HOSTEL_REGISTRATION
   COURSE_CHANGE_FEE
 }
 
@@ -1287,8 +1328,11 @@ enum AccommodationType {
 }
 
 enum HostelType {
+  SHARING_2
   SHARING_4
+  SHARING_6
   SHARING_8
+  SHARING_10
 }
 
 enum DiscountStatus {

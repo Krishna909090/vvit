@@ -339,19 +339,20 @@ export const InvoiceService = {
                 additionalAttachments
             });
         } else {
-            // Determine specific payment type for email template
+            // Determine email template by PaymentComponent enum (strict, component-driven)
             let pType: any = 'DEFAULT';
             if (payment.component === PaymentComponent.SCHOLARSHIP_TOKEN) pType = 'ADMISSION_FEE';
             else if (payment.component === PaymentComponent.TUITION) pType = 'TUITION_FEE';
-            else if (payment.component === PaymentComponent.HOSTEL || payment.component === PaymentComponent.HOSTEL_ACCOMMODATION || payment.component === PaymentComponent.HOSTEL_MESS) pType = 'HOSTEL_FEE';
+            else if (
+                payment.component === PaymentComponent.HOSTEL
+                || payment.component === PaymentComponent.HOSTEL_ACCOMMODATION
+                || payment.component === PaymentComponent.HOSTEL_MESS
+                || payment.component === PaymentComponent.HOSTEL_LAUNDRY
+                || payment.component === PaymentComponent.HOSTEL_REGISTRATION
+            ) pType = 'HOSTEL_FEE';
             else if (payment.component === PaymentComponent.TRANSPORT) pType = 'TRANSPORT_FEE';
             else if (payment.component === PaymentComponent.BOOK_BANK) pType = 'BOOK_BANK_FEE';
-            else if (payment.component === 'MULTI_COMPONENT' || payment.component === 'OTHER') {
-                 // Try to be smart about 'Other' if description is clear, otherwise Default
-                 if (description.includes('Hostel')) pType = 'HOSTEL_FEE';
-                 else if (description.includes('Transport')) pType = 'TRANSPORT_FEE';
-                 else pType = 'DEFAULT';
-            }
+            else pType = 'DEFAULT';
 
             // For admission-related payments, attach Allotment Order instead of Invoice
             const admissionComponents = [PaymentComponent.SCHOLARSHIP_TOKEN, PaymentComponent.TUITION];

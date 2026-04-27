@@ -9,6 +9,7 @@ const ledgerLog = createModuleLogger('LEDGER');
 import { format } from 'date-fns';
 import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod, PaymentMode, HostelPaymentMode } from '@prisma/client';
 import { getApplicationFeeAmount } from './fee.service';
+import { getOrCreateAccommodationPricing, resolveFeeDemandContext } from '../../utils/studentContext';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { ScholarshipService } from '../admin/scholarship.service';
@@ -60,14 +61,96 @@ export const getPhonePeClient = (type: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISS
 
     const creds = PHONEPE_CREDENTIALS[type] || PHONEPE_CREDENTIALS.ADMISSION;
     logger.info(`[PhonePe] Initializing client for ${type} (Merchant: ${creds.MERCHANT_ID})`);
-    
+
     // Using 'new' to create independent instances if supported, avoiding the global singleton issue of getInstance
-    // If 'new' is not available (protected constructor), we might have to fallback or rethink, 
+    // If 'new' is not available (protected constructor), we might have to fallback or rethink,
     // but usually Node SDKs allow new.
     // @ts-ignore
     clients[type] = new StandardCheckoutClient(creds.MERCHANT_ID, creds.SALT_KEY, creds.SALT_INDEX as any, ENV);
-    
+
     return clients[type];
+};
+
+/**
+ * Resolve which PhonePe merchant (ADMISSION / HOSTEL=TRUST / MESS=LLP) a payment should
+ * route through, based on the student's hostel banking config in the DB.
+ *
+ * Mapping: each hostel-related component reads its corresponding bank field on Hostel:
+ *   - HOSTEL / HOSTEL_ACCOMMODATION → hostel.accommodationBank
+ *   - HOSTEL_MESS                   → hostel.messBank
+ *   - HOSTEL_LAUNDRY                → hostel.laundryBank
+ *   - HOSTEL_REGISTRATION           → hostel.registrationBank
+ *   - TRANSPORT                     → defaults to HOSTEL merchant (no per-route bank field)
+ *
+ * Bank value translation:
+ *   TRUST → 'HOSTEL' merchant
+ *   LLP   → 'MESS' merchant
+ *
+ * Non-hostel components (TUITION, ADMISSION, BOOK_BANK, etc.) → 'ADMISSION' merchant.
+ */
+export const resolvePhonePeClientType = async (
+    studentId: string,
+    component: PaymentComponent
+): Promise<'ADMISSION' | 'HOSTEL' | 'MESS'> => {
+    const hostelComponents: PaymentComponent[] = [
+        PaymentComponent.HOSTEL,
+        PaymentComponent.HOSTEL_ACCOMMODATION,
+        PaymentComponent.HOSTEL_MESS,
+        PaymentComponent.HOSTEL_LAUNDRY,
+        PaymentComponent.HOSTEL_REGISTRATION,
+    ];
+
+    if (component === PaymentComponent.TRANSPORT) {
+        return 'HOSTEL';
+    }
+    if (!hostelComponents.includes(component)) {
+        return 'ADMISSION';
+    }
+    // Note: legacy `PaymentComponent.HOSTEL` (no sub-component suffix) is treated as
+    // HOSTEL_ACCOMMODATION for routing purposes. New code never writes 'HOSTEL'.
+
+    const admission = await prisma.studentAdmission.findUnique({
+        where: { studentId },
+        select: { hostelId: true }
+    });
+    if (!admission?.hostelId) {
+        logger.warn(`[resolvePhonePeClientType] Student ${studentId} has no hostelId — defaulting to HOSTEL merchant for ${component}`);
+        return 'HOSTEL';
+    }
+
+    const hostel = await prisma.hostel.findUnique({
+        where: { id: admission.hostelId },
+        select: {
+            accommodationBank: true,
+            messBank: true,
+            laundryBank: true,
+            registrationBank: true
+        }
+    });
+    if (!hostel) {
+        logger.warn(`[resolvePhonePeClientType] Hostel ${admission.hostelId} not found — defaulting to HOSTEL merchant for ${component}`);
+        return 'HOSTEL';
+    }
+
+    let bank: string | null = null;
+    switch (component) {
+        case PaymentComponent.HOSTEL:
+        case PaymentComponent.HOSTEL_ACCOMMODATION:
+            bank = hostel.accommodationBank; break;
+        case PaymentComponent.HOSTEL_MESS:
+            bank = hostel.messBank; break;
+        case PaymentComponent.HOSTEL_LAUNDRY:
+            bank = hostel.laundryBank; break;
+        case PaymentComponent.HOSTEL_REGISTRATION:
+            bank = hostel.registrationBank; break;
+    }
+
+    const upper = (bank || '').toUpperCase();
+    if (upper === 'LLP') return 'MESS';
+    if (upper === 'TRUST') return 'HOSTEL';
+
+    logger.warn(`[resolvePhonePeClientType] Hostel ${admission.hostelId} has no/unknown bank "${bank}" for ${component} — defaulting to HOSTEL merchant`);
+    return 'HOSTEL';
 };
 
 // Reusable PhonePe Initialization
@@ -75,17 +158,25 @@ const resolveComponent = async (componentName: string, feeHeadId?: string): Prom
     const normalize = (s: string) => s.toUpperCase().replace(/ /g, '_');
     const input = normalize(componentName);
 
-    // 1. Map Display Names/Aliases to Enums
+    // 1. Map Display Names/Aliases to Enums.
+    // Note: legacy 'HOSTEL FEE' input is now routed to HOSTEL_ACCOMMODATION (the bare HOSTEL
+    // enum value is being phased out — backfill SQL renames existing rows).
     const nameMap: Record<string, PaymentComponent> = {
         'APPLICATION FEE': PaymentComponent.APPLICATION_FEE,
         'TUITION FEE': PaymentComponent.TUITION,
-        'HOSTEL FEE': PaymentComponent.HOSTEL,
+        'HOSTEL FEE': PaymentComponent.HOSTEL_ACCOMMODATION,
         'HOSTEL ACCOMMODATION FEE': PaymentComponent.HOSTEL_ACCOMMODATION,
+        'HOSTEL ACCOMMODATION': PaymentComponent.HOSTEL_ACCOMMODATION,
         'MESS FEE': PaymentComponent.HOSTEL_MESS,
+        'HOSTEL MESS': PaymentComponent.HOSTEL_MESS,
+        'LAUNDRY FEE': PaymentComponent.HOSTEL_LAUNDRY,
+        'HOSTEL LAUNDRY': PaymentComponent.HOSTEL_LAUNDRY,
+        'REGISTRATION FEE': PaymentComponent.HOSTEL_REGISTRATION,
+        'HOSTEL REGISTRATION': PaymentComponent.HOSTEL_REGISTRATION,
         'TRANSPORT FEE': PaymentComponent.TRANSPORT,
         'TOKEN FEE': PaymentComponent.SCHOLARSHIP_TOKEN,
         'BOOK BANK FEE': PaymentComponent.BOOK_BANK,
-        'SKILL DEVELOPMENT FEE': PaymentComponent.SKILL_DEVELOPMENT, 
+        'SKILL DEVELOPMENT FEE': PaymentComponent.SKILL_DEVELOPMENT,
         'OTHER FEE': PaymentComponent.OTHER
     };
 
@@ -216,6 +307,7 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
                         status: PaymentStatus.PENDING,
                         component: PaymentComponent.APPLICATION_FEE,
                         providerTxId: transactionId,
+                        idempotencyKey: `${transactionId}_APPLICATION_FEE`,
                         method: PaymentMethod.UPI
                     }
                 });
@@ -231,6 +323,7 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
                     status: PaymentStatus.PENDING,
                     component: PaymentComponent.APPLICATION_FEE,
                     providerTxId: transactionId,
+                    idempotencyKey: `${transactionId}_APPLICATION_FEE`,
                     method: PaymentMethod.UPI
                 }
             });
@@ -271,7 +364,7 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
  *   Use `paymentMethod` instead.
  *
  * Restricted components (must be paid separately via /pay-component):
- *   HOSTEL, HOSTEL_ACCOMMODATION, HOSTEL_MESS, TRANSPORT
+ *   HOSTEL, HOSTEL_ACCOMMODATION, HOSTEL_MESS, HOSTEL_LAUNDRY, HOSTEL_REGISTRATION, TRANSPORT
  *
  * Online flow:
  *   - All components share a single PhonePe transaction (total amount charged at once).
@@ -302,17 +395,20 @@ export const initiateMultiComponentPayment = async (
         components.push({ ...c, ...r });
     }
 
-    // 1. Validate: No Hostel/Mess allowed
+    // 1. Validate: No Hostel/Mess/Laundry/Registration/Transport allowed in multi-component
+    // (each routes through its own bank merchant, so they must be paid separately)
     const restrictedComponents: PaymentComponent[] = [
         PaymentComponent.HOSTEL,
         PaymentComponent.HOSTEL_ACCOMMODATION,
         PaymentComponent.HOSTEL_MESS,
+        PaymentComponent.HOSTEL_LAUNDRY,
+        PaymentComponent.HOSTEL_REGISTRATION,
         PaymentComponent.TRANSPORT
     ];
 
     const hasRestricted = components.some(c => restrictedComponents.includes(c.component));
     if (hasRestricted) {
-        throw new AppError("Hostel, Mess, and Transport fees cannot be bundled in multi-component payment. Please pay them separately.", 400);
+        throw new AppError("Hostel, Mess, Laundry, Registration, and Transport fees cannot be bundled in multi-component payment. Please pay them separately.", 400);
     }
 
     // 2. Validate Fee Heads - Mandate Fee Head ID (Exempting specific types)
@@ -321,6 +417,8 @@ export const initiateMultiComponentPayment = async (
         PaymentComponent.OTHER,
         PaymentComponent.HOSTEL_ACCOMMODATION,
         PaymentComponent.HOSTEL_MESS,
+        PaymentComponent.HOSTEL_LAUNDRY,
+        PaymentComponent.HOSTEL_REGISTRATION,
         PaymentComponent.HOSTEL,
         PaymentComponent.COURSE_CHANGE_FEE
     ];
@@ -397,6 +495,7 @@ export const initiateMultiComponentPayment = async (
                     status: paymentStatus,
                     component: item.component,
                     providerTxId: transactionId,
+                    idempotencyKey: `${transactionId}_${item.component}`,
                     method: paymentMethod,
                     mode: paymentMode,
                     referenceNumber,
@@ -451,15 +550,15 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
             logger.warn(`[checkPaymentStatus] No payment records found locally for ${merchantTransactionId}`);
         }
 
-        const primaryPayment = payments[0]; 
-        let clientToCheck = getPhonePeClient('ADMISSION'); 
-        
+        const primaryPayment = payments[0];
+        let clientToCheck = getPhonePeClient('ADMISSION');
+
         if (primaryPayment) {
-             if (primaryPayment.component === PaymentComponent.HOSTEL || primaryPayment.component === PaymentComponent.HOSTEL_ACCOMMODATION || primaryPayment.component === PaymentComponent.TRANSPORT) {
-                 clientToCheck = getPhonePeClient('HOSTEL');
-             } else if (primaryPayment.component === PaymentComponent.HOSTEL_MESS) {
-                 clientToCheck = getPhonePeClient('MESS');
-             }
+            const clientType = await resolvePhonePeClientType(
+                primaryPayment.studentId,
+                primaryPayment.component as PaymentComponent
+            );
+            clientToCheck = getPhonePeClient(clientType);
         }
         
         logger.info(`[checkPaymentStatus] Querying PhonePe with component-resolved client for txnId=${merchantTransactionId}`);
@@ -659,15 +758,42 @@ const _settleFeeDemands = async (payment: any) => {
                     where: { id: demand.id },
                     data: { status: newStatus as any }
                 });
-                await prisma.payment.update({ where: { id: payment.id }, data: { feeDemandId: targetDemandId } });
+                // Copy academicYearId + yearOfStudy onto the Payment row so reports filter by year cheaply
+                await prisma.payment.update({
+                    where: { id: payment.id },
+                    data: {
+                        feeDemandId: targetDemandId,
+                        academicYearId: demand.academicYearId ?? undefined,
+                        yearOfStudy: demand.yearOfStudy ?? undefined,
+                    }
+                });
+                // Mutate in-memory so the subsequent _createPaymentLedger() picks up the year context
+                payment.feeDemandId = targetDemandId;
+                payment.academicYearId = demand.academicYearId ?? null;
+                payment.yearOfStudy = demand.yearOfStudy ?? null;
             }
-        } 
+        }
         // Waterfall Settlement
         else {
             const pendingDemands = await prisma.studentFeeDemand.findMany({
                 where: { studentId: payment.studentId, status: FeeStatus.PENDING },
                 orderBy: { dueDate: 'asc' }
             });
+
+            // Use the first (oldest) demand's year as the payment's year. Best proxy when
+            // a generic payment splits across multiple demands.
+            if (pendingDemands.length > 0) {
+                const first = pendingDemands[0];
+                await prisma.payment.update({
+                    where: { id: payment.id },
+                    data: {
+                        academicYearId: first.academicYearId ?? undefined,
+                        yearOfStudy: first.yearOfStudy ?? undefined,
+                    }
+                });
+                payment.academicYearId = first.academicYearId ?? null;
+                payment.yearOfStudy = first.yearOfStudy ?? null;
+            }
 
             let remaining = payment.amount;
             for (const demand of pendingDemands) {
@@ -677,7 +803,7 @@ const _settleFeeDemands = async (payment: any) => {
                     remaining -= demand.amount;
                 } else {
                     await prisma.studentFeeDemand.update({ where: { id: demand.id }, data: { status: FeeStatus.PARTIAL } });
-                    break; 
+                    break;
                 }
             }
         }
@@ -781,6 +907,7 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
                 status: PaymentStatus.PENDING,
                 component: PaymentComponent.APPLICATION_FEE,
                 providerTxId,
+                idempotencyKey: `${providerTxId}_APPLICATION_FEE`,
                 referenceNumber: referenceNumber || null,
                 method: paymentMethod,
                 mode: PaymentMode.OFFLINE,
@@ -1028,25 +1155,13 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
     let messFee = 0;
     let transportFee = 0;
     
-    // Validate & Calculate Hostel Fee
+    // Validate & Calculate Hostel Fee — pricing comes from HostelPriceCategory keyed by (sharing, roomType)
     if (hostelSelection?.hostelId) {
-        const hostel = await prisma.hostel.findUnique({ 
-            where: { id: hostelSelection.hostelId },
-            include: { blocks: { include: { rooms: true } } }
-        });
+        const hostel = await prisma.hostel.findUnique({ where: { id: hostelSelection.hostelId } });
         if (!hostel) throw new AppError('Selected hostel not found', 404);
-        
-        let room = null;
-        if (student.admissionDetails.roomNumber) {
-            room = hostel.blocks.flatMap(b => b.rooms).find(r => r.number === student.admissionDetails?.roomNumber);
-        }
 
-        if (room) {
-            accommodationFee = room.accommodationCost ?? room.cost ?? 0;
-            messFee = room.messCost ?? 0;
-        } else if (hostelSelection.hostelType || hostelSelection.roomType) {
-            // Price Category (Assuming split exists in categories too, if not fallback)
-             const sharing = hostelSelection.hostelType === 'SHARING_4' ? 4 : 
+        if (hostelSelection.hostelType || hostelSelection.roomType) {
+             const sharing = hostelSelection.hostelType === 'SHARING_4' ? 4 :
                              hostelSelection.hostelType === 'SHARING_8' ? 8 : 4;
 
              const priceCategory = await prisma.hostelPriceCategory.findFirst({
@@ -1057,15 +1172,10 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
              });
 
              if (priceCategory) {
-                 accommodationFee = priceCategory.accommodationPrice ?? priceCategory.price;
-                 messFee = priceCategory.messPrice ?? 0;
+                 const isSemwise = student.admissionDetails.hostelPaymentMode === HostelPaymentMode.SEMWISE;
+                 accommodationFee = (isSemwise ? priceCategory.accommodationSemwise : priceCategory.accommodationYearwise) ?? 0;
+                 messFee = (isSemwise ? priceCategory.messSemwise : priceCategory.messYearwise) ?? 0;
              }
-        }
-        
-        // Add semwise surcharge if applicable
-        if (student.admissionDetails.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-            if (hostelSelection.hostelType === 'SHARING_4') accommodationFee += 7000;
-            else if (hostelSelection.hostelType === 'SHARING_8') accommodationFee += 6000;
         }
 
         // Deduct paid
@@ -1088,29 +1198,24 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
     
     let amountToPay = 0;
     let paymentComponent: PaymentComponent = PaymentComponent.TUITION;
-    let feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION';
 
     // Logic: If Tuition/Transport is PENDING, pay that first? Or if user explicitly selected hostel?
     // The current input `data` has `hostelSelection`. If present, we assume Hostel Payment intent.
     // But usually this API pays EVERYTHING.
     // We must split.
-    
+
     if (collegeFee > 0) {
         amountToPay = collegeFee;
         paymentComponent = PaymentComponent.TUITION;
-        feeType = 'ADMISSION';
     } else if (transportFee > 0) {
         amountToPay = transportFee;
         paymentComponent = PaymentComponent.TRANSPORT;
-        feeType = 'HOSTEL';
     } else if (accommodationFee > 0) {
         amountToPay = accommodationFee;
         paymentComponent = PaymentComponent.HOSTEL_ACCOMMODATION;
-        feeType = 'HOSTEL';
     } else if (messFee > 0) {
         amountToPay = messFee;
         paymentComponent = PaymentComponent.HOSTEL_MESS;
-        feeType = 'MESS';
     } else {
         // Nothing to pay
         return { redirectUrl: null, message: "All fees paid" };
@@ -1132,6 +1237,7 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
 
     // 5. Create Payment Record
     const { feeHeadId, feeDemandId } = paymentDetails || {};
+    const yearCtx = await resolveFeeDemandContext(feeDemandId);
 
     const payment = await prisma.payment.create({
         data: {
@@ -1140,15 +1246,19 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
             status: PaymentStatus.PENDING,
             component: paymentComponent,
             providerTxId: transactionId,
+            idempotencyKey: `${transactionId}_${paymentComponent}`,
             method: paymentDetails?.paymentMode === 'PHONEPE' ? PaymentMethod.UPI : PaymentMethod.CASH,
             feeHeadId: feeHeadId || undefined,
-            feeDemandId: feeDemandId || undefined
+            feeDemandId: feeDemandId || undefined,
+            academicYearId: yearCtx.academicYearId,
+            yearOfStudy: yearCtx.yearOfStudy,
         } as any
     });
 
-    // PhonePe Integration
+    // PhonePe Integration — pick merchant from DB-driven banking config
     try {
         const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
+        const feeType = await resolvePhonePeClientType(studentId, paymentComponent);
         const client = getPhonePeClient(feeType);
 
         const request = StandardCheckoutPayRequest.builder()
@@ -1608,6 +1718,7 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
             status: PaymentStatus.PENDING,
             component: PaymentComponent.SCHOLARSHIP_TOKEN,
             providerTxId: transactionId,
+            idempotencyKey: `${transactionId}_SCHOLARSHIP_TOKEN`,
             method: PaymentMethod.UPI
         }
     });
@@ -1641,18 +1752,19 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
 
 
 export const getStudentFinancialSummary = async (studentId: string) => {
-    // 1. Fetch Student Config & Admission Details
+    // 1. Fetch Student Config & Admission Details (incl. frozen pricing snapshot)
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         include: {
             admissionDetails: {
                 include: {
-                    hostel: { include: { blocks: { include: { rooms: true } } } },
+                    hostel: { include: { rooms: true } },
                     transportRoute: true
                 }
-            }
+            },
+            accommodationPricing: true
         }
-    });
+    }) as any;
 
     if (!student || !student.admissionDetails) {
         throw new AppError('Student admission details not found', 404);
@@ -1693,34 +1805,16 @@ export const getStudentFinancialSummary = async (studentId: string) => {
 
     logger.info(`[FinancialSummary] Student: ${studentId}, HostelType: ${student.admissionDetails.hostelType}, Mode: ${student.admissionDetails.hostelPaymentMode}`);
 
-    // Hostel Cost
-    if (student.admissionDetails.hostelId && student.admissionDetails.roomNumber) {
-         // Try to find the specific room cost
-         const room = student.admissionDetails.hostel?.blocks
-            .flatMap(b => b.rooms)
-            .find(r => r.number === student.admissionDetails?.roomNumber);
-         hostelFee = room ? ((room.accommodationCost ?? room.cost ?? 0) + (room.messCost ?? 0)) : 0;
-         logger.info(`[FinancialSummary] Room Found: ${room?.number}, Cost: ${hostelFee}`);
-    } else if (student.admissionDetails.hostelType) {
-         // Check based on Sharing Type (SHARING_4, SHARING_8)
-         const sharingMatch = student.admissionDetails.hostelType.match(/SHARING_(\d+)/);
-         if (sharingMatch) {
-             const sharingCount = parseInt(sharingMatch[1]);
-             const priceCategory = hostelPrices.find(p => p.sharing === sharingCount);
-             logger.info(`[FinancialSummary] Sharing: ${sharingCount}, PriceCategory: ${JSON.stringify(priceCategory)}`);
-             if (priceCategory) {
-                 hostelFee = (priceCategory.accommodationPrice ?? 0) + (priceCategory.messPrice ?? 0);
-             }
-         }
-    }
-
-    if (student.admissionDetails.hostelPaymentMode === HostelPaymentMode.SEMWISE && hostelFee > 0) {
-        let semFee = 0;
-        if (student.admissionDetails.hostelType?.includes('SHARING_4')) semFee = 7000;
-        else if (student.admissionDetails.hostelType?.includes('SHARING_8')) semFee = 6000;
-        
-        hostelFee += semFee;
-        logger.info(`[FinancialSummary] SemWise Mode. Added ${semFee}. Total Hostel: ${hostelFee}`);
+    // Hostel Cost — single source of truth via getOrCreateAccommodationPricing.
+    // Auto-creates snapshot for fully-allocated students who don't have one yet;
+    // returns null for students without a bed (hostelFee stays 0 — correct).
+    const snap = await getOrCreateAccommodationPricing(studentId);
+    if (snap) {
+        hostelFee = (snap.accommodationPrice ?? 0)
+                    + (snap.messPrice ?? 0)
+                    + (snap.laundryPrice ?? 0)
+                    + (snap.registrationFee ?? 0);
+        logger.info(`[FinancialSummary] Snapshot used: total=${hostelFee} (mode=${snap.paymentMode})`);
     }
 
     // Transport Cost
@@ -1745,7 +1839,11 @@ export const getStudentFinancialSummary = async (studentId: string) => {
 
     payments.forEach(p => {
         if (p.component === PaymentComponent.TUITION) paidBreakdown.tuition += p.amount;
-        else if (p.component === PaymentComponent.HOSTEL || p.component === PaymentComponent.HOSTEL_ACCOMMODATION || p.component === PaymentComponent.HOSTEL_MESS) paidBreakdown.hostel += p.amount;
+        else if (p.component === PaymentComponent.HOSTEL
+                 || p.component === PaymentComponent.HOSTEL_ACCOMMODATION
+                 || p.component === PaymentComponent.HOSTEL_MESS
+                 || p.component === PaymentComponent.HOSTEL_LAUNDRY
+                 || p.component === PaymentComponent.HOSTEL_REGISTRATION) paidBreakdown.hostel += p.amount;
         else if (p.component === PaymentComponent.TRANSPORT) paidBreakdown.transport += p.amount;
         else if (p.component === PaymentComponent.SCHOLARSHIP_TOKEN) paidBreakdown.scholarship_token += p.amount;
         else if (p.component === PaymentComponent.OTHER) paidBreakdown.other += p.amount;
@@ -1789,12 +1887,14 @@ export const getStudentFinancialSummary = async (studentId: string) => {
 
     // Update College Fee Paid Logic to Include Discounts
     const collegeFeeComponents = [
-        PaymentComponent.TUITION, 
-        PaymentComponent.HOSTEL, 
+        PaymentComponent.TUITION,
+        PaymentComponent.HOSTEL,
         PaymentComponent.HOSTEL_ACCOMMODATION,
         PaymentComponent.HOSTEL_MESS,
-        PaymentComponent.TRANSPORT, 
-        PaymentComponent.SCHOLARSHIP_TOKEN, 
+        PaymentComponent.HOSTEL_LAUNDRY,
+        PaymentComponent.HOSTEL_REGISTRATION,
+        PaymentComponent.TRANSPORT,
+        PaymentComponent.SCHOLARSHIP_TOKEN,
         PaymentComponent.OTHER
     ];
     
@@ -1976,6 +2076,8 @@ export const processUnifiedPayment = async (data: any) => {
         PaymentComponent.HOSTEL,
         PaymentComponent.HOSTEL_ACCOMMODATION,
         PaymentComponent.HOSTEL_MESS,
+        PaymentComponent.HOSTEL_LAUNDRY,
+        PaymentComponent.HOSTEL_REGISTRATION,
         PaymentComponent.TRANSPORT,
         PaymentComponent.OTHER,
         PaymentComponent.COURSE_CHANGE_FEE
@@ -2012,6 +2114,7 @@ export const processUnifiedPayment = async (data: any) => {
             referenceNumber,
             feeHeadId,
             providerTxId,
+            idempotencyKey: `${providerTxId}_${component}`,
             collectedBy: initiatedBy,
             createdBy: initiatedBy, // Strict data
             metadata: { remarks, source: 'UNIFIED_API' }
@@ -2051,14 +2154,8 @@ export const processUnifiedPayment = async (data: any) => {
             
             logger.info(`[processUnifiedPayment] Initiating online payment: Amount=₹${amount}, FinalUrl=${finalRedirectUrl}`);
             
-            // Unified API: Determine type
-            let feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION';
-            if (component === PaymentComponent.HOSTEL || component === PaymentComponent.HOSTEL_ACCOMMODATION || component === PaymentComponent.TRANSPORT) {
-                feeType = 'HOSTEL';
-            } else if (component === PaymentComponent.HOSTEL_MESS) {
-                feeType = 'MESS';
-            }
-
+            // Pick PhonePe merchant from DB-driven banking config (Hostel.<component>Bank)
+            const feeType = await resolvePhonePeClientType(studentId, component);
             const client = getPhonePeClient(feeType);
 
             const request = StandardCheckoutPayRequest.builder()
@@ -2094,12 +2191,13 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         include: {
             admissionDetails: {
                 include: {
-                    hostel: { include: { blocks: { include: { rooms: true } } } },
+                    hostel: { include: { rooms: true } },
                     transportRoute: true
                 }
-            }
+            },
+            accommodationPricing: true
         }
-    });
+    }) as any;
 
     // 2. Fetch Configuration Data (Parallel is fine for these small tables)
     const [allFeeHeads, hostelPrices] = await Promise.all([
@@ -2120,44 +2218,43 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         }),
         prisma.studentFeeDemand.findMany({
             where: { studentId, isDeleted: false },
-            include: { feeStructure: { include: { feeHead: true } } }
+            include: {
+                feeStructure: { include: { feeHead: true } },
+                feeHead: true
+            }
         })
     ]);
 
     logger.info(`[FinancialHistory] Data Fetched. Ledgers: ${ledgers.length}, Payments: ${payments.length}, Demands: ${feeDemands.length}`);
 
     // 2. Initialize Breakdown
-    const categories = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'OTHER'];
+    const categories = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'OTHER'];
     const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number, scholarshipAmount: number, feeHeadId: string }> = {};
     categories.forEach(cat => {
         breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0, scholarshipAmount: 0, feeHeadId: '' };
     });
 
-    // 3. Helper: Map Fee Head Name to Category
-    const getCategoryFromHeadName = (name: string): string => {
-        const headName = (name || '').toUpperCase();
-        if (headName.includes('MESS')) return 'HOSTEL_MESS';
-        if (headName.includes('HOSTEL') || headName.includes('ACCOMMODATION') || headName.includes('ROOM')) return 'HOSTEL_ACCOMMODATION';
-        if (headName.includes('TRANSPORT') || headName.includes('BUS')) return 'TRANSPORT';
-        if (headName.includes('TUITION') || headName.includes('SEMESTER') || headName.includes('COLLEGE')) return 'TUITION';
-        if (headName.includes('BOOK') || headName.includes('LIBRARY')) return 'BOOK_BANK';
-        if (headName.includes('ADMISSION') || headName.includes('ENTRANCE')) return 'ADMISSION';
-        return 'OTHER';
+    // 3. Helper: Map FeeHead → category bucket.
+    // Strict: only the explicit `feeHead.component` enum is honored. FeeHeads
+    // without a component are bucketed as 'OTHER' (run the backfill SQL to tag them).
+    const getCategoryForHead = (h: { component?: PaymentComponent | null }): string => {
+        return h.component ? (h.component as string) : 'OTHER';
     };
 
     // Fee Head ID -> Category Map
     const feeHeadCategoryMap = new Map<string, string>();
-    allFeeHeads.forEach(h => feeHeadCategoryMap.set(h.id, getCategoryFromHeadName(h.name)));
+    allFeeHeads.forEach((h: any) => feeHeadCategoryMap.set(h.id, getCategoryForHead(h)));
 
     // 4. DEMAND CALCULATION (From Fee Tables)
-    feeDemands.forEach(demand => {
-        const headId = demand.feeStructure?.feeHeadId;
+    feeDemands.forEach((demand: any) => {
+        // Demands link a FeeHead either directly (hostel/transport) or via FeeStructure (course tuition).
+        const headId = demand.feeHeadId ?? demand.feeStructure?.feeHeadId;
+        const head = demand.feeHead ?? demand.feeStructure?.feeHead;
         let category: string | undefined;
 
         if (headId) category = feeHeadCategoryMap.get(headId);
-        if (!category) {
-             const headName = demand.feeStructure?.feeHead?.name || '';
-             category = getCategoryFromHeadName(headName);
+        if (!category && head) {
+             category = getCategoryForHead(head);
              if (headId) feeHeadCategoryMap.set(headId, category);
         }
 
@@ -2177,62 +2274,24 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         if (headId && !target.feeHeadId) target.feeHeadId = headId;
     });
 
-    // 5. Override/Refine with Admission Details
+    // 5. Override hostel/transport demands using the per-student frozen snapshot.
+    //    `getOrCreateAccommodationPricing` is the single source of truth — it returns
+    //    the existing snapshot, auto-creates one for fully-allocated students who don't
+    //    have one yet (legacy/manual data), or returns null when the student isn't yet
+    //    bed-allocated (correct: hostel demand stays 0).
     if (student && student.admissionDetails) {
         const admission = student.admissionDetails;
+        const snapshot = await getOrCreateAccommodationPricing(studentId);
 
-        // Hostel Cost
-        if (admission.hostelId || admission.hostelType) {
-             let accCost = 0;
-             let messCost = 0;
-
-             // Priority 1: Specific Room Cost
-             if (admission.roomNumber && admission.hostel) {
-                 const room = admission.hostel.blocks.flatMap(b => b.rooms).find(r => r.number === admission.roomNumber);
-                 if (room) {
-                     accCost = room.accommodationCost ?? room.cost ?? 0;
-                     messCost = room.messCost ?? 0;
-                 }
-             }
-             // Priority 2: Hostel Type
-             if (accCost === 0 && messCost === 0 && admission.hostelType) {
-                 const sharingMatch = admission.hostelType.match(/SHARING_(\d+)/);
-                 if (sharingMatch) {
-                     const sharingCount = parseInt(sharingMatch[1]);
-                     const priceCategory = hostelPrices.find(p => p.sharing === sharingCount);
-                     logger.info(`[FinancialHistory] HostelType: ${admission.hostelType}, PriceCat: ${JSON.stringify(priceCategory)}`);
-                     
-                     if (priceCategory) {
-                         const meta = priceCategory.metadata as any;
-                         if (meta && (meta.accommodation || meta.laundry || meta.registration || meta.mess)) {
-                             // Use metadata breakdown: accommodation + laundry + registration → accCost, mess → messCost
-                             accCost = (meta.accommodation ?? 0) + (meta.laundry ?? 0) + (meta.registration ?? 0);
-                             messCost = meta.mess ?? 0;
-                             logger.info(`[FinancialHistory] Using metadata breakdown - Acc: ${meta.accommodation}, Laundry: ${meta.laundry}, Reg: ${meta.registration}, Mess: ${meta.mess}`);
-                         } else {
-                             accCost = priceCategory.accommodationPrice ?? 0;
-                             messCost = priceCategory.messPrice ?? 0;
-                         }
-                     }
-                 }
-             }
-
-             if (admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                 let semFee = 0;
-                 if (admission.hostelType?.includes('SHARING_4')) semFee = 7000;
-                 else if (admission.hostelType?.includes('SHARING_8')) semFee = 6000;
-                 
-                 accCost += semFee;
-                 logger.info(`[FinancialHistory] SemWise added ${semFee} to AccCost. New AccCost: ${accCost}`);
-             }
-             
-             // Override Demanded
-             breakdown.HOSTEL_ACCOMMODATION.demanded = accCost;
-             breakdown.HOSTEL_MESS.demanded = messCost;
-             logger.info(`[FinancialHistory] Final Demands Set - Acc: ${accCost}, Mess: ${messCost}`);
+        if (snapshot) {
+            breakdown.HOSTEL_ACCOMMODATION.demanded = snapshot.accommodationPrice ?? 0;
+            breakdown.HOSTEL_MESS.demanded           = snapshot.messPrice ?? 0;
+            breakdown.HOSTEL_LAUNDRY.demanded        = snapshot.laundryPrice ?? 0;
+            breakdown.HOSTEL_REGISTRATION.demanded   = snapshot.registrationFee ?? 0;
         }
+        // else: student has no bed yet → all hostel buckets remain 0 (correct)
 
-        // Transport Demand Override
+        // Transport — uses live route.cost (no snapshot model for transport pricing)
         if (admission.transportRouteId && admission.transportRoute) {
             breakdown.TRANSPORT.demanded = admission.transportRoute.cost;
         }
@@ -2243,12 +2302,11 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         // Skip cancellation entries — they should not affect financial history
         if (entry.referenceType === 'CANCELLATION') return;
 
-        let category = 'OTHER';
-        if (entry.feeHeadId && feeHeadCategoryMap.has(entry.feeHeadId)) {
-            category = feeHeadCategoryMap.get(entry.feeHeadId) || 'OTHER';
-        } else {
-             category = getCategoryFromHeadName(entry.description || '');
-        }
+        // Strict: bucket by feeHeadId only. Ledger entries without a feeHeadId
+        // bucket as OTHER (no description keyword fallback).
+        const category = entry.feeHeadId
+            ? (feeHeadCategoryMap.get(entry.feeHeadId) ?? 'OTHER')
+            : 'OTHER';
 
         let key = category;
         if (!breakdown[key]) {
@@ -2282,7 +2340,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
 
          let key = 'OTHER';
          if (p.feeDemand?.feeStructure?.feeHead) {
-             key = getCategoryFromHeadName(p.feeDemand.feeStructure.feeHead.name);
+             key = getCategoryForHead(p.feeDemand.feeStructure.feeHead);
          } else if (p.feeHeadId && feeHeadCategoryMap.has(p.feeHeadId)) {
              key = feeHeadCategoryMap.get(p.feeHeadId) || 'OTHER';
          } else {

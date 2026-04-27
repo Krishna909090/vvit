@@ -7,8 +7,12 @@ export const validateRequest =
   (schema: ZodSchema<any>) =>
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // Express 5 defaults req.body to undefined when no body is sent or
+      // Content-Type doesn't match (Express 4 used {}). Normalize so Zod
+      // sees an object and produces a useful "field required" error
+      // instead of an opaque "expected object, received undefined".
       const parsed = await schema.parseAsync({
-        body: req.body,
+        body: req.body ?? {},
         query: req.query,
         params: req.params,
       });

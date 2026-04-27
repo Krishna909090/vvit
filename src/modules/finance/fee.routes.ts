@@ -15,7 +15,7 @@ import {
 } from './fee.controller';
 
 import {
-    createFeeHeadSchema, createFeeStructureSchema, createBulkFeeStructureSchema,
+    createFeeHeadSchema, updateFeeHeadSchema, createFeeStructureSchema, createBulkFeeStructureSchema,
     createDiscountRequestSchema, updateDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema
 } from '../../validators/adminValidators';
 
@@ -48,7 +48,7 @@ router.get('/fee-head', authenticate, authorizePermission('finance.read.all'), g
  * Params: { id }
  * Body: { name?, description? }
  */
-router.put('/fee-head/:id', authenticate, authorizePermission('finance.update.all'), updateFeeHead);
+router.put('/fee-head/:id', authenticate, authorizePermission('finance.update.all'), validateRequest(updateFeeHeadSchema), updateFeeHead);
 
 /**
  * DELETE /finance/fees/fee-head/:id

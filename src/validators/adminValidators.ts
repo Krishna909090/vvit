@@ -381,10 +381,27 @@ export const createAcademicYearSchema = z.object({
     }),
 });
 
+const PAYMENT_COMPONENT_ENUM = [
+    'APPLICATION_FEE', 'TUITION', 'HOSTEL', 'TRANSPORT', 'OTHER',
+    'SCHOLARSHIP_TOKEN', 'BOOK_BANK', 'ADMISSION', 'SKILL_DEVELOPMENT',
+    'HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION',
+    'COURSE_CHANGE_FEE'
+] as const;
+
 export const createFeeHeadSchema = z.object({
     body: z.object({
         name: z.string().min(1),
         description: z.string().optional(),
+        component: z.string().transform(v => v.toUpperCase()).pipe(z.enum(PAYMENT_COMPONENT_ENUM)).optional(),
+    }),
+});
+
+export const updateFeeHeadSchema = z.object({
+    params: z.object({ id: z.string().uuid() }),
+    body: z.object({
+        name: z.string().min(1).optional(),
+        description: z.string().optional(),
+        component: z.string().transform(v => v.toUpperCase()).pipe(z.enum(PAYMENT_COMPONENT_ENUM)).optional(),
     }),
 });
 

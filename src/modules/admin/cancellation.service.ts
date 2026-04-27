@@ -504,15 +504,11 @@ export const CancellationService = {
                     });
                 }
 
-                // Vacate hostel allocation & decrement hostel filled count
+                // Vacate hostel allocation (hostel "filled" is computed on-demand from StudentAdmission.hostelId)
                 if (admission?.hostelId) {
                     await (tx.hostelAllocation as any).updateMany({
                         where: { studentId: request.studentId, status: 'ACTIVE' },
                         data:  { status: 'VACATED' },
-                    });
-                    await tx.hostel.update({
-                        where: { id: admission.hostelId },
-                        data:  { filled: { decrement: 1 } },
                     });
                 }
 

@@ -1,35 +1,13 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response } from 'express';
 import { catchAsync } from '../../utils/catchAsync';
-import { AppError } from '../../utils/AppError';
 import { sendResponse } from '../../utils/response';
 import * as service from './hostelPrice.service';
 import logger from '../../utils/logger';
 
 export const createPriceCategory = catchAsync(async (req: Request, res: Response) => {
     logger.info(`[createPriceCategory] request by=${req.user?.userId || 'anonymous'}`);
-    const { sharing, roomType, price, metadata } = req.body;
-    
-    // Zod handles basic validation, but custom business logic checks can remain
-    if (!sharing || !roomType || price === undefined) {
-        throw new AppError('Sharing type, room type, and price are required', 400);
-    }
-    
-    // Validate Sharing
-    if (![2, 4, 6, 8, 10].includes(Number(sharing))) {
-        throw new AppError('Invalid sharing type. Allowed: 2, 4, 6, 8, 10', 400);
-    }
 
-    // Validate Room Type
-    if (!['AC', 'NON_AC'].includes(roomType)) {
-        throw new AppError('Invalid room type. Allowed: AC, NON_AC', 400);
-    }
-
-    const data = await service.createPriceCategory({
-        sharing: Number(sharing),
-        roomType,
-        price: Number(price),
-        metadata
-    }, req.user?.userId || null);
+    const data = await service.createPriceCategory(req.body, req.user?.userId || null);
 
     logger.info(`[createPriceCategory] successful, id=${data.id}`);
 

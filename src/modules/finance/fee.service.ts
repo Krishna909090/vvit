@@ -6,6 +6,7 @@ import { MESSAGES } from '../../constants/messages';
 import logger from '../../utils/logger';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { getHostelCostTx } from '../../utils/hostelPricing';
+import { assertHostelHasCapacity } from '../infrastructure/hostel.service';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';
@@ -34,9 +35,9 @@ export const setApplicationFeeAmount = async (amount: number, userId: string): P
 
 export const FeeService = {
     // Fee Head
-    createFeeHead: async (name: string, description: string, userId: string) => {
+    createFeeHead: async (name: string, description: string, userId: string, component?: PaymentComponent) => {
         return prisma.feeHead.create({
-            data: { name, description, createdBy: userId, updatedBy: userId }
+            data: { name, description, component: component ?? null, createdBy: userId, updatedBy: userId }
         });
     },
 
@@ -59,22 +60,15 @@ export const FeeService = {
         const course = await prisma.course.findUnique({ where: { id: courseId } });
         if (!course) throw new AppError('Course not found', 404);
 
-        // Helper: Map Fee Head Name to Category
-        const getCategoryFromHeadName = (name: string): string => {
-            const headName = (name || '').toUpperCase();
-            if (headName.includes('MESS')) return 'HOSTEL_MESS';
-            if (headName.includes('HOSTEL') || headName.includes('ACCOMMODATION') || headName.includes('ROOM')) return 'HOSTEL_ACCOMMODATION';
-            if (headName.includes('TRANSPORT') || headName.includes('BUS')) return 'TRANSPORT';
-            if (headName.includes('TUITION') || headName.includes('SEMESTER') || headName.includes('COLLEGE')) return 'TUITION';
-            if (headName.includes('BOOK') || headName.includes('LIBRARY')) return 'BOOK_BANK';
-            if (headName.includes('ADMISSION') || headName.includes('ENTRANCE')) return 'ADMISSION';
-            return 'OTHER';
+        // Strict: read explicit FeeHead.component only. Untagged heads bucket as 'OTHER'.
+        const getCategoryForHead = (h: { component?: PaymentComponent | null }): string => {
+            return h.component ? (h.component as string) : 'OTHER';
         };
 
         const breakdown: Record<string, { demanded: number, feeHeadId: string }> = {};
 
         feeStructures.forEach(fs => {
-            const category = getCategoryFromHeadName(fs.feeHead.name);
+            const category = getCategoryForHead(fs.feeHead as any);
             if (!breakdown[category]) {
                 breakdown[category] = { demanded: 0, feeHeadId: '' };
             }
@@ -93,10 +87,14 @@ export const FeeService = {
         };
     },
 
-    updateFeeHead: async (id: string, name: string, description: string, userId: string) => {
+    updateFeeHead: async (id: string, name: string, description: string, userId: string, component?: PaymentComponent | null) => {
+        const updateData: any = { updatedBy: userId };
+        if (name !== undefined) updateData.name = name;
+        if (description !== undefined) updateData.description = description;
+        if (component !== undefined) updateData.component = component;
         return prisma.feeHead.update({
             where: { id },
-            data: { name, description, updatedBy: userId }
+            data: updateData
         });
     },
 
@@ -752,15 +750,16 @@ export const FeeService = {
                         feeStructureId: fee.id,
                         feeHeadId: fee.feeHeadId,
                         academicYearId: fee.academicYearId,
+                        yearOfStudy: fee.yearOfStudy ?? undefined,
                         amount: fee.amount, // Base
-                        
+
                         // New Fields
                         discountAmount: scholarshipAmt, // Initial discount (scholarship)
                         scholarshipAmount: scholarshipAmt,
                         netAmount: netAmount,
 
                         status: 'PENDING',
-                        dueDate: fee.dueDate || new Date(), 
+                        dueDate: fee.dueDate || new Date(),
                         createdBy: userId,
                         remarks: scholarshipAmt > 0 ? `Scholarship Applied: ${discountPct}%` : undefined
                     } as any
@@ -858,17 +857,16 @@ export const FeeService = {
             if (allocation && (allocation.status === 'LOCKED' || allocation.status === 'RESERVED')) {
                  const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
                  
-                 // Get actual tuition fee from demands, fallback to admission total fee, then fallback to default
-                 // Strategy 1: Precise Name Match (Check both structure and direct head)
+                 // Find the tuition demand by FeeHead.component === 'TUITION' (no name keyword fallback)
                  let tuitionDemand = demands.find(d => {
-                    const name = (d.feeStructure?.feeHead?.name || d.feeHead?.name || '').toLowerCase();
-                    return name.includes('tuition') || name.includes('tution');
+                    const comp = d.feeStructure?.feeHead?.component ?? d.feeHead?.component ?? null;
+                    return comp === 'TUITION';
                  });
 
-                 // Strategy 2: Highest Amount Heuristic (Tuition is usually the largest fee)
+                 // Heuristic fallback: largest demand (used when no head is tagged as TUITION yet)
                  if (!tuitionDemand && demands.length > 0) {
                      tuitionDemand = demands.reduce((max, d) => d.amount > max.amount ? d : max, demands[0]);
-                     logger.debug(`[Scholarship] Precise Tuition Fee finding failed. Used highest demand: ${tuitionDemand.amount}`);
+                     logger.debug(`[Scholarship] No TUITION-tagged FeeHead found. Used highest demand as proxy: ${tuitionDemand.amount}`);
                  }
 
                  // Strategy 3: Admission Record
@@ -901,27 +899,29 @@ export const FeeService = {
             OTHER: { demand: 0, paid: 0, balance: 0 } 
         };
 
-        // Map Demands (Approximate via Fee Head Name)
+        // Bucket FeeHead.component → top-level breakdown key
+        const componentToKey = (comp: string | null | undefined): 'TUITION' | 'HOSTEL' | 'TRANSPORT' | 'OTHER' => {
+            if (!comp) return 'OTHER';
+            if (comp === 'TUITION' || comp === 'SCHOLARSHIP_TOKEN') return 'TUITION';
+            if (comp === 'TRANSPORT') return 'TRANSPORT';
+            if (comp === 'HOSTEL'
+                || comp === 'HOSTEL_ACCOMMODATION'
+                || comp === 'HOSTEL_MESS'
+                || comp === 'HOSTEL_LAUNDRY'
+                || comp === 'HOSTEL_REGISTRATION') return 'HOSTEL';
+            return 'OTHER';
+        };
+
+        // Map Demands by FeeHead.component (no name keyword fallback)
         demands.forEach(d => {
-            // Priority: FeeStructure.FeeHead -> FeeHead (Direct) -> Unknown
-            const name = (d.feeStructure?.feeHead?.name || d.feeHead?.name || '').toUpperCase();
-            
-            let key = 'OTHER';
-            if (name.includes('TUITION') || name.includes('COLLEGE')) key = 'TUITION';
-            else if (name.includes('HOSTEL')) key = 'HOSTEL';
-            else if (name.includes('TRANSPORT') || name.includes('BUS')) key = 'TRANSPORT';
-            
+            const comp = d.feeStructure?.feeHead?.component ?? d.feeHead?.component ?? null;
+            const key = componentToKey(comp);
             breakdown[key].demand += d.amount;
         });
 
-        // Map Payments (Via Component Enum)
+        // Map Payments via Component Enum
         payments.forEach(p => {
-             const comp = p.component as string; 
-             let key = 'OTHER';
-             if (comp === 'TUITION' || comp === 'SCHOLARSHIP_TOKEN') key = 'TUITION'; 
-             else if (comp === 'HOSTEL') key = 'HOSTEL';
-             else if (comp === 'TRANSPORT') key = 'TRANSPORT';
-             
+             const key = componentToKey(p.component as string);
              breakdown[key].paid += p.amount;
         });
 
@@ -935,18 +935,11 @@ export const FeeService = {
 
         adjustmentLedgers.forEach(a => {
             if (!a.feeHeadId) return;
-            
-            // Find head name from demands or fetch if needed. 
-            // Since we already have demands with heads, find the head name there.
-            const head = demands.find(d => (d.feeStructure?.feeHeadId === a.feeHeadId || d.feeHeadId === a.feeHeadId))?.feeHead || 
+
+            // Resolve component via demand-side join (we already have heads in scope)
+            const head = demands.find(d => (d.feeStructure?.feeHeadId === a.feeHeadId || d.feeHeadId === a.feeHeadId))?.feeHead ||
                          demands.find(d => (d.feeStructure?.feeHeadId === a.feeHeadId || d.feeHeadId === a.feeHeadId))?.feeStructure?.feeHead;
-            
-            const name = (head?.name || '').toUpperCase();
-            
-            let key = 'OTHER';
-            if (name.includes('TUITION') || name.includes('COLLEGE')) key = 'TUITION';
-            else if (name.includes('HOSTEL')) key = 'HOSTEL';
-            else if (name.includes('TRANSPORT') || name.includes('BUS')) key = 'TRANSPORT';
+            const key = componentToKey(head?.component as string | null | undefined);
 
             if (a.type === 'CREDIT') breakdown[key].paid += a.amount;
             else breakdown[key].paid -= a.amount;
@@ -1020,11 +1013,12 @@ export const FeeService = {
         const feeHeadMap = new Map<string, any>();
 
         // Helper to get or create group
-        const getGroup = (id: string, name: string) => {
+        const getGroup = (id: string, name: string, component?: PaymentComponent | null) => {
             if (!feeHeadMap.has(id)) {
                 feeHeadMap.set(id, {
                     feeHeadId: id,
                     feeHeadName: name,
+                    feeHeadComponent: component ?? null,
                     totalFee: 0,
                     paidAmount: 0,
                     discountAmount: 0,
@@ -1039,7 +1033,7 @@ export const FeeService = {
         demands.forEach(d => {
             // Determine Head: Structure Head > Direct Head
             const head = d.feeStructure?.feeHead || d.feeHead;
-            const group = getGroup(head?.id || 'UNKNOWN', head?.name || 'Unknown Fee');
+            const group = getGroup(head?.id || 'UNKNOWN', head?.name || 'Unknown Fee', head?.component);
             
             group.totalFee += d.amount;
             group.history.push({
@@ -1115,26 +1109,24 @@ export const FeeService = {
              const recordType = l.referenceType === 'SCHOLARSHIP' ? 'SCHOLARSHIP' : 'DISCOUNT';
              
              for (const [id, group] of feeHeadMap.entries()) {
-                 const headName = group.feeHeadName.toUpperCase();
-                 const desc = l.description?.toUpperCase() || '';
-                 
-                 // Logic for Scholarship (Tuition only)
-                 if (desc.includes('SCHOLARSHIP') && headName.includes('TUITION')) {
-                     // CREDIT adds to pool, DEBIT subtracts from it (reduction)
+                 const isTuition = group.feeHeadComponent === 'TUITION';
+
+                 // Scholarship adjustments target TUITION component only
+                 if (l.referenceType === 'SCHOLARSHIP' && isTuition) {
                      group.discountAmount += isCredit ? l.amount : -l.amount;
                      group.history.push({
                          type: recordType,
                          date: l.date,
-                         amount: isCredit ? l.amount : -l.amount, // Show negative in history for reductions
+                         amount: isCredit ? l.amount : -l.amount,
                          id: l.id,
                          description: l.description
                      });
                      matched = true;
                      break;
                  }
-                 
-                 // Logic for Manual Discounts
-                 if (desc.includes('DISCOUNT') && (headName.includes('TUITION') || headName.includes('COLLEGE'))) {
+
+                 // Manual discount adjustments also target TUITION component only
+                 if (l.referenceType !== 'SCHOLARSHIP' && isTuition) {
                      group.discountAmount += isCredit ? l.amount : -l.amount;
                      group.history.push({
                          type: recordType,
@@ -1335,12 +1327,8 @@ export const FeeService = {
             let oldLabel = '';
             let newLabel = '';
 
-            // --- Release old allocation ---
+            // --- Release old allocation (hostel "filled" is computed on-demand from StudentAdmission.hostelId) ---
             if (oldType === 'HOSTEL' && admission.hostelId) {
-                await tx.hostel.update({
-                    where: { id: admission.hostelId },
-                    data: { filled: { decrement: 1 } }
-                });
                 const oldPricing = await getHostelCostTx(admission.hostelType, tx);
                 oldCost = oldPricing.totalPrice;
                 oldLabel = `Hostel (${admission.hostel?.name || admission.hostelId})`;
@@ -1357,12 +1345,8 @@ export const FeeService = {
             if (newType === 'HOSTEL') {
                 const hostel = await tx.hostel.findUnique({ where: { id: hostelId } });
                 if (!hostel) throw new AppError('Hostel not found', 404);
-                if ((hostel.filled ?? 0) >= hostel.capacity) throw new AppError('Hostel is full', 400);
+                await assertHostelHasCapacity(hostelId!, tx);
 
-                await tx.hostel.update({
-                    where: { id: hostelId },
-                    data: { filled: { increment: 1 } }
-                });
                 const newPricing = await getHostelCostTx(hostelType, tx);
                 newCost = newPricing.totalPrice;
                 newLabel = `Hostel (${hostel.name})`;
