@@ -103,6 +103,12 @@ export const pendingHostelAllocationsQuerySchema = z.object({
         limit: z.string().optional().transform(v => v ? Number(v) : 10),
         search: z.string().trim().optional(),
         hostelId: z.string().uuid("Invalid Hostel ID").optional(),
+        hostelType: z.string()
+            .optional()
+            .transform(v => v ? v.toUpperCase() : undefined)
+            .refine(v => v === undefined || ['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10'].includes(v), {
+                message: "hostelType must be SHARING_2, SHARING_4, SHARING_6, SHARING_8, or SHARING_10"
+            }),
         gender: z.string().trim().optional(),
     }),
 });

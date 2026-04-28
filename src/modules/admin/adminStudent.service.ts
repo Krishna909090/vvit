@@ -1674,6 +1674,7 @@ export const AdminStudentService = {
             limit = 10,
             search,
             hostelId,
+            hostelType,
             gender,
         } = query;
 
@@ -1688,6 +1689,7 @@ export const AdminStudentService = {
                 // have hostelId set but accommodationType=NONE — those still
                 // belong on the worklist.
                 ...(hostelId ? { hostelId } : { hostelId: { not: null } }),
+                ...(hostelType ? { hostelType: hostelType as HostelType } : {}),
             },
             ...(gender ? { gender } : {}),
             OR: [
