@@ -7,16 +7,33 @@ import { convertToPresignedUrl } from '../../utils/s3Utils';
 // Compute occupancy on-demand from source-of-truth tables.
 // totalRooms     = COUNT(HostelRoom) for the hostel
 // totalBeds      = SUM(HostelRoom.capacity) for the hostel
+// filledRooms    = COUNT(HostelRoom where EVERY bed has an active HostelAllocation, and the room has ≥1 bed)
 // filledBeds     = COUNT(active HostelAllocation rows in this hostel)
 // filledStudents = COUNT(StudentAdmission.hostelId = X, not CANCELLED) — students earmarked for the hostel (some may not yet have a bed)
 export const getHostelOccupancy = async (hostelId: string, client: any = prisma) => {
-    const [totalRooms, bedsAgg, filledBeds, filledStudents] = await Promise.all([
+    const [totalRooms, bedsAgg, filledRooms, filledBeds, filledStudents] = await Promise.all([
         client.hostelRoom.count({
             where: { hostelId, isDeleted: false }
         }),
         client.hostelRoom.aggregate({
             where: { hostelId, isDeleted: false },
             _sum: { capacity: true }
+        }),
+        client.hostelRoom.count({
+            where: {
+                hostelId,
+                isDeleted: false,
+                // Has at least one bed AND no bed is missing an active allocation.
+                beds: {
+                    some: {},
+                    none: {
+                        OR: [
+                            { allocation: null },
+                            { allocation: { status: { not: 'ACTIVE' } } }
+                        ]
+                    }
+                }
+            }
         }),
         client.hostelAllocation.count({
             where: { status: 'ACTIVE', bed: { room: { hostelId, isDeleted: false } } }
@@ -28,10 +45,12 @@ export const getHostelOccupancy = async (hostelId: string, client: any = prisma)
     const totalBeds = bedsAgg._sum.capacity ?? 0;
     return {
         totalRooms,
+        filledRooms,
+        vacantRooms: Math.max(0, totalRooms - filledRooms),
         totalBeds,
         filledBeds,
+        vacantBeds: Math.max(0, totalBeds - filledBeds),
         filledStudents,
-        vacantBeds: Math.max(0, totalBeds - filledBeds)
     };
 };
 
@@ -97,13 +116,15 @@ export const HostelService = {
         const totals = enriched.reduce(
             (acc, h) => {
                 acc.totalRooms += h.occupancy.totalRooms;
+                acc.filledRooms += h.occupancy.filledRooms;
+                acc.vacantRooms += h.occupancy.vacantRooms;
                 acc.totalBeds += h.occupancy.totalBeds;
                 acc.filledBeds += h.occupancy.filledBeds;
-                acc.filledStudents += h.occupancy.filledStudents;
                 acc.vacantBeds += h.occupancy.vacantBeds;
+                acc.filledStudents += h.occupancy.filledStudents;
                 return acc;
             },
-            { totalHostels: enriched.length, totalRooms: 0, totalBeds: 0, filledBeds: 0, filledStudents: 0, vacantBeds: 0 }
+            { totalHostels: enriched.length, totalRooms: 0, filledRooms: 0, vacantRooms: 0, totalBeds: 0, filledBeds: 0, vacantBeds: 0, filledStudents: 0 }
         );
 
         return { hostels: enriched, totals };
