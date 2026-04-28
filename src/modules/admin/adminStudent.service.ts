@@ -1683,8 +1683,11 @@ export const AdminStudentService = {
 
         const where: Prisma.StudentWhereInput = {
             admissionDetails: {
-                accommodationType: AccommodationType.HOSTEL,
-                ...(hostelId ? { hostelId } : {}),
+                // "Wants hostel" = has a specific hostel assigned. This is the
+                // load-bearing signal for bed allocation. Some legacy admissions
+                // have hostelId set but accommodationType=NONE — those still
+                // belong on the worklist.
+                ...(hostelId ? { hostelId } : { hostelId: { not: null } }),
             },
             ...(gender ? { gender } : {}),
             OR: [
