@@ -1691,7 +1691,7 @@ export const AdminStudentService = {
                 ...(hostelId ? { hostelId } : { hostelId: { not: null } }),
                 ...(hostelType ? { hostelType: hostelType as HostelType } : {}),
             },
-            ...(gender ? { gender } : {}),
+            ...(gender ? { gender: { equals: gender, mode: 'insensitive' } } : {}),
             OR: [
                 { hostelAllocation: null },
                 { hostelAllocation: { status: { not: 'ACTIVE' } } },

@@ -5,13 +5,21 @@ import { HostelType } from '@prisma/client';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 
 // Compute occupancy on-demand from source-of-truth tables.
-// totalBeds = SUM(HostelRoom.capacity) for the hostel
-// filledStudents = COUNT(StudentAdmission.hostelId = X, not CANCELLED)
+// totalRooms     = COUNT(HostelRoom) for the hostel
+// totalBeds      = SUM(HostelRoom.capacity) for the hostel
+// filledBeds     = COUNT(active HostelAllocation rows in this hostel)
+// filledStudents = COUNT(StudentAdmission.hostelId = X, not CANCELLED) — students earmarked for the hostel (some may not yet have a bed)
 export const getHostelOccupancy = async (hostelId: string, client: any = prisma) => {
-    const [bedsAgg, filledStudents] = await Promise.all([
+    const [totalRooms, bedsAgg, filledBeds, filledStudents] = await Promise.all([
+        client.hostelRoom.count({
+            where: { hostelId, isDeleted: false }
+        }),
         client.hostelRoom.aggregate({
             where: { hostelId, isDeleted: false },
             _sum: { capacity: true }
+        }),
+        client.hostelAllocation.count({
+            where: { status: 'ACTIVE', bed: { room: { hostelId, isDeleted: false } } }
         }),
         client.studentAdmission.count({
             where: { hostelId, status: { not: 'CANCELLED' } }
@@ -19,15 +27,19 @@ export const getHostelOccupancy = async (hostelId: string, client: any = prisma)
     ]);
     const totalBeds = bedsAgg._sum.capacity ?? 0;
     return {
+        totalRooms,
         totalBeds,
+        filledBeds,
         filledStudents,
-        vacantBeds: Math.max(0, totalBeds - filledStudents)
+        vacantBeds: Math.max(0, totalBeds - filledBeds)
     };
 };
 
 export const assertHostelHasCapacity = async (hostelId: string, client: any = prisma) => {
     const { totalBeds, filledStudents } = await getHostelOccupancy(hostelId, client);
     if (totalBeds === 0) throw new AppError('Hostel has no rooms configured', 400);
+    // Use filledStudents (earmarks) so we don't oversubscribe the hostel even
+    // before beds are allocated. Capacity check fires at assign-hostel time.
     if (filledStudents >= totalBeds) throw new AppError(MESSAGES.ERROR.HOSTEL_FULL, 400);
 };
 
@@ -325,11 +337,12 @@ export const HostelService = {
         };
     },
 
-    async getHostelRooms(filters?: { blockId?: string, hostelId?: string, floor?: number, includeBeds?: boolean }) {
+    async getHostelRooms(filters?: { blockId?: string, hostelId?: string, floor?: number, includeBeds?: boolean, roomNumber?: string }) {
         const where: any = { isDeleted: false };
         if (filters?.blockId) where.blockId = filters.blockId;
         if (filters?.hostelId) where.hostelId = filters.hostelId;
         if (filters?.floor !== undefined) where.floor = Number(filters.floor);
+        if (filters?.roomNumber) where.number = { contains: filters.roomNumber, mode: 'insensitive' };
 
         const includeBeds = filters?.includeBeds === true;
 

@@ -90,13 +90,14 @@ export const createHostelRoomsBulk = catchAsync(async (req: Request, res: Respon
 
 // Hostel Room
 export const getHostelRooms = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { blockId, hostelId, floor, includeBeds } = req.query;
+    const { blockId, hostelId, floor, includeBeds, roomNumber } = req.query;
     const truthy = (v: any) => v === true || v === 'true' || v === '1';
     const rooms = await HostelService.getHostelRooms({
         blockId: blockId as string,
         hostelId: hostelId as string,
         floor: floor !== undefined ? Number(floor) : undefined,
-        includeBeds: truthy(includeBeds)
+        includeBeds: truthy(includeBeds),
+        roomNumber: roomNumber ? String(roomNumber).trim() : undefined,
     });
     sendResponse({ res, statusCode: 200, success: true, data: rooms });
 });
