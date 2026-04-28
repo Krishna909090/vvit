@@ -1762,6 +1762,110 @@ export const AdminStudentService = {
     },
 
     /**
+     * List students who have a transportRouteId set (i.e. opted for transport)
+     * but no active TransportAllocation. Mirrors getPendingHostelAllocations.
+     */
+    async getPendingTransportAllocations(query: any) {
+        const {
+            page = 1,
+            limit = 10,
+            search,
+            routeId,
+            gender,
+        } = query;
+
+        const pageNum = Number(page) || 1;
+        const limitNum = Number(limit) || 10;
+        const skip = (pageNum - 1) * limitNum;
+
+        const where: Prisma.StudentWhereInput = {
+            admissionDetails: {
+                // "Wants transport" = has a route assigned. Mirror of the hostel
+                // worklist: hostelId IS NOT NULL signals intent regardless of
+                // accommodationType (some legacy admissions have routeId set
+                // but accommodationType=NONE).
+                ...(routeId ? { transportRouteId: routeId } : { transportRouteId: { not: null } }),
+            },
+            ...(gender ? { gender } : {}),
+            OR: [
+                { transportAllocation: null },
+                { transportAllocation: { status: { not: 'ACTIVE' } } },
+            ],
+            ...(search
+                ? {
+                      AND: [
+                          {
+                              OR: [
+                                  { name: { contains: search, mode: 'insensitive' } },
+                                  { phone: { contains: search } },
+                                  { applicationId: { contains: search, mode: 'insensitive' } },
+                              ],
+                          },
+                      ],
+                  }
+                : {}),
+        };
+
+        const [students, total] = await prisma.$transaction([
+            prisma.student.findMany({
+                where,
+                skip,
+                take: limitNum,
+                orderBy: [{ createdAt: 'desc' }],
+                select: {
+                    id: true,
+                    applicationId: true,
+                    name: true,
+                    gender: true,
+                    phone: true,
+                    email: true,
+                    profilePhotoUrl: true,
+                    createdAt: true,
+                    admissionDetails: {
+                        select: {
+                            status: true,
+                            transportRouteId: true,
+                            transportRoute: {
+                                select: {
+                                    id: true, name: true, cost: true,
+                                    busNumber: true, city: true,
+                                    capacity: true, filled: true,
+                                },
+                            },
+                            allottedCourse: { select: { id: true, name: true } },
+                        },
+                    },
+                    transportAllocation: {
+                        select: {
+                            id: true, status: true, startDate: true, endDate: true,
+                            stop: { select: { id: true, name: true, sequence: true } },
+                        },
+                    },
+                },
+            }),
+            prisma.student.count({ where }),
+        ]);
+
+        const enhanced = await Promise.all(
+            students.map(async (s) => ({
+                ...s,
+                profilePhotoUrl: await convertToPresignedUrl(s.profilePhotoUrl),
+                allocationStatus: s.transportAllocation?.status ?? 'NOT_ALLOCATED',
+            }))
+        );
+
+        return {
+            students: enhanced,
+            pagination: {
+                total,
+                page: pageNum,
+                limit: limitNum,
+                totalPages: Math.ceil(total / limitNum),
+            },
+        };
+    },
+
+    /**
      * Allocate a specific bed to a student who already has accommodationType=HOSTEL.
      * Atomically:
      *   - Validates student + bed eligibility
@@ -2560,6 +2664,7 @@ export const AdminStudentService = {
         studentId: string,
         hostelId: string,
         hostelPaymentMode: 'YEARWISE' | 'SEMWISE',
+        hostelType: HostelType | undefined,
         adminId?: string
     ) {
         const ctx = await getStudentContext(studentId);
@@ -2597,6 +2702,7 @@ export const AdminStudentService = {
                 accommodationType: AccommodationType.HOSTEL,
                 hostelId,
                 hostelPaymentMode: hostelPaymentMode as HostelPaymentMode,
+                ...(hostelType ? { hostelType } : {}),
             }
         });
 
@@ -2609,8 +2715,10 @@ export const AdminStudentService = {
                 details: {
                     previousHostelId: admission.hostelId,
                     previousAccommodationType: admission.accommodationType,
+                    previousHostelType: admission.hostelType,
                     newHostelId: hostelId,
                     newPaymentMode: hostelPaymentMode,
+                    newHostelType: hostelType ?? null,
                     hostelName: hostel.name,
                 }
             }

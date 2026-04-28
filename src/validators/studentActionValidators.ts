@@ -28,6 +28,12 @@ export const assignHostelSchema = z.object({
         hostelPaymentMode: z.string()
             .transform(v => v.toUpperCase())
             .pipe(z.enum(['YEARWISE', 'SEMWISE'])),
+        hostelType: z.string()
+            .optional()
+            .transform(v => v ? v.toUpperCase() : undefined)
+            .refine(v => v === undefined || ['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10'].includes(v), {
+                message: "hostelType must be SHARING_2, SHARING_4, SHARING_6, SHARING_8, or SHARING_10"
+            }),
     }),
 });
 
@@ -97,6 +103,16 @@ export const pendingHostelAllocationsQuerySchema = z.object({
         limit: z.string().optional().transform(v => v ? Number(v) : 10),
         search: z.string().trim().optional(),
         hostelId: z.string().uuid("Invalid Hostel ID").optional(),
+        gender: z.string().trim().optional(),
+    }),
+});
+
+export const pendingTransportAllocationsQuerySchema = z.object({
+    query: z.object({
+        page: z.string().optional().transform(v => v ? Number(v) : 1),
+        limit: z.string().optional().transform(v => v ? Number(v) : 10),
+        search: z.string().trim().optional(),
+        routeId: z.string().uuid("Invalid Route ID").optional(),
         gender: z.string().trim().optional(),
     }),
 });
