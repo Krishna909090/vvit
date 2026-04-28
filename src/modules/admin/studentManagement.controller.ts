@@ -357,6 +357,22 @@ export const getPendingHostelAllocations = catchAsync(async (req: Request, res: 
     });
 });
 
+// List all students assigned to a specific hostel (roster view)
+export const getStudentsByHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { hostelId } = req.params;
+    logger.info(`[getStudentsByHostel] hostelId=${hostelId} by=${req.user?.userId || 'anonymous'}`);
+
+    const result = await AdminStudentService.getStudentsByHostel(hostelId, req.query);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
 // List students who opted for transport but have no active route allocation
 export const getPendingTransportAllocations = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getPendingTransportAllocations] by=${req.user?.userId || 'anonymous'}`);

@@ -1764,6 +1764,146 @@ export const AdminStudentService = {
     },
 
     /**
+     * List all students assigned to a hostel (allocated or not).
+     * Used by the hostel-detail roster view.
+     */
+    async getStudentsByHostel(hostelId: string, query: any) {
+        const {
+            page = 1,
+            limit = 10,
+            search,
+            hostelType,
+            gender,
+            allottedCourseId,
+            allocationStatus,
+        } = query;
+
+        const pageNum = Number(page) || 1;
+        const limitNum = Number(limit) || 10;
+        const skip = (pageNum - 1) * limitNum;
+
+        const hostel = await prisma.hostel.findUnique({
+            where: { id: hostelId },
+            select: { id: true, name: true, type: true, isDeleted: true }
+        });
+        if (!hostel || hostel.isDeleted) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+
+        const allocationFilter: Prisma.StudentWhereInput = (() => {
+            if (allocationStatus === 'ALLOCATED') {
+                return { hostelAllocation: { status: 'ACTIVE' } };
+            }
+            if (allocationStatus === 'NOT_ALLOCATED') {
+                return {
+                    OR: [
+                        { hostelAllocation: null },
+                        { hostelAllocation: { status: { not: 'ACTIVE' } } },
+                    ],
+                };
+            }
+            return {};
+        })();
+
+        const where: Prisma.StudentWhereInput = {
+            admissionDetails: {
+                hostelId,
+                ...(hostelType ? { hostelType: hostelType as HostelType } : {}),
+                ...(allottedCourseId ? { allottedCourseId } : {}),
+            },
+            ...(gender ? { gender: { equals: gender, mode: 'insensitive' } } : {}),
+            ...allocationFilter,
+            ...(search
+                ? {
+                      AND: [
+                          {
+                              OR: [
+                                  { name: { contains: search, mode: 'insensitive' } },
+                                  { phone: { contains: search } },
+                                  { applicationId: { contains: search, mode: 'insensitive' } },
+                              ],
+                          },
+                      ],
+                  }
+                : {}),
+        };
+
+        const [students, total] = await prisma.$transaction([
+            prisma.student.findMany({
+                where,
+                skip,
+                take: limitNum,
+                orderBy: [{ name: 'asc' }],
+                select: {
+                    id: true,
+                    applicationId: true,
+                    name: true,
+                    fatherName: true,
+                    motherName: true,
+                    gender: true,
+                    phone: true,
+                    profilePhotoUrl: true,
+                    admissionDetails: {
+                        select: {
+                            hostelType: true,
+                            roomNumber: true,
+                            hostelPaymentMode: true,
+                            allottedCourse: { select: { id: true, name: true } },
+                        },
+                    },
+                    hostelAllocation: {
+                        select: {
+                            status: true,
+                            startDate: true,
+                            bed: {
+                                select: {
+                                    number: true,
+                                    room: {
+                                        select: { id: true, number: true, capacity: true, type: true, floor: true },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            }),
+            prisma.student.count({ where }),
+        ]);
+
+        const enhanced = await Promise.all(
+            students.map(async (s) => ({
+                applicationId: s.applicationId,
+                name: s.name,
+                fatherName: s.fatherName,
+                motherName: s.motherName,
+                gender: s.gender,
+                phone: s.phone,
+                profilePhotoUrl: await convertToPresignedUrl(s.profilePhotoUrl),
+                hostelType: s.admissionDetails?.hostelType ?? null,
+                hostelPaymentMode: s.admissionDetails?.hostelPaymentMode ?? null,
+                roomNumber:
+                    s.hostelAllocation?.bed?.room?.number
+                    ?? s.admissionDetails?.roomNumber
+                    ?? null,
+                bedNumber: s.hostelAllocation?.bed?.number ?? null,
+                floor: s.hostelAllocation?.bed?.room?.floor ?? null,
+                allottedCourse: s.admissionDetails?.allottedCourse?.name ?? null,
+                allocationStatus: s.hostelAllocation?.status ?? 'NOT_ALLOCATED',
+                allocatedAt: s.hostelAllocation?.startDate ?? null,
+            }))
+        );
+
+        return {
+            hostel: { id: hostel.id, name: hostel.name, type: hostel.type },
+            students: enhanced,
+            pagination: {
+                total,
+                page: pageNum,
+                limit: limitNum,
+                totalPages: Math.ceil(total / limitNum),
+            },
+        };
+    },
+
+    /**
      * List students who have a transportRouteId set (i.e. opted for transport)
      * but no active TransportAllocation. Mirrors getPendingHostelAllocations.
      */

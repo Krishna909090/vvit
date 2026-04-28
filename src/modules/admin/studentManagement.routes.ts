@@ -40,6 +40,7 @@ import {
     getAvailableBeds,
     getPendingHostelAllocations,
     getPendingTransportAllocations,
+    getStudentsByHostel,
     reassignHostel,
     bulkAllocateRoomBeds
 } from './studentManagement.controller';
@@ -58,7 +59,7 @@ import {
     editProSchema,
     updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
-import { assignHostelSchema, allocateBedSchema, availableBedsQuerySchema, pendingHostelAllocationsQuerySchema, pendingTransportAllocationsQuerySchema, reassignHostelSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
+import { assignHostelSchema, allocateBedSchema, availableBedsQuerySchema, pendingHostelAllocationsQuerySchema, pendingTransportAllocationsQuerySchema, studentsByHostelSchema, reassignHostelSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
 
 import upload from '../../config/multer';
 import {
@@ -272,6 +273,14 @@ router.get('/available-beds/:hostelId', authenticate, authorizePermission(['stud
  * Response: { status, data: { students[], pagination: { total, page, limit, totalPages } } }
  */
 router.get('/hostel-pending-allocation', authenticate, authorizePermission(['student.read.all']), validateRequest(pendingHostelAllocationsQuerySchema), getPendingHostelAllocations);
+
+/**
+ * GET /admin/student/by-hostel/:hostelId
+ * Lists every student assigned to a hostel with their roster info (allocated and unallocated).
+ * Query: { page?, limit?, search? (matches name/phone/applicationId), hostelType?, gender?, allottedCourseId?, allocationStatus? (ALLOCATED|NOT_ALLOCATED) }
+ * Response: { status, data: { hostel: { id, name, type }, students[], pagination } }
+ */
+router.get('/by-hostel/:hostelId', authenticate, authorizePermission(['student.read.all']), validateRequest(studentsByHostelSchema), getStudentsByHostel);
 
 /**
  * GET /admin/student/transport-pending-allocation
