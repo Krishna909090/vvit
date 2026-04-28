@@ -357,6 +357,22 @@ export const getPendingHostelAllocations = catchAsync(async (req: Request, res: 
     });
 });
 
+// List students who opted for transport but have no active route allocation
+export const getPendingTransportAllocations = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getPendingTransportAllocations] by=${req.user?.userId || 'anonymous'}`);
+    logger.debug && logger.debug(`[getPendingTransportAllocations] query=${JSON.stringify(req.query)}`);
+
+    const result = await AdminStudentService.getPendingTransportAllocations(req.query);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
 // List vacant beds in a hostel for the assignment-UI dropdown
 export const getAvailableBeds = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { hostelId } = req.params;
@@ -379,8 +395,8 @@ export const getAvailableBeds = catchAsync(async (req: Request, res: Response, n
 // Assign hostel — flips accommodationType from NONE to HOSTEL
 export const assignHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { hostelId, hostelPaymentMode } = req.body;
-    logger.info(`[assignHostel] studentId=${studentId} hostelId=${hostelId} mode=${hostelPaymentMode} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
+    const { hostelId, hostelPaymentMode, hostelType } = req.body;
+    logger.info(`[assignHostel] studentId=${studentId} hostelId=${hostelId} mode=${hostelPaymentMode} type=${hostelType ?? 'unset'} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
 
     // Students cannot self-assign hostel
     if (req.user?.role === Role.STUDENT) {
@@ -391,6 +407,7 @@ export const assignHostel = catchAsync(async (req: Request, res: Response, next:
         studentId,
         hostelId,
         hostelPaymentMode,
+        hostelType,
         req.user?.userId
     );
 

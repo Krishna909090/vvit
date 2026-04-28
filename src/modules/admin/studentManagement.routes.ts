@@ -39,6 +39,7 @@ import {
     allocateBed,
     getAvailableBeds,
     getPendingHostelAllocations,
+    getPendingTransportAllocations,
     reassignHostel,
     bulkAllocateRoomBeds
 } from './studentManagement.controller';
@@ -57,7 +58,7 @@ import {
     editProSchema,
     updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
-import { assignHostelSchema, allocateBedSchema, availableBedsQuerySchema, pendingHostelAllocationsQuerySchema, reassignHostelSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
+import { assignHostelSchema, allocateBedSchema, availableBedsQuerySchema, pendingHostelAllocationsQuerySchema, pendingTransportAllocationsQuerySchema, reassignHostelSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
 
 import upload from '../../config/multer';
 import {
@@ -271,6 +272,14 @@ router.get('/available-beds/:hostelId', authenticate, authorizePermission(['stud
  * Response: { status, data: { students[], pagination: { total, page, limit, totalPages } } }
  */
 router.get('/hostel-pending-allocation', authenticate, authorizePermission(['student.read.all']), validateRequest(pendingHostelAllocationsQuerySchema), getPendingHostelAllocations);
+
+/**
+ * GET /admin/student/transport-pending-allocation
+ * Lists students who have a transportRouteId set (opted for transport) but no active TransportAllocation.
+ * Query: { page?, limit?, search?, routeId?, gender? }
+ * Response: { status, data: { students[], pagination: { total, page, limit, totalPages } } }
+ */
+router.get('/transport-pending-allocation', authenticate, authorizePermission(['student.read.all']), validateRequest(pendingTransportAllocationsQuerySchema), getPendingTransportAllocations);
 
 /**
  * POST /admin/student/finalize-admission
