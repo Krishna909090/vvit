@@ -1686,7 +1686,9 @@ export const AdminStudentService = {
             admissionDetails: {
                 accommodationType: AccommodationType.HOSTEL,
                 ...(hostelId ? { hostelId } : {}),
-                ...(hostelType ? { hostelType: hostelType as HostelType } : {}),
+                ...(hostelType
+                    ? { hostel: { type: { equals: hostelType, mode: 'insensitive' } } }
+                    : {}),
             },
             ...(gender ? { gender } : {}),
             OR: [
