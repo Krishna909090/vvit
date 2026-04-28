@@ -13,7 +13,7 @@ import { getOrCreateAccommodationPricing, resolveFeeDemandContext } from '../../
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { ScholarshipService } from '../admin/scholarship.service';
-import { generateAllotmentOrderPDF } from '../../utils/allotmentGenerator';
+import { generateAllotmentOrderPDF, generateHostelAllotmentOrderPDF } from '../../utils/allotmentGenerator';
 import { StudentDocumentStatus } from '@prisma/client';
 import { sendPaymentReceipt } from '../../utils/emailService';
 
@@ -1770,16 +1770,13 @@ export const getStudentFinancialSummary = async (studentId: string) => {
         throw new AppError('Student admission details not found', 404);
     }
 
-    // 2. Fetch All Successful Payments & Hostel Prices
-    const [payments, hostelPrices] = await Promise.all([
-        prisma.payment.findMany({
-            where: {
-                studentId,
-                status: PaymentStatus.SUCCESS
-            }
-        }),
-        prisma.hostelPriceCategory.findMany()
-    ]);
+    // 2. Fetch All Successful Payments
+    const payments = await prisma.payment.findMany({
+        where: {
+            studentId,
+            status: PaymentStatus.SUCCESS
+        }
+    });
 
     // 3. Initialize Summary Structure
     const summary = {
@@ -2022,6 +2019,116 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
     }
 };
 
+/**
+ * Generate + save the Hostel Allotment Order PDF for a student.
+ *
+ * Reads the frozen pricing snapshot (StudentAccommodationPricing) so the document
+ * shows what THIS student locked in at allocation time. Upserts under StudentDocument
+ * key 'HOSTEL_ALLOTMENT_ORDER' — re-running (e.g. after re-assignment) replaces the
+ * file at S3 and refreshes the row.
+ *
+ * Best-effort: never throws. Failure is logged and the calling flow continues.
+ */
+export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
+    try {
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: {
+                admissionDetails: true,
+                accommodationPricing: true,
+            } as any,
+        }) as any;
+
+        if (!student?.admissionDetails) {
+            logger.warn(`[HostelAllotment] Student ${studentId} has no admission record — skipping`);
+            return;
+        }
+        if (!student.accommodationPricing) {
+            logger.warn(`[HostelAllotment] Student ${studentId} has no accommodation snapshot — skipping (bed not yet allocated?)`);
+            return;
+        }
+
+        const admission = student.admissionDetails;
+        const snap = student.accommodationPricing;
+
+        // Pull hostel + the allocated bed for warden + floor + bed number
+        const hostel = admission.hostelId
+            ? await prisma.hostel.findUnique({ where: { id: admission.hostelId } })
+            : null;
+
+        const allocation = await (prisma.hostelAllocation as any).findUnique({
+            where: { studentId },
+            include: { bed: { include: { room: true } } }
+        });
+
+        let profilePhotoUrl: string | undefined;
+        if (student.profilePhotoUrl) {
+            profilePhotoUrl = (await convertToPresignedUrl(student.profilePhotoUrl)) || undefined;
+        }
+
+        const reportingDate = new Date();
+        reportingDate.setDate(reportingDate.getDate() + 7);
+
+        const allotmentData = {
+            applicationId: student.applicationId ?? '',
+            studentName: student.name,
+            fatherName: student.fatherName,
+            motherName: student.motherName,
+            gender: student.gender,
+            state: student.state || 'Andhra Pradesh',
+
+            hostelName: hostel?.name || 'Hostel',
+            hostelType: hostel?.type || 'BOYS',
+            roomNumber: admission.roomNumber || allocation?.bed?.room?.number || '—',
+            bedNumber: allocation?.bed?.number || '—',
+            floor: allocation?.bed?.room?.floor,
+            sharing: snap.sharing,
+            roomType: snap.roomType,
+            paymentMode: (snap.paymentMode as 'YEARWISE' | 'SEMWISE') || 'YEARWISE',
+            wardenName: hostel?.wardenName || undefined,
+
+            accommodationPrice: snap.accommodationPrice ?? 0,
+            messPrice: snap.messPrice ?? 0,
+            laundryPrice: snap.laundryPrice ?? 0,
+            registrationFee: snap.registrationFee ?? 0,
+            effectiveTotal: snap.effectiveTotal ?? 0,
+
+            profilePhotoUrl,
+            reportingDate: format(reportingDate, 'dd.MM.yyyy'),
+        };
+
+        const pdfBuffer = await generateHostelAllotmentOrderPDF(allotmentData);
+        const timestamp = Date.now();
+        const s3Key = `student/${student.phone}/documents/HostelAllotmentOrder_${timestamp}.pdf`;
+        const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
+
+        await prisma.studentDocument.upsert({
+            where: {
+                studentId_documentKey: {
+                    studentId,
+                    documentKey: 'HOSTEL_ALLOTMENT_ORDER',
+                },
+            },
+            create: {
+                studentId,
+                documentKey: 'HOSTEL_ALLOTMENT_ORDER',
+                url,
+                status: StudentDocumentStatus.APPROVED,
+                remarks: 'Generated on hostel bed allocation',
+            },
+            update: {
+                url,
+                status: StudentDocumentStatus.APPROVED,
+                remarks: 'Refreshed on bed allocation / re-assignment',
+            },
+        });
+
+        logger.info(`[HostelAllotment] Generated for student ${studentId}: ${url}`);
+    } catch (err) {
+        logger.error(`[HostelAllotment] Failed to generate for student ${studentId}: ${err}`);
+    }
+}
+
 // Step 4. Unified Payment Processor
 export const processUnifiedPayment = async (data: any) => {
     const { studentId, amount, mode, method, component: rawComponent, feeHeadId: rawFeeHeadId, remarks, initiatedBy, referenceNumber, redirectUrl } = data;
@@ -2199,11 +2306,8 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         }
     }) as any;
 
-    // 2. Fetch Configuration Data (Parallel is fine for these small tables)
-    const [allFeeHeads, hostelPrices] = await Promise.all([
-        prisma.feeHead.findMany(),
-        prisma.hostelPriceCategory.findMany()
-    ]);
+    // 2. Fetch Configuration Data
+    const allFeeHeads = await prisma.feeHead.findMany();
 
     // 3. Fetch Financial Records (Parallel)
     const [ledgers, payments, feeDemands] = await Promise.all([

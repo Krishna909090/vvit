@@ -386,3 +386,188 @@ function drawBigWatermark(doc: PDFKit.PDFDocument) {
   doc.image(logoPath, x, y, { width: size })
   doc.restore()
 }
+
+/* ============================================================
+   HOSTEL ALLOTMENT ORDER
+   Generated when admin allocates a bed to a student.
+   ============================================================ */
+
+export interface HostelAllotmentData {
+  applicationId: string
+  studentName: string
+  fatherName: string
+  motherName: string
+  gender: string
+  state: string
+
+  // Hostel details
+  hostelName: string
+  hostelType: string                // e.g. "Boys" / "Girls"
+  roomNumber: string
+  bedNumber: string
+  floor?: number
+  sharing: number                   // 2 / 4 / 6 / 8 / 10
+  roomType: string                  // "AC" / "NON_AC"
+  paymentMode: 'YEARWISE' | 'SEMWISE'
+  wardenName?: string
+
+  // Pricing snapshot (frozen for this student)
+  accommodationPrice: number
+  messPrice: number
+  laundryPrice: number
+  registrationFee: number
+  effectiveTotal: number
+
+  profilePhotoUrl?: string
+  reportingDate?: string
+}
+
+export const generateHostelAllotmentOrderPDF = async (
+  data: HostelAllotmentData
+): Promise<Buffer> => {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 40 })
+      const buffers: Buffer[] = []
+      doc.on('data', buffers.push.bind(buffers))
+      doc.on('end', () => resolve(Buffer.concat(buffers)))
+      doc.on('error', reject)
+
+      drawHeader(doc)
+      drawBigWatermark(doc)
+      drawHostelTitle(doc)
+
+      const detailsEndY = await drawStudentDetailsSection(doc, {
+        applicationId: data.applicationId,
+        studentName: data.studentName,
+        fatherName: data.fatherName,
+        motherName: data.motherName,
+        gender: data.gender,
+        state: data.state,
+        allottedCollege: '',
+        allottedCourse: '',
+        profilePhotoUrl: data.profilePhotoUrl,
+      } as AllotmentData)
+
+      doc.y = detailsEndY + 10
+      drawHostelDetailsBlock(doc, data)
+      drawHostelFeeTable(doc, data)
+      drawHostelInstructions(doc)
+      drawFooter(doc)
+
+      doc.end()
+    } catch (err) {
+      reject(err)
+    }
+  })
+}
+
+function drawHostelTitle(doc: PDFKit.PDFDocument) {
+  doc
+    .font('Helvetica-Bold').fontSize(14).fillColor('#1C2833')
+    .text('HOSTEL ALLOTMENT ORDER', 0, doc.y, { align: 'center', width: doc.page.width, underline: true })
+
+  doc.moveDown(0.3)
+    .fontSize(10).fillColor('#566573')
+    .text('(Academic Year 2026–2027)', { align: 'center', width: doc.page.width })
+
+  doc.moveDown(0.5)
+}
+
+function drawHostelDetailsBlock(doc: PDFKit.PDFDocument, data: HostelAllotmentData) {
+  const startY = doc.y
+  const tableX = 50
+  const tableWidth = 495
+  const rowHeight = 26
+
+  const rows = [
+    { label: 'Hostel',          value: `${data.hostelName} (${data.hostelType})` },
+    { label: 'Room Number',     value: data.roomNumber },
+    { label: 'Bed Number',      value: data.bedNumber },
+    { label: 'Floor',           value: data.floor !== undefined ? String(data.floor) : '—' },
+    { label: 'Sharing / Type',  value: `${data.sharing}-Sharing • ${data.roomType}` },
+    { label: 'Payment Mode',    value: data.paymentMode === 'SEMWISE' ? 'Two Instalment (Semwise)' : 'Single Instalment (Yearwise)' },
+    { label: 'Warden',          value: data.wardenName || '—' },
+    { label: 'Reporting Date',  value: data.reportingDate || '—' },
+  ]
+
+  let currentY = startY
+  rows.forEach((row) => {
+    doc.rect(tableX, currentY, tableWidth, rowHeight).strokeColor('#E5E7E9').stroke()
+    const textY = currentY + 8
+    doc.font('Helvetica').fontSize(10).fillColor('#5D6D7E').text(row.label, tableX + 15, textY)
+    doc.font('Helvetica-Bold').fillColor('#000000').text(row.value, tableX + 200, textY)
+    currentY += rowHeight
+  })
+
+  doc.y = currentY + 10
+}
+
+function drawHostelFeeTable(doc: PDFKit.PDFDocument, data: HostelAllotmentData) {
+  const startY = doc.y
+  const tableX = 50
+  const tableWidth = 495
+  const rowHeight = 26
+
+  const fmt = (n: number) => `INR ${(n || 0).toLocaleString('en-IN')}`
+
+  const rows = [
+    { label: 'Accommodation', value: fmt(data.accommodationPrice), highlight: false },
+    { label: 'Mess',          value: fmt(data.messPrice),          highlight: false },
+    { label: 'Laundry',       value: fmt(data.laundryPrice),       highlight: false },
+    { label: 'Registration',  value: fmt(data.registrationFee),    highlight: false },
+    { label: 'Total Payable', value: fmt(data.effectiveTotal),     highlight: true },
+  ]
+
+  let currentY = startY
+  rows.forEach((row) => {
+    if (row.highlight) {
+      doc.rect(tableX, currentY, tableWidth, rowHeight).fill('#FEF5E7')
+      doc.fillColor('#000000')
+    }
+    doc.rect(tableX, currentY, tableWidth, rowHeight).strokeColor('#E5E7E9').stroke()
+    const textY = currentY + 8
+    doc.font('Helvetica').fontSize(10).fillColor('#5D6D7E').text(row.label, tableX + 15, textY)
+    doc.font('Helvetica-Bold').fillColor('#000000').text(row.value, tableX + 280, textY)
+    currentY += rowHeight
+  })
+
+  doc.y = currentY + 10
+}
+
+function drawHostelInstructions(doc: PDFKit.PDFDocument) {
+  const startY = doc.y
+  const boxPadding = 10
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#000000')
+    .text('Important Conditions of Hostel Allotment', 50 + boxPadding, startY + boxPadding, { underline: true })
+
+  doc.moveDown(0.5)
+  doc.font('Helvetica').fontSize(8).fillColor('#000')
+
+  const items = [
+    '1. The allotted bed is for the student named above only. Sub-letting or swapping with another student without written approval is strictly prohibited.',
+    '2. Hostel fees shown above are payable per the chosen payment mode. Late payment may incur penalties as per university norms.',
+    '3. Re-assignment to a different hostel/room/bed is allowed only on written request and at the discretion of the Hostel Warden / Director — Admissions.',
+    '4. Damage to hostel property will be billed to the student. Deposits (if applicable) may be withheld for outstanding charges.',
+    '5. Students must comply with the Hostel Code of Conduct, including curfew timings, attendance during inspections, and visitor policies.',
+    '6. Vacating the hostel mid-year requires approval and may result in pro-rated refunds as per the cancellation policy.',
+  ]
+
+  items.forEach((text) => {
+    const startX = 50 + boxPadding
+    const fullWidth = 495 - (boxPadding * 2)
+    const mainMatch = text.match(/^(\d+\.)\s+(.*)/)
+    const currentY = doc.y
+    if (mainMatch) {
+      doc.text(mainMatch[1], startX, currentY)
+      doc.text(mainMatch[2], startX + 15, currentY, { width: fullWidth - 15, align: 'left', lineGap: 1 })
+    } else {
+      doc.text(text, startX, currentY, { width: fullWidth, align: 'left', lineGap: 1 })
+    }
+    doc.y += 3
+  })
+
+  const endY = doc.y + boxPadding
+  doc.rect(50, startY, 495, endY - startY).strokeColor('#000000').stroke()
+  doc.y = endY + 10
+}

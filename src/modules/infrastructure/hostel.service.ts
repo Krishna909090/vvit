@@ -2,6 +2,7 @@ import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 import { HostelType } from '@prisma/client';
+import { convertToPresignedUrl } from '../../utils/s3Utils';
 
 // Compute occupancy on-demand from source-of-truth tables.
 // totalBeds = SUM(HostelRoom.capacity) for the hostel
@@ -76,6 +77,7 @@ export const HostelService = {
         });
         return Promise.all(hostels.map(async (h) => ({
             ...h,
+            photoUrl: await convertToPresignedUrl(h.photoUrl),
             occupancy: await getHostelOccupancy(h.id)
         })));
     },
@@ -86,7 +88,11 @@ export const HostelService = {
             include: { rooms: { include: { beds: true } } }
         });
         if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
-        return { ...hostel, occupancy: await getHostelOccupancy(id) };
+        return {
+            ...hostel,
+            photoUrl: await convertToPresignedUrl(hostel.photoUrl),
+            occupancy: await getHostelOccupancy(id)
+        };
     },
 
     async updateHostel(id: string, data: any) {
@@ -419,8 +425,9 @@ export const HostelService = {
         });
         if (!room) throw new AppError("Hostel Room not found", 404);
 
-        // Shape the response: per-bed status + room-level counts
-        const beds = room.beds.map(bed => {
+        // Shape the response: per-bed status + room-level counts.
+        // Presign occupant profilePhotoUrl (S3 key → 1h presigned URL).
+        const beds = await Promise.all(room.beds.map(async bed => {
             const alloc: any = (bed as any).allocation;
             const isActive = alloc && alloc.status === 'ACTIVE';
             return {
@@ -433,11 +440,11 @@ export const HostelService = {
                     applicationId: alloc.student?.applicationId ?? null,
                     phone: alloc.student?.phone ?? null,
                     gender: alloc.student?.gender ?? null,
-                    profilePhotoUrl: alloc.student?.profilePhotoUrl ?? null,
+                    profilePhotoUrl: await convertToPresignedUrl(alloc.student?.profilePhotoUrl ?? null),
                     allocatedAt: alloc.startDate ?? null
                 } : null
             };
-        });
+        }));
 
         const filledBeds = beds.filter(b => b.status === 'OCCUPIED').length;
 

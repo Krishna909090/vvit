@@ -47,9 +47,6 @@ export const bulkAllocateRoomSchema = z.object({
         studentIds: z.array(z.string().uuid("Invalid Student ID"))
             .min(1, "At least one student ID required")
             .max(50, "Cannot allocate more than 50 students in a single batch"),
-        hostelPaymentMode: z.string()
-            .transform(v => v.toUpperCase())
-            .pipe(z.enum(['YEARWISE', 'SEMWISE'])),
         academicYearId: z.string().uuid("Invalid Academic Year ID").optional(),
     }).refine(
         data => new Set(data.studentIds).size === data.studentIds.length,
@@ -91,5 +88,21 @@ export const availableBedsQuerySchema = z.object({
         floor: z.string()
             .optional()
             .transform(v => v ? Number(v) : undefined),
+    }),
+});
+
+export const pendingHostelAllocationsQuerySchema = z.object({
+    query: z.object({
+        page: z.string().optional().transform(v => v ? Number(v) : 1),
+        limit: z.string().optional().transform(v => v ? Number(v) : 10),
+        search: z.string().trim().optional(),
+        hostelId: z.string().uuid("Invalid Hostel ID").optional(),
+        hostelType: z.string()
+            .optional()
+            .transform(v => v ? v.toUpperCase() : undefined)
+            .refine(v => v === undefined || v === 'BOYS' || v === 'GIRLS', {
+                message: "hostelType must be BOYS or GIRLS"
+            }),
+        gender: z.string().trim().optional(),
     }),
 });

@@ -38,6 +38,7 @@ import {
     assignHostel,
     allocateBed,
     getAvailableBeds,
+    getPendingHostelAllocations,
     reassignHostel,
     bulkAllocateRoomBeds
 } from './studentManagement.controller';
@@ -56,7 +57,7 @@ import {
     editProSchema,
     updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
-import { assignHostelSchema, allocateBedSchema, availableBedsQuerySchema, reassignHostelSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
+import { assignHostelSchema, allocateBedSchema, availableBedsQuerySchema, pendingHostelAllocationsQuerySchema, reassignHostelSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
 
 import upload from '../../config/multer';
 import {
@@ -247,9 +248,11 @@ router.post('/:studentId/reassign-hostel', authenticate, authorizePermission(['s
 /**
  * POST /admin/student/bulk-allocate-room
  * Bulk-allocates vacant beds in a single room to a list of students.
+ * Each student must already be on accommodationType=HOSTEL with the target hostelId
+ * and a hostelPaymentMode set (i.e. they must have gone through assign-hostel first).
  * Pre-validates everyone first; if any student fails validation, NONE are allocated.
- * Body: { roomId: uuid, studentIds: uuid[], hostelPaymentMode: 'YEARWISE'|'SEMWISE', academicYearId?: uuid }
- * Response: { success, allocated, requested, allocations[], skippedComponents }
+ * Body: { roomId: uuid, studentIds: uuid[], academicYearId?: uuid }
+ * Response: { success, allocated, requested, allocations[], pricing, skippedComponents }
  */
 router.post('/bulk-allocate-room', authenticate, authorizePermission(['student.update.all']), validateRequest(bulkAllocateRoomSchema), bulkAllocateRoomBeds);
 
@@ -260,6 +263,14 @@ router.post('/bulk-allocate-room', authenticate, authorizePermission(['student.u
  * Response: { status, data: { hostelId, count, beds: [{ bedId, bedNumber, roomNumber, floor, capacity, roomType }] } }
  */
 router.get('/available-beds/:hostelId', authenticate, authorizePermission(['student.read.all']), validateRequest(availableBedsQuerySchema), getAvailableBeds);
+
+/**
+ * GET /admin/student/hostel-pending-allocation
+ * Lists students who opted for hostel (accommodationType=HOSTEL) but have no active bed allocation.
+ * Query: { page?, limit?, search?, hostelId?, hostelType? (BOYS|GIRLS), gender? }
+ * Response: { status, data: { students[], pagination: { total, page, limit, totalPages } } }
+ */
+router.get('/hostel-pending-allocation', authenticate, authorizePermission(['student.read.all']), validateRequest(pendingHostelAllocationsQuerySchema), getPendingHostelAllocations);
 
 /**
  * POST /admin/student/finalize-admission

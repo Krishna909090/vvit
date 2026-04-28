@@ -273,15 +273,15 @@ export const updateAdmissionDetails = catchAsync(async (req: Request, res: Respo
 
 // Bulk-allocate vacant beds in a single room to a list of students
 export const bulkAllocateRoomBeds = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { roomId, studentIds, hostelPaymentMode, academicYearId } = req.body;
-    logger.info(`[bulkAllocateRoomBeds] roomId=${roomId} count=${studentIds?.length} mode=${hostelPaymentMode} by=${req.user?.userId || 'anonymous'}`);
+    const { roomId, studentIds, academicYearId } = req.body;
+    logger.info(`[bulkAllocateRoomBeds] roomId=${roomId} count=${studentIds?.length} by=${req.user?.userId || 'anonymous'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot bulk-allocate beds', 403);
     }
 
     const result = await AdminStudentService.bulkAllocateRoomBeds(
-        roomId, studentIds, hostelPaymentMode, academicYearId, req.user?.userId
+        roomId, studentIds, academicYearId, req.user?.userId
     );
 
     sendResponse({
@@ -337,6 +337,22 @@ export const allocateBed = catchAsync(async (req: Request, res: Response, next: 
         statusCode: 200,
         success: true,
         message: 'Bed allocated successfully',
+        data: result
+    });
+});
+
+// List students who opted for hostel but have no active bed allocation
+export const getPendingHostelAllocations = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getPendingHostelAllocations] by=${req.user?.userId || 'anonymous'}`);
+    logger.debug && logger.debug(`[getPendingHostelAllocations] query=${JSON.stringify(req.query)}`);
+
+    const result = await AdminStudentService.getPendingHostelAllocations(req.query);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
         data: result
     });
 });
