@@ -88,11 +88,25 @@ export const HostelService = {
             },
             orderBy: { createdAt: 'asc' }
         });
-        return Promise.all(hostels.map(async (h) => ({
+        const enriched = await Promise.all(hostels.map(async (h) => ({
             ...h,
             photoUrl: await convertToPresignedUrl(h.photoUrl),
             occupancy: await getHostelOccupancy(h.id)
         })));
+
+        const totals = enriched.reduce(
+            (acc, h) => {
+                acc.totalRooms += h.occupancy.totalRooms;
+                acc.totalBeds += h.occupancy.totalBeds;
+                acc.filledBeds += h.occupancy.filledBeds;
+                acc.filledStudents += h.occupancy.filledStudents;
+                acc.vacantBeds += h.occupancy.vacantBeds;
+                return acc;
+            },
+            { totalHostels: enriched.length, totalRooms: 0, totalBeds: 0, filledBeds: 0, filledStudents: 0, vacantBeds: 0 }
+        );
+
+        return { hostels: enriched, totals };
     },
 
     async getHostelById(id: string) {
