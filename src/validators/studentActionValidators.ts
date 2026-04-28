@@ -97,12 +97,6 @@ export const pendingHostelAllocationsQuerySchema = z.object({
         limit: z.string().optional().transform(v => v ? Number(v) : 10),
         search: z.string().trim().optional(),
         hostelId: z.string().uuid("Invalid Hostel ID").optional(),
-        hostelType: z.string()
-            .optional()
-            .transform(v => v ? v.toUpperCase() : undefined)
-            .refine(v => v === undefined || v === 'BOYS' || v === 'GIRLS', {
-                message: "hostelType must be BOYS or GIRLS"
-            }),
         gender: z.string().trim().optional(),
     }),
 });

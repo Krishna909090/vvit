@@ -1674,7 +1674,6 @@ export const AdminStudentService = {
             limit = 10,
             search,
             hostelId,
-            hostelType,
             gender,
         } = query;
 
@@ -1686,9 +1685,6 @@ export const AdminStudentService = {
             admissionDetails: {
                 accommodationType: AccommodationType.HOSTEL,
                 ...(hostelId ? { hostelId } : {}),
-                ...(hostelType
-                    ? { hostel: { type: { equals: hostelType, mode: 'insensitive' } } }
-                    : {}),
             },
             ...(gender ? { gender } : {}),
             OR: [

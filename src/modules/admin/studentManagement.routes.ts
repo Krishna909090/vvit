@@ -267,7 +267,7 @@ router.get('/available-beds/:hostelId', authenticate, authorizePermission(['stud
 /**
  * GET /admin/student/hostel-pending-allocation
  * Lists students who opted for hostel (accommodationType=HOSTEL) but have no active bed allocation.
- * Query: { page?, limit?, search?, hostelId?, hostelType? (BOYS|GIRLS), gender? }
+ * Query: { page?, limit?, search?, hostelId?, gender? }
  * Response: { status, data: { students[], pagination: { total, page, limit, totalPages } } }
  */
 router.get('/hostel-pending-allocation', authenticate, authorizePermission(['student.read.all']), validateRequest(pendingHostelAllocationsQuerySchema), getPendingHostelAllocations);
