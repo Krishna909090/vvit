@@ -427,7 +427,19 @@ export const HostelService = {
                                 student: {
                                     select: {
                                         id: true, name: true, applicationId: true,
-                                        phone: true, gender: true, profilePhotoUrl: true
+                                        phone: true, gender: true, profilePhotoUrl: true,
+                                        fatherName: true, motherName: true, degreeType: true,
+                                        admissionDetails: {
+                                            select: {
+                                                allottedCourse: { select: { id: true, name: true } }
+                                            }
+                                        },
+                                        documents: {
+                                            where: { documentKey: 'HOSTEL_ALLOTMENT_ORDER', isDeleted: false },
+                                            select: { url: true, updatedAt: true },
+                                            take: 1,
+                                            orderBy: { updatedAt: 'desc' }
+                                        }
                                     }
                                 }
                             }
@@ -439,21 +451,29 @@ export const HostelService = {
         if (!room) throw new AppError("Hostel Room not found", 404);
 
         // Shape the response: per-bed status + room-level counts.
-        // Presign occupant profilePhotoUrl (S3 key → 1h presigned URL).
+        // Presign occupant profilePhotoUrl + hostelAllotmentOrder PDF URL (S3 keys → 1h presigned URLs).
         const beds = await Promise.all(room.beds.map(async bed => {
             const alloc: any = (bed as any).allocation;
             const isActive = alloc && alloc.status === 'ACTIVE';
+            const student = alloc?.student;
+            const allotmentDoc = student?.documents?.[0];
             return {
                 id: bed.id,
                 number: bed.number,
                 status: isActive ? 'OCCUPIED' : 'AVAILABLE',
                 occupant: isActive ? {
-                    studentId: alloc.student?.id ?? null,
-                    name: alloc.student?.name ?? null,
-                    applicationId: alloc.student?.applicationId ?? null,
-                    phone: alloc.student?.phone ?? null,
-                    gender: alloc.student?.gender ?? null,
-                    profilePhotoUrl: await convertToPresignedUrl(alloc.student?.profilePhotoUrl ?? null),
+                    studentId: student?.id ?? null,
+                    name: student?.name ?? null,
+                    applicationId: student?.applicationId ?? null,
+                    phone: student?.phone ?? null,
+                    gender: student?.gender ?? null,
+                    fatherName: student?.fatherName ?? null,
+                    motherName: student?.motherName ?? null,
+                    degreeType: student?.degreeType ?? null,
+                    allottedCourse: student?.admissionDetails?.allottedCourse?.name ?? null,
+                    profilePhotoUrl: await convertToPresignedUrl(student?.profilePhotoUrl ?? null),
+                    hostelAllotmentOrderUrl: await convertToPresignedUrl(allotmentDoc?.url ?? null),
+                    hostelAllotmentOrderGeneratedAt: allotmentDoc?.updatedAt ?? null,
                     allocatedAt: alloc.startDate ?? null
                 } : null
             };
