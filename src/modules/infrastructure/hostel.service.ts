@@ -85,7 +85,8 @@ export const HostelService = {
                     where: { isDeleted: false },
                     include: { beds: true }
                 }
-            }
+            },
+            orderBy: { createdAt: 'asc' }
         });
         return Promise.all(hostels.map(async (h) => ({
             ...h,
@@ -369,7 +370,7 @@ export const HostelService = {
         const rooms = await prisma.hostelRoom.findMany({
             where,
             include: { beds: bedInclude as any },
-            orderBy: [{ floor: 'asc' }, { number: 'asc' }]
+            orderBy: { createdAt: 'asc' }
         });
 
         return rooms.map(room => {
