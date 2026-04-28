@@ -99,12 +99,6 @@ export const HostelService = {
     async getAllHostels() {
         const hostels = await prisma.hostel.findMany({
             where: { isDeleted: false },
-            include: {
-                rooms: {
-                    where: { isDeleted: false },
-                    include: { beds: true }
-                }
-            },
             orderBy: { createdAt: 'asc' }
         });
         const enriched = await Promise.all(hostels.map(async (h) => ({
