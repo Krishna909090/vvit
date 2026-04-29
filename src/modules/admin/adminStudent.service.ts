@@ -1764,6 +1764,63 @@ export const AdminStudentService = {
     },
 
     /**
+     * List every student with an active bed allocation (across all hostels).
+     * Used for the "all bed-allocated students" report.
+     */
+    async getBedAllocatedStudents(query: any) {
+        const { page = 1, limit = 10, search, gender, all } = query;
+
+        const pageNum = Number(page) || 1;
+        const limitNum = Number(limit) || 10;
+        const skip = (pageNum - 1) * limitNum;
+        const fetchAll = !!all;
+
+        const where: Prisma.StudentWhereInput = {
+            hostelAllocation: { status: 'ACTIVE' },
+            ...(gender ? { gender: { equals: gender, mode: 'insensitive' } } : {}),
+            ...(search
+                ? {
+                      OR: [
+                          { name: { contains: search, mode: 'insensitive' } },
+                          { phone: { contains: search } },
+                          { applicationId: { contains: search, mode: 'insensitive' } },
+                      ],
+                  }
+                : {}),
+        };
+
+        const [students, total] = await prisma.$transaction([
+            prisma.student.findMany({
+                where,
+                ...(fetchAll ? {} : { skip, take: limitNum }),
+                orderBy: [{ name: 'asc' }],
+                select: {
+                    id: true,
+                    applicationId: true,
+                    name: true,
+                    fatherName: true,
+                    phone: true,
+                    courseType: true,
+                    gender: true,
+                },
+            }),
+            prisma.student.count({ where }),
+        ]);
+
+        return {
+            students,
+            pagination: fetchAll
+                ? { total, page: 1, limit: total, totalPages: 1 }
+                : {
+                      total,
+                      page: pageNum,
+                      limit: limitNum,
+                      totalPages: Math.ceil(total / limitNum),
+                  },
+        };
+    },
+
+    /**
      * List all students assigned to a hostel (allocated or not).
      * Used by the hostel-detail roster view.
      */

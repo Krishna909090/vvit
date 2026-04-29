@@ -357,6 +357,20 @@ export const getPendingHostelAllocations = catchAsync(async (req: Request, res: 
     });
 });
 
+// List every student with an active bed allocation (across all hostels)
+export const getBedAllocatedStudents = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getBedAllocatedStudents] by=${req.user?.userId || 'anonymous'}`);
+    const result = await AdminStudentService.getBedAllocatedStudents(req.query);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
 // List all students assigned to a specific hostel (roster view)
 export const getStudentsByHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { hostelId } = req.params;
