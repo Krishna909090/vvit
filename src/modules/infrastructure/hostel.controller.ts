@@ -29,6 +29,17 @@ export const getHostels = catchAsync(async (req: Request, res: Response, next: N
     });
 });
 
+export const getHostelFloors = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { hostelId } = req.params;
+    const data = await HostelService.getHostelFloors(hostelId);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        data
+    });
+});
+
 export const getHostelById = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
     const hostel = await HostelService.getHostelById(id);

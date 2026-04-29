@@ -124,6 +124,31 @@ export const HostelService = {
         return { hostels: enriched, totals };
     },
 
+    async getHostelFloors(hostelId: string) {
+        const hostel = await prisma.hostel.findUnique({
+            where: { id: hostelId },
+            select: { id: true, name: true, floors: true, isDeleted: true }
+        });
+        if (!hostel || hostel.isDeleted) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+
+        const grouped = await prisma.hostelRoom.groupBy({
+            by: ['floor'],
+            where: { hostelId, isDeleted: false },
+            _count: { _all: true },
+            orderBy: { floor: 'asc' }
+        });
+
+        return {
+            hostelId,
+            hostelName: hostel.name,
+            declaredFloors: hostel.floors ?? null,
+            floors: grouped.map(g => ({
+                floor: g.floor,
+                roomCount: g._count._all,
+            })),
+        };
+    },
+
     async getHostelById(id: string) {
         const hostel = await prisma.hostel.findUnique({
             where: { id },

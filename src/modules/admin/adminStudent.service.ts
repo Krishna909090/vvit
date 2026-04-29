@@ -1800,15 +1800,29 @@ export const AdminStudentService = {
                     name: true,
                     fatherName: true,
                     phone: true,
-                    courseType: true,
                     gender: true,
+                    admissionDetails: {
+                        select: {
+                            allottedCourse: { select: { id: true, name: true } },
+                        },
+                    },
                 },
             }),
             prisma.student.count({ where }),
         ]);
 
+        const shaped = students.map(s => ({
+            id: s.id,
+            applicationId: s.applicationId,
+            name: s.name,
+            fatherName: s.fatherName,
+            phone: s.phone,
+            gender: s.gender,
+            courseType: s.admissionDetails?.allottedCourse?.name ?? null,
+        }));
+
         return {
-            students,
+            students: shaped,
             pagination: fetchAll
                 ? { total, page: 1, limit: total, totalPages: 1 }
                 : {

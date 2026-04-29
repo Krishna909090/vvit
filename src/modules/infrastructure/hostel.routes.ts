@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
-    createHostel, getHostels, getHostelById, updateHostel, deleteHostel,
+    createHostel, getHostels, getHostelById, getHostelFloors, updateHostel, deleteHostel,
     createHostelRoom, getHostelRooms, getHostelRoomById, updateHostelRoom, deleteHostelRoom,
     createHostelRoomsBulk
 } from './hostel.controller';
@@ -93,6 +93,14 @@ router.delete('/room/:id', authenticate, authorizePermission('hostel.delete.all'
 // ═══════════════════════════════════════════════════════════
 //  HOSTEL — ID-SPECIFIC ROUTES (placed last to prevent path shadowing)
 // ═══════════════════════════════════════════════════════════
+
+/**
+ * @route   GET /:hostelId/floors
+ * @desc    Returns the floors that actually have rooms in this hostel, with per-floor room count.
+ * @access  Requires `hostel.read.all`, `student.create.own`, or `student.create.all` permission.
+ * @returns {{ success: boolean, data: { hostelId, hostelName, declaredFloors, floors: [{ floor, roomCount }] } }}
+ */
+router.get('/:hostelId/floors', authenticate, authorizePermission(['hostel.read.all', 'student.create.own', 'student.create.all']), getHostelFloors);
 
 /**
  * @route   GET /:id
