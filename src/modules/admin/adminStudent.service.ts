@@ -2017,14 +2017,21 @@ export const AdminStudentService = {
      *   - Creates StudentFeeDemand rows (one per fee component)
      *   - Increments StudentAdmission.totalFee
      */
-    async allocateBed(studentId: string, bedId: string, academicYearIdInput: string | undefined, adminId: string | undefined) {
+    async allocateBed(studentId: string, bedId: string, _academicYearIdInput: string | undefined, adminId: string | undefined) {
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'allocate bed');
         assertHostelAccommodation(ctx.admission, 'Run assign-hostel first.');
-        assertNoBedAllocated(ctx.accommodationPricing, 'Use re-allocation flow.');
+        assertNoBedAllocated(ctx.accommodationPricing as any, 'Use re-allocation flow.'); // legacy guard kept; superseded by HostelAllocation lookup below
         const admission = ctx.admission!;
         if (!admission.hostelId) {
-            throw new AppError('Student has no hostel assigned', 400);
+            throw new AppError('Student has no hostel assigned. Run assign-hostel first.', 400);
+        }
+        if (!ctx.accommodationPricing) {
+            throw new AppError('No pricing snapshot. Run assign-hostel first.', 400);
+        }
+        const existingAllocation = await prisma.hostelAllocation.findUnique({ where: { studentId } });
+        if (existingAllocation && existingAllocation.status === 'ACTIVE') {
+            throw new AppError('Student already has an active bed allocation. Use the reassign-hostel flow.', 409);
         }
 
         const bed = await prisma.hostelBed.findUnique({
@@ -2035,50 +2042,17 @@ export const AdminStudentService = {
         if (bed.allocation) throw new AppError('Bed is already allocated to another student', 409);
         if (bed.room.isDeleted) throw new AppError('Cannot allocate a bed in a deleted room', 400);
         if (bed.room.hostelId !== admission.hostelId) {
-            throw new AppError('Bed does not belong to the student\'s assigned hostel', 400);
+            throw new AppError("Bed does not belong to the student's assigned hostel", 400);
         }
-
-        const sharing = bed.room.capacity;
-        const roomType = bed.room.type;
-
-        // Look up price tier
-        const priceCategory = await prisma.hostelPriceCategory.findFirst({
-            where: { sharing, roomType: roomType as any, isActive: true }
-        });
-        if (!priceCategory) {
+        // Snapshot's sharing tier must match the bed's room capacity.
+        if (bed.room.capacity !== ctx.accommodationPricing.sharing) {
             throw new AppError(
-                `No active price tier found for sharing=${sharing}, roomType=${roomType}. Create one in HostelPriceCategory first.`,
+                `Snapshot is for SHARING_${ctx.accommodationPricing.sharing} but bed is in a ${bed.room.capacity}-sharing room. Re-run assign-hostel with the correct hostelType.`,
                 400
             );
         }
 
-        const isSemwise = admission.hostelPaymentMode === HostelPaymentMode.SEMWISE;
-        const accommodationPrice = (isSemwise ? priceCategory.accommodationSemwise : priceCategory.accommodationYearwise) ?? 0;
-        const messPrice = (isSemwise ? priceCategory.messSemwise : priceCategory.messYearwise) ?? 0;
-        const laundryPrice = (isSemwise ? priceCategory.laundrySemwise : priceCategory.laundryYearwise) ?? 0;
-        const registrationFee = priceCategory.registrationFee ?? 0;
-        const effectiveTotal = accommodationPrice + messPrice + laundryPrice + registrationFee;
-
-        // Resolve hostelType enum from sharing tier (now supports 2/4/6/8/10)
-        const hostelType = `SHARING_${sharing}` as HostelType;
-
-        // Resolve academic year (caller-provided or fall back to admission's existing one)
-        const academicYearId = academicYearIdInput ?? admission.academicYearId ?? undefined;
-
-        // Look up FeeHeads via explicit `component` tag (with name-keyword fallback for legacy heads)
-        const feeHeadMap = await resolveFeeHeadsByComponent([
-            PaymentComponent.HOSTEL_ACCOMMODATION,
-            PaymentComponent.HOSTEL_MESS,
-            PaymentComponent.HOSTEL_LAUNDRY,
-            PaymentComponent.HOSTEL_REGISTRATION,
-        ]);
-        const accHead = feeHeadMap.get(PaymentComponent.HOSTEL_ACCOMMODATION);
-        const messHead = feeHeadMap.get(PaymentComponent.HOSTEL_MESS);
-        const laundryHead = feeHeadMap.get(PaymentComponent.HOSTEL_LAUNDRY);
-        const regHead = feeHeadMap.get(PaymentComponent.HOSTEL_REGISTRATION);
-
         const result = await prisma.$transaction(async (tx) => {
-            // 1. Create allocation
             await (tx.hostelAllocation as any).create({
                 data: {
                     studentId,
@@ -2089,76 +2063,15 @@ export const AdminStudentService = {
                 }
             });
 
-            // 2. Mark bed occupied
             await tx.hostelBed.update({
                 where: { id: bedId },
                 data: { isOccupied: true, updatedBy: adminId }
             });
 
-            // 3. Update admission
             await tx.studentAdmission.update({
                 where: { studentId },
-                data: {
-                    hostelType,
-                    roomNumber: bed.room.number,
-                    totalFee: { increment: effectiveTotal }
-                }
+                data: { roomNumber: bed.room.number }
             });
-
-            // 4. Snapshot pricing
-            await (tx.studentAccommodationPricing as any).create({
-                data: {
-                    studentId,
-                    academicYearId,
-                    sharing,
-                    roomType,
-                    paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
-                    hostelId: admission.hostelId,
-                    accommodationPrice,
-                    messPrice,
-                    laundryPrice,
-                    registrationFee,
-                    effectiveTotal,
-                    pricingSource: 'CONFIG',
-                    createdBy: adminId
-                }
-            });
-
-            // 5. Create fee demands (skip components without a matching FeeHead)
-            const dueDate = new Date();
-            dueDate.setDate(dueDate.getDate() + 30);
-            const demands: { feeHeadId: string; amount: number; label: string }[] = [];
-            if (accHead && accommodationPrice > 0) demands.push({ feeHeadId: accHead.id, amount: accommodationPrice, label: 'accommodation' });
-            if (messHead && messPrice > 0)         demands.push({ feeHeadId: messHead.id, amount: messPrice, label: 'mess' });
-            if (laundryHead && laundryPrice > 0)   demands.push({ feeHeadId: laundryHead.id, amount: laundryPrice, label: 'laundry' });
-            if (regHead && registrationFee > 0)    demands.push({ feeHeadId: regHead.id, amount: registrationFee, label: 'registration' });
-
-            for (const d of demands) {
-                await tx.studentFeeDemand.create({
-                    data: {
-                        studentId,
-                        feeHeadId: d.feeHeadId,
-                        amount: d.amount,
-                        netAmount: d.amount,
-                        academicYearId,
-                        yearOfStudy: ctx.yearOfStudy,
-                        dueDate,
-                        status: FeeStatus.PENDING,
-                        remarks: `Hostel ${d.label} (${hostelType}, ${roomType}, ${isSemwise ? 'SEMWISE' : 'YEARWISE'})`,
-                        createdBy: adminId
-                    }
-                });
-            }
-
-            const componentPrices: Record<string, number> = {
-                accommodation: accommodationPrice,
-                mess: messPrice,
-                laundry: laundryPrice,
-                registration: registrationFee
-            };
-            const skipped = Object.keys(componentPrices).filter(
-                l => !demands.find(d => d.label === l) && (componentPrices[l] ?? 0) > 0
-            );
 
             await tx.auditLog.create({
                 data: {
@@ -2170,25 +2083,17 @@ export const AdminStudentService = {
                         bedId, bedNumber: bed.number,
                         roomId: bed.room.id, roomNumber: bed.room.number,
                         hostelId: admission.hostelId,
-                        hostelType,
-                        sharing, roomType,
-                        paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
-                        effectiveTotal,
-                        feeDemandsCreated: demands.length,
+                        hostelType: admission.hostelType,
                     }
                 }
             });
 
             return {
-                allocation: { studentId, bedId, roomNumber: bed.room.number, hostelType },
-                pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal, paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE' },
-                feeDemandsCreated: demands.length,
-                skippedComponents: skipped.length > 0 ? `Missing FeeHead for: ${skipped.join(', ')} — create those FeeHeads to bill these components` : null
+                allocation: { studentId, bedId, roomNumber: bed.room.number, hostelType: admission.hostelType },
             };
         });
 
         // Generate hostel allotment order PDF (best-effort, post-transaction).
-        // Failure logged inside the helper; doesn't block the response.
         generateAndSaveHostelAllotmentOrder(studentId).catch(() => { /* logged inside */ });
 
         return result;
@@ -2213,7 +2118,7 @@ export const AdminStudentService = {
     async bulkAllocateRoomBeds(
         roomId: string,
         studentIds: string[],
-        academicYearIdInput: string | undefined,
+        _academicYearIdInput: string | undefined,
         adminId: string | undefined
     ) {
         // 1. Validate room
@@ -2245,34 +2150,10 @@ export const AdminStudentService = {
 
         const hostelId = room.hostelId;
         const sharing = room.capacity;
-        const roomType = room.type;
-
-        // 2. Validate price tier
-        const priceCategory = await prisma.hostelPriceCategory.findFirst({
-            where: { sharing, roomType: roomType as any, isActive: true }
-        });
-        if (!priceCategory) {
-            throw new AppError(
-                `No active price tier for sharing=${sharing}, roomType=${roomType}. Create one in HostelPriceCategory first.`,
-                400
-            );
-        }
-
-        const yearwise = {
-            accommodation: (priceCategory as any).accommodationYearwise ?? 0,
-            mess: (priceCategory as any).messYearwise ?? 0,
-            laundry: (priceCategory as any).laundryYearwise ?? 0,
-        };
-        const semwise = {
-            accommodation: (priceCategory as any).accommodationSemwise ?? 0,
-            mess: (priceCategory as any).messSemwise ?? 0,
-            laundry: (priceCategory as any).laundrySemwise ?? 0,
-        };
-        const registrationFee = (priceCategory as any).registrationFee ?? 0;
         const hostelType = `SHARING_${sharing}` as HostelType;
 
-        // 3. Validate every student up-front. Mode is read from each admission
-        // (set during assign-hostel). Bulk-allocate does NOT flip mode or accommodationType.
+        // 2. Validate every student up-front. Pricing was set at assign-hostel,
+        // so we just verify each student has a snapshot matching this room's sharing tier.
         const students = await prisma.student.findMany({
             where: { id: { in: studentIds } },
             include: { admissionDetails: true, accommodationPricing: true } as any
@@ -2280,6 +2161,11 @@ export const AdminStudentService = {
 
         const studentMap = new Map(students.map(s => [s.id, s]));
         const validationErrors: { studentId: string; reason: string }[] = [];
+
+        const allocations = await prisma.hostelAllocation.findMany({
+            where: { studentId: { in: studentIds } }
+        });
+        const allocByStudent = new Map(allocations.map(a => [a.studentId, a]));
 
         for (const sid of studentIds) {
             const s = studentMap.get(sid);
@@ -2292,8 +2178,9 @@ export const AdminStudentService = {
                 validationErrors.push({ studentId: sid, reason: 'Admission is cancelled' });
                 continue;
             }
-            if (s.accommodationPricing) {
-                validationErrors.push({ studentId: sid, reason: 'Already has a bed allocated' });
+            const existingAlloc = allocByStudent.get(sid);
+            if (existingAlloc && existingAlloc.status === 'ACTIVE') {
+                validationErrors.push({ studentId: sid, reason: 'Already has an active bed allocation' });
                 continue;
             }
             if (s.admissionDetails.accommodationType !== AccommodationType.HOSTEL) {
@@ -2304,10 +2191,7 @@ export const AdminStudentService = {
                 continue;
             }
             if (!s.admissionDetails.hostelId) {
-                validationErrors.push({
-                    studentId: sid,
-                    reason: 'No hostel assigned. Run assign-hostel first.'
-                });
+                validationErrors.push({ studentId: sid, reason: 'No hostel assigned. Run assign-hostel first.' });
                 continue;
             }
             if (s.admissionDetails.hostelId !== hostelId) {
@@ -2317,10 +2201,17 @@ export const AdminStudentService = {
                 });
                 continue;
             }
-            if (!s.admissionDetails.hostelPaymentMode) {
+            if (!s.accommodationPricing) {
                 validationErrors.push({
                     studentId: sid,
-                    reason: 'No hostelPaymentMode on admission. Run assign-hostel first.'
+                    reason: 'No pricing snapshot. Run assign-hostel first.'
+                });
+                continue;
+            }
+            if (s.accommodationPricing.sharing !== sharing) {
+                validationErrors.push({
+                    studentId: sid,
+                    reason: `Snapshot is for SHARING_${s.accommodationPricing.sharing} but room is SHARING_${sharing}. Re-run assign-hostel with the correct hostelType.`
                 });
                 continue;
             }
@@ -2341,65 +2232,17 @@ export const AdminStudentService = {
             };
         }
 
-        // 4. Resolve FeeHeads via component tag (with name-keyword fallback)
-        const feeHeadMap = await resolveFeeHeadsByComponent([
-            PaymentComponent.HOSTEL_ACCOMMODATION,
-            PaymentComponent.HOSTEL_MESS,
-            PaymentComponent.HOSTEL_LAUNDRY,
-            PaymentComponent.HOSTEL_REGISTRATION,
-        ]);
-        const accHead = feeHeadMap.get(PaymentComponent.HOSTEL_ACCOMMODATION);
-        const messHead = feeHeadMap.get(PaymentComponent.HOSTEL_MESS);
-        const laundryHead = feeHeadMap.get(PaymentComponent.HOSTEL_LAUNDRY);
-        const regHead = feeHeadMap.get(PaymentComponent.HOSTEL_REGISTRATION);
-
         // Pair students with beds (in input order)
         const pairs = studentIds.map((sid, idx) => ({
             studentId: sid,
             bed: vacantBeds[idx]
         }));
 
-        // 5. Execute the batch atomically
-        const dueDate = new Date();
-        dueDate.setDate(dueDate.getDate() + 30);
-
-        // Pre-resolve year-of-study for each student (one query per student, outside the tx)
-        const yearOfStudyMap = new Map<string, number>();
-        for (const sid of studentIds) {
-            yearOfStudyMap.set(sid, await getStudentYearOfStudy(sid));
-        }
-
         const allocated: any[] = [];
-        const skippedComponentSet = new Set<string>();
         await prisma.$transaction(async (tx) => {
             for (const { studentId, bed } of pairs) {
                 const student = studentMap.get(studentId)!;
-                const admission = student.admissionDetails;
-                const academicYearId = academicYearIdInput
-                    ?? admission?.academicYearId
-                    ?? undefined;
-                const yearOfStudy = yearOfStudyMap.get(studentId) ?? 1;
 
-                // Per-student pricing: mode comes from each admission, set by assign-hostel.
-                const studentMode = admission.hostelPaymentMode as HostelPaymentMode;
-                const isSemwise = studentMode === HostelPaymentMode.SEMWISE;
-                const tier = isSemwise ? semwise : yearwise;
-                const accommodationPrice = tier.accommodation;
-                const messPrice = tier.mess;
-                const laundryPrice = tier.laundry;
-                const effectiveTotal = accommodationPrice + messPrice + laundryPrice + registrationFee;
-
-                // a. Update admission (mode is NOT touched here — it was set at assign-hostel time)
-                await tx.studentAdmission.update({
-                    where: { studentId },
-                    data: {
-                        hostelType,
-                        roomNumber: room.number,
-                        totalFee: { increment: effectiveTotal }
-                    }
-                });
-
-                // b. Create allocation
                 await (tx.hostelAllocation as any).create({
                     data: {
                         studentId,
@@ -2410,56 +2253,15 @@ export const AdminStudentService = {
                     }
                 });
 
-                // c. Mark bed occupied
                 await tx.hostelBed.update({
                     where: { id: bed.id },
                     data: { isOccupied: true, updatedBy: adminId }
                 });
 
-                // d. Snapshot pricing
-                await (tx.studentAccommodationPricing as any).create({
-                    data: {
-                        studentId,
-                        academicYearId,
-                        sharing,
-                        roomType,
-                        paymentMode: studentMode,
-                        hostelId,
-                        accommodationPrice,
-                        messPrice,
-                        laundryPrice,
-                        registrationFee,
-                        effectiveTotal,
-                        pricingSource: 'CONFIG',
-                        createdBy: adminId
-                    }
+                await tx.studentAdmission.update({
+                    where: { studentId },
+                    data: { roomNumber: room.number }
                 });
-
-                // e. Create fee demands (skip components without matching FeeHead)
-                const components = [
-                    { head: accHead, amount: accommodationPrice, label: 'accommodation' },
-                    { head: messHead, amount: messPrice, label: 'mess' },
-                    { head: laundryHead, amount: laundryPrice, label: 'laundry' },
-                    { head: regHead, amount: registrationFee, label: 'registration' }
-                ];
-                for (const c of components) {
-                    if (c.amount <= 0) continue;
-                    if (!c.head) { skippedComponentSet.add(c.label); continue; }
-                    await tx.studentFeeDemand.create({
-                        data: {
-                            studentId,
-                            feeHeadId: c.head.id,
-                            amount: c.amount,
-                            netAmount: c.amount,
-                            academicYearId,
-                            yearOfStudy,
-                            dueDate,
-                            status: FeeStatus.PENDING,
-                            remarks: `Hostel ${c.label} (bulk-allocated to ${room.number}, ${hostelType}, ${studentMode})`,
-                            createdBy: adminId
-                        }
-                    });
-                }
 
                 await tx.auditLog.create({
                     data: {
@@ -2472,9 +2274,7 @@ export const AdminStudentService = {
                             roomId, roomNumber: room.number,
                             hostelId,
                             hostelType,
-                            sharing, roomType,
-                            paymentMode: studentMode,
-                            effectiveTotal,
+                            sharing,
                             batchSize: pairs.length,
                         }
                     }
@@ -2485,19 +2285,14 @@ export const AdminStudentService = {
                     studentName: student.name,
                     bedId: bed.id,
                     bedNumber: bed.number,
-                    paymentMode: studentMode,
-                    effectiveTotal,
                 });
             }
-        }, { timeout: 60000 }); // 60s ceiling — typical 50-student batch finishes well under this
+        }, { timeout: 60000 });
 
         // Generate hostel allotment orders for each allocated student (best-effort, post-transaction).
-        // Fired in parallel; failures are logged inside the helper and don't block the response.
         for (const a of allocated) {
             generateAndSaveHostelAllotmentOrder(a.studentId).catch(() => { /* logged inside */ });
         }
-
-        const skippedComponents = Array.from(skippedComponentSet);
 
         return {
             success: true,
@@ -2509,14 +2304,7 @@ export const AdminStudentService = {
             requested: studentIds.length,
             allocated: allocated.length,
             remainingVacantInRoom: vacantBeds.length - allocated.length,
-            pricing: {
-                yearwise: { ...yearwise, registrationFee, effectiveTotal: yearwise.accommodation + yearwise.mess + yearwise.laundry + registrationFee },
-                semwise: { ...semwise, registrationFee, effectiveTotal: semwise.accommodation + semwise.mess + semwise.laundry + registrationFee },
-            },
             allocations: allocated,
-            skippedComponents: skippedComponents.length > 0
-                ? `Missing FeeHead for: ${skippedComponents.join(', ')} — those components were not billed`
-                : null
         };
     },
 
@@ -2806,7 +2594,7 @@ export const AdminStudentService = {
         studentId: string,
         hostelId: string,
         hostelPaymentMode: 'YEARWISE' | 'SEMWISE',
-        hostelType: HostelType | undefined,
+        hostelType: HostelType,
         adminId?: string
     ) {
         const ctx = await getStudentContext(studentId);
@@ -2824,9 +2612,10 @@ export const AdminStudentService = {
             );
         }
 
-        // Already in HOSTEL — only allow if no bed is allocated yet
-        if (admission.accommodationType === AccommodationType.HOSTEL) {
-            assertNoBedAllocated(ctx.accommodationPricing, 'Use the re-assignment flow to change hostel.');
+        // Block re-assignment after a bed is bound. Use reassign-hostel instead.
+        const existingAllocation = await prisma.hostelAllocation.findUnique({ where: { studentId } });
+        if (existingAllocation && existingAllocation.status === 'ACTIVE') {
+            throw new AppError('Bed already allocated. Use the reassign-hostel flow to change hostel/sharing/mode.', 409);
         }
 
         const hostel = await prisma.hostel.findUnique({ where: { id: hostelId } });
@@ -2838,35 +2627,169 @@ export const AdminStudentService = {
             await assertHostelHasCapacity(hostelId);
         }
 
-        const updated = await prisma.studentAdmission.update({
-            where: { studentId },
-            data: {
-                accommodationType: AccommodationType.HOSTEL,
-                hostelId,
-                hostelPaymentMode: hostelPaymentMode as HostelPaymentMode,
-                ...(hostelType ? { hostelType } : {}),
-            }
-        });
+        // Derive sharing tier from hostelType. Hardcoded roomType=AC (campus has AC only today).
+        const sharing = parseInt(hostelType.split('_')[1], 10);
+        const roomType = 'AC';
 
-        await prisma.auditLog.create({
-            data: {
-                userId: adminId,
-                action: 'HOSTEL_ASSIGNED',
-                entity: 'StudentAdmission',
-                entityId: studentId,
-                details: {
-                    previousHostelId: admission.hostelId,
-                    previousAccommodationType: admission.accommodationType,
-                    previousHostelType: admission.hostelType,
-                    newHostelId: hostelId,
-                    newPaymentMode: hostelPaymentMode,
-                    newHostelType: hostelType ?? null,
-                    hostelName: hostel.name,
+        // Look up active price tier for (sharing, roomType=AC)
+        const priceCategory = await prisma.hostelPriceCategory.findFirst({
+            where: { sharing, roomType: roomType as any, isActive: true }
+        });
+        if (!priceCategory) {
+            throw new AppError(
+                `No active price tier found for sharing=${sharing}, roomType=${roomType}. Create one in HostelPriceCategory first.`,
+                400
+            );
+        }
+
+        const isSemwise = hostelPaymentMode === 'SEMWISE';
+        const accommodationPrice = (isSemwise ? priceCategory.accommodationSemwise : priceCategory.accommodationYearwise) ?? 0;
+        const messPrice          = (isSemwise ? priceCategory.messSemwise : priceCategory.messYearwise) ?? 0;
+        const laundryPrice       = (isSemwise ? priceCategory.laundrySemwise : priceCategory.laundryYearwise) ?? 0;
+        const registrationFee    = priceCategory.registrationFee ?? 0;
+        const effectiveTotal     = accommodationPrice + messPrice + laundryPrice + registrationFee;
+
+        const academicYearId = admission.academicYearId ?? undefined;
+
+        // Resolve hostel fee heads
+        const feeHeadMap = await resolveFeeHeadsByComponent([
+            PaymentComponent.HOSTEL_ACCOMMODATION,
+            PaymentComponent.HOSTEL_MESS,
+            PaymentComponent.HOSTEL_LAUNDRY,
+            PaymentComponent.HOSTEL_REGISTRATION,
+        ]);
+        const accHead     = feeHeadMap.get(PaymentComponent.HOSTEL_ACCOMMODATION);
+        const messHead    = feeHeadMap.get(PaymentComponent.HOSTEL_MESS);
+        const laundryHead = feeHeadMap.get(PaymentComponent.HOSTEL_LAUNDRY);
+        const regHead     = feeHeadMap.get(PaymentComponent.HOSTEL_REGISTRATION);
+
+        // Diff against an existing snapshot (re-assign before bed allocation must adjust totalFee delta).
+        const previousEffectiveTotal = ctx.accommodationPricing?.effectiveTotal ?? 0;
+        const totalFeeDelta = effectiveTotal - previousEffectiveTotal;
+
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Update admission (mode + tier + totals)
+            await tx.studentAdmission.update({
+                where: { studentId },
+                data: {
+                    accommodationType: AccommodationType.HOSTEL,
+                    hostelId,
+                    hostelType,
+                    hostelPaymentMode: hostelPaymentMode as HostelPaymentMode,
+                    totalFee: { increment: totalFeeDelta }
                 }
+            });
+
+            // 2. Soft-delete previous PENDING hostel demands so we don't double-bill.
+            //    Paid/partially-paid history is preserved (only PENDING flips to deleted).
+            const hostelHeadIds = [accHead?.id, messHead?.id, laundryHead?.id, regHead?.id].filter(Boolean) as string[];
+            if (hostelHeadIds.length > 0) {
+                await tx.studentFeeDemand.updateMany({
+                    where: {
+                        studentId,
+                        feeHeadId: { in: hostelHeadIds },
+                        status: FeeStatus.PENDING,
+                        isDeleted: false
+                    },
+                    data: { isDeleted: true, updatedBy: adminId }
+                });
             }
+
+            // 3. Replace pricing snapshot
+            await (tx.studentAccommodationPricing as any).upsert({
+                where: { studentId },
+                create: {
+                    studentId,
+                    academicYearId,
+                    sharing,
+                    roomType,
+                    paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
+                    hostelId,
+                    accommodationPrice,
+                    messPrice,
+                    laundryPrice,
+                    registrationFee,
+                    effectiveTotal,
+                    pricingSource: 'CONFIG',
+                    createdBy: adminId
+                },
+                update: {
+                    academicYearId,
+                    sharing,
+                    roomType,
+                    paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
+                    hostelId,
+                    accommodationPrice,
+                    messPrice,
+                    laundryPrice,
+                    registrationFee,
+                    effectiveTotal,
+                    pricingSource: 'CONFIG',
+                    updatedBy: adminId
+                }
+            });
+
+            // 4. Create fresh demands
+            const dueDate = new Date();
+            dueDate.setDate(dueDate.getDate() + 30);
+            const demands: { feeHeadId: string; amount: number; label: string }[] = [];
+            if (accHead && accommodationPrice > 0) demands.push({ feeHeadId: accHead.id, amount: accommodationPrice, label: 'accommodation' });
+            if (messHead && messPrice > 0)         demands.push({ feeHeadId: messHead.id, amount: messPrice, label: 'mess' });
+            if (laundryHead && laundryPrice > 0)   demands.push({ feeHeadId: laundryHead.id, amount: laundryPrice, label: 'laundry' });
+            if (regHead && registrationFee > 0)    demands.push({ feeHeadId: regHead.id, amount: registrationFee, label: 'registration' });
+
+            for (const d of demands) {
+                await tx.studentFeeDemand.create({
+                    data: {
+                        studentId,
+                        feeHeadId: d.feeHeadId,
+                        amount: d.amount,
+                        netAmount: d.amount,
+                        academicYearId,
+                        yearOfStudy: ctx.yearOfStudy,
+                        dueDate,
+                        status: FeeStatus.PENDING,
+                        remarks: `Hostel ${d.label} (${hostelType}, ${roomType}, ${isSemwise ? 'SEMWISE' : 'YEARWISE'})`,
+                        createdBy: adminId
+                    }
+                });
+            }
+
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'HOSTEL_ASSIGNED',
+                    entity: 'StudentAdmission',
+                    entityId: studentId,
+                    details: {
+                        previousHostelId: admission.hostelId,
+                        previousAccommodationType: admission.accommodationType,
+                        previousHostelType: admission.hostelType,
+                        previousEffectiveTotal,
+                        newHostelId: hostelId,
+                        newHostelType: hostelType,
+                        newPaymentMode: hostelPaymentMode,
+                        newEffectiveTotal: effectiveTotal,
+                        totalFeeDelta,
+                        hostelName: hostel.name,
+                        sharing,
+                        roomType,
+                        feeDemandsCreated: demands.length,
+                    }
+                }
+            });
+
+            return {
+                hostelId,
+                hostelType,
+                paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
+                pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal },
+                feeDemandsCreated: demands.length,
+                totalFeeDelta,
+            };
         });
 
-        return updated;
+        return result;
     },
 
     async updateAdmissionDetails(data: any, adminId: string | undefined) {

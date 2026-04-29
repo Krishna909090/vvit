@@ -29,11 +29,8 @@ export const assignHostelSchema = z.object({
             .transform(v => v.toUpperCase())
             .pipe(z.enum(['YEARWISE', 'SEMWISE'])),
         hostelType: z.string()
-            .optional()
-            .transform(v => v ? v.toUpperCase() : undefined)
-            .refine(v => v === undefined || ['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10'].includes(v), {
-                message: "hostelType must be SHARING_2, SHARING_4, SHARING_6, SHARING_8, or SHARING_10"
-            }),
+            .transform(v => v.toUpperCase())
+            .pipe(z.enum(['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10'])),
     }),
 });
 
