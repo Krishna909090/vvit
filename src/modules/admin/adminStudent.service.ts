@@ -1803,7 +1803,34 @@ export const AdminStudentService = {
                     gender: true,
                     admissionDetails: {
                         select: {
+                            hostelType: true,
+                            hostelPaymentMode: true,
                             allottedCourse: { select: { id: true, name: true } },
+                        },
+                    },
+                    hostelAllocation: {
+                        select: {
+                            id: true,
+                            startDate: true,
+                            bedId: true,
+                            bed: {
+                                select: {
+                                    id: true,
+                                    number: true,
+                                    room: {
+                                        select: {
+                                            id: true,
+                                            number: true,
+                                            floor: true,
+                                            capacity: true,
+                                            type: true,
+                                            hostel: {
+                                                select: { id: true, name: true, type: true },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
                         },
                     },
                 },
@@ -1811,15 +1838,33 @@ export const AdminStudentService = {
             prisma.student.count({ where }),
         ]);
 
-        const shaped = students.map(s => ({
-            id: s.id,
-            applicationId: s.applicationId,
-            name: s.name,
-            fatherName: s.fatherName,
-            phone: s.phone,
-            gender: s.gender,
-            courseType: s.admissionDetails?.allottedCourse?.name ?? null,
-        }));
+        const shaped = students.map(s => {
+            const alloc = s.hostelAllocation;
+            const bed = alloc?.bed;
+            const room = bed?.room;
+            const hostel = room?.hostel;
+            return {
+                id: s.id,
+                applicationId: s.applicationId,
+                name: s.name,
+                fatherName: s.fatherName,
+                phone: s.phone,
+                gender: s.gender,
+                courseType: s.admissionDetails?.allottedCourse?.name ?? null,
+                hostelId: hostel?.id ?? null,
+                hostelName: hostel?.name ?? null,
+                hostelType: hostel?.type ?? null,
+                sharingType: s.admissionDetails?.hostelType ?? (room ? `SHARING_${room.capacity}` : null),
+                paymentMode: s.admissionDetails?.hostelPaymentMode ?? null,
+                floor: room?.floor ?? null,
+                roomId: room?.id ?? null,
+                roomNumber: room?.number ?? null,
+                roomType: room?.type ?? null,
+                bedId: bed?.id ?? null,
+                bedNumber: bed?.number ?? null,
+                allocatedAt: alloc?.startDate ?? null,
+            };
+        });
 
         return {
             students: shaped,
