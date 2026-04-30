@@ -1394,7 +1394,12 @@ export const getAllSuccessPayments = async (query: any) => {
                         name: true,
                         phone: true,
                         email: true,
-                        degreeType: true
+                        degreeType: true,
+                        admissionDetails: {
+                            select: {
+                                allottedCourse: { select: { id: true, name: true } }
+                            }
+                        }
                     }
                 },
                 feeHead: { select: { id: true, name: true } }
@@ -1410,12 +1415,17 @@ export const getAllSuccessPayments = async (query: any) => {
         : [];
     const creatorMap = Object.fromEntries(creators.map(c => [c.id, c.name]));
 
-    // Convert invoice URLs to presigned + attach creator name
-    const paymentsWithUrls = await Promise.all(payments.map(async p => ({
-        ...p,
-        invoiceUrl: await convertToPresignedUrl(p.invoiceUrl),
-        createdByName: p.createdBy ? (creatorMap[p.createdBy] || null) : null
-    })));
+    // Convert invoice URLs to presigned + attach creator name + flatten allottedCourse
+    const paymentsWithUrls = await Promise.all(payments.map(async p => {
+        const allottedCourse = (p.student as any)?.admissionDetails?.allottedCourse ?? null;
+        return {
+            ...p,
+            invoiceUrl: await convertToPresignedUrl(p.invoiceUrl),
+            createdByName: p.createdBy ? (creatorMap[p.createdBy] || null) : null,
+            allottedCourseName: allottedCourse?.name ?? null,
+            allottedCourseId: allottedCourse?.id ?? null,
+        };
+    }));
 
     return {
         data: paymentsWithUrls,
