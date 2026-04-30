@@ -4375,6 +4375,27 @@ export const AdminStudentService = {
             }
         }
 
+        // Apply HOSTEL allocation up-front: flip accommodationType + create
+        // StudentAccommodationPricing snapshot + 4 hostel StudentFeeDemand rows
+        // + increment totalFee. This way, hostel components passed in
+        // payment.component reconcile against demands that already exist.
+        // Idempotent: assignHostel handles re-assignment before bed allocation.
+        if (
+            allocation.type === AccommodationType.HOSTEL &&
+            allocation.hostelId &&
+            allocation.hostelType &&
+            allocation.hostelPaymentMode
+        ) {
+            await AdminStudentService.assignHostel(
+                studentId,
+                allocation.hostelId,
+                allocation.hostelPaymentMode as 'YEARWISE' | 'SEMWISE',
+                allocation.hostelType as HostelType,
+                adminId
+            );
+            logger.info(`[finalizeAdmission] Hostel snapshot+demands created via assignHostel for student=${studentId} hostelId=${allocation.hostelId} type=${allocation.hostelType} mode=${allocation.hostelPaymentMode}`);
+        }
+
         // Validate Fee Structure ID if provided and resolve Demand
         // validFeeStructure is either the fetched record or {id:'skip'} (when feeStructureId was not provided).
         // When feeStructureId IS provided, Promise.all ran prisma.feeStructure.findUnique which returns Object | null.
@@ -5409,7 +5430,7 @@ export const AdminStudentService = {
                         select: {
                             netAmount: true,
                             amount: true,
-                            feeHead: { select: { name: true } }
+                            feeHead: { select: { name: true, component: true } }
                         }
                     },
                     ledgerEntries: {
@@ -5421,24 +5442,18 @@ export const AdminStudentService = {
             prisma.student.count({ where })
         ]);
 
-        // Preload hostel price categories for cost lookup
-        const allHostelPrices = await prisma.hostelPriceCategory.findMany();
-        const getHostelTotalByType = (hostelType: string | null | undefined): number => {
-            if (!hostelType) return 0;
-            const match = hostelType.match(/SHARING_(\d+)/);
-            if (!match) return 0;
-            const sharing = parseInt(match[1]);
-            const pc = allHostelPrices.find(p => p.sharing === sharing);
-            return pc ? ((pc.accommodationYearwise ?? 0) + (pc.messYearwise ?? 0) + (pc.laundryYearwise ?? 0) + (pc.registrationFee ?? 0)) : 0;
-        };
-
         const applications = students.map((student: any) => {
-            const demands = student.feeDemands as { netAmount: number | null; amount: number; feeHead: { name: string } | null }[];
+            const demands = student.feeDemands as { netAmount: number | null; amount: number; feeHead: { name: string; component: PaymentComponent | null } | null }[];
             const credits = student.ledgerEntries as { amount: number; description: string | null }[];
 
             const getTotalByHead = (keyword: string) =>
                 demands
                     .filter((d) => d.feeHead?.name?.toUpperCase().includes(keyword.toUpperCase()))
+                    .reduce((sum, d) => sum + (d.netAmount ?? d.amount ?? 0), 0);
+
+            const getTotalByComponent = (components: PaymentComponent[]) =>
+                demands
+                    .filter((d) => d.feeHead?.component && components.includes(d.feeHead.component))
                     .reduce((sum, d) => sum + (d.netAmount ?? d.amount ?? 0), 0);
 
             // Extract fee type keyword from description:
@@ -5459,15 +5474,26 @@ export const AdminStudentService = {
                     .filter((c) => getFeeKeyword(c.description) === keyword.toUpperCase())
                     .reduce((sum, c) => sum + (c.amount ?? 0), 0);
 
-            // Description-based: HOSTEL_ACCOMODATION, HOSTEL_MESS, TRANSPORT
+            // Description-based hostel paid (covers HOSTEL_ACCOMMODATION, HOSTEL_MESS, HOSTEL_LAUNDRY, HOSTEL_REGISTRATION).
+            // Tolerate the legacy "ACCOMODATION" misspelling in older ledger entries.
+            const HOSTEL_KEYWORDS = new Set([
+                'HOSTEL_ACCOMMODATION', 'HOSTEL_ACCOMODATION',
+                'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION'
+            ]);
             const hostelPaid = credits
-                .filter((c) => {
-                    const kw = getFeeKeyword(c.description);
-                    return kw === 'HOSTEL_ACCOMODATION' || kw === 'HOSTEL_MESS';
-                })
+                .filter((c) => HOSTEL_KEYWORDS.has(getFeeKeyword(c.description)))
                 .reduce((sum, c) => sum + (c.amount ?? 0), 0);
 
-            const hostelTotal = getHostelTotalByType(student.admissionDetails?.hostelType);
+            // Per-student hostel total = sum of frozen StudentFeeDemand rows tagged with hostel components.
+            // Drives off the snapshot created at assign-hostel time (handles SEMWISE/YEARWISE correctly).
+            const hostelComponents: PaymentComponent[] = [
+                PaymentComponent.HOSTEL_ACCOMMODATION,
+                PaymentComponent.HOSTEL_MESS,
+                PaymentComponent.HOSTEL_LAUNDRY,
+                PaymentComponent.HOSTEL_REGISTRATION,
+            ];
+            const hostelTotal = getTotalByComponent(hostelComponents);
+            const hostelOpted = student.admissionDetails?.accommodationType === AccommodationType.HOSTEL;
 
             const transportPaid = credits
                 .filter((c) => getFeeKeyword(c.description) === 'TRANSPORT')
@@ -5498,12 +5524,19 @@ export const AdminStudentService = {
                     total: getTotalByHead('ADMISSION')
                 },
                 bookBankFee: {
-                    paid: getPaidByDesc('BOOK_BANK'),       // ledger description suffix: "BOOK_BANK"
-                    total: getTotalByHead('BOOK BANK')      // feeHead.name: "Book Bank"
+                    paid: getPaidByDesc('BOOK_BANK'),
+                    total: getTotalByHead('BOOK BANK')
                 },
                 hostelFee: {
+                    opted: hostelOpted,
                     paid: hostelPaid,
-                    total: hostelTotal
+                    total: hostelTotal,
+                    breakdown: {
+                        accommodation: getTotalByComponent([PaymentComponent.HOSTEL_ACCOMMODATION]),
+                        mess:          getTotalByComponent([PaymentComponent.HOSTEL_MESS]),
+                        laundry:       getTotalByComponent([PaymentComponent.HOSTEL_LAUNDRY]),
+                        registration:  getTotalByComponent([PaymentComponent.HOSTEL_REGISTRATION]),
+                    }
                 },
                 transport: {
                     opted: student.admissionDetails?.accommodationType === AccommodationType.TRANSPORT,
