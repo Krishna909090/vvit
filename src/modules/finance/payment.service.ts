@@ -363,12 +363,16 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
  *   Do NOT rely on `mode` to control offline/online behavior in this function.
  *   Use `paymentMethod` instead.
  *
- * Restricted components (must be paid separately via /pay-component):
- *   HOSTEL, HOSTEL_ACCOMMODATION, HOSTEL_MESS, HOSTEL_LAUNDRY, HOSTEL_REGISTRATION, TRANSPORT
+ * Bundle rule: all components must route to the SAME PhonePe merchant.
+ *   - Each hostel component routes per the student's hostel bank config:
+ *       accommodationBank=TRUST → HOSTEL merchant; messBank=LLP → MESS merchant; etc.
+ *   - Non-hostel/transport (TUITION, ADMISSION, BOOK_BANK, etc.) → ADMISSION merchant.
+ *   - TRANSPORT → HOSTEL merchant.
+ *   - If the bundle spans merchants, the request is rejected — split into per-merchant calls.
  *
  * Online flow:
  *   - All components share a single PhonePe transaction (total amount charged at once).
- *   - Always uses the ADMISSION PhonePe merchant account regardless of component type.
+ *   - Routes to the merchant the bundle resolves to (validated above).
  *   - Individual payment records are created as PENDING; finalized via webhook callback.
  *
  * Offline flow:
@@ -395,20 +399,26 @@ export const initiateMultiComponentPayment = async (
         components.push({ ...c, ...r });
     }
 
-    // 1. Validate: No Hostel/Mess/Laundry/Registration/Transport allowed in multi-component
-    // (each routes through its own bank merchant, so they must be paid separately)
-    const restrictedComponents: PaymentComponent[] = [
-        PaymentComponent.HOSTEL,
-        PaymentComponent.HOSTEL_ACCOMMODATION,
-        PaymentComponent.HOSTEL_MESS,
-        PaymentComponent.HOSTEL_LAUNDRY,
-        PaymentComponent.HOSTEL_REGISTRATION,
-        PaymentComponent.TRANSPORT
-    ];
-
-    const hasRestricted = components.some(c => restrictedComponents.includes(c.component));
-    if (hasRestricted) {
-        throw new AppError("Hostel, Mess, Laundry, Registration, and Transport fees cannot be bundled in multi-component payment. Please pay them separately.", 400);
+    // 1. Validate: bundle must route to a single PhonePe merchant.
+    // Hostel sub-components can route to ADMISSION / HOSTEL (TRUST) / MESS (LLP)
+    // depending on the student's hostel banking config. Components going to the
+    // same merchant CAN be bundled; mixing merchants is a hard error because
+    // PhonePe initiates one transaction at one merchant.
+    const merchants = new Set<string>();
+    const merchantPerComponent: Record<string, string> = {};
+    for (const c of components) {
+        const m = await resolvePhonePeClientType(studentId, c.component);
+        merchants.add(m);
+        merchantPerComponent[c.component] = m;
+    }
+    if (merchants.size > 1) {
+        const breakdown = Object.entries(merchantPerComponent)
+            .map(([comp, m]) => `${comp}→${m}`)
+            .join(', ');
+        throw new AppError(
+            `Components in this bundle route to different bank merchants (${breakdown}). Pay each merchant group separately.`,
+            400
+        );
     }
 
     // 2. Validate Fee Heads - Mandate Fee Head ID (Exempting specific types)
@@ -525,8 +535,10 @@ export const initiateMultiComponentPayment = async (
         };
     } else {
         const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}/admin/fees/offlinepayments?appId=${student.applicationId}&paymentId=${paymentIds.join(',')}`;
+        // Route to the merchant that matches the bundle. Validated above to be a single merchant.
+        const targetMerchant = (Array.from(merchants)[0] ?? 'ADMISSION') as 'ADMISSION' | 'HOSTEL' | 'MESS';
         try {
-            const result = await initiatePhonePePayment(studentId, totalAmount, transactionId, redirectUrl, 'ADMISSION');
+            const result = await initiatePhonePePayment(studentId, totalAmount, transactionId, redirectUrl, targetMerchant);
             return { redirectUrl: result.redirectUrl, paymentIds, expiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString() };
         } catch (err) {
             await prisma.payment.updateMany({
