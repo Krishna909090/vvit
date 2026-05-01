@@ -36,13 +36,19 @@ import {
     allotFromWaitingList,
     removeFromWaitingList,
     assignHostel,
+    assignTransport,
     allocateBed,
+    cancelHostel,
+    cancelTransport,
     getAvailableBeds,
     getBedAllocatedStudents,
     getPendingHostelAllocations,
-    getPendingTransportAllocations,
     getStudentsByHostel,
+    getTransportAllocatedStudents,
     reassignHostel,
+    reassignTransport,
+    switchHostelToTransport,
+    switchTransportToHostel,
     bulkAllocateRoomBeds
 } from './studentManagement.controller';
 import {
@@ -60,7 +66,7 @@ import {
     editProSchema,
     updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
-import { assignHostelSchema, allocateBedSchema, availableBedsQuerySchema, bedAllocatedStudentsQuerySchema, pendingHostelAllocationsQuerySchema, pendingTransportAllocationsQuerySchema, studentsByHostelSchema, reassignHostelSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
+import { assignHostelSchema, assignTransportSchema, allocateBedSchema, availableBedsQuerySchema, bedAllocatedStudentsQuerySchema, cancelHostelSchema, cancelTransportSchema, pendingHostelAllocationsQuerySchema, studentsByHostelSchema, switchHostelToTransportSchema, switchTransportToHostelSchema, transportAllocatedStudentsQuerySchema, reassignHostelSchema, reassignTransportSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
 
 import upload from '../../config/multer';
 import {
@@ -230,6 +236,67 @@ router.post('/update-admission', authenticate, authorizePermission(['student.upd
 router.post('/:studentId/assign-hostel', authenticate, authorizePermission(['student.update.all']), validateRequest(assignHostelSchema), assignHostel);
 
 /**
+ * POST /admin/student/:studentId/assign-transport
+ * Flips student's accommodationType from NONE to TRANSPORT and sets transportRouteId.
+ * Creates a single TRANSPORT StudentFeeDemand using route.cost; increments totalFee.
+ * Idempotent: re-running before any TransportAllocation row exists replaces the demand
+ * (soft-deletes old PENDING demand) and adjusts totalFee by the delta.
+ * Body: { transportRouteId: uuid }
+ * Response: { status, data: { transportRouteId, routeName, cost, feeDemandsCreated, totalFeeDelta } }
+ */
+router.post('/:studentId/assign-transport', authenticate, authorizePermission(['student.update.all']), validateRequest(assignTransportSchema), assignTransport);
+
+/**
+ * POST /admin/student/:studentId/reassign-transport
+ * Re-assigns a TRANSPORT student to a different route.
+ * Soft-deletes the prior PENDING TRANSPORT demand, creates a fresh one with the new
+ * route's cost, and adjusts totalFee by the delta.
+ * Body: { transportRouteId: uuid, reason: string }
+ * Response: { status, data: { transportRouteId, routeName, cost, feeDemandsCreated, totalFeeDelta } }
+ */
+router.post('/:studentId/reassign-transport', authenticate, authorizePermission(['student.update.all']), validateRequest(reassignTransportSchema), reassignTransport);
+
+/**
+ * POST /admin/student/:studentId/cancel-hostel
+ * Cancels a HOSTEL student: flips accommodationType to NONE, vacates bed, soft-deletes
+ * pending hostel demands, drops pricing snapshot, and creates a FeeCorrection refund
+ * (type=ACCOMMODATION_CHANGE_REFUND, amount = max(0, paid − cancellationFee)).
+ * Body: { cancellationFee?: number (default 0), reason: string }
+ * Response: { status, data: { paid, cancellationFee, refundAmount, pendingDemandRemoved, bedVacated, feeCorrectionId } }
+ */
+router.post('/:studentId/cancel-hostel', authenticate, authorizePermission(['student.update.all']), validateRequest(cancelHostelSchema), cancelHostel);
+
+/**
+ * POST /admin/student/:studentId/cancel-transport
+ * Cancels a TRANSPORT student: flips accommodationType to NONE, soft-deletes pending
+ * transport demand, and creates a FeeCorrection refund (type=ACCOMMODATION_CHANGE_REFUND,
+ * amount = max(0, paid − cancellationFee)).
+ * Body: { cancellationFee?: number (default 0), reason: string }
+ * Response: { status, data: { paid, cancellationFee, refundAmount, pendingDemandRemoved, feeCorrectionId } }
+ */
+router.post('/:studentId/cancel-transport', authenticate, authorizePermission(['student.update.all']), validateRequest(cancelTransportSchema), cancelTransport);
+
+/**
+ * POST /admin/student/:studentId/switch-hostel-to-transport
+ * Cancels HOSTEL and assigns a TRANSPORT route in one call. Refund pool from prorated
+ * cancellation is applied as a discount on the new transport demand; any leftover
+ * goes to FeeCorrection (refund).
+ * Body: { chargeRetained?: number (default 0), reason: string, transportRouteId: uuid }
+ * Response: { status, data: { cancellation, newAssignment, refund } }
+ */
+router.post('/:studentId/switch-hostel-to-transport', authenticate, authorizePermission(['student.update.all']), validateRequest(switchHostelToTransportSchema), switchHostelToTransport);
+
+/**
+ * POST /admin/student/:studentId/switch-transport-to-hostel
+ * Cancels TRANSPORT and assigns a HOSTEL in one call. Refund pool from prorated
+ * cancellation is split proportionally across the 4 new hostel demands as discounts;
+ * any leftover goes to FeeCorrection (refund).
+ * Body: { chargeRetained?: number (default 0), reason: string, hostelId: uuid, hostelType: SHARING_*, hostelPaymentMode: YEARWISE|SEMWISE }
+ * Response: { status, data: { cancellation, newAssignment, refund } }
+ */
+router.post('/:studentId/switch-transport-to-hostel', authenticate, authorizePermission(['student.update.all']), validateRequest(switchTransportToHostelSchema), switchTransportToHostel);
+
+/**
  * POST /admin/student/:studentId/allocate-bed
  * Allocates a specific bed to a student already assigned to a hostel.
  * Snapshots pricing, creates HostelAllocation row, fee demands, and updates totalFee.
@@ -293,12 +360,15 @@ router.get('/by-hostel/:hostelId', authenticate, authorizePermission(['student.r
 router.get('/bed-allocated', authenticate, authorizePermission(['student.read.all']), validateRequest(bedAllocatedStudentsQuerySchema), getBedAllocatedStudents);
 
 /**
- * GET /admin/student/transport-pending-allocation
- * Lists students who have a transportRouteId set (opted for transport) but no active TransportAllocation.
- * Query: { page?, limit?, search?, routeId?, gender? }
- * Response: { status, data: { students[], pagination: { total, page, limit, totalPages } } }
+ * GET /admin/student/transport-allocated
+ * Lists every student whose admissionDetails.transportRouteId is set, with
+ * route fee + paid breakdown. Pulled fields: applicationId, name, fatherName,
+ * phone, gender, courseName, degreeType, routeName, transportRouteFee,
+ * transportFeePaid, balance.
+ * Query: { page?, limit?, search? (name/phone/applicationId), gender?, routeId?, all? (true|1) }
+ * Response: { status, data: { students[], pagination } }
  */
-router.get('/transport-pending-allocation', authenticate, authorizePermission(['student.read.all']), validateRequest(pendingTransportAllocationsQuerySchema), getPendingTransportAllocations);
+router.get('/transport-allocated', authenticate, authorizePermission(['student.read.all']), validateRequest(transportAllocatedStudentsQuerySchema), getTransportAllocatedStudents);
 
 /**
  * POST /admin/student/finalize-admission

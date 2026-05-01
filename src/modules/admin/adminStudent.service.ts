@@ -1880,6 +1880,129 @@ export const AdminStudentService = {
     },
 
     /**
+     * List every student with a transportRouteId set, with route fee + paid breakdown.
+     * Used for the "all transport-allocated students" report.
+     */
+    async getTransportAllocatedStudents(query: any) {
+        const { page = 1, limit = 10, search, gender, routeId, all } = query;
+
+        const pageNum = Number(page) || 1;
+        const limitNum = Number(limit) || 10;
+        const skip = (pageNum - 1) * limitNum;
+        const fetchAll = !!all;
+
+        const where: Prisma.StudentWhereInput = {
+            AND: [
+                {
+                    admissionDetails: routeId
+                        ? { transportRouteId: routeId }
+                        : { transportRouteId: { not: null } },
+                },
+                ...(gender ? [{ gender: { equals: gender, mode: 'insensitive' as const } }] : []),
+                ...(search
+                    ? [
+                          {
+                              OR: [
+                                  { name: { contains: search, mode: 'insensitive' as const } },
+                                  { phone: { contains: search } },
+                                  { applicationId: { contains: search, mode: 'insensitive' as const } },
+                                  { admissionDetails: { transportRoute: { name: { contains: search, mode: 'insensitive' as const } } } },
+                                  { admissionDetails: { transportRoute: { city: { contains: search, mode: 'insensitive' as const } } } },
+                              ],
+                          },
+                      ]
+                    : []),
+            ],
+        };
+
+        const [students, total] = await prisma.$transaction([
+            prisma.student.findMany({
+                where,
+                ...(fetchAll ? {} : { skip, take: limitNum }),
+                orderBy: [{ name: 'asc' }],
+                select: {
+                    id: true,
+                    applicationId: true,
+                    name: true,
+                    fatherName: true,
+                    phone: true,
+                    gender: true,
+                    degreeType: true,
+                    admissionDetails: {
+                        select: {
+                            transportRouteId: true,
+                            allottedCourse: { select: { id: true, name: true } },
+                            transportRoute: {
+                                select: { id: true, name: true, cost: true, busNumber: true, city: true },
+                            },
+                        },
+                    },
+                    feeDemands: {
+                        where: {
+                            isDeleted: false,
+                            feeHead: { component: PaymentComponent.TRANSPORT },
+                        },
+                        select: { netAmount: true, amount: true, status: true },
+                    },
+                    payments: {
+                        where: {
+                            component: PaymentComponent.TRANSPORT,
+                            status: PaymentStatus.SUCCESS,
+                            isDeleted: false,
+                        },
+                        select: { amount: true },
+                    },
+                },
+            }),
+            prisma.student.count({ where }),
+        ]);
+
+        const shaped = students.map((s: any) => {
+            const route = s.admissionDetails?.transportRoute;
+            const demandTotal = (s.feeDemands as any[]).reduce(
+                (sum, d) => sum + (d.netAmount ?? d.amount ?? 0),
+                0
+            );
+            const paidTotal = (s.payments as any[]).reduce(
+                (sum, p) => sum + (p.amount ?? 0),
+                0
+            );
+            // Route fee: prefer the frozen demand amount; fall back to route.cost
+            // (covers students who have transportRouteId set but no demand yet).
+            const transportRouteFee = demandTotal > 0 ? demandTotal : (route?.cost ?? 0);
+            return {
+                id: s.id,
+                applicationId: s.applicationId,
+                name: s.name,
+                fatherName: s.fatherName,
+                phone: s.phone,
+                gender: s.gender,
+                degreeType: s.degreeType,
+                courseName: s.admissionDetails?.allottedCourse?.name ?? null,
+                routeId: route?.id ?? null,
+                routeName: route?.name ?? null,
+                busNumber: route?.busNumber ?? null,
+                city: route?.city ?? null,
+                transportRouteFee,
+                transportFeePaid: paidTotal,
+                balance: Math.max(0, transportRouteFee - paidTotal),
+            };
+        });
+
+        return {
+            students: shaped,
+            pagination: fetchAll
+                ? { total, page: 1, limit: total, totalPages: 1 }
+                : {
+                      total,
+                      page: pageNum,
+                      limit: limitNum,
+                      totalPages: Math.ceil(total / limitNum),
+                  },
+        };
+    },
+
+    /**
      * List all students assigned to a hostel (allocated or not).
      * Used by the hostel-detail roster view.
      */
@@ -2009,110 +2132,6 @@ export const AdminStudentService = {
 
         return {
             hostel: { id: hostel.id, name: hostel.name, type: hostel.type },
-            students: enhanced,
-            pagination: {
-                total,
-                page: pageNum,
-                limit: limitNum,
-                totalPages: Math.ceil(total / limitNum),
-            },
-        };
-    },
-
-    /**
-     * List students who have a transportRouteId set (i.e. opted for transport)
-     * but no active TransportAllocation. Mirrors getPendingHostelAllocations.
-     */
-    async getPendingTransportAllocations(query: any) {
-        const {
-            page = 1,
-            limit = 10,
-            search,
-            routeId,
-            gender,
-        } = query;
-
-        const pageNum = Number(page) || 1;
-        const limitNum = Number(limit) || 10;
-        const skip = (pageNum - 1) * limitNum;
-
-        const where: Prisma.StudentWhereInput = {
-            admissionDetails: {
-                // "Wants transport" = has a route assigned. Mirror of the hostel
-                // worklist: hostelId IS NOT NULL signals intent regardless of
-                // accommodationType (some legacy admissions have routeId set
-                // but accommodationType=NONE).
-                ...(routeId ? { transportRouteId: routeId } : { transportRouteId: { not: null } }),
-            },
-            ...(gender ? { gender } : {}),
-            OR: [
-                { transportAllocation: null },
-                { transportAllocation: { status: { not: 'ACTIVE' } } },
-            ],
-            ...(search
-                ? {
-                      AND: [
-                          {
-                              OR: [
-                                  { name: { contains: search, mode: 'insensitive' } },
-                                  { phone: { contains: search } },
-                                  { applicationId: { contains: search, mode: 'insensitive' } },
-                              ],
-                          },
-                      ],
-                  }
-                : {}),
-        };
-
-        const [students, total] = await prisma.$transaction([
-            prisma.student.findMany({
-                where,
-                skip,
-                take: limitNum,
-                orderBy: [{ createdAt: 'desc' }],
-                select: {
-                    id: true,
-                    applicationId: true,
-                    name: true,
-                    gender: true,
-                    phone: true,
-                    email: true,
-                    profilePhotoUrl: true,
-                    createdAt: true,
-                    admissionDetails: {
-                        select: {
-                            status: true,
-                            transportRouteId: true,
-                            transportRoute: {
-                                select: {
-                                    id: true, name: true, cost: true,
-                                    busNumber: true, city: true,
-                                    capacity: true, filled: true,
-                                },
-                            },
-                            allottedCourse: { select: { id: true, name: true } },
-                        },
-                    },
-                    transportAllocation: {
-                        select: {
-                            id: true, status: true, startDate: true, endDate: true,
-                            stop: { select: { id: true, name: true, sequence: true } },
-                        },
-                    },
-                },
-            }),
-            prisma.student.count({ where }),
-        ]);
-
-        const enhanced = await Promise.all(
-            students.map(async (s) => ({
-                ...s,
-                profilePhotoUrl: await convertToPresignedUrl(s.profilePhotoUrl),
-                allocationStatus: s.transportAllocation?.status ?? 'NOT_ALLOCATED',
-            }))
-        );
-
-        return {
             students: enhanced,
             pagination: {
                 total,
@@ -2503,6 +2522,39 @@ export const AdminStudentService = {
         const totalFeeDelta = newEffectiveTotal - oldEffectiveTotal;
         const academicYearId = oldPricing.academicYearId ?? admission.academicYearId ?? undefined;
 
+        // 5b. Compute "already paid for hostel" credit + refund split.
+        // The old hostel demands stay in history (only PENDING ones get soft-deleted later);
+        // the payments tied to them stay too. To represent the financial reality after
+        // a sharing-tier change, we apply the already-paid amount as a discount across
+        // the NEW demands; any excess (paid > newCost) becomes a refund FeeCorrection.
+        const hostelPaidAgg = await prisma.payment.aggregate({
+            where: {
+                studentId,
+                status: PaymentStatus.SUCCESS,
+                isDeleted: false,
+                component: { in: [
+                    PaymentComponent.HOSTEL,
+                    PaymentComponent.HOSTEL_ACCOMMODATION,
+                    PaymentComponent.HOSTEL_MESS,
+                    PaymentComponent.HOSTEL_LAUNDRY,
+                    PaymentComponent.HOSTEL_REGISTRATION,
+                ]},
+            },
+            _sum: { amount: true },
+        });
+        const hostelPaid = hostelPaidAgg._sum.amount ?? 0;
+        const appliedToNew = Math.min(hostelPaid, newEffectiveTotal);
+        const leftoverRefund = Math.max(0, hostelPaid - newEffectiveTotal);
+
+        // Distribute appliedToNew proportionally across the 4 new demands.
+        // Last (registration) absorbs rounding so discounts sum exactly to appliedToNew.
+        const distribute = (componentPrice: number) =>
+            newEffectiveTotal > 0 ? Math.round((componentPrice / newEffectiveTotal) * appliedToNew) : 0;
+        const accDiscount = distribute(accommodationPrice);
+        const messDiscount = distribute(messPrice);
+        const laundryDiscount = distribute(laundryPrice);
+        const regDiscount = appliedToNew - accDiscount - messDiscount - laundryDiscount;
+
         // 6. Resolve hostel-related FeeHeads via component tag (with name-keyword fallback)
         const feeHeadMap = await resolveFeeHeadsByComponent([
             PaymentComponent.HOSTEL_ACCOMMODATION,
@@ -2592,35 +2644,63 @@ export const AdminStudentService = {
                 supersededDemands = result.count;
             }
 
-            // f. Create new demands for the new pricing
+            // f. Create new demands for the new pricing.
+            // Apply already-paid amount as `discountAmount` per component (proportional).
+            // netAmount = max(0, gross − discount). status = FULL when net=0, else PENDING.
             const dueDate = new Date();
             dueDate.setDate(dueDate.getDate() + 30);
-            const components: { head: typeof accHead; amount: number; label: string }[] = [
-                { head: accHead, amount: accommodationPrice, label: 'accommodation' },
-                { head: messHead, amount: messPrice, label: 'mess' },
-                { head: laundryHead, amount: laundryPrice, label: 'laundry' },
-                { head: regHead, amount: registrationFee, label: 'registration' }
+            const components: { head: typeof accHead; amount: number; discount: number; label: string }[] = [
+                { head: accHead,     amount: accommodationPrice, discount: accDiscount,     label: 'accommodation' },
+                { head: messHead,    amount: messPrice,          discount: messDiscount,    label: 'mess' },
+                { head: laundryHead, amount: laundryPrice,       discount: laundryDiscount, label: 'laundry' },
+                { head: regHead,     amount: registrationFee,    discount: regDiscount,     label: 'registration' }
             ];
             const createdDemands: string[] = [];
             const skippedComponents: string[] = [];
             for (const c of components) {
                 if (!c.head) { if (c.amount > 0) skippedComponents.push(c.label); continue; }
                 if (c.amount <= 0) continue;
+                const net = Math.max(0, c.amount - c.discount);
                 const d = await tx.studentFeeDemand.create({
                     data: {
                         studentId,
                         feeHeadId: c.head.id,
                         amount: c.amount,
-                        netAmount: c.amount,
+                        discountAmount: c.discount,
+                        netAmount: net,
                         academicYearId,
                         yearOfStudy: ctx.yearOfStudy,
                         dueDate,
-                        status: FeeStatus.PENDING,
-                        remarks: `Hostel ${c.label} (re-assigned: ${newHostelType}, ${args.hostelPaymentMode})`,
+                        status: net === 0 ? FeeStatus.FULL : FeeStatus.PENDING,
+                        remarks:
+                            c.discount > 0
+                                ? `Hostel ${c.label} (re-assigned: ${newHostelType}, ${args.hostelPaymentMode}). Previous-payment credit applied: ${c.discount}.`
+                                : `Hostel ${c.label} (re-assigned: ${newHostelType}, ${args.hostelPaymentMode})`,
                         createdBy: adminId
                     }
                 });
                 createdDemands.push(d.id);
+            }
+
+            // f2. If old hostel paid > new cost, the excess is refundable. Park it in FeeCorrection.
+            let feeCorrectionId: string | null = null;
+            if (leftoverRefund > 0) {
+                const fc = await (tx.feeCorrection as any).create({
+                    data: {
+                        studentId,
+                        academicYearId,
+                        amount: leftoverRefund,
+                        reason: `Hostel re-assignment refund (${args.reason})`,
+                        type: 'ACCOMMODATION_CHANGE_REFUND',
+                        referenceId: oldPricing.hostelId,
+                        referenceType: 'HOSTEL_REASSIGNMENT',
+                        remarks: `hostelPaid: ${hostelPaid}, oldEffectiveTotal: ${oldEffectiveTotal}, newEffectiveTotal: ${newEffectiveTotal}, appliedToNew: ${appliedToNew}, leftover: ${leftoverRefund}`,
+                        carryForward: true,
+                        isSettled: false,
+                        createdBy: adminId,
+                    },
+                });
+                feeCorrectionId = fc.id;
             }
 
             // g. Audit ledger entry (financial)
@@ -2656,6 +2736,11 @@ export const AdminStudentService = {
                         newPaymentMode: args.hostelPaymentMode,
                         newEffectiveTotal,
                         feeDelta: totalFeeDelta,
+                        hostelPaid,
+                        appliedToNew,
+                        leftoverRefund,
+                        creditDistribution: { accDiscount, messDiscount, laundryDiscount, regDiscount },
+                        feeCorrectionId,
                         reason: args.reason,
                     }
                 }
@@ -2679,6 +2764,14 @@ export const AdminStudentService = {
                     effectiveTotal: newEffectiveTotal,
                 },
                 feeDelta: totalFeeDelta,
+                financialAdjustment: {
+                    hostelPaid,
+                    appliedToNew,
+                    studentOwes: Math.max(0, newEffectiveTotal - appliedToNew),
+                    leftoverRefund,
+                    creditDistribution: { accDiscount, messDiscount, laundryDiscount, regDiscount },
+                    feeCorrectionId,
+                },
                 supersededDemands,
                 newDemandsCreated: createdDemands.length,
                 skippedComponents: skippedComponents.length > 0
@@ -2902,6 +2995,1175 @@ export const AdminStudentService = {
                 pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal },
                 feeDemandsCreated: demands.length,
                 totalFeeDelta,
+            };
+        });
+
+        return result;
+    },
+
+    /**
+     * Set or update a student's transport assignment (pre-stop-allocation).
+     *
+     * Mirrors assignHostel but simpler — transport pricing is a single line
+     * (TransportRoute.cost), no payment mode, no sharing tier.
+     *
+     * Allowed transitions:
+     *   - NONE → TRANSPORT (initial assignment)
+     *   - TRANSPORT → TRANSPORT (change route BEFORE TransportAllocation row exists)
+     *
+     * Locked once a TransportAllocation row exists for the student. Use a
+     * separate reassign-transport flow after that.
+     *
+     * Side effects:
+     *   - Sets accommodationType=TRANSPORT, transportRouteId on admission
+     *   - Soft-deletes any prior PENDING TRANSPORT fee demand
+     *   - Creates a fresh StudentFeeDemand tagged TRANSPORT with route.cost
+     *   - Adjusts StudentAdmission.totalFee by the delta
+     */
+    async assignTransport(
+        studentId: string,
+        transportRouteId: string,
+        adminId?: string
+    ) {
+        const ctx = await getStudentContext(studentId);
+        assertActiveAdmission(ctx.admission, 'assign transport');
+        const admission = ctx.admission!;
+
+        // HOSTEL/other → TRANSPORT is a different flow. Block it.
+        if (
+            admission.accommodationType !== AccommodationType.NONE &&
+            admission.accommodationType !== AccommodationType.TRANSPORT
+        ) {
+            throw new AppError(
+                `Student has accommodation type "${admission.accommodationType}". Use the change-accommodation flow to switch to TRANSPORT.`,
+                409
+            );
+        }
+
+        // Block re-assignment after a TransportAllocation has been created.
+        const existingAllocation = await prisma.transportAllocation.findUnique({ where: { studentId } });
+        if (existingAllocation && existingAllocation.status === 'ACTIVE') {
+            throw new AppError('Student already has an active transport allocation. Use the reassign-transport flow.', 409);
+        }
+
+        // Fetch existing transportRouteId directly (not exposed on ctx.admission shape)
+        const admissionRow = await prisma.studentAdmission.findUnique({
+            where: { studentId },
+            select: { transportRouteId: true }
+        });
+        const previousRouteId = admissionRow?.transportRouteId ?? null;
+
+        const route = await prisma.transportRoute.findUnique({ where: { id: transportRouteId } });
+        if (!route) throw new AppError('Transport route not found', 404);
+        if (route.isDeleted) throw new AppError('Cannot assign to a deleted route', 400);
+        if ((route.capacity ?? 0) > 0 && (route.filled ?? 0) >= (route.capacity ?? 0)) {
+            // Allow re-assigning to the SAME route (no capacity bump needed)
+            if (transportRouteId !== previousRouteId) {
+                throw new AppError('Transport route is full', 400);
+            }
+        }
+
+        // Resolve the TRANSPORT fee head (single component)
+        const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
+        const transportHead = feeHeadMap.get(PaymentComponent.TRANSPORT);
+
+        const newCost = route.cost ?? 0;
+        const academicYearId = admission.academicYearId ?? undefined;
+
+        // Diff against existing PENDING TRANSPORT demand (if any) to compute totalFee delta.
+        let previousCost = 0;
+        if (transportHead) {
+            const existingDemands = await prisma.studentFeeDemand.findMany({
+                where: {
+                    studentId,
+                    feeHeadId: transportHead.id,
+                    status: FeeStatus.PENDING,
+                    isDeleted: false,
+                },
+                select: { netAmount: true, amount: true },
+            });
+            previousCost = existingDemands.reduce((s, d) => s + (d.netAmount ?? d.amount ?? 0), 0);
+        }
+        const totalFeeDelta = newCost - previousCost;
+
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Update admission
+            await tx.studentAdmission.update({
+                where: { studentId },
+                data: {
+                    accommodationType: AccommodationType.TRANSPORT,
+                    transportRouteId,
+                    totalFee: { increment: totalFeeDelta }
+                }
+            });
+
+            // 2. Soft-delete previous PENDING transport demand(s)
+            if (transportHead) {
+                await tx.studentFeeDemand.updateMany({
+                    where: {
+                        studentId,
+                        feeHeadId: transportHead.id,
+                        status: FeeStatus.PENDING,
+                        isDeleted: false,
+                    },
+                    data: { isDeleted: true, updatedBy: adminId }
+                });
+            }
+
+            // 3. Create fresh demand
+            let feeDemandsCreated = 0;
+            if (transportHead && newCost > 0) {
+                const dueDate = new Date();
+                dueDate.setDate(dueDate.getDate() + 30);
+                await tx.studentFeeDemand.create({
+                    data: {
+                        studentId,
+                        feeHeadId: transportHead.id,
+                        amount: newCost,
+                        netAmount: newCost,
+                        academicYearId,
+                        yearOfStudy: ctx.yearOfStudy,
+                        dueDate,
+                        status: FeeStatus.PENDING,
+                        remarks: `Transport (${route.name}, ${route.busNumber ?? '—'})`,
+                        createdBy: adminId
+                    }
+                });
+                feeDemandsCreated = 1;
+            }
+
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'TRANSPORT_ASSIGNED',
+                    entity: 'StudentAdmission',
+                    entityId: studentId,
+                    details: {
+                        previousAccommodationType: admission.accommodationType,
+                        previousRouteId,
+                        previousCost,
+                        newRouteId: transportRouteId,
+                        newCost,
+                        totalFeeDelta,
+                        routeName: route.name,
+                        feeDemandsCreated,
+                    }
+                }
+            });
+
+            return {
+                transportRouteId,
+                routeName: route.name,
+                cost: newCost,
+                feeDemandsCreated,
+                totalFeeDelta,
+                missingFeeHead: !transportHead
+                    ? 'No FeeHead tagged with component=TRANSPORT — fee demand was NOT created. Create the fee head and retry.'
+                    : null,
+            };
+        });
+
+        return result;
+    },
+
+    /**
+     * Re-assign a TRANSPORT student to a different route.
+     *
+     * Transport doesn't have a separate "allocate" step — having a route on the
+     * admission IS being on transport. So this is just: change route, replace
+     * demand, adjust totalFee.
+     *
+     * Side effects (atomic):
+     *   - Updates StudentAdmission.transportRouteId
+     *   - Soft-deletes any prior PENDING TRANSPORT fee demand
+     *   - Creates a fresh StudentFeeDemand using the new route's cost
+     *   - Adjusts StudentAdmission.totalFee by the delta (newCost − previousPendingCost)
+     *   - Writes audit log including the reason
+     *
+     * Pre-conditions:
+     *   - Admission active, accommodationType === TRANSPORT
+     *   - New route exists, not deleted, has capacity (skipped when same route)
+     */
+    async reassignTransport(
+        studentId: string,
+        args: { transportRouteId: string; reason: string },
+        adminId?: string
+    ) {
+        const { transportRouteId, reason } = args;
+
+        const ctx = await getStudentContext(studentId);
+        assertActiveAdmission(ctx.admission, 'reassign transport');
+        const admission = ctx.admission!;
+
+        if (admission.accommodationType !== AccommodationType.TRANSPORT) {
+            throw new AppError(
+                `Student is not on TRANSPORT (currently ${admission.accommodationType}). Use assign-transport instead.`,
+                400
+            );
+        }
+
+        const newRoute = await prisma.transportRoute.findUnique({ where: { id: transportRouteId } });
+        if (!newRoute) throw new AppError('New transport route not found', 404);
+        if (newRoute.isDeleted) throw new AppError('Cannot reassign to a deleted route', 400);
+
+        const admissionRow = await prisma.studentAdmission.findUnique({
+            where: { studentId },
+            select: { transportRouteId: true }
+        });
+        const oldRouteId = admissionRow?.transportRouteId ?? null;
+
+        // Capacity check on the NEW route, only when actually changing routes.
+        if (transportRouteId !== oldRouteId) {
+            const studentsOnNewRoute = await prisma.studentAdmission.count({
+                where: { transportRouteId, status: { not: 'CANCELLED' } }
+            });
+            if ((newRoute.capacity ?? 0) > 0 && studentsOnNewRoute >= (newRoute.capacity ?? 0)) {
+                throw new AppError('New transport route is full', 400);
+            }
+        }
+
+        // Resolve TRANSPORT fee head and existing PENDING cost
+        const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
+        const transportHead = feeHeadMap.get(PaymentComponent.TRANSPORT);
+
+        const newCost = newRoute.cost ?? 0;
+        let previousCost = 0;
+        if (transportHead) {
+            const existingDemands = await prisma.studentFeeDemand.findMany({
+                where: {
+                    studentId,
+                    feeHeadId: transportHead.id,
+                    status: FeeStatus.PENDING,
+                    isDeleted: false,
+                },
+                select: { netAmount: true, amount: true },
+            });
+            previousCost = existingDemands.reduce((s, d) => s + (d.netAmount ?? d.amount ?? 0), 0);
+        }
+        const totalFeeDelta = newCost - previousCost;
+
+        const academicYearId = admission.academicYearId ?? undefined;
+
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Update admission
+            await tx.studentAdmission.update({
+                where: { studentId },
+                data: {
+                    transportRouteId,
+                    totalFee: { increment: totalFeeDelta },
+                }
+            });
+
+            // 2. Soft-delete prior PENDING transport demand(s)
+            if (transportHead) {
+                await tx.studentFeeDemand.updateMany({
+                    where: {
+                        studentId,
+                        feeHeadId: transportHead.id,
+                        status: FeeStatus.PENDING,
+                        isDeleted: false,
+                    },
+                    data: { isDeleted: true, updatedBy: adminId }
+                });
+            }
+
+            // 3. Create fresh demand
+            let feeDemandsCreated = 0;
+            if (transportHead && newCost > 0) {
+                const dueDate = new Date();
+                dueDate.setDate(dueDate.getDate() + 30);
+                await tx.studentFeeDemand.create({
+                    data: {
+                        studentId,
+                        feeHeadId: transportHead.id,
+                        amount: newCost,
+                        netAmount: newCost,
+                        academicYearId,
+                        yearOfStudy: ctx.yearOfStudy,
+                        dueDate,
+                        status: FeeStatus.PENDING,
+                        remarks: `Transport (re-assigned: ${newRoute.name}). Reason: ${reason}`,
+                        createdBy: adminId
+                    }
+                });
+                feeDemandsCreated = 1;
+            }
+
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'TRANSPORT_REASSIGNED',
+                    entity: 'StudentAdmission',
+                    entityId: studentId,
+                    details: {
+                        oldRouteId,
+                        newRouteId: transportRouteId,
+                        previousCost,
+                        newCost,
+                        totalFeeDelta,
+                        reason,
+                        routeName: newRoute.name,
+                    }
+                }
+            });
+
+            return {
+                transportRouteId,
+                routeName: newRoute.name,
+                cost: newCost,
+                feeDemandsCreated,
+                totalFeeDelta,
+                missingFeeHead: !transportHead
+                    ? 'No FeeHead tagged with component=TRANSPORT — fee demand was NOT created. Create the fee head and retry.'
+                    : null,
+            };
+        });
+
+        return result;
+    },
+
+    /**
+     * Cancel a student's HOSTEL allocation: flip back to NONE, clear hostel fields,
+     * vacate bed, soft-delete pending demands, drop pricing snapshot, and create a
+     * FeeCorrection (type=ACCOMMODATION_CHANGE_REFUND) for any refundable amount.
+     *
+     * Refund formula: max(0, hostelPaid − cancellationFee).
+     * - cancellationFee is the amount the college keeps as a non-refundable charge.
+     * - If paid < cancellationFee, no refund is created (admin can chase the balance separately).
+     */
+    async cancelHostel(
+        studentId: string,
+        args: { cancellationFee?: number; reason: string },
+        adminId?: string
+    ) {
+        const cancellationFee = Math.max(0, args.cancellationFee ?? 0);
+        const reason = args.reason;
+
+        const ctx = await getStudentContext(studentId);
+        assertActiveAdmission(ctx.admission, 'cancel hostel');
+        const admission = ctx.admission!;
+
+        if (admission.accommodationType !== AccommodationType.HOSTEL) {
+            throw new AppError(
+                `Student is not on HOSTEL (currently ${admission.accommodationType}). Nothing to cancel.`,
+                400
+            );
+        }
+        const academicYearId = admission.academicYearId;
+        if (!academicYearId) {
+            throw new AppError('Cannot cancel: student has no academicYearId on admission', 400);
+        }
+
+        // Resolve hostel fee heads
+        const feeHeadMap = await resolveFeeHeadsByComponent([
+            PaymentComponent.HOSTEL_ACCOMMODATION,
+            PaymentComponent.HOSTEL_MESS,
+            PaymentComponent.HOSTEL_LAUNDRY,
+            PaymentComponent.HOSTEL_REGISTRATION,
+        ]);
+        const hostelHeadIds = Array.from(feeHeadMap.values()).filter(Boolean).map((h: any) => h.id);
+
+        // Sum hostel-tagged successful payments
+        const paidAgg = await prisma.payment.aggregate({
+            where: {
+                studentId,
+                status: PaymentStatus.SUCCESS,
+                isDeleted: false,
+                component: {
+                    in: [
+                        PaymentComponent.HOSTEL,
+                        PaymentComponent.HOSTEL_ACCOMMODATION,
+                        PaymentComponent.HOSTEL_MESS,
+                        PaymentComponent.HOSTEL_LAUNDRY,
+                        PaymentComponent.HOSTEL_REGISTRATION,
+                    ],
+                },
+            },
+            _sum: { amount: true },
+        });
+        const paid = paidAgg._sum.amount ?? 0;
+
+        // Sum pending hostel demand (to back out from totalFee)
+        let pendingDemandTotal = 0;
+        if (hostelHeadIds.length > 0) {
+            const pendingAgg = await prisma.studentFeeDemand.aggregate({
+                where: {
+                    studentId,
+                    feeHeadId: { in: hostelHeadIds },
+                    status: FeeStatus.PENDING,
+                    isDeleted: false,
+                },
+                _sum: { netAmount: true },
+            });
+            pendingDemandTotal = pendingAgg._sum.netAmount ?? 0;
+        }
+
+        const refundAmount = Math.max(0, paid - cancellationFee);
+        const previousHostelId = admission.hostelId;
+        const previousHostelType = admission.hostelType;
+        const allocation = await prisma.hostelAllocation.findUnique({ where: { studentId } });
+
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Vacate bed if active
+            if (allocation && allocation.status === 'ACTIVE') {
+                await (tx.hostelAllocation as any).update({
+                    where: { studentId },
+                    data: { status: 'CANCELLED', endDate: new Date(), updatedBy: adminId },
+                });
+                await tx.hostelBed.update({
+                    where: { id: allocation.bedId },
+                    data: { isOccupied: false, updatedBy: adminId },
+                });
+            }
+
+            // 2. Soft-delete pending hostel demands
+            if (hostelHeadIds.length > 0) {
+                await tx.studentFeeDemand.updateMany({
+                    where: {
+                        studentId,
+                        feeHeadId: { in: hostelHeadIds },
+                        status: FeeStatus.PENDING,
+                        isDeleted: false,
+                    },
+                    data: { isDeleted: true, updatedBy: adminId },
+                });
+            }
+
+            // 3. Drop pricing snapshot (so future re-assign starts fresh)
+            await (tx.studentAccommodationPricing as any).deleteMany({ where: { studentId } });
+
+            // 4. Reset admission to NONE
+            await tx.studentAdmission.update({
+                where: { studentId },
+                data: {
+                    accommodationType: AccommodationType.NONE,
+                    hostelId: null,
+                    hostelType: null,
+                    hostelPaymentMode: null,
+                    roomNumber: null,
+                    totalFee: { decrement: pendingDemandTotal },
+                },
+            });
+
+            // 5. Refund -> FeeCorrection
+            let feeCorrection: any = null;
+            if (refundAmount > 0) {
+                feeCorrection = await (tx.feeCorrection as any).create({
+                    data: {
+                        studentId,
+                        academicYearId,
+                        amount: refundAmount,
+                        reason: `Hostel cancellation: ${reason}`,
+                        type: 'ACCOMMODATION_CHANGE_REFUND',
+                        referenceId: previousHostelId,
+                        referenceType: 'HOSTEL_CANCELLATION',
+                        remarks: `Paid: ${paid}, cancellationFee: ${cancellationFee}, refund: ${refundAmount}`,
+                        carryForward: true,
+                        isSettled: false,
+                        createdBy: adminId,
+                    },
+                });
+            }
+
+            // 6. Audit
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'HOSTEL_CANCELLED',
+                    entity: 'StudentAdmission',
+                    entityId: studentId,
+                    details: {
+                        previousHostelId,
+                        previousHostelType,
+                        paid,
+                        cancellationFee,
+                        refundAmount,
+                        pendingDemandRemoved: pendingDemandTotal,
+                        bedVacated: !!(allocation && allocation.status === 'ACTIVE'),
+                        reason,
+                    },
+                },
+            });
+
+            return {
+                paid,
+                cancellationFee,
+                refundAmount,
+                pendingDemandRemoved: pendingDemandTotal,
+                bedVacated: !!(allocation && allocation.status === 'ACTIVE'),
+                feeCorrectionId: feeCorrection?.id ?? null,
+            };
+        });
+
+        return result;
+    },
+
+    /**
+     * Cancel a student's TRANSPORT route: flip back to NONE, clear transportRouteId,
+     * soft-delete pending TRANSPORT demand, and create a FeeCorrection
+     * (type=ACCOMMODATION_CHANGE_REFUND) for any refundable amount.
+     */
+    async cancelTransport(
+        studentId: string,
+        args: { cancellationFee?: number; reason: string },
+        adminId?: string
+    ) {
+        const cancellationFee = Math.max(0, args.cancellationFee ?? 0);
+        const reason = args.reason;
+
+        const ctx = await getStudentContext(studentId);
+        assertActiveAdmission(ctx.admission, 'cancel transport');
+        const admission = ctx.admission!;
+
+        if (admission.accommodationType !== AccommodationType.TRANSPORT) {
+            throw new AppError(
+                `Student is not on TRANSPORT (currently ${admission.accommodationType}). Nothing to cancel.`,
+                400
+            );
+        }
+        const academicYearId = admission.academicYearId;
+        if (!academicYearId) {
+            throw new AppError('Cannot cancel: student has no academicYearId on admission', 400);
+        }
+
+        const admissionRow = await prisma.studentAdmission.findUnique({
+            where: { studentId },
+            select: { transportRouteId: true },
+        });
+        const previousRouteId = admissionRow?.transportRouteId ?? null;
+
+        // Resolve TRANSPORT fee head
+        const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
+        const transportHead = feeHeadMap.get(PaymentComponent.TRANSPORT);
+
+        // Sum transport-tagged successful payments
+        const paidAgg = await prisma.payment.aggregate({
+            where: {
+                studentId,
+                status: PaymentStatus.SUCCESS,
+                isDeleted: false,
+                component: PaymentComponent.TRANSPORT,
+            },
+            _sum: { amount: true },
+        });
+        const paid = paidAgg._sum.amount ?? 0;
+
+        // Sum pending demand
+        let pendingDemandTotal = 0;
+        if (transportHead) {
+            const pendingAgg = await prisma.studentFeeDemand.aggregate({
+                where: {
+                    studentId,
+                    feeHeadId: transportHead.id,
+                    status: FeeStatus.PENDING,
+                    isDeleted: false,
+                },
+                _sum: { netAmount: true },
+            });
+            pendingDemandTotal = pendingAgg._sum.netAmount ?? 0;
+        }
+
+        const refundAmount = Math.max(0, paid - cancellationFee);
+
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Soft-delete pending transport demand(s)
+            if (transportHead) {
+                await tx.studentFeeDemand.updateMany({
+                    where: {
+                        studentId,
+                        feeHeadId: transportHead.id,
+                        status: FeeStatus.PENDING,
+                        isDeleted: false,
+                    },
+                    data: { isDeleted: true, updatedBy: adminId },
+                });
+            }
+
+            // 2. Reset admission
+            await tx.studentAdmission.update({
+                where: { studentId },
+                data: {
+                    accommodationType: AccommodationType.NONE,
+                    transportRouteId: null,
+                    totalFee: { decrement: pendingDemandTotal },
+                },
+            });
+
+            // 3. Refund -> FeeCorrection
+            let feeCorrection: any = null;
+            if (refundAmount > 0) {
+                feeCorrection = await (tx.feeCorrection as any).create({
+                    data: {
+                        studentId,
+                        academicYearId,
+                        amount: refundAmount,
+                        reason: `Transport cancellation: ${reason}`,
+                        type: 'ACCOMMODATION_CHANGE_REFUND',
+                        referenceId: previousRouteId,
+                        referenceType: 'TRANSPORT_CANCELLATION',
+                        remarks: `Paid: ${paid}, cancellationFee: ${cancellationFee}, refund: ${refundAmount}`,
+                        carryForward: true,
+                        isSettled: false,
+                        createdBy: adminId,
+                    },
+                });
+            }
+
+            // 4. Audit
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'TRANSPORT_CANCELLED',
+                    entity: 'StudentAdmission',
+                    entityId: studentId,
+                    details: {
+                        previousRouteId,
+                        paid,
+                        cancellationFee,
+                        refundAmount,
+                        pendingDemandRemoved: pendingDemandTotal,
+                        reason,
+                    },
+                },
+            });
+
+            return {
+                paid,
+                cancellationFee,
+                refundAmount,
+                pendingDemandRemoved: pendingDemandTotal,
+                feeCorrectionId: feeCorrection?.id ?? null,
+            };
+        });
+
+        return result;
+    },
+
+    /**
+     * One-shot switch from HOSTEL to TRANSPORT with proration.
+     *
+     * Money flow:
+     *   refundPool   = max(0, hostelPaid − chargeRetained)
+     *   appliedToNew = min(refundPool, transportRoute.cost)   // covered as a discount on the new demand
+     *   leftover     = refundPool − appliedToNew              // goes to FeeCorrection (refund)
+     *
+     * The new TRANSPORT StudentFeeDemand carries `discountAmount = appliedToNew`,
+     * `netAmount = newCost − appliedToNew`. Student owes only `netAmount` (or zero
+     * if the credit fully covers the new route).
+     */
+    async switchHostelToTransport(
+        studentId: string,
+        args: { chargeRetained?: number; reason: string; transportRouteId: string },
+        adminId?: string
+    ) {
+        const chargeRetained = Math.max(0, args.chargeRetained ?? 0);
+        const { reason, transportRouteId } = args;
+
+        const ctx = await getStudentContext(studentId);
+        assertActiveAdmission(ctx.admission, 'switch hostel to transport');
+        const admission = ctx.admission!;
+
+        if (admission.accommodationType !== AccommodationType.HOSTEL) {
+            throw new AppError(
+                `Student is not on HOSTEL (currently ${admission.accommodationType}). Use assign-transport directly.`,
+                400
+            );
+        }
+        const academicYearId = admission.academicYearId;
+        if (!academicYearId) throw new AppError('Cannot switch: student has no academicYearId on admission', 400);
+
+        // Resolve fee heads
+        const hostelHeadMap = await resolveFeeHeadsByComponent([
+            PaymentComponent.HOSTEL_ACCOMMODATION,
+            PaymentComponent.HOSTEL_MESS,
+            PaymentComponent.HOSTEL_LAUNDRY,
+            PaymentComponent.HOSTEL_REGISTRATION,
+        ]);
+        const hostelHeadIds = Array.from(hostelHeadMap.values()).filter(Boolean).map((h: any) => h.id);
+        const transportHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
+        const transportHead = transportHeadMap.get(PaymentComponent.TRANSPORT);
+
+        // Compute hostelPaid + pendingHostelTotal
+        const paidAgg = await prisma.payment.aggregate({
+            where: {
+                studentId,
+                status: PaymentStatus.SUCCESS,
+                isDeleted: false,
+                component: { in: [
+                    PaymentComponent.HOSTEL,
+                    PaymentComponent.HOSTEL_ACCOMMODATION,
+                    PaymentComponent.HOSTEL_MESS,
+                    PaymentComponent.HOSTEL_LAUNDRY,
+                    PaymentComponent.HOSTEL_REGISTRATION,
+                ]},
+            },
+            _sum: { amount: true },
+        });
+        const hostelPaid = paidAgg._sum.amount ?? 0;
+
+        let pendingHostelTotal = 0;
+        if (hostelHeadIds.length > 0) {
+            const pAgg = await prisma.studentFeeDemand.aggregate({
+                where: {
+                    studentId,
+                    feeHeadId: { in: hostelHeadIds },
+                    status: FeeStatus.PENDING,
+                    isDeleted: false,
+                },
+                _sum: { netAmount: true },
+            });
+            pendingHostelTotal = pAgg._sum.netAmount ?? 0;
+        }
+
+        // Validate new route
+        const route = await prisma.transportRoute.findUnique({ where: { id: transportRouteId } });
+        if (!route) throw new AppError('Transport route not found', 404);
+        if (route.isDeleted) throw new AppError('Cannot assign to a deleted route', 400);
+        const studentsOnRoute = await prisma.studentAdmission.count({
+            where: { transportRouteId, status: { not: 'CANCELLED' } },
+        });
+        if ((route.capacity ?? 0) > 0 && studentsOnRoute >= (route.capacity ?? 0)) {
+            throw new AppError('Transport route is full', 400);
+        }
+
+        const refundPool = Math.max(0, hostelPaid - chargeRetained);
+        const newCost = route.cost ?? 0;
+        const appliedToNew = Math.min(refundPool, newCost);
+        const leftover = refundPool - appliedToNew;
+        const newDemandNet = Math.max(0, newCost - appliedToNew);
+
+        const previousHostelId = admission.hostelId;
+        const previousHostelType = admission.hostelType;
+        const allocation = await prisma.hostelAllocation.findUnique({ where: { studentId } });
+
+        const result = await prisma.$transaction(async (tx) => {
+            // ── 1. Cancel hostel ──
+            if (allocation && allocation.status === 'ACTIVE') {
+                await (tx.hostelAllocation as any).update({
+                    where: { studentId },
+                    data: { status: 'CANCELLED', endDate: new Date(), updatedBy: adminId },
+                });
+                await tx.hostelBed.update({
+                    where: { id: allocation.bedId },
+                    data: { isOccupied: false, updatedBy: adminId },
+                });
+            }
+            if (hostelHeadIds.length > 0) {
+                await tx.studentFeeDemand.updateMany({
+                    where: {
+                        studentId,
+                        feeHeadId: { in: hostelHeadIds },
+                        status: FeeStatus.PENDING,
+                        isDeleted: false,
+                    },
+                    data: { isDeleted: true, updatedBy: adminId },
+                });
+            }
+            await (tx.studentAccommodationPricing as any).deleteMany({ where: { studentId } });
+
+            // ── 2. Switch admission to TRANSPORT ──
+            await tx.studentAdmission.update({
+                where: { studentId },
+                data: {
+                    accommodationType: AccommodationType.TRANSPORT,
+                    transportRouteId,
+                    hostelId: null,
+                    hostelType: null,
+                    hostelPaymentMode: null,
+                    roomNumber: null,
+                    // totalFee: subtract pending hostel removed, add new transport gross
+                    totalFee: { increment: newCost - pendingHostelTotal },
+                },
+            });
+
+            // ── 3. Create new TRANSPORT demand with credit applied as discount ──
+            let feeDemandsCreated = 0;
+            let createdDemandId: string | null = null;
+            if (transportHead && newCost > 0) {
+                const dueDate = new Date();
+                dueDate.setDate(dueDate.getDate() + 30);
+                const demand = await tx.studentFeeDemand.create({
+                    data: {
+                        studentId,
+                        feeHeadId: transportHead.id,
+                        amount: newCost,
+                        discountAmount: appliedToNew,
+                        netAmount: newDemandNet,
+                        academicYearId,
+                        yearOfStudy: ctx.yearOfStudy,
+                        dueDate,
+                        status: newDemandNet === 0 ? FeeStatus.FULL : FeeStatus.PENDING,
+                        remarks:
+                            appliedToNew > 0
+                                ? `Transport (${route.name}). Hostel-cancellation credit applied: ${appliedToNew}. Reason: ${reason}`
+                                : `Transport (${route.name}). Reason: ${reason}`,
+                        createdBy: adminId,
+                    },
+                });
+                feeDemandsCreated = 1;
+                createdDemandId = demand.id;
+            }
+
+            // ── 4. Refund leftover to FeeCorrection ──
+            let feeCorrectionId: string | null = null;
+            if (leftover > 0) {
+                const fc = await (tx.feeCorrection as any).create({
+                    data: {
+                        studentId,
+                        academicYearId,
+                        amount: leftover,
+                        reason: `Hostel→Transport switch leftover refund: ${reason}`,
+                        type: 'ACCOMMODATION_CHANGE_REFUND',
+                        referenceId: previousHostelId,
+                        referenceType: 'HOSTEL_TO_TRANSPORT_SWITCH',
+                        remarks: `hostelPaid: ${hostelPaid}, chargeRetained: ${chargeRetained}, refundPool: ${refundPool}, appliedToNewTransport: ${appliedToNew}, leftover: ${leftover}`,
+                        carryForward: true,
+                        isSettled: false,
+                        createdBy: adminId,
+                    },
+                });
+                feeCorrectionId = fc.id;
+            }
+
+            // ── 5. Audit ──
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'HOSTEL_TO_TRANSPORT_SWITCH',
+                    entity: 'StudentAdmission',
+                    entityId: studentId,
+                    details: {
+                        previousHostelId,
+                        previousHostelType,
+                        newRouteId: transportRouteId,
+                        routeName: route.name,
+                        hostelPaid,
+                        chargeRetained,
+                        refundPool,
+                        appliedToNew,
+                        leftover,
+                        newCost,
+                        newDemandNet,
+                        pendingHostelRemoved: pendingHostelTotal,
+                        bedVacated: !!(allocation && allocation.status === 'ACTIVE'),
+                        feeDemandsCreated,
+                        createdDemandId,
+                        feeCorrectionId,
+                        reason,
+                    },
+                },
+            });
+
+            return {
+                cancellation: {
+                    hostelPaid,
+                    chargeRetained,
+                    refundPool,
+                    pendingHostelRemoved: pendingHostelTotal,
+                    bedVacated: !!(allocation && allocation.status === 'ACTIVE'),
+                },
+                newAssignment: {
+                    transportRouteId,
+                    routeName: route.name,
+                    cost: newCost,
+                    creditApplied: appliedToNew,
+                    studentOwes: newDemandNet,
+                    feeDemandsCreated,
+                    demandId: createdDemandId,
+                },
+                refund: {
+                    leftover,
+                    feeCorrectionId,
+                },
+                missingFeeHead: !transportHead
+                    ? 'No FeeHead tagged with component=TRANSPORT — fee demand was NOT created.'
+                    : null,
+            };
+        });
+
+        return result;
+    },
+
+    /**
+     * One-shot switch from TRANSPORT to HOSTEL with proration.
+     * Same idea as the reverse: refund pool from transport (paid − chargeRetained) is
+     * applied as a discount across the NEW hostel demand rows (split proportionally
+     * across the four components), and any leftover goes to FeeCorrection.
+     */
+    async switchTransportToHostel(
+        studentId: string,
+        args: {
+            chargeRetained?: number;
+            reason: string;
+            hostelId: string;
+            hostelType: HostelType;
+            hostelPaymentMode: 'YEARWISE' | 'SEMWISE';
+        },
+        adminId?: string
+    ) {
+        const chargeRetained = Math.max(0, args.chargeRetained ?? 0);
+        const { reason, hostelId, hostelType, hostelPaymentMode } = args;
+
+        const ctx = await getStudentContext(studentId);
+        assertActiveAdmission(ctx.admission, 'switch transport to hostel');
+        const admission = ctx.admission!;
+
+        if (admission.accommodationType !== AccommodationType.TRANSPORT) {
+            throw new AppError(
+                `Student is not on TRANSPORT (currently ${admission.accommodationType}). Use assign-hostel directly.`,
+                400
+            );
+        }
+        const academicYearId = admission.academicYearId;
+        if (!academicYearId) throw new AppError('Cannot switch: student has no academicYearId on admission', 400);
+
+        // Resolve fee heads
+        const transportHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
+        const transportHead = transportHeadMap.get(PaymentComponent.TRANSPORT);
+        const hostelHeadMap = await resolveFeeHeadsByComponent([
+            PaymentComponent.HOSTEL_ACCOMMODATION,
+            PaymentComponent.HOSTEL_MESS,
+            PaymentComponent.HOSTEL_LAUNDRY,
+            PaymentComponent.HOSTEL_REGISTRATION,
+        ]);
+        const accHead = hostelHeadMap.get(PaymentComponent.HOSTEL_ACCOMMODATION);
+        const messHead = hostelHeadMap.get(PaymentComponent.HOSTEL_MESS);
+        const laundryHead = hostelHeadMap.get(PaymentComponent.HOSTEL_LAUNDRY);
+        const regHead = hostelHeadMap.get(PaymentComponent.HOSTEL_REGISTRATION);
+
+        // Validate new hostel
+        const hostel = await prisma.hostel.findUnique({ where: { id: hostelId } });
+        if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+        if (hostel.isDeleted) throw new AppError('Cannot assign to a deleted hostel', 400);
+        await assertHostelHasCapacity(hostelId);
+
+        const sharing = parseInt(hostelType.split('_')[1], 10);
+        const roomType = 'AC';
+        const priceCategory = await prisma.hostelPriceCategory.findFirst({
+            where: { sharing, roomType: roomType as any, isActive: true },
+        });
+        if (!priceCategory) {
+            throw new AppError(`No active price tier for sharing=${sharing}, roomType=${roomType}.`, 400);
+        }
+        const isSemwise = hostelPaymentMode === 'SEMWISE';
+        const accommodationPrice = (isSemwise ? priceCategory.accommodationSemwise : priceCategory.accommodationYearwise) ?? 0;
+        const messPrice = (isSemwise ? priceCategory.messSemwise : priceCategory.messYearwise) ?? 0;
+        const laundryPrice = (isSemwise ? priceCategory.laundrySemwise : priceCategory.laundryYearwise) ?? 0;
+        const registrationFee = priceCategory.registrationFee ?? 0;
+        const effectiveTotal = accommodationPrice + messPrice + laundryPrice + registrationFee;
+
+        // Compute transportPaid + pendingTransportTotal
+        const paidAgg = await prisma.payment.aggregate({
+            where: {
+                studentId,
+                status: PaymentStatus.SUCCESS,
+                isDeleted: false,
+                component: PaymentComponent.TRANSPORT,
+            },
+            _sum: { amount: true },
+        });
+        const transportPaid = paidAgg._sum.amount ?? 0;
+
+        let pendingTransportTotal = 0;
+        if (transportHead) {
+            const pAgg = await prisma.studentFeeDemand.aggregate({
+                where: {
+                    studentId,
+                    feeHeadId: transportHead.id,
+                    status: FeeStatus.PENDING,
+                    isDeleted: false,
+                },
+                _sum: { netAmount: true },
+            });
+            pendingTransportTotal = pAgg._sum.netAmount ?? 0;
+        }
+
+        const refundPool = Math.max(0, transportPaid - chargeRetained);
+        const appliedToNew = Math.min(refundPool, effectiveTotal);
+        const leftover = refundPool - appliedToNew;
+
+        // Distribute appliedToNew proportionally across the 4 components.
+        // Last (registration) absorbs rounding so the discounts sum exactly to appliedToNew.
+        const distribute = (amount: number) =>
+            effectiveTotal > 0 ? Math.round((amount / effectiveTotal) * appliedToNew) : 0;
+        const accDiscount = distribute(accommodationPrice);
+        const messDiscount = distribute(messPrice);
+        const laundryDiscount = distribute(laundryPrice);
+        const regDiscount = appliedToNew - accDiscount - messDiscount - laundryDiscount;
+
+        const admissionRow = await prisma.studentAdmission.findUnique({
+            where: { studentId },
+            select: { transportRouteId: true },
+        });
+        const previousRouteId = admissionRow?.transportRouteId ?? null;
+
+        const result = await prisma.$transaction(async (tx) => {
+            // ── 1. Cancel transport ──
+            if (transportHead) {
+                await tx.studentFeeDemand.updateMany({
+                    where: {
+                        studentId,
+                        feeHeadId: transportHead.id,
+                        status: FeeStatus.PENDING,
+                        isDeleted: false,
+                    },
+                    data: { isDeleted: true, updatedBy: adminId },
+                });
+            }
+
+            // ── 2. Switch admission to HOSTEL ──
+            await tx.studentAdmission.update({
+                where: { studentId },
+                data: {
+                    accommodationType: AccommodationType.HOSTEL,
+                    transportRouteId: null,
+                    hostelId,
+                    hostelType,
+                    hostelPaymentMode: hostelPaymentMode as HostelPaymentMode,
+                    // totalFee: subtract pending transport, add full new hostel gross
+                    totalFee: { increment: effectiveTotal - pendingTransportTotal },
+                },
+            });
+
+            // ── 3. Snapshot pricing ──
+            await (tx.studentAccommodationPricing as any).upsert({
+                where: { studentId },
+                create: {
+                    studentId,
+                    academicYearId,
+                    sharing,
+                    roomType,
+                    paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
+                    hostelId,
+                    accommodationPrice,
+                    messPrice,
+                    laundryPrice,
+                    registrationFee,
+                    effectiveTotal,
+                    pricingSource: 'CONFIG',
+                    createdBy: adminId,
+                },
+                update: {
+                    academicYearId,
+                    sharing,
+                    roomType,
+                    paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
+                    hostelId,
+                    accommodationPrice,
+                    messPrice,
+                    laundryPrice,
+                    registrationFee,
+                    effectiveTotal,
+                    pricingSource: 'CONFIG',
+                    updatedBy: adminId,
+                },
+            });
+
+            // ── 4. Create 4 hostel demands with proportional discounts ──
+            const dueDate = new Date();
+            dueDate.setDate(dueDate.getDate() + 30);
+            const buildDemand = async (
+                head: any,
+                gross: number,
+                discount: number,
+                label: string
+            ) => {
+                if (!head || gross <= 0) return false;
+                const net = Math.max(0, gross - discount);
+                await tx.studentFeeDemand.create({
+                    data: {
+                        studentId,
+                        feeHeadId: head.id,
+                        amount: gross,
+                        discountAmount: discount,
+                        netAmount: net,
+                        academicYearId,
+                        yearOfStudy: ctx.yearOfStudy,
+                        dueDate,
+                        status: net === 0 ? FeeStatus.FULL : FeeStatus.PENDING,
+                        remarks:
+                            discount > 0
+                                ? `Hostel ${label} (${hostelType}, ${roomType}, ${isSemwise ? 'SEMWISE' : 'YEARWISE'}). Transport-cancellation credit applied: ${discount}.`
+                                : `Hostel ${label} (${hostelType}, ${roomType}, ${isSemwise ? 'SEMWISE' : 'YEARWISE'})`,
+                        createdBy: adminId,
+                    },
+                });
+                return true;
+            };
+            let feeDemandsCreated = 0;
+            if (await buildDemand(accHead, accommodationPrice, accDiscount, 'accommodation')) feeDemandsCreated++;
+            if (await buildDemand(messHead, messPrice, messDiscount, 'mess')) feeDemandsCreated++;
+            if (await buildDemand(laundryHead, laundryPrice, laundryDiscount, 'laundry')) feeDemandsCreated++;
+            if (await buildDemand(regHead, registrationFee, regDiscount, 'registration')) feeDemandsCreated++;
+
+            // ── 5. Refund leftover ──
+            let feeCorrectionId: string | null = null;
+            if (leftover > 0) {
+                const fc = await (tx.feeCorrection as any).create({
+                    data: {
+                        studentId,
+                        academicYearId,
+                        amount: leftover,
+                        reason: `Transport→Hostel switch leftover refund: ${reason}`,
+                        type: 'ACCOMMODATION_CHANGE_REFUND',
+                        referenceId: previousRouteId,
+                        referenceType: 'TRANSPORT_TO_HOSTEL_SWITCH',
+                        remarks: `transportPaid: ${transportPaid}, chargeRetained: ${chargeRetained}, refundPool: ${refundPool}, appliedToNewHostel: ${appliedToNew}, leftover: ${leftover}`,
+                        carryForward: true,
+                        isSettled: false,
+                        createdBy: adminId,
+                    },
+                });
+                feeCorrectionId = fc.id;
+            }
+
+            // ── 6. Audit ──
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'TRANSPORT_TO_HOSTEL_SWITCH',
+                    entity: 'StudentAdmission',
+                    entityId: studentId,
+                    details: {
+                        previousRouteId,
+                        newHostelId: hostelId,
+                        hostelType,
+                        hostelPaymentMode,
+                        transportPaid,
+                        chargeRetained,
+                        refundPool,
+                        appliedToNew,
+                        leftover,
+                        effectiveTotal,
+                        pendingTransportRemoved: pendingTransportTotal,
+                        feeDemandsCreated,
+                        feeCorrectionId,
+                        reason,
+                    },
+                },
+            });
+
+            return {
+                cancellation: {
+                    transportPaid,
+                    chargeRetained,
+                    refundPool,
+                    pendingTransportRemoved: pendingTransportTotal,
+                },
+                newAssignment: {
+                    hostelId,
+                    hostelType,
+                    paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
+                    pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal },
+                    creditApplied: appliedToNew,
+                    creditDistribution: { accDiscount, messDiscount, laundryDiscount, regDiscount },
+                    studentOwes: Math.max(0, effectiveTotal - appliedToNew),
+                    feeDemandsCreated,
+                },
+                refund: {
+                    leftover,
+                    feeCorrectionId,
+                },
             };
         });
 
@@ -4394,6 +5656,21 @@ export const AdminStudentService = {
                 adminId
             );
             logger.info(`[finalizeAdmission] Hostel snapshot+demands created via assignHostel for student=${studentId} hostelId=${allocation.hostelId} type=${allocation.hostelType} mode=${allocation.hostelPaymentMode}`);
+        }
+
+        // Apply TRANSPORT allocation up-front: flip accommodationType + create
+        // single TRANSPORT StudentFeeDemand using route.cost + increment totalFee.
+        // Idempotent: assignTransport handles re-assignment before TransportAllocation row exists.
+        if (
+            allocation.type === AccommodationType.TRANSPORT &&
+            allocation.transportRouteId
+        ) {
+            await AdminStudentService.assignTransport(
+                studentId,
+                allocation.transportRouteId,
+                adminId
+            );
+            logger.info(`[finalizeAdmission] Transport demand created via assignTransport for student=${studentId} routeId=${allocation.transportRouteId}`);
         }
 
         // Validate Fee Structure ID if provided and resolve Demand

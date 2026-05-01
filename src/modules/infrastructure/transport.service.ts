@@ -2,10 +2,21 @@ import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 import logger from '../../utils/logger';
+import { convertToPresignedUrl } from '../../utils/s3Utils';
 
 export const TransportService = {
     // Transport Route
-    async createTransportRoute(name: string, city: string, cost: number, busNumber: string, capacity: number, vehicleId?: string, createdBy?: string) {
+    async createTransportRoute(
+        name: string,
+        city: string,
+        cost: number,
+        busNumber: string,
+        capacity: number,
+        vehicleId?: string,
+        pickupTime?: string | Date | null,
+        dropTime?: string | Date | null,
+        createdBy?: string
+    ) {
         logger.info(`[createTransportRoute] Attempting to create route: ${name}`);
         if (!name || !city || cost === undefined || !busNumber || !capacity) {
             throw new AppError(MESSAGES.ERROR.TRANSPORT_FIELDS_REQUIRED, 400);
@@ -39,6 +50,8 @@ export const TransportService = {
                 busNumber,
                 capacity: Number(capacity),
                 vehicleId,
+                pickupTime: pickupTime ? new Date(pickupTime) : undefined,
+                dropTime: dropTime ? new Date(dropTime) : undefined,
                 filled: 0,
                 createdBy
             }
@@ -47,11 +60,79 @@ export const TransportService = {
         return route;
     },
 
-    async getTransportRoutes() {
-        return await prisma.transportRoute.findMany({
-            where: { isDeleted: false },
-            include: { stops: true }
+    async getTransportRoutes(filters?: { search?: string; name?: string; city?: string; busNumber?: string }) {
+        const where: any = { isDeleted: false };
+
+        if (filters?.search) {
+            where.OR = [
+                { name: { contains: filters.search, mode: 'insensitive' } },
+                { city: { contains: filters.search, mode: 'insensitive' } },
+                { busNumber: { contains: filters.search, mode: 'insensitive' } },
+            ];
+        } else {
+            if (filters?.name) where.name = { contains: filters.name, mode: 'insensitive' };
+            if (filters?.city) where.city = { contains: filters.city, mode: 'insensitive' };
+            if (filters?.busNumber) where.busNumber = { contains: filters.busNumber, mode: 'insensitive' };
+        }
+
+        const rows = await prisma.transportRoute.findMany({
+            where,
+            include: {
+                stops: {
+                    where: { isDeleted: false },
+                    orderBy: { sequence: 'asc' },
+                    select: { id: true, name: true, sequence: true, pickupTime: true, dropTime: true },
+                },
+            },
+            orderBy: { createdAt: 'desc' },
         });
+
+        // Recompute filled live from active TransportAllocations (route.filled column may drift).
+        const allocCounts = await prisma.transportAllocation.groupBy({
+            by: ['routeId'],
+            where: { status: 'ACTIVE', route: { isDeleted: false } },
+            _count: { _all: true },
+        });
+        const filledByRoute = new Map<string, number>(
+            allocCounts.map(a => [a.routeId, a._count._all])
+        );
+
+        const routes = rows.map(r => {
+            const capacity = r.capacity ?? 0;
+            const filled = filledByRoute.get(r.id) ?? (r.filled ?? 0);
+            const stops = r.stops as any[];
+            return {
+                id: r.id,
+                name: r.name,
+                city: r.city,
+                busNumber: r.busNumber,
+                cost: r.cost,
+                capacity,
+                filled,
+                vacant: Math.max(0, capacity - filled),
+                pickupTime: r.pickupTime,
+                dropTime: r.dropTime,
+                vehicleId: r.vehicleId,
+                createdAt: r.createdAt,
+                updatedAt: r.updatedAt,
+                totalStops: stops.length,
+                stopsNames: stops.map(s => s.name),
+                stops,
+            };
+        });
+
+        const totals = routes.reduce(
+            (acc, r) => {
+                acc.totalCapacity += r.capacity;
+                acc.totalFilled += r.filled;
+                acc.totalVacant += r.vacant;
+                acc.totalStops += r.totalStops;
+                return acc;
+            },
+            { totalRoutes: routes.length, totalCapacity: 0, totalFilled: 0, totalVacant: 0, totalStops: 0 }
+        );
+
+        return { routes, totals };
     },
 
     async getTransportRouteById(id: string) {
@@ -74,7 +155,9 @@ export const TransportService = {
         if (data.cost !== undefined) updateData.cost = Number(data.cost);
         if (data.busNumber) updateData.busNumber = data.busNumber;
         if (data.capacity) updateData.capacity = Number(data.capacity);
-        
+        if (data.pickupTime !== undefined) updateData.pickupTime = data.pickupTime ? new Date(data.pickupTime) : null;
+        if (data.dropTime !== undefined) updateData.dropTime = data.dropTime ? new Date(data.dropTime) : null;
+
         if (data.vehicleId) {
             const vehicle = await prisma.vehicle.findUnique({ where: { id: data.vehicleId } });
             if (!vehicle) throw new AppError(MESSAGES.ERROR.VEHICLE_NOT_FOUND, 404);
@@ -102,14 +185,21 @@ export const TransportService = {
     },
 
     // Vehicle
-    async createVehicle(number: string, capacity: number, driverName: string, driverPhone: string, createdBy?: string) {
+    async createVehicle(
+        number: string,
+        capacity: number,
+        driverName: string,
+        driverPhone: string,
+        photoUrl?: string | null,
+        createdBy?: string
+    ) {
         logger.info(`[createVehicle] Attempting to create vehicle: ${number}`);
-        
-        const existingVehicle = await prisma.vehicle.findFirst({ 
-            where: { 
+
+        const existingVehicle = await prisma.vehicle.findFirst({
+            where: {
                 number,
-                isDeleted: false 
-            } 
+                isDeleted: false
+            }
         });
 
         if (existingVehicle) {
@@ -118,21 +208,48 @@ export const TransportService = {
         }
 
         const vehicle = await prisma.vehicle.create({
-            data: { number, capacity: Number(capacity), driverName, driverPhone, createdBy }
+            data: {
+                number,
+                capacity: Number(capacity),
+                driverName,
+                driverPhone,
+                photoUrl: photoUrl || undefined,
+                createdBy,
+            }
         });
 
         logger.info(`[createVehicle] Vehicle created successfully: ${vehicle.id}`);
         return vehicle;
     },
 
-    async getVehicles() {
-        return await prisma.vehicle.findMany({ where: { isDeleted: false } });
+    async getVehicles(filters?: { search?: string }) {
+        const where: any = { isDeleted: false };
+
+        if (filters?.search) {
+            where.OR = [
+                { driverName: { contains: filters.search, mode: 'insensitive' } },
+                { driverPhone: { contains: filters.search } },
+                { number: { contains: filters.search, mode: 'insensitive' } },
+            ];
+        }
+
+        const vehicles = await prisma.vehicle.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+        });
+        return Promise.all(vehicles.map(async v => ({
+            ...v,
+            photoUrl: await convertToPresignedUrl(v.photoUrl),
+        })));
     },
 
     async getVehicleById(id: string) {
         const vehicle = await prisma.vehicle.findFirst({ where: { id, isDeleted: false } });
         if (!vehicle) throw new AppError(MESSAGES.ERROR.VEHICLE_NOT_FOUND, 404);
-        return vehicle;
+        return {
+            ...vehicle,
+            photoUrl: await convertToPresignedUrl(vehicle.photoUrl),
+        };
     },
 
     async updateVehicle(id: string, data: any, updatedBy?: string) {
@@ -145,6 +262,7 @@ export const TransportService = {
         if (data.capacity) updateData.capacity = Number(data.capacity);
         if (data.driverName) updateData.driverName = data.driverName;
         if (data.driverPhone) updateData.driverPhone = data.driverPhone;
+        if (data.photoUrl !== undefined) updateData.photoUrl = data.photoUrl || null;
 
         const updated = await prisma.vehicle.update({
             where: { id },

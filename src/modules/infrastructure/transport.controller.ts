@@ -9,10 +9,12 @@ export const createTransportRoute = catchAsync(async (req: Request, res: Respons
     logger.info(`[createTransportRoute] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[createTransportRoute] payload=${JSON.stringify(req.body)}`);
 
-    const { name, city, cost, busNumber, capacity, vehicleId } = req.body;
+    const { name, city, cost, busNumber, capacity, vehicleId, pickupTime, dropTime } = req.body;
     const adminId = req.user?.userId;
 
-    const route = await TransportService.createTransportRoute(name, city, cost, busNumber, capacity, vehicleId, adminId);
+    const route = await TransportService.createTransportRoute(
+        name, city, cost, busNumber, capacity, vehicleId, pickupTime, dropTime, adminId
+    );
     
     sendResponse({
         res,
@@ -25,7 +27,13 @@ export const createTransportRoute = catchAsync(async (req: Request, res: Respons
 
 export const getTransportRoutes = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getTransportRoutes] by=${req.user?.userId || 'anonymous'}`);
-    const routes = await TransportService.getTransportRoutes();
+    const { search, name, city, busNumber } = req.query as any;
+    const routes = await TransportService.getTransportRoutes({
+        search:    search    ? String(search).trim()    : undefined,
+        name:      name      ? String(name).trim()      : undefined,
+        city:      city      ? String(city).trim()      : undefined,
+        busNumber: busNumber ? String(busNumber).trim() : undefined,
+    });
     sendResponse({
         res,
         statusCode: 200,
@@ -74,11 +82,11 @@ export const deleteTransportRoute = catchAsync(async (req: Request, res: Respons
 });
 
 export const createVehicle = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { number, capacity, driverName, driverPhone } = req.body;
+    const { number, capacity, driverName, driverPhone, photoUrl } = req.body;
     const adminId = req.user?.userId;
 
-    const vehicle = await TransportService.createVehicle(number, capacity, driverName, driverPhone, adminId);
-    
+    const vehicle = await TransportService.createVehicle(number, capacity, driverName, driverPhone, photoUrl, adminId);
+
     sendResponse({
         res,
         statusCode: 201,
@@ -106,7 +114,10 @@ export const createTransportStop = catchAsync(async (req: Request, res: Response
 
 // Vehicle
 export const getVehicles = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const vehicles = await TransportService.getVehicles();
+    const { search } = req.query as any;
+    const vehicles = await TransportService.getVehicles({
+        search: search ? String(search).trim() : undefined,
+    });
     sendResponse({ res, statusCode: 200, success: true, data: vehicles });
 });
 

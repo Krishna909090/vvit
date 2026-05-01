@@ -110,13 +110,73 @@ export const pendingHostelAllocationsQuerySchema = z.object({
     }),
 });
 
-export const pendingTransportAllocationsQuerySchema = z.object({
-    query: z.object({
-        page: z.string().optional().transform(v => v ? Number(v) : 1),
-        limit: z.string().optional().transform(v => v ? Number(v) : 10),
-        search: z.string().trim().optional(),
-        routeId: z.string().uuid("Invalid Route ID").optional(),
-        gender: z.string().trim().optional(),
+export const assignTransportSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        transportRouteId: z.string().uuid("Invalid Transport Route ID"),
+    }),
+});
+
+export const reassignTransportSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        transportRouteId: z.string().uuid("Invalid Transport Route ID"),
+        reason: z.string().trim().min(1, "Reason is required").max(500),
+    }),
+});
+
+export const cancelHostelSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        cancellationFee: z.number().min(0).optional().default(0),
+        reason: z.string().trim().min(1, "Reason is required").max(500),
+    }),
+});
+
+export const cancelTransportSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        cancellationFee: z.number().min(0).optional().default(0),
+        reason: z.string().trim().min(1, "Reason is required").max(500),
+    }),
+});
+
+export const switchHostelToTransportSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        // What the college keeps as a non-refundable charge for the period the student
+        // actually used the hostel (e.g. prorated for 2 months).
+        // refundPool = max(0, hostelPaid − chargeRetained)
+        chargeRetained: z.number().min(0).optional().default(0),
+        reason: z.string().trim().min(1, "Reason is required").max(500),
+        transportRouteId: z.string().uuid("Invalid Transport Route ID"),
+    }),
+});
+
+export const switchTransportToHostelSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        chargeRetained: z.number().min(0).optional().default(0),
+        reason: z.string().trim().min(1, "Reason is required").max(500),
+        hostelId: z.string().uuid("Invalid Hostel ID"),
+        hostelPaymentMode: z.string()
+            .transform(v => v.toUpperCase())
+            .pipe(z.enum(['YEARWISE', 'SEMWISE'])),
+        hostelType: z.string()
+            .transform(v => v.toUpperCase())
+            .pipe(z.enum(['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10'])),
     }),
 });
 
@@ -126,6 +186,17 @@ export const bedAllocatedStudentsQuerySchema = z.object({
         limit: z.string().optional().transform(v => v ? Number(v) : 10),
         search: z.string().trim().optional(),
         gender: z.string().trim().optional(),
+        all: z.string().optional().transform(v => v === 'true' || v === '1'),
+    }),
+});
+
+export const transportAllocatedStudentsQuerySchema = z.object({
+    query: z.object({
+        page: z.string().optional().transform(v => v ? Number(v) : 1),
+        limit: z.string().optional().transform(v => v ? Number(v) : 10),
+        search: z.string().trim().optional(),
+        gender: z.string().trim().optional(),
+        routeId: z.string().uuid("Invalid Route ID").optional(),
         all: z.string().optional().transform(v => v === 'true' || v === '1'),
     }),
 });

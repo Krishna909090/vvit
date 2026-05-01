@@ -502,6 +502,7 @@ model Vehicle {
   capacity    Int
   driverName  String
   driverPhone String
+  photoUrl    String?
   isDeleted   Boolean?         @default(false)
   createdAt   DateTime?        @default(now())
   updatedAt   DateTime         @updatedAt
@@ -519,6 +520,8 @@ model TransportRoute {
   capacity          Int?                  @default(0)
   filled            Int?                  @default(0)
   vehicleId         String?
+  pickupTime        DateTime?
+  dropTime          DateTime?
   isDeleted         Boolean?              @default(false)
   createdAt         DateTime?             @default(now())
   updatedAt         DateTime              @updatedAt

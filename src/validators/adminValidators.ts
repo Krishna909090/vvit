@@ -132,6 +132,8 @@ export const createTransportRouteSchema = z.object({
         busNumber: z.string().min(1, "Bus number is required"),
         capacity: z.number().int().min(1, "Capacity must be at least 1"),
         vehicleId: z.string().uuid().optional().nullable(),
+        pickupTime: z.string().datetime().or(z.date()).optional().nullable(),
+        dropTime: z.string().datetime().or(z.date()).optional().nullable(),
     }),
 });
 
@@ -358,6 +360,7 @@ export const createVehicleSchema = z.object({
         capacity: z.number().int().positive(),
         driverName: z.string().min(1),
         driverPhone: z.string().min(10),
+        photoUrl: z.string().url("photoUrl must be a valid URL").optional().nullable(),
     }),
 });
 

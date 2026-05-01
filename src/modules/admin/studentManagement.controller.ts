@@ -357,6 +357,20 @@ export const getPendingHostelAllocations = catchAsync(async (req: Request, res: 
     });
 });
 
+// List every student with a transportRouteId set (route fee + paid breakdown)
+export const getTransportAllocatedStudents = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getTransportAllocatedStudents] by=${req.user?.userId || 'anonymous'}`);
+    const result = await AdminStudentService.getTransportAllocatedStudents(req.query);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
 // List every student with an active bed allocation (across all hostels)
 export const getBedAllocatedStudents = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getBedAllocatedStudents] by=${req.user?.userId || 'anonymous'}`);
@@ -387,18 +401,157 @@ export const getStudentsByHostel = catchAsync(async (req: Request, res: Response
     });
 });
 
-// List students who opted for transport but have no active route allocation
-export const getPendingTransportAllocations = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[getPendingTransportAllocations] by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[getPendingTransportAllocations] query=${JSON.stringify(req.query)}`);
+// Switch student from HOSTEL to TRANSPORT with proration.
+// chargeRetained = what college keeps for the period the student actually used hostel.
+// refundPool = paid - chargeRetained → applied to new transport demand as discount,
+// leftover goes to FeeCorrection.
+export const switchHostelToTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { chargeRetained, reason, transportRouteId } = req.body;
+    logger.info(`[switchHostelToTransport] studentId=${studentId} routeId=${transportRouteId} chargeRetained=${chargeRetained} by=${req.user?.userId || 'anonymous'}`);
 
-    const result = await AdminStudentService.getPendingTransportAllocations(req.query);
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot switch their own accommodation', 403);
+    }
+
+    const result = await AdminStudentService.switchHostelToTransport(
+        studentId,
+        { chargeRetained, reason, transportRouteId },
+        req.user?.userId
+    );
 
     sendResponse({
         res,
         statusCode: 200,
         success: true,
-        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        message: 'Switched from hostel to transport',
+        data: result
+    });
+});
+
+// Switch student from TRANSPORT to HOSTEL with proration.
+// chargeRetained = what college keeps for the period the student actually used transport.
+// refundPool = paid - chargeRetained → applied across the 4 new hostel demands as discount,
+// leftover goes to FeeCorrection.
+export const switchTransportToHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { chargeRetained, reason, hostelId, hostelType, hostelPaymentMode } = req.body;
+    logger.info(`[switchTransportToHostel] studentId=${studentId} hostelId=${hostelId} type=${hostelType} mode=${hostelPaymentMode} chargeRetained=${chargeRetained} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot switch their own accommodation', 403);
+    }
+
+    const result = await AdminStudentService.switchTransportToHostel(
+        studentId,
+        { chargeRetained, reason, hostelId, hostelType, hostelPaymentMode },
+        req.user?.userId
+    );
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Switched from transport to hostel',
+        data: result
+    });
+});
+
+// Cancel a student's HOSTEL — flips accommodationType to NONE, vacates bed,
+// soft-deletes pending demands, drops snapshot, creates FeeCorrection refund.
+export const cancelHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { cancellationFee, reason } = req.body;
+    logger.info(`[cancelHostel] studentId=${studentId} cancellationFee=${cancellationFee} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot cancel their own hostel', 403);
+    }
+
+    const result = await AdminStudentService.cancelHostel(
+        studentId,
+        { cancellationFee, reason },
+        req.user?.userId
+    );
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Hostel cancelled successfully',
+        data: result
+    });
+});
+
+// Cancel a student's TRANSPORT — flips accommodationType to NONE, soft-deletes
+// pending demand, creates FeeCorrection refund.
+export const cancelTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { cancellationFee, reason } = req.body;
+    logger.info(`[cancelTransport] studentId=${studentId} cancellationFee=${cancellationFee} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot cancel their own transport', 403);
+    }
+
+    const result = await AdminStudentService.cancelTransport(
+        studentId,
+        { cancellationFee, reason },
+        req.user?.userId
+    );
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Transport cancelled successfully',
+        data: result
+    });
+});
+
+// Re-assign a TRANSPORT student to a different route. Adjusts demand + totalFee.
+export const reassignTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { transportRouteId, reason } = req.body;
+    logger.info(`[reassignTransport] studentId=${studentId} newRouteId=${transportRouteId} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot reassign transport', 403);
+    }
+
+    const result = await AdminStudentService.reassignTransport(
+        studentId,
+        { transportRouteId, reason },
+        req.user?.userId
+    );
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Transport reassigned successfully',
+        data: result
+    });
+});
+
+// Assign transport — flips accommodationType from NONE to TRANSPORT, sets routeId,
+// creates TRANSPORT StudentFeeDemand, increments totalFee.
+export const assignTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { transportRouteId } = req.body;
+    logger.info(`[assignTransport] studentId=${studentId} routeId=${transportRouteId} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot assign their own transport', 403);
+    }
+
+    const result = await AdminStudentService.assignTransport(studentId, transportRouteId, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Transport assigned successfully',
         data: result
     });
 });
