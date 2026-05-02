@@ -4083,8 +4083,8 @@ export const AdminStudentService = {
                         status: net === 0 ? FeeStatus.FULL : FeeStatus.PENDING,
                         remarks:
                             discount > 0
-                                ? `Hostel ${label} (${hostelType}, ${roomType}, ${isSemwise ? 'SEMWISE' : 'YEARWISE'}). Transport-cancellation credit applied: ${discount}.`
-                                : `Hostel ${label} (${hostelType}, ${roomType}, ${isSemwise ? 'SEMWISE' : 'YEARWISE'})`,
+                                ? `Hostel ${label} (${hostelType}, ${roomType}, ${isSemwise ? 'SEMWISE' : 'YEARWISE'}). Transport-cancellation credit applied: ${discount}. Reason: ${reason}`
+                                : `Hostel ${label} (${hostelType}, ${roomType}, ${isSemwise ? 'SEMWISE' : 'YEARWISE'}). Reason: ${reason}`,
                         createdBy: adminId,
                     },
                 });
