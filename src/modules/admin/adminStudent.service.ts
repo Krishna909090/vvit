@@ -3408,7 +3408,7 @@ export const AdminStudentService = {
             if (allocation && allocation.status === 'ACTIVE') {
                 await (tx.hostelAllocation as any).update({
                     where: { studentId },
-                    data: { status: 'CANCELLED', endDate: new Date(), updatedBy: adminId },
+                    data: { status: 'VACATED', endDate: new Date(), updatedBy: adminId },
                 });
                 await tx.hostelBed.update({
                     where: { id: allocation.bedId },
@@ -3741,7 +3741,7 @@ export const AdminStudentService = {
             if (allocation && allocation.status === 'ACTIVE') {
                 await (tx.hostelAllocation as any).update({
                     where: { studentId },
-                    data: { status: 'CANCELLED', endDate: new Date(), updatedBy: adminId },
+                    data: { status: 'VACATED', endDate: new Date(), updatedBy: adminId },
                 });
                 await tx.hostelBed.update({
                     where: { id: allocation.bedId },
