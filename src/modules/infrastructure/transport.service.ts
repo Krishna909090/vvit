@@ -87,14 +87,21 @@ export const TransportService = {
             orderBy: { createdAt: 'desc' },
         });
 
-        // Recompute filled live from active TransportAllocations (route.filled column may drift).
-        const allocCounts = await prisma.transportAllocation.groupBy({
-            by: ['routeId'],
-            where: { status: 'ACTIVE', route: { isDeleted: false } },
+        // Recompute filled live from StudentAdmission (route.filled column drifts across switches/cancels).
+        // Counts students currently assigned to each route (excluding cancelled admissions).
+        const allocCounts = await prisma.studentAdmission.groupBy({
+            by: ['transportRouteId'],
+            where: {
+                transportRouteId: { not: null },
+                accommodationType: 'TRANSPORT',
+                status: { not: 'CANCELLED' },
+            },
             _count: { _all: true },
         });
         const filledByRoute = new Map<string, number>(
-            allocCounts.map(a => [a.routeId, a._count._all])
+            allocCounts
+                .filter(a => a.transportRouteId !== null)
+                .map(a => [a.transportRouteId as string, a._count._all])
         );
 
         const routes = rows.map(r => {
