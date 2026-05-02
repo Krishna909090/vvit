@@ -520,8 +520,8 @@ model TransportRoute {
   capacity          Int?                  @default(0)
   filled            Int?                  @default(0)
   vehicleId         String?
-  pickupTime        DateTime?
-  dropTime          DateTime?
+  pickupTime        String?               // HH:MM (24-hour). Time-only — no date.
+  dropTime          String?               // HH:MM (24-hour). Time-only — no date.
   isDeleted         Boolean?              @default(false)
   createdAt         DateTime?             @default(now())
   updatedAt         DateTime              @updatedAt
@@ -538,8 +538,6 @@ model TransportStop {
   routeId     String
   name        String
   sequence    Int
-  pickupTime  DateTime
-  dropTime    DateTime
   isDeleted   Boolean?              @default(false)
   createdAt   DateTime?             @default(now())
   updatedAt   DateTime              @updatedAt

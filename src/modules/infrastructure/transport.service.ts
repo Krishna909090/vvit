@@ -13,8 +13,8 @@ export const TransportService = {
         busNumber: string,
         capacity: number,
         vehicleId?: string,
-        pickupTime?: string | Date | null,
-        dropTime?: string | Date | null,
+        pickupTime?: string | null,
+        dropTime?: string | null,
         createdBy?: string
     ) {
         logger.info(`[createTransportRoute] Attempting to create route: ${name}`);
@@ -50,8 +50,8 @@ export const TransportService = {
                 busNumber,
                 capacity: Number(capacity),
                 vehicleId,
-                pickupTime: pickupTime ? new Date(pickupTime) : undefined,
-                dropTime: dropTime ? new Date(dropTime) : undefined,
+                pickupTime: pickupTime || undefined,
+                dropTime: dropTime || undefined,
                 filled: 0,
                 createdBy
             }
@@ -81,7 +81,7 @@ export const TransportService = {
                 stops: {
                     where: { isDeleted: false },
                     orderBy: { sequence: 'asc' },
-                    select: { id: true, name: true, sequence: true, pickupTime: true, dropTime: true },
+                    select: { id: true, name: true, sequence: true },
                 },
             },
             orderBy: { createdAt: 'desc' },
@@ -155,8 +155,8 @@ export const TransportService = {
         if (data.cost !== undefined) updateData.cost = Number(data.cost);
         if (data.busNumber) updateData.busNumber = data.busNumber;
         if (data.capacity) updateData.capacity = Number(data.capacity);
-        if (data.pickupTime !== undefined) updateData.pickupTime = data.pickupTime ? new Date(data.pickupTime) : null;
-        if (data.dropTime !== undefined) updateData.dropTime = data.dropTime ? new Date(data.dropTime) : null;
+        if (data.pickupTime !== undefined) updateData.pickupTime = data.pickupTime || null;
+        if (data.dropTime !== undefined) updateData.dropTime = data.dropTime || null;
 
         if (data.vehicleId) {
             const vehicle = await prisma.vehicle.findUnique({ where: { id: data.vehicleId } });
@@ -282,7 +282,7 @@ export const TransportService = {
     },
 
     // Transport Stop
-    async createTransportStop(routeId: string, name: string, sequence: number, pickupTime: string, dropTime: string, createdBy?: string) {
+    async createTransportStop(routeId: string, name: string, sequence: number, createdBy?: string) {
         logger.info(`[createTransportStop] Creating stop for route: ${routeId} - ${name}`);
         const existingStop = await prisma.transportStop.findFirst({
             where: {
@@ -302,8 +302,6 @@ export const TransportService = {
                 routeId,
                 name,
                 sequence: Number(sequence),
-                pickupTime: new Date(pickupTime),
-                dropTime: new Date(dropTime),
                 createdBy
             }
         });
@@ -337,8 +335,6 @@ export const TransportService = {
         if (data.name) updateData.name = data.name;
         if (data.routeId) updateData.routeId = data.routeId;
         if (data.sequence !== undefined) updateData.sequence = Number(data.sequence);
-        if (data.pickupTime) updateData.pickupTime = new Date(data.pickupTime);
-        if (data.dropTime) updateData.dropTime = new Date(data.dropTime);
 
         const updated = await prisma.transportStop.update({
             where: { id },

@@ -5648,14 +5648,18 @@ export const AdminStudentService = {
             allocation.hostelType &&
             allocation.hostelPaymentMode
         ) {
-            await AdminStudentService.assignHostel(
+            const hostelResult = await AdminStudentService.assignHostel(
                 studentId,
                 allocation.hostelId,
                 allocation.hostelPaymentMode as 'YEARWISE' | 'SEMWISE',
                 allocation.hostelType as HostelType,
                 adminId
             );
-            logger.info(`[finalizeAdmission] Hostel snapshot+demands created via assignHostel for student=${studentId} hostelId=${allocation.hostelId} type=${allocation.hostelType} mode=${allocation.hostelPaymentMode}`);
+            if (hostelResult.feeDemandsCreated > 0) {
+                logger.info(`[finalizeAdmission] Hostel snapshot+demands created via assignHostel for student=${studentId} hostelId=${allocation.hostelId} type=${allocation.hostelType} mode=${allocation.hostelPaymentMode} demandsCreated=${hostelResult.feeDemandsCreated}`);
+            } else {
+                logger.warn(`[finalizeAdmission] Hostel snapshot created BUT no fee demands for student=${studentId} — likely no FeeHead tagged with HOSTEL_ACCOMMODATION/MESS/LAUNDRY/REGISTRATION components, OR all component prices are 0. Result=${JSON.stringify(hostelResult)}`);
+            }
         }
 
         // Apply TRANSPORT allocation up-front: flip accommodationType + create
@@ -5665,12 +5669,18 @@ export const AdminStudentService = {
             allocation.type === AccommodationType.TRANSPORT &&
             allocation.transportRouteId
         ) {
-            await AdminStudentService.assignTransport(
+            const transportResult = await AdminStudentService.assignTransport(
                 studentId,
                 allocation.transportRouteId,
                 adminId
             );
-            logger.info(`[finalizeAdmission] Transport demand created via assignTransport for student=${studentId} routeId=${allocation.transportRouteId}`);
+            if (transportResult.feeDemandsCreated > 0) {
+                logger.info(`[finalizeAdmission] Transport demand created via assignTransport for student=${studentId} routeId=${allocation.transportRouteId} cost=${transportResult.cost}`);
+            } else if (transportResult.missingFeeHead) {
+                logger.warn(`[finalizeAdmission] Transport demand NOT created for student=${studentId} — ${transportResult.missingFeeHead}`);
+            } else {
+                logger.warn(`[finalizeAdmission] Transport demand NOT created for student=${studentId} routeId=${allocation.transportRouteId} — route cost may be 0 (got cost=${transportResult.cost})`);
+            }
         }
 
         // Validate Fee Structure ID if provided and resolve Demand

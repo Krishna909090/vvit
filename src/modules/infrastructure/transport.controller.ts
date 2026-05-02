@@ -97,10 +97,10 @@ export const createVehicle = catchAsync(async (req: Request, res: Response, next
 });
 
 export const createTransportStop = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { routeId, name, sequence, pickupTime, dropTime } = req.body;
+    const { routeId, name, sequence } = req.body;
     const adminId = req.user?.userId;
 
-    const stop = await TransportService.createTransportStop(routeId, name, sequence, pickupTime, dropTime, adminId);
+    const stop = await TransportService.createTransportStop(routeId, name, sequence, adminId);
     
     sendResponse({
         res,

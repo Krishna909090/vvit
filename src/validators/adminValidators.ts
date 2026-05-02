@@ -124,6 +124,9 @@ export const updateExamScoreSchema = z.object({
     }),
 });
 
+// HH:MM in 24-hour format, e.g. "07:30", "17:00". Allows HH:MM:SS too ("07:30:00").
+const timeRegex = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
 export const createTransportRouteSchema = z.object({
     body: z.object({
         name: z.string().min(1, "Route name is required"),
@@ -132,8 +135,8 @@ export const createTransportRouteSchema = z.object({
         busNumber: z.string().min(1, "Bus number is required"),
         capacity: z.number().int().min(1, "Capacity must be at least 1"),
         vehicleId: z.string().uuid().optional().nullable(),
-        pickupTime: z.string().datetime().or(z.date()).optional().nullable(),
-        dropTime: z.string().datetime().or(z.date()).optional().nullable(),
+        pickupTime: z.string().regex(timeRegex, "pickupTime must be HH:MM (24-hour)").optional().nullable(),
+        dropTime: z.string().regex(timeRegex, "dropTime must be HH:MM (24-hour)").optional().nullable(),
     }),
 });
 
@@ -369,8 +372,6 @@ export const createTransportStopSchema = z.object({
         routeId: z.string().uuid(),
         name: z.string().min(1),
         sequence: z.number().int().min(1),
-        pickupTime: z.string().datetime().or(z.date()),
-        dropTime: z.string().datetime().or(z.date()),
     }),
 });
 
