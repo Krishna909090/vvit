@@ -2332,7 +2332,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     const allFeeHeads = await prisma.feeHead.findMany();
 
     // 3. Fetch Financial Records (Parallel)
-    const [ledgers, payments, feeDemands] = await Promise.all([
+    const [ledgers, payments, feeDemands, feeCorrections] = await Promise.all([
         prisma.studentLedger.findMany({ where: { studentId, isDeleted: false }, orderBy: { date: 'desc' } }),
         prisma.payment.findMany({
             where: { studentId, status: PaymentStatus.SUCCESS, isDeleted: false },
@@ -2348,10 +2348,14 @@ export const getStudentFinancialHistory = async (studentId: string) => {
                 feeStructure: { include: { feeHead: true } },
                 feeHead: true
             }
-        })
+        }),
+        (prisma as any).feeCorrection.findMany({
+            where: { studentId },
+            orderBy: { createdAt: 'desc' },
+        }),
     ]);
 
-    logger.info(`[FinancialHistory] Data Fetched. Ledgers: ${ledgers.length}, Payments: ${payments.length}, Demands: ${feeDemands.length}`);
+    logger.info(`[FinancialHistory] Data Fetched. Ledgers: ${ledgers.length}, Payments: ${payments.length}, Demands: ${feeDemands.length}, FeeCorrections: ${feeCorrections.length}`);
 
     // 2. Initialize Breakdown
     const categories = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'OTHER'];
@@ -2537,11 +2541,24 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     console.table(tableData);
     console.log('======================================================\n');
 
+    // Fee correction summary: pending refunds (isSettled=false) and total settled
+    const pendingRefunds = (feeCorrections as any[]).filter(fc => !fc.isSettled);
+    const settledRefunds = (feeCorrections as any[]).filter(fc => fc.isSettled);
+    const correctionSummary = {
+        total: feeCorrections.length,
+        pendingCount: pendingRefunds.length,
+        pendingTotal: pendingRefunds.reduce((s: number, fc: any) => s + (fc.amount ?? 0), 0),
+        settledCount: settledRefunds.length,
+        settledTotal: settledRefunds.reduce((s: number, fc: any) => s + (fc.amount ?? 0), 0),
+    };
+
     return {
         summary,
         breakdown,
         ledger: ledgers,
-        payments: paymentsWithUrls
+        payments: paymentsWithUrls,
+        feeCorrections,
+        correctionSummary,
     };
 };
 
