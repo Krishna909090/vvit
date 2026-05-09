@@ -7,7 +7,7 @@ const payLog = createModuleLogger('PAYMENT');
 const webhookLog = createModuleLogger('WEBHOOK');
 const ledgerLog = createModuleLogger('LEDGER');
 import { format } from 'date-fns';
-import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod, PaymentMode, HostelPaymentMode } from '@prisma/client';
+import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod, PaymentMode, HostelPaymentMode, AccommodationType } from '@prisma/client';
 import { getApplicationFeeAmount } from './fee.service';
 import { getOrCreateAccommodationPricing, resolveFeeDemandContext } from '../../utils/studentContext';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
@@ -1783,8 +1783,7 @@ export const getStudentFinancialSummary = async (studentId: string) => {
                     hostel: { include: { rooms: true } },
                     transportRoute: true
                 }
-            },
-            accommodationPricing: true
+            }
         }
     }) as any;
 
@@ -2057,7 +2056,7 @@ export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
             where: { id: studentId },
             include: {
                 admissionDetails: true,
-                accommodationPricing: true,
+                accommodationPricing: { where: { isActive: true }, take: 1 },
             } as any,
         }) as any;
 
@@ -2065,13 +2064,13 @@ export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
             logger.warn(`[HostelAllotment] Student ${studentId} has no admission record — skipping`);
             return;
         }
-        if (!student.accommodationPricing) {
-            logger.warn(`[HostelAllotment] Student ${studentId} has no accommodation snapshot — skipping (bed not yet allocated?)`);
+        const snap = student.accommodationPricing?.[0] ?? null;
+        if (!snap) {
+            logger.warn(`[HostelAllotment] Student ${studentId} has no active accommodation snapshot — skipping (bed not yet allocated?)`);
             return;
         }
 
         const admission = student.admissionDetails;
-        const snap = student.accommodationPricing;
 
         // Pull hostel + the allocated bed for warden + floor + bed number
         const hostel = admission.hostelId
@@ -2323,8 +2322,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
                     hostel: { include: { rooms: true } },
                     transportRoute: true
                 }
-            },
-            accommodationPricing: true
+            }
         }
     }) as any;
 
@@ -2399,6 +2397,9 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         const target = breakdown[targetKey];
         
         target.demanded += demand.amount;
+        // Credit applied at demand creation (e.g. previously-paid amount carried into a reassign/switch demand).
+        // Without this, "pending" miscounts demands that are already fully covered by prior payments.
+        target.discount += demand.discountAmount ?? 0;
         if (demand.scholarshipAmount) target.scholarshipAmount += demand.scholarshipAmount;
         if (demand.fineAmount) target.fine += demand.fineAmount;
         if (headId && !target.feeHeadId) target.feeHeadId = headId;
@@ -2411,18 +2412,24 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     //    bed-allocated (correct: hostel demand stays 0).
     if (student && student.admissionDetails) {
         const admission = student.admissionDetails;
-        const snapshot = await getOrCreateAccommodationPricing(studentId);
 
-        if (snapshot) {
-            breakdown.HOSTEL_ACCOMMODATION.demanded = snapshot.accommodationPrice ?? 0;
-            breakdown.HOSTEL_MESS.demanded           = snapshot.messPrice ?? 0;
-            breakdown.HOSTEL_LAUNDRY.demanded        = snapshot.laundryPrice ?? 0;
-            breakdown.HOSTEL_REGISTRATION.demanded   = snapshot.registrationFee ?? 0;
+        // Hostel override only when the student is currently on HOSTEL. If they switched to
+        // TRANSPORT/NONE, an old snapshot must not synthesize HOSTEL_* demand lines — the
+        // demand-row aggregation above is the authoritative source for those rows.
+        if (admission.accommodationType === AccommodationType.HOSTEL) {
+            const snapshot = await getOrCreateAccommodationPricing(studentId);
+            if (snapshot) {
+                breakdown.HOSTEL_ACCOMMODATION.demanded = snapshot.accommodationPrice ?? 0;
+                breakdown.HOSTEL_MESS.demanded           = snapshot.messPrice ?? 0;
+                breakdown.HOSTEL_LAUNDRY.demanded        = snapshot.laundryPrice ?? 0;
+                breakdown.HOSTEL_REGISTRATION.demanded   = snapshot.registrationFee ?? 0;
+            }
+            // else: student has no bed yet → all hostel buckets remain 0 (correct)
         }
-        // else: student has no bed yet → all hostel buckets remain 0 (correct)
 
         // Transport — uses live route.cost (no snapshot model for transport pricing)
-        if (admission.transportRouteId && admission.transportRoute) {
+        if (admission.accommodationType === AccommodationType.TRANSPORT
+            && admission.transportRouteId && admission.transportRoute) {
             breakdown.TRANSPORT.demanded = admission.transportRoute.cost;
         }
     }

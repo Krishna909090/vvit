@@ -550,18 +550,19 @@ export const finalizeAdmissionSchema = z.object({
         }).nullable(),
         allocation: z.object({
             type: z.nativeEnum(AccommodationType),
-            hostelId: z.string().uuid().optional(),
+            hostelId: z.string().uuid().optional(),                         // optional — inferred from student's admission if not sent
             transportRouteId: z.string().uuid().optional(),
             hostelType: z.nativeEnum(HostelType).optional(),
             hostelPaymentMode: z.nativeEnum(HostelPaymentMode).optional(),
         }).refine((data) => {
             if (data.type === AccommodationType.HOSTEL) {
-                return !!data.hostelId && !!data.hostelType && !!data.hostelPaymentMode;
+                // hostelId is no longer required in body — picked up from student's admission
+                return !!data.hostelType && !!data.hostelPaymentMode;
             }
             if (data.type === AccommodationType.TRANSPORT) return !!data.transportRouteId;
             return true;
         }, {
-            message: "For HOSTEL: hostelId, hostelType (SHARING_*), and hostelPaymentMode are required. For TRANSPORT: transportRouteId is required.",
+            message: "For HOSTEL: hostelType (SHARING_*) and hostelPaymentMode are required. For TRANSPORT: transportRouteId is required.",
         }).optional(),
         course: z.object({
             allottedCourseId: z.string().uuid(),

@@ -323,14 +323,14 @@ export const reassignHostel = catchAsync(async (req: Request, res: Response, nex
 // Allocate a specific bed to a student already assigned to a hostel
 export const allocateBed = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { bedId, academicYearId } = req.body;
-    logger.info(`[allocateBed] studentId=${studentId} bedId=${bedId} by=${req.user?.userId || 'anonymous'}`);
+    const { bedId, hostelId, academicYearId } = req.body;
+    logger.info(`[allocateBed] studentId=${studentId} bedId=${bedId} hostelId=${hostelId ?? 'unset'} by=${req.user?.userId || 'anonymous'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot allocate their own bed', 403);
     }
 
-    const result = await AdminStudentService.allocateBed(studentId, bedId, academicYearId, req.user?.userId);
+    const result = await AdminStudentService.allocateBed(studentId, bedId, hostelId, academicYearId, req.user?.userId);
 
     sendResponse({
         res,
@@ -375,6 +375,20 @@ export const getTransportAllocatedStudents = catchAsync(async (req: Request, res
 export const getBedAllocatedStudents = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getBedAllocatedStudents] by=${req.user?.userId || 'anonymous'}`);
     const result = await AdminStudentService.getBedAllocatedStudents(req.query);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
+// List students currently on HOSTEL who've paid at least ₹1 toward hostel
+export const getHostelPaidStudents = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getHostelPaidStudents] by=${req.user?.userId || 'anonymous'}`);
+    const result = await AdminStudentService.getHostelPaidStudents(req.query);
 
     sendResponse({
         res,

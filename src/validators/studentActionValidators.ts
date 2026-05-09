@@ -40,6 +40,7 @@ export const allocateBedSchema = z.object({
     }),
     body: z.object({
         bedId: z.string().uuid("Invalid Bed ID"),
+        hostelId: z.string().uuid("Invalid Hostel ID").optional(),
         academicYearId: z.string().uuid("Invalid Academic Year ID").optional(),
     }),
 });
@@ -197,6 +198,16 @@ export const transportAllocatedStudentsQuerySchema = z.object({
         search: z.string().trim().optional(),
         gender: z.string().trim().optional(),
         routeId: z.string().uuid("Invalid Route ID").optional(),
+        all: z.string().optional().transform(v => v === 'true' || v === '1'),
+    }),
+});
+
+export const hostelPaidStudentsQuerySchema = z.object({
+    query: z.object({
+        page: z.string().optional().transform(v => v ? Number(v) : 1),
+        limit: z.string().optional().transform(v => v ? Number(v) : 10),
+        search: z.string().trim().optional(),
+        gender: z.string().trim().optional(),
         all: z.string().optional().transform(v => v === 'true' || v === '1'),
     }),
 });

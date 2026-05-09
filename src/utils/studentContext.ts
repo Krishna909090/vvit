@@ -83,7 +83,10 @@ export const getStudentContext = async (studentId: string, tx?: any): Promise<St
                 orderBy: { createdAt: 'desc' },
                 take: 1
             },
-            accommodationPricing: true
+            accommodationPricing: {
+                where: { isActive: true },
+                take: 1
+            }
         }
     });
     if (!student) throw new AppError('Student not found', 404);
@@ -142,7 +145,7 @@ export const getStudentContext = async (studentId: string, tx?: any): Promise<St
             academicYearId: enrollment.academicYearId,
             status: enrollment.status,
         } : null,
-        accommodationPricing: student.accommodationPricing ?? null,
+        accommodationPricing: student.accommodationPricing?.[0] ?? null,
         hostel,
         yearOfStudy,
         currentSemester,
@@ -223,9 +226,11 @@ export const resolveFeeDemandContext = async (
 export const getOrCreateAccommodationPricing = async (studentId: string, tx?: any): Promise<any | null> => {
     const client = tx || prisma;
 
-    // 1. Existing snapshot — return as-is
-    const existing = await client.studentAccommodationPricing.findUnique({
-        where: { studentId }
+    // 1. Existing active snapshot — return as-is.
+    // Supersede semantics: at most one row per studentId has isActive=true at any time.
+    // Older rows (isActive=false) are kept for audit/refund history but never read here.
+    const existing = await client.studentAccommodationPricing.findFirst({
+        where: { studentId, isActive: true }
     });
     if (existing) return existing;
 
@@ -281,7 +286,8 @@ export const getOrCreateAccommodationPricing = async (studentId: string, tx?: an
     const registrationFee    = priceCategory.registrationFee ?? 0;
     const effectiveTotal     = accommodationPrice + messPrice + laundryPrice + registrationFee;
 
-    // 5. Self-healing create. Race-condition safe via studentId @unique constraint.
+    // 5. Self-healing create. Race-condition safe via the partial unique index
+    // (studentId) WHERE isActive=true — see migration SQL.
     try {
         const snapshot = await client.studentAccommodationPricing.create({
             data: {
@@ -297,6 +303,7 @@ export const getOrCreateAccommodationPricing = async (studentId: string, tx?: an
                 registrationFee,
                 effectiveTotal,
                 pricingSource: 'AUTO_BACKFILL',
+                isActive: true,
                 createdBy: 'system'
             }
         });
@@ -305,7 +312,9 @@ export const getOrCreateAccommodationPricing = async (studentId: string, tx?: an
     } catch (err: any) {
         // P2002 = unique constraint violation; another concurrent request created it first.
         if (err?.code === 'P2002') {
-            return await client.studentAccommodationPricing.findUnique({ where: { studentId } });
+            return await client.studentAccommodationPricing.findFirst({
+                where: { studentId, isActive: true }
+            });
         }
         throw err;
     }

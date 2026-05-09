@@ -42,6 +42,7 @@ import {
     cancelTransport,
     getAvailableBeds,
     getBedAllocatedStudents,
+    getHostelPaidStudents,
     getPendingHostelAllocations,
     getStudentsByHostel,
     getTransportAllocatedStudents,
@@ -66,7 +67,7 @@ import {
     editProSchema,
     updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
-import { assignHostelSchema, assignTransportSchema, allocateBedSchema, availableBedsQuerySchema, bedAllocatedStudentsQuerySchema, cancelHostelSchema, cancelTransportSchema, pendingHostelAllocationsQuerySchema, studentsByHostelSchema, switchHostelToTransportSchema, switchTransportToHostelSchema, transportAllocatedStudentsQuerySchema, reassignHostelSchema, reassignTransportSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
+import { assignHostelSchema, assignTransportSchema, allocateBedSchema, availableBedsQuerySchema, bedAllocatedStudentsQuerySchema, cancelHostelSchema, cancelTransportSchema, hostelPaidStudentsQuerySchema, pendingHostelAllocationsQuerySchema, studentsByHostelSchema, switchHostelToTransportSchema, switchTransportToHostelSchema, transportAllocatedStudentsQuerySchema, reassignHostelSchema, reassignTransportSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
 
 import upload from '../../config/multer';
 import {
@@ -349,6 +350,16 @@ router.get('/hostel-pending-allocation', authenticate, authorizePermission(['stu
  * Response: { status, data: { hostel: { id, name, type }, students[], pagination } }
  */
 router.get('/by-hostel/:hostelId', authenticate, authorizePermission(['student.read.all']), validateRequest(studentsByHostelSchema), getStudentsByHostel);
+
+/**
+ * GET /admin/student/hostel-paid
+ * Lists students with accommodationType=HOSTEL who have at least one SUCCESS payment
+ * (amount > 0) tagged with any hostel component (HOSTEL/HOSTEL_ACCOMMODATION/MESS/LAUNDRY/REGISTRATION).
+ * No hostelId filter — spans all hostels.
+ * Query: { page?, limit?, search? (name/phone/applicationId), gender?, all? (true|1) }
+ * Response: { status, data: { students[], pagination } }
+ */
+router.get('/hostel-paid', authenticate, authorizePermission(['student.read.all']), validateRequest(hostelPaidStudentsQuerySchema), getHostelPaidStudents);
 
 /**
  * GET /admin/student/bed-allocated
