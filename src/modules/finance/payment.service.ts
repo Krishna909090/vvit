@@ -2413,6 +2413,22 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     if (student && student.admissionDetails) {
         const admission = student.admissionDetails;
 
+        // When override fires, both `demanded` and `discount` come from the active demand
+        // for the active snapshot/route — NOT the demand-row aggregation, which sums
+        // historical reassign churn (FULL demands with discount=full amount, netAmount=0)
+        // and would inflate `discount` past `demanded`. Active discount = sum of
+        // discountAmount on PENDING/PARTIAL demands of the matching feeHead.
+        const activeDiscountForFeeHead = (feeHeadId: string | undefined): number => {
+            if (!feeHeadId) return 0;
+            return feeDemands
+                .filter((d: any) =>
+                    d.feeHeadId === feeHeadId
+                    && !d.isDeleted
+                    && d.status !== FeeStatus.FULL
+                )
+                .reduce((sum: number, d: any) => sum + (d.discountAmount ?? 0), 0);
+        };
+
         // Hostel override only when the student is currently on HOSTEL. If they switched to
         // TRANSPORT/NONE, an old snapshot must not synthesize HOSTEL_* demand lines — the
         // demand-row aggregation above is the authoritative source for those rows.
@@ -2420,17 +2436,23 @@ export const getStudentFinancialHistory = async (studentId: string) => {
             const snapshot = await getOrCreateAccommodationPricing(studentId);
             if (snapshot) {
                 breakdown.HOSTEL_ACCOMMODATION.demanded = snapshot.accommodationPrice ?? 0;
-                breakdown.HOSTEL_MESS.demanded           = snapshot.messPrice ?? 0;
-                breakdown.HOSTEL_LAUNDRY.demanded        = snapshot.laundryPrice ?? 0;
-                breakdown.HOSTEL_REGISTRATION.demanded   = snapshot.registrationFee ?? 0;
+                breakdown.HOSTEL_ACCOMMODATION.discount = activeDiscountForFeeHead(breakdown.HOSTEL_ACCOMMODATION.feeHeadId);
+                breakdown.HOSTEL_MESS.demanded          = snapshot.messPrice ?? 0;
+                breakdown.HOSTEL_MESS.discount          = activeDiscountForFeeHead(breakdown.HOSTEL_MESS.feeHeadId);
+                breakdown.HOSTEL_LAUNDRY.demanded       = snapshot.laundryPrice ?? 0;
+                breakdown.HOSTEL_LAUNDRY.discount       = activeDiscountForFeeHead(breakdown.HOSTEL_LAUNDRY.feeHeadId);
+                breakdown.HOSTEL_REGISTRATION.demanded  = snapshot.registrationFee ?? 0;
+                breakdown.HOSTEL_REGISTRATION.discount  = activeDiscountForFeeHead(breakdown.HOSTEL_REGISTRATION.feeHeadId);
             }
             // else: student has no bed yet → all hostel buckets remain 0 (correct)
         }
 
-        // Transport — uses live route.cost (no snapshot model for transport pricing)
+        // Transport — uses live route.cost (no snapshot model for transport pricing).
+        // Discount is reset to the active PENDING demand's discount, same reasoning as hostel.
         if (admission.accommodationType === AccommodationType.TRANSPORT
             && admission.transportRouteId && admission.transportRoute) {
             breakdown.TRANSPORT.demanded = admission.transportRoute.cost;
+            breakdown.TRANSPORT.discount = activeDiscountForFeeHead(breakdown.TRANSPORT.feeHeadId);
         }
     }
 
