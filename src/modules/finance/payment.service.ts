@@ -2445,6 +2445,11 @@ export const getStudentFinancialHistory = async (studentId: string) => {
                 breakdown.HOSTEL_REGISTRATION.discount  = activeDiscountForFeeHead(breakdown.HOSTEL_REGISTRATION.feeHeadId);
             }
             // else: student has no bed yet → all hostel buckets remain 0 (correct)
+
+            // Student is on HOSTEL — any TRANSPORT demand rows are stale (from a prior
+            // H→T switch that was reversed). Zero the bucket so it doesn't inflate totals.
+            breakdown.TRANSPORT.demanded = 0;
+            breakdown.TRANSPORT.discount = 0;
         }
 
         // Transport — uses live route.cost (no snapshot model for transport pricing).
@@ -2453,13 +2458,48 @@ export const getStudentFinancialHistory = async (studentId: string) => {
             && admission.transportRouteId && admission.transportRoute) {
             breakdown.TRANSPORT.demanded = admission.transportRoute.cost;
             breakdown.TRANSPORT.discount = activeDiscountForFeeHead(breakdown.TRANSPORT.feeHeadId);
+
+            // Mirror inverse: zero hostel buckets so stale snapshots/demands don't leak
+            breakdown.HOSTEL_ACCOMMODATION.demanded = 0;
+            breakdown.HOSTEL_ACCOMMODATION.discount = 0;
+            breakdown.HOSTEL_MESS.demanded          = 0;
+            breakdown.HOSTEL_MESS.discount          = 0;
+            breakdown.HOSTEL_LAUNDRY.demanded       = 0;
+            breakdown.HOSTEL_LAUNDRY.discount       = 0;
+            breakdown.HOSTEL_REGISTRATION.demanded  = 0;
+            breakdown.HOSTEL_REGISTRATION.discount  = 0;
+        }
+
+        // NONE — student has no active accommodation; both buckets must be 0
+        if (admission.accommodationType !== AccommodationType.HOSTEL
+            && admission.accommodationType !== AccommodationType.TRANSPORT) {
+            breakdown.HOSTEL_ACCOMMODATION.demanded = 0;
+            breakdown.HOSTEL_ACCOMMODATION.discount = 0;
+            breakdown.HOSTEL_MESS.demanded          = 0;
+            breakdown.HOSTEL_MESS.discount          = 0;
+            breakdown.HOSTEL_LAUNDRY.demanded       = 0;
+            breakdown.HOSTEL_LAUNDRY.discount       = 0;
+            breakdown.HOSTEL_REGISTRATION.demanded  = 0;
+            breakdown.HOSTEL_REGISTRATION.discount  = 0;
+            breakdown.TRANSPORT.demanded            = 0;
+            breakdown.TRANSPORT.discount            = 0;
         }
     }
 
     // 6. LEDGER ADJUSTMENTS (Discounts, Scholarships)
+    // Reassign/cancellation/switch CREDITs are mirrored as FeeCorrection refund rows;
+    // counting them here would double-account against `correctionSummary`.
+    const REFUND_LIKE_REFERENCE_TYPES = new Set([
+        'CANCELLATION',
+        'HOSTEL_REASSIGNMENT',
+        'HOSTEL_CANCELLATION',
+        'TRANSPORT_REASSIGNMENT',
+        'TRANSPORT_CANCELLATION',
+        'ACCOMMODATION_SWITCH',
+    ]);
     ledgers.forEach(entry => {
-        // Skip cancellation entries — they should not affect financial history
-        if (entry.referenceType === 'CANCELLATION') return;
+        // Skip cancellation/reassign/switch — those are reflected in FeeCorrection, not here.
+        if (REFUND_LIKE_REFERENCE_TYPES.has(entry.referenceType as string)) return;
 
         // Strict: bucket by feeHeadId only. Ledger entries without a feeHeadId
         // bucket as OTHER (no description keyword fallback).
@@ -2533,7 +2573,13 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
         .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
     const scholarshipCredits = ledgers
-        .filter(l => l.type === 'CREDIT' && l.referenceType !== 'PAYMENT' && l.referenceType !== 'COURSE_CHANGE' && l.referenceType !== 'CANCELLATION' && l.referenceType !== 'FEE_CORRECTION')
+        .filter(l =>
+            l.type === 'CREDIT'
+            && l.referenceType !== 'PAYMENT'
+            && l.referenceType !== 'COURSE_CHANGE'
+            && l.referenceType !== 'FEE_CORRECTION'
+            && !REFUND_LIKE_REFERENCE_TYPES.has(l.referenceType as string)
+        )
         .reduce((sum, l) => sum + l.amount, 0);
     const scholarshipReversals = ledgers
         .filter(l => l.type === 'DEBIT' && l.referenceType === 'SCHOLARSHIP')
