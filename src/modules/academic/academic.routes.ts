@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
-import { validateRequest } from '../../middlewares/validationMiddleware';
+import { validateRequest } from '../../middleware/validationMiddleware';
 import {
     createAcademicYear, getAcademicYears, updateAcademicYear, deleteAcademicYear,
     createSchool, getSchools, getSchoolById, updateSchool, deleteSchool,

@@ -6,7 +6,7 @@ import { MESSAGES } from '../../constants/messages';
 import logger from '../../utils/logger';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { getHostelCostTx } from '../../utils/hostelPricing';
-import { assertHostelHasCapacity } from '../infrastructure/hostel.service';
+import { assertHostelHasCapacity } from '../accommodation/hostel/hostel.service';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';

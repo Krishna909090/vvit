@@ -5,9 +5,9 @@ import { authenticate, authorizePermission } from '../../middleware/rbac.middlew
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
 import feeRoutes from './fee.routes';
-import { paymentRateLimiter } from '../../middlewares/rateLimitMiddleware';
+import { paymentRateLimiter } from '../../middleware/rateLimitMiddleware';
 import { payFeeComponentSchema } from '../../validators/paymentValidators';
-import { validateRequest } from '../../middlewares/validationMiddleware';
+import { validateRequest } from '../../middleware/validationMiddleware';
 
 const router = express.Router();
 

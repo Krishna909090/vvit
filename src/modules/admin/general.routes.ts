@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
-import { validateRequest } from '../../middlewares/validationMiddleware';
+import { validateRequest } from '../../middleware/validationMiddleware';
 import {
     getDashboardStats, addAdmin, getAgentCommissions, getUserDetails, addInvigilator, getStaffUsers, updateStaffUser, deleteStaffUser,
     getSystemSettings, updateSystemSetting, updateAgentCommissionStatus, assignUserRoleAndGroups, updateFullStaffDetails

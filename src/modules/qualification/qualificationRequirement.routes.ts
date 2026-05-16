@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
-import { validateRequest } from '../../middlewares/validationMiddleware';
+import { validateRequest } from '../../middleware/validationMiddleware';
 import * as controller from './qualificationRequirement.controller';
 import { createQualificationRequirementSchema, updateQualificationRequirementSchema } from '../../validators/qualificationRequirementValidators';
 

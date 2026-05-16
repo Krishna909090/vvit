@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { getUserPermissions } from '../modules/rbac/services/rbac.service';
+import { getUserPermissions } from '../modules/rbac/rbac.service';
 import { AppError } from '../utils/AppError';
 import logger from '../utils/logger';
 import { RoleType } from '../constants/roles';

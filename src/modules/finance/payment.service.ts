@@ -12,7 +12,7 @@ import { getApplicationFeeAmount } from './fee.service';
 import { getOrCreateAccommodationPricing, resolveFeeDemandContext } from '../../utils/studentContext';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
-import { ScholarshipService } from '../admin/scholarship.service';
+import { ScholarshipService } from './scholarship.service';
 import { generateAllotmentOrderPDF, generateHostelAllotmentOrderPDF } from '../../utils/allotmentGenerator';
 import { StudentDocumentStatus } from '@prisma/client';
 import { sendPaymentReceipt } from '../../utils/emailService';
@@ -583,7 +583,7 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
              if (needsUpdate) {
                  const isAdmissionPayment = payments.some((p: any) => p.metadata?.targetAction === 'FINALIZE_ADMISSION');
                  if (isAdmissionPayment) {
-                     const { AdminStudentService } = await import('../admin/adminStudent.service');
+                     const { AdminStudentService } = await import('../studentManagement/adminStudent.service');
                      await AdminStudentService._completeAdmissionTransaction(payments, 'system', merchantTransactionId, response);
                  } else {
                      await processMultiPaymentSuccess(payments, response);
@@ -874,7 +874,7 @@ const _handleTriggers = async (payments: any[]) => {
     const finalizeTrigger = payments.find(p => p.metadata?.targetAction === 'FINALIZE_ADMISSION');
     if (finalizeTrigger) {
          try {
-            const { AdminStudentService } = require('../admin/adminStudent.service');
+            const { AdminStudentService } = require('../studentManagement/adminStudent.service');
             await prisma.$transaction(async (tx) => {
                  await AdminStudentService.executeAdmissionUpdates(finalizeTrigger.studentId, finalizeTrigger.metadata, finalizeTrigger.id, 'SYSTEM', tx);
             });

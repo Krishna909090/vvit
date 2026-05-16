@@ -4,7 +4,7 @@ import { getPaymentReceiptTemplate, PaymentEmailData, PaymentEmailType, HallTick
 import fs from 'fs';
 import path from 'path';
 import { EmailStatus } from '@prisma/client';
-import { createEmailLog, updateEmailStatus, getEmailLogById } from '../modules/system/emailLog.service';
+import { createEmailLog, updateEmailStatus, getEmailLogById } from '../modules/system/emailLog/emailLog.service';
 import { generateInvoicePDF, InvoiceData } from './invoiceGenerator';
 import { uploadFileToS3 } from './s3Utils';
 

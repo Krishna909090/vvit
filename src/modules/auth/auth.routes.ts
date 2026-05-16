@@ -6,7 +6,7 @@ import {
     adminIssueStudentResetOtp,
     studentResetPassword,
 } from './student-auth.controller';
-import { validateRequest } from '../../middlewares/validationMiddleware';
+import { validateRequest } from '../../middleware/validationMiddleware';
 import {
     sendOtpSchema,
     verifyOtpSchema,
@@ -17,7 +17,7 @@ import {
     adminIssueStudentOtpSchema,
     studentResetPasswordSchema,
 } from '../../validators/authValidators';
-import { authRateLimiter } from '../../middlewares/rateLimitMiddleware';
+import { authRateLimiter } from '../../middleware/rateLimitMiddleware';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 
 const router = Router();

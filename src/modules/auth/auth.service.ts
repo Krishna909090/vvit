@@ -9,7 +9,7 @@ import { AppError } from '../../utils/AppError';
 import { sendBsnlOtp, sendZeptoEmail } from '../integration/integration.service';
 import { MESSAGES } from '../../constants/messages';
 import { maskPhone, maskEmail } from '../../utils/mask';
-import { getUserPermissions, getUserModules } from '../rbac/services/rbac.service';
+import { getUserPermissions, getUserModules } from '../rbac/rbac.service';
 
 // JWT_SECRET is validated on startup by envValidator - no fallback needed
 const JWT_SECRET = process.env.JWT_SECRET!;

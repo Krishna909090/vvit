@@ -23,7 +23,7 @@ import {
 } from '../finance/payment.controller';
 
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
-import { validateRequest } from '../../middlewares/validationMiddleware';
+import { validateRequest } from '../../middleware/validationMiddleware';
 import {
     registerStudentSchema,
     studentIdParamSchema,

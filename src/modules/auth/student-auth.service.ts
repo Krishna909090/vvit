@@ -5,7 +5,7 @@ import prisma from "../../config/prisma";
 import { Role } from "../../constants/roles";
 import logger from "../../utils/logger";
 import { AppError } from "../../utils/AppError";
-import { getUserPermissions, getUserModules } from "../rbac/services/rbac.service";
+import { getUserPermissions, getUserModules } from "../rbac/rbac.service";
 import { encrypt, decrypt } from "../../utils/encryption";
 
 const JWT_SECRET = process.env.JWT_SECRET!;

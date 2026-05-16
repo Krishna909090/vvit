@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import * as rbacService from './services/rbac.service';
+import * as rbacService from './rbac.service';
 
 // --- GROUPS ---
 export const createGroup = async (req: Request, res: Response, next: NextFunction) => {

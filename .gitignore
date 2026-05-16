@@ -66,3 +66,6 @@ deploy.zip
 *.html
 *.pdf
 *.sql
+
+*.svg
+*.png

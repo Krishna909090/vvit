@@ -2,9 +2,9 @@
 import { Router } from 'express';
 import { scanAttendance, verifyAttendance, manualScan } from './exam.controller';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
-import { validateRequest } from '../../middlewares/validationMiddleware';
+import { validateRequest } from '../../middleware/validationMiddleware';
 import { scanAttendanceSchema } from '../../validators/examValidators';
-import { qrScanRateLimiter } from '../../middlewares/rateLimitMiddleware';
+import { qrScanRateLimiter } from '../../middleware/rateLimitMiddleware';
 
 const router = Router();
 

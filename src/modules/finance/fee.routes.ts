@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
-import { validateRequest } from '../../middlewares/validationMiddleware';
+import { validateRequest } from '../../middleware/validationMiddleware';
 import {
     createFeeHead, getFeeHeads, updateFeeHead, deleteFeeHead,
     createFeeStructure, createBulkFeeStructure, bulkHeadsFeeStructure, cloneFeeStructures, getFeeStructures, updateFeeStructure, deleteFeeStructure,
