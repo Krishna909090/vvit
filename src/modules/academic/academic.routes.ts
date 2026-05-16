@@ -12,9 +12,15 @@ import {
 } from './academic.controller';
 import {
     createAcademicYearSchema, createSchoolSchema, createDepartmentSchema,
-    createCourseSchema, createSpecializationSchema, createBatchSchema, createSectionSchema
+    createCourseSchema, createSpecializationSchema, createBatchSchema, createSectionSchema,
+    createCourseCapacitySchema, upsertCourseCapacitySchema,
+    bulkUpsertCourseCapacitySchema, updateCourseCapacitySchema,
 } from '../../validators/adminValidators';
 import { promoteStudentsController, getEnrollmentHistoryController, getYearWiseFinancialsController } from './yearPromotion.controller';
+import {
+    createCapacity, upsertCapacity, bulkUpsertCapacity,
+    listCapacity, getCapacity, updateCapacity, deleteCapacity,
+} from './courseCapacity.controller';
 
 const router = Router();
 
@@ -403,5 +409,55 @@ router.get('/enrollment-history/:studentId', authenticate, authorizePermission([
  * @returns 200 - { status: 'success', data: YearWiseFinancial[] }
  */
 router.get('/year-wise-financials/:studentId', authenticate, authorizePermission(['academic.read.all', 'finance.read.all', 'finance.read.own']), getYearWiseFinancialsController);
+
+// ═══════════════════════════════════════════════════════════
+//  COURSE CAPACITY (per Course × AcademicYear)
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * @route   POST /capacity
+ * @desc    Create a per-year capacity row for a course (strict — fails on duplicate).
+ * @body    { courseId, academicYearId, totalSeats, filledSeats? }
+ */
+router.post('/capacity', authenticate, authorizePermission('academic.create.all'), validateRequest(createCourseCapacitySchema), createCapacity);
+
+/**
+ * @route   POST /capacity/upsert
+ * @desc    Create-or-update single (course × year) capacity. Idempotent.
+ * @body    { courseId, academicYearId, totalSeats }
+ */
+router.post('/capacity/upsert', authenticate, authorizePermission('academic.create.all'), validateRequest(upsertCourseCapacitySchema), upsertCapacity);
+
+/**
+ * @route   POST /capacity/bulk
+ * @desc    Bulk upsert capacity for many courses in one academic year.
+ * @body    { academicYearId, rows: [{ courseId, totalSeats }] }
+ */
+router.post('/capacity/bulk', authenticate, authorizePermission('academic.create.all'), validateRequest(bulkUpsertCourseCapacitySchema), bulkUpsertCapacity);
+
+/**
+ * @route   GET /capacity
+ * @desc    List capacity rows. Optional filters: courseId, academicYearId.
+ */
+router.get('/capacity', authenticate, authorizePermission('academic.read.all'), listCapacity);
+
+/**
+ * @route   GET /capacity/:id
+ * @desc    Get a single capacity row by id.
+ */
+router.get('/capacity/:id', authenticate, authorizePermission('academic.read.all'), getCapacity);
+
+/**
+ * @route   PUT /capacity/:id
+ * @desc    Update totalSeats and/or filledSeats on a specific capacity row.
+ * @body    { totalSeats?, filledSeats? }
+ */
+router.put('/capacity/:id', authenticate, authorizePermission('academic.update.all'), validateRequest(updateCourseCapacitySchema), updateCapacity);
+
+/**
+ * @route   DELETE /capacity/:id
+ * @desc    Delete a capacity row (only allowed when filledSeats = 0).
+ */
+router.delete('/capacity/:id', authenticate, authorizePermission('academic.delete.all'), deleteCapacity);
 
 export default router;

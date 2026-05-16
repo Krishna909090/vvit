@@ -3,11 +3,11 @@ import { authenticate, authorizePermission } from '../../middleware/rbac.middlew
 import { validateRequest } from '../../middlewares/validationMiddleware';
 import {
     createFeeHead, getFeeHeads, updateFeeHead, deleteFeeHead,
-    createFeeStructure, createBulkFeeStructure, getFeeStructures, updateFeeStructure, deleteFeeStructure,
+    createFeeStructure, createBulkFeeStructure, bulkHeadsFeeStructure, cloneFeeStructures, getFeeStructures, updateFeeStructure, deleteFeeStructure,
     getFeeStatistics,
     createDiscountRequest, updateDiscountRequest, deleteDiscountRequest, approveDiscount,
     getApplicationFee, updateApplicationFee,
-    collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, getStudentFeeDemands, getPaymentHistory,
+    collectFee, getStudentLedger, downloadAllotmentOrder, generateFeeDemands, generateFeeDemandsBulk, getStudentFeeDemands, getPaymentHistory,
     addStudentDiscount,
     getDiscountRequests,
     getCourseFeeHeads,
@@ -16,7 +16,10 @@ import {
 
 import {
     createFeeHeadSchema, updateFeeHeadSchema, createFeeStructureSchema, createBulkFeeStructureSchema,
-    createDiscountRequestSchema, updateDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema
+    bulkHeadsFeeStructureSchema,
+    cloneFeeStructuresSchema,
+    createDiscountRequestSchema, updateDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema,
+    generateFeeDemandsBulkSchema
 } from '../../validators/adminValidators';
 
 const router = Router();
@@ -80,12 +83,45 @@ router.get('/course-fee-heads/:courseId', authenticate, authorizePermission(['fi
 router.post('/fee-structure/bulk', authenticate, authorizePermission('finance.create.all'), validateRequest(createBulkFeeStructureSchema), createBulkFeeStructure);
 
 /**
+ * POST /finance/fees/fee-structure/bulk-heads
+ * Creates many fee structures in one call — same (course, year, entryType, quota, ...)
+ * combination, multiple fee heads each with their own amount.
+ * Body: {
+ *   courseId, academicYearId, entryAcademicYearId?, entryType?, instituteCode?, quotaType?, yearOfStudy?,
+ *   feeHeads: [ { feeHeadId, amount }, ... ]
+ * }
+ * Response: { status, message, data: { createdCount, skippedCount, created, skipped } }
+ */
+router.post('/fee-structure/bulk-heads',
+    authenticate,
+    authorizePermission('finance.create.all'),
+    validateRequest(bulkHeadsFeeStructureSchema),
+    bulkHeadsFeeStructure,
+);
+
+/**
  * POST /finance/fees/fee-structure
  * Creates a single fee structure entry.
  * Body: { courseId, feeHeadId, amount, academicYearId, yearOfStudy?, quotaType?, courseType? }
  * Response: { status, data: { id } }
  */
 router.post('/fee-structure', authenticate, authorizePermission('finance.create.all'), validateRequest(createFeeStructureSchema), createFeeStructure);
+
+/**
+ * POST /finance/fees/fee-structure/clone-academic-year
+ * Clone all (non-deleted) fee structures from one academic year to another.
+ * Used to seed a NEW academic year (clone prior year, then edit), or to BACK-FILL
+ * a past year for lateral / back-dated admissions so generateFeeDemands has rows
+ * to seed against.
+ * Body: { sourceAcademicYearId, targetAcademicYearId, multiplier?, courseIds? }
+ * Response: { status, data: { cloned, skipped, total, source, target, multiplier? } }
+ */
+router.post('/fee-structure/clone-academic-year',
+    authenticate,
+    authorizePermission('finance.create.all'),
+    validateRequest(cloneFeeStructuresSchema),
+    cloneFeeStructures
+);
 
 /**
  * GET /finance/fees/fee-structure
@@ -116,14 +152,35 @@ router.delete('/fee-structure/:id', authenticate, authorizePermission('finance.d
 
 /**
  * POST /finance/fees/generate-demands
- * Generates fee demands for a student based on their course, year, quota, and academic year.
- * Looks up applicable fee structures and creates StudentFeeDemand records.
- * Applies scholarship discounts automatically if the student has an active scholarship.
- * Skips fee heads where a demand already exists (idempotent).
- * Body: { studentId, academicYearId, courseId }
- * Response: { status, message, data: { generated: number, skipped: number, demands: [] } }
+ * Generates fee demands for a single student based on their course, year, quota, and academic year.
+ * Looks up applicable fee structures via admission cohort tags (entryAcademicYearId/entryType/instituteCode),
+ * applies scholarship discounts (only when isEligible='YES' AND FeeHead.component='TUITION'),
+ * and skips fee heads where a demand already exists (idempotent).
+ * Body: {
+ *   studentId, courseId, academicYearId,
+ *   deleteExisting?:      boolean (default false — wipes & re-seeds this course/year),
+ *   allowLegacyFallback?: boolean (default true  — falls back to NULL-tagged structures when strict pass returns 0),
+ *   requireEnrollment?:   boolean (default false — when true, errors if student isn't enrolled in that year),
+ *   dueDateFallbackDays?: number  (default 30   — days past AcademicYear.startDate for dueDate)
+ * }
+ * Response: { status, message, data: { generated, skipped, considered, fallbackUsed, scholarshipApplied, structuresStrict, structuresFallback, demands } }
  */
 router.post('/generate-demands', authenticate, authorizePermission('finance.create.all'), validateRequest(generateFeeDemandsSchema), generateFeeDemands);
+
+/**
+ * POST /finance/fees/generate-demands-bulk
+ * Generates fee demands for EVERY active enrollment in the target academic year that
+ * matches the cohort filter. Designed for end-of-year promotion runs covering freshers
+ * + seniors + laterals in one operation. Strict by default (allowLegacyFallback=false,
+ * requireEnrollment=true) — flip the flags in runOptions for legacy semantics.
+ * Body: {
+ *   academicYearId,
+ *   filters?: { courseIds?, entryTypes?, instituteCodes?, entryAcademicYearIds?, quotaTypes?, studentIds? },
+ *   runOptions?: { allowLegacyFallback?, requireEnrollment?, deleteExisting?, dueDateFallbackDays? }
+ * }
+ * Response: { status, data: { summary: { studentsProcessed, studentsOk, studentsFailed, demandsGenerated, demandsSkipped, fallbackHits, scholarshipsApplied }, perStudent: [...] } }
+ */
+router.post('/generate-demands-bulk', authenticate, authorizePermission('finance.create.all'), validateRequest(generateFeeDemandsBulkSchema), generateFeeDemandsBulk);
 
 // ═══════════════════════════════════════════════════════════
 // FEE STATISTICS & REPORTS

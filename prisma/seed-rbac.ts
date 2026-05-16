@@ -65,6 +65,38 @@ async function seedRBAC() {
         console.log(`✅ Permissions for module: ${moduleCode}`);
     }
 
+    // 2b. Create custom (non-CRUD) permissions
+    const customPermissions = [
+        {
+            key: 'student.create.lateral',
+            moduleCode: 'student',
+            description: 'Create lateral / transfer / back-dated student admissions (manual entry flow)',
+        },
+        {
+            key: 'student.password.reset',
+            moduleCode: 'student',
+            description: 'Issue a password-reset OTP to a student (admin-mediated forgot-password flow)',
+        },
+    ];
+
+    for (const perm of customPermissions) {
+        const module = createdModules[perm.moduleCode];
+        if (!module) {
+            console.warn(`⚠️  Skipping custom permission ${perm.key}: module ${perm.moduleCode} not found`);
+            continue;
+        }
+        await prisma.permission.upsert({
+            where: { key: perm.key },
+            update: { description: perm.description },
+            create: {
+                key: perm.key,
+                description: perm.description,
+                moduleId: module.id,
+            },
+        });
+        console.log(`✅ Custom permission: ${perm.key}`);
+    }
+
     // 3. Create Roles
     const roles = [
         { name: 'SuperAdminRole', description: 'Full system access' },

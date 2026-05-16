@@ -5,6 +5,7 @@ import { CancellationStatus, AdmissionStatus, PaymentStatus, PaymentComponent } 
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, convertToPresignedUrl } from '../../utils/s3Utils';
 import { sendCancellationReceipt } from '../../utils/emailService';
+import { incrementCourseCapacity, decrementCourseCapacity } from '../../utils/courseCapacity';
 
 const DEFAULT_DEDUCTION = 10_000;
 
@@ -496,12 +497,9 @@ export const CancellationService = {
                     },
                 });
 
-                // Free up course seat
-                if (admission?.allottedCourseId) {
-                    await tx.course.update({
-                        where: { id: admission.allottedCourseId },
-                        data:  { filledSeats: { decrement: 1 } },
-                    });
+                // Free up course seat (year-scoped via CourseCapacity)
+                if (admission?.allottedCourseId && admission.academicYearId) {
+                    await decrementCourseCapacity(tx, admission.allottedCourseId, admission.academicYearId);
                 }
 
                 // Vacate hostel allocation (hostel "filled" is computed on-demand from StudentAdmission.hostelId)
@@ -530,18 +528,6 @@ export const CancellationService = {
                 await (tx.studentScholarship as any).updateMany({
                     where: { studentId: request.studentId },
                     data:  { isEligible: 'NO', remarks: 'Cancelled — seat cancellation' },
-                });
-
-                // Clear scholarship fields on student
-                await tx.student.update({
-                    where: { id: request.studentId },
-                    data:  {
-                        eligibleScholarshipRuleId: null,
-                        scholarshipVerified: false,
-                        scholarshipVerifiedAt: null,
-                        scholarshipVerifiedBy: null,
-                        scholarshipRemarks: 'Cancelled — seat cancellation',
-                    },
                 });
 
                 // Fetch total scholarship amount before deleting fee demands
@@ -657,12 +643,13 @@ export const CancellationService = {
                         data:  { status: AdmissionStatus.ENROLLED },
                     });
 
-                    // Give back the seat
-                    if (request.student.admissionDetails?.allottedCourseId) {
-                        await tx.course.update({
-                            where: { id: request.student.admissionDetails.allottedCourseId },
-                            data:  { filledSeats: { increment: 1 } },
-                        });
+                    // Give back the seat (year-scoped via CourseCapacity)
+                    if (request.student.admissionDetails?.allottedCourseId && request.student.admissionDetails.academicYearId) {
+                        await incrementCourseCapacity(
+                            tx,
+                            request.student.admissionDetails.allottedCourseId,
+                            request.student.admissionDetails.academicYearId,
+                        );
                     }
 
                     // Restore payments back to SUCCESS

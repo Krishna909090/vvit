@@ -6,6 +6,7 @@ import logger from '../utils/logger';
 import { RoleType } from '../constants/roles';
 import { setContextUser } from '../utils/requestContext';
 import { isTokenBlacklisted } from '../modules/auth/auth.service';
+import prisma from '../config/prisma';
 
 // In-memory permission cache: userId -> { permissions, expiresAt }
 const permissionCache = new Map<string, { permissions: string[], expiresAt: number }>();
@@ -53,7 +54,23 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
             throw new AppError('Token has been revoked', 401);
         }
 
-        const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string, role: RoleType };
+        const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string, role: RoleType, tokenVersion?: number };
+
+        // If the token carries a tokenVersion, it must match the current value on User.
+        // Tokens issued before tokenVersion was introduced (no claim) are accepted for
+        // backward compatibility — they'll naturally rotate as users re-authenticate.
+        if (typeof decoded.tokenVersion === 'number') {
+            const user = await prisma.user.findUnique({
+                where: { id: decoded.userId },
+                select: { tokenVersion: true, isDeleted: true },
+            });
+            if (!user || user.isDeleted) {
+                throw new AppError('Account is no longer active', 401);
+            }
+            if (user.tokenVersion !== decoded.tokenVersion) {
+                throw new AppError('Token has been revoked', 401);
+            }
+        }
 
         setContextUser(decoded.userId);
 

@@ -399,6 +399,20 @@ export const getHostelPaidStudents = catchAsync(async (req: Request, res: Respon
     });
 });
 
+// List students currently on TRANSPORT who've paid at least ₹1 toward transport
+export const getTransportPaidStudents = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[getTransportPaidStudents] by=${req.user?.userId || 'anonymous'}`);
+    const result = await AdminStudentService.getTransportPaidStudents(req.query);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.DATA_FETCHED,
+        data: result
+    });
+});
+
 // List all students assigned to a specific hostel (roster view)
 export const getStudentsByHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { hostelId } = req.params;
@@ -931,6 +945,46 @@ export const finalizeAdmission = catchAsync(async (req: Request, res: Response, 
         success: true,
         message: result.message,
         data: result
+    });
+});
+
+export const manualEntryAdmission = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[manualEntryAdmission] by=${req.user?.userId || 'anonymous'} entryType=${req.body?.entry?.type ?? 'REGULAR'} yearOfStudy=${req.body?.entry?.yearOfStudy ?? 1}`);
+
+    const result = await AdminStudentService.manualEntryAdmission(req.body, req.user?.userId!);
+
+    res.status(201).json({
+        success: true,
+        message: 'Manual entry admission completed successfully',
+        data: result,
+    });
+});
+
+// Step 2 of the two-step admission flow: assign rollNumber + section to a
+// previously-registered student (after counseling / seat allotment). Creates
+// the StudentEnrollment row that backs roll-number-based login and billing.
+export const assignEnrollment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { rollNumber, sectionId, currentSemester, yearOfStudy, seedFeeDemands } = req.body;
+    logger.info(
+        `[assignEnrollment] by=${req.user?.userId || 'anonymous'} studentId=${studentId} ` +
+        `roll=${rollNumber} sectionId=${sectionId}`
+    );
+
+    const result = await AdminStudentService.assignEnrollment(
+        studentId,
+        rollNumber,
+        sectionId,
+        req.user!.userId,
+        { currentSemester, yearOfStudy, seedFeeDemands },
+    );
+
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: `Roll number ${rollNumber} assigned and enrollment created`,
+        data: result,
     });
 });
 

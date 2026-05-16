@@ -56,11 +56,19 @@ export const deleteFeeHead = catchAsync(async (req: Request, res: Response, next
 
 // Fee Structure
 export const createFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { courseId, feeHeadId, amount, academicYearId, quotaType, courseType, yearOfStudy, dueDate, degreeId } = req.body;
+    const {
+        courseId, feeHeadId, amount, academicYearId,
+        quotaType, yearOfStudy,
+        entryAcademicYearId, entryType, instituteCode,
+    } = req.body;
     const adminId = req.user!.userId;
 
-    const feeStructure = await FeeService.createFeeStructure(courseId, feeHeadId, amount, academicYearId, adminId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined, degreeId);
-    
+    const feeStructure = await FeeService.createFeeStructure(
+        courseId, feeHeadId, amount, academicYearId, adminId,
+        quotaType, yearOfStudy,
+        entryAcademicYearId, entryType, instituteCode,
+    );
+
     sendResponse({
         res,
         statusCode: 201,
@@ -70,13 +78,41 @@ export const createFeeStructure = catchAsync(async (req: Request, res: Response,
     });
 });
 
+export const bulkHeadsFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const {
+        courseId, academicYearId, entryAcademicYearId,
+        entryType, instituteCode, quotaType, yearOfStudy,
+        feeHeads,
+    } = req.body;
+    const adminId = req.user!.userId;
+
+    const result = await FeeService.createFeeStructuresForCombination({
+        courseId, academicYearId, entryAcademicYearId,
+        entryType, instituteCode, quotaType, yearOfStudy,
+        feeHeads,
+        userId: adminId,
+    });
+
+    const skipMsg = result.skippedCount > 0
+        ? ` (${result.skippedCount} skipped — already exist: ${result.skipped.map(s => s.feeHeadName).join(', ')})`
+        : '';
+
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: `Created ${result.createdCount} fee structure(s)${skipMsg}`,
+        data: result,
+    });
+});
+
 export const createBulkFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { degreeType, feeHeadId, amount, academicYearId, quotaType, courseType, yearOfStudy, dueDate } = req.body;
+    const { degreeType, feeHeadId, amount, academicYearId, quotaType, yearOfStudy } = req.body;
     const adminId = req.user!.userId;
 
     if (!degreeType) throw new AppError('Degree type is required', 400);
 
-    const result = await FeeService.createFeeStructureForDegree(degreeType, feeHeadId, amount, academicYearId, adminId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined);
+    const result = await FeeService.createFeeStructureForDegree(degreeType, feeHeadId, amount, academicYearId, adminId, quotaType, yearOfStudy);
 
     const skipMsg = result.skippedCount > 0 ? ` (${result.skippedCount} skipped due to existing structures: ${result.skippedCourses.join(', ')})` : '';
     sendResponse({
@@ -88,25 +124,70 @@ export const createBulkFeeStructure = catchAsync(async (req: Request, res: Respo
     });
 });
 
-export const getFeeStructures = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { courseId, academicYearId, feeHeadId, search } = req.query;
-    
-    const filters = {
-        courseId: courseId as string,
-        academicYearId: academicYearId as string,
-        feeHeadId: feeHeadId as string,
-        search: search as string
-    };
+export const cloneFeeStructures = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { sourceAcademicYearId, targetAcademicYearId, multiplier, courseIds } = req.body;
+    const adminId = req.user!.userId;
 
-    const feeStructures = await FeeService.getFeeStructures(filters);
-    sendResponse({ res, statusCode: 200, success: true, data: feeStructures });
+    const result = await FeeService.cloneFeeStructuresForAcademicYear(
+        sourceAcademicYearId,
+        targetAcademicYearId,
+        adminId,
+        { multiplier, courseIds }
+    );
+
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: `Cloned ${result.cloned} fee structures from ${result.source} → ${result.target}` +
+                 (result.skipped > 0 ? ` (${result.skipped} skipped — already exist in target)` : ''),
+        data: result,
+    });
+});
+
+export const getFeeStructures = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const {
+        courseId, academicYearId, feeHeadId, search,
+        entryAcademicYearId, entryType, instituteCode, quotaType, yearOfStudy,
+        minAmount, maxAmount, includeDeleted,
+        page, limit, sortBy, sortDir,
+    } = req.query;
+
+    const toNum = (v: any) => (v === undefined || v === '' ? undefined : Number(v));
+    const toBool = (v: any) => v === 'true' || v === true;
+
+    const result = await FeeService.getFeeStructures({
+        courseId:            courseId            ? String(courseId)            : undefined,
+        academicYearId:      academicYearId      ? String(academicYearId)      : undefined,
+        feeHeadId:           feeHeadId           ? String(feeHeadId)           : undefined,
+        entryAcademicYearId: entryAcademicYearId ? String(entryAcademicYearId) : undefined,
+        entryType:           entryType           ? (String(entryType) as any)  : undefined,
+        instituteCode:       instituteCode       ? (String(instituteCode) as any) : undefined,
+        quotaType:           quotaType           ? (String(quotaType) as any)  : undefined,
+        yearOfStudy:         toNum(yearOfStudy),
+        minAmount:           toNum(minAmount),
+        maxAmount:           toNum(maxAmount),
+        includeDeleted:      toBool(includeDeleted),
+        search:              search              ? String(search)              : undefined,
+        page:                toNum(page),
+        limit:               toNum(limit),
+        sortBy:              sortBy              ? (String(sortBy) as any)     : undefined,
+        sortDir:             sortDir             ? (String(sortDir) as any)    : undefined,
+    });
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        data: { items: result.data, pagination: result.pagination },
+    });
 });
 
 export const updateFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { courseId, feeHeadId, amount, academicYearId, quotaType, courseType, yearOfStudy, dueDate, degreeId } = req.body;
-    
-    const updatedFeeStructure = await FeeService.updateFeeStructure(id, courseId, feeHeadId, amount, academicYearId, req.user!.userId, quotaType, courseType, yearOfStudy, dueDate ? new Date(dueDate) : undefined, degreeId);
+    const { courseId, feeHeadId, amount, academicYearId, quotaType, yearOfStudy } = req.body;
+
+    const updatedFeeStructure = await FeeService.updateFeeStructure(id, courseId, feeHeadId, amount, academicYearId, req.user!.userId, quotaType, yearOfStudy);
     
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.FEE_STRUCTURE_UPDATED, data: updatedFeeStructure });
 });
@@ -133,20 +214,33 @@ export const getFeeStatistics = catchAsync(async (req: Request, res: Response, n
     });
 });
 
-// Generate Fee Demands
+// Generate Fee Demands (single student)
 export const generateFeeDemands = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { studentId, courseId, academicYearId } = req.body;
+    const { studentId, courseId, academicYearId, deleteExisting, allowLegacyFallback, requireEnrollment, dueDateFallbackDays } = req.body;
     const adminId = req.user!.userId;
 
-    const result = await FeeService.generateFeeDemands(studentId, courseId, academicYearId, adminId);
-    
-    // If undefined returned (no applicable fees or error?) Service returns undefined if no applicable fees
-    if (!result) {
+    const result = await FeeService.generateFeeDemands(
+        studentId,
+        courseId,
+        academicYearId,
+        adminId,
+        Boolean(deleteExisting),
+        {
+            allowLegacyFallback,
+            requireEnrollment,
+            dueDateFallbackDays,
+        }
+    );
+
+    if (result.generated === 0) {
         return sendResponse({
             res,
-            statusCode: 200, // Ok but nothing done
+            statusCode: 200,
             success: true,
-            message: "No applicable fee structures found for this student criteria"
+            message: result.considered === 0
+                ? "No applicable fee structures found for this student"
+                : `All applicable demands already exist (skipped=${result.skipped})`,
+            data: result
         });
     }
 
@@ -154,7 +248,24 @@ export const generateFeeDemands = catchAsync(async (req: Request, res: Response,
         res,
         statusCode: 201,
         success: true,
-        message: "Fee demands generated successfully"
+        message: `Generated ${result.generated} fee demand(s)${result.fallbackUsed ? ' (legacy fallback used)' : ''}`,
+        data: result
+    });
+});
+
+// Generate Fee Demands (bulk — across a cohort filter for an academic year)
+export const generateFeeDemandsBulk = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { academicYearId, filters = {}, runOptions = {} } = req.body;
+    const adminId = req.user!.userId;
+
+    const result = await FeeService.generateFeeDemandsBulk(academicYearId, adminId, filters, runOptions);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: `Bulk run complete: ok=${result.summary.studentsOk}, failed=${result.summary.studentsFailed}, demands=${result.summary.demandsGenerated}`,
+        data: result
     });
 });
 

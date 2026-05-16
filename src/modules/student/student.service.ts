@@ -12,7 +12,18 @@ import { deleteFileFromS3, getPresignedUrl, convertToPresignedUrl } from '../../
 import { MESSAGES } from '../../constants/messages';
 import { formatDate, formatTime, formatDateTime } from '../../utils/dateFormatter';
 import { maskAadhaar } from '../../utils/mask';
-export const registerStudent = async (data: any, agentId: string | null, userId: string | null, currentUserId: string | null) => {
+import { getActiveAcademicYear } from '../../utils/studentContext';
+
+// Resolve the active academic year id for year-tagging new rows; NULL if none.
+const resolveActiveYearId = async (): Promise<string | null> => {
+    try {
+        return (await getActiveAcademicYear()).id;
+    } catch {
+        return null;
+    }
+};
+
+export const registerStudent = async (data: any, userId: string | null, currentUserId: string | null) => {
     // Check for duplicate registration
     const dobDate = data.dob ? new Date(data.dob) : undefined;
 
@@ -74,11 +85,14 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
 
     const isOffline = data.isOffline || data.applicationMode === 'SEAT_BOOKING' || data.applicationMode === 'OFFLINE';
     
-    // Determine prefix based on application mode
-    // Seat Booking and Online -> VON
-    // Offline -> VOF
+    // Determine prefix:
+    //   LATERAL entry -> VLE (overrides mode; lateral has its own series)
+    //   Offline       -> VOF
+    //   Default       -> VON (online + seat booking)
     let prefix = 'VON';
-    if (data.applicationMode === 'OFFLINE' || (data.isOffline && data.applicationMode !== 'SEAT_BOOKING')) {
+    if (data.entryType === 'LATERAL') {
+        prefix = 'VLE';
+    } else if (data.applicationMode === 'OFFLINE' || (data.isOffline && data.applicationMode !== 'SEAT_BOOKING')) {
         prefix = 'VOF';
     }
 
@@ -184,7 +198,6 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
                 state: data.state,
                 pincode: data.pincode,
                 profilePhotoUrl: data.profilePhotoUrl,
-                agentId,
                 isOffline: data.isOffline || data.applicationMode === 'SEAT_BOOKING' || data.applicationMode === 'OFFLINE' || false,
                 degreeType: data.degreeType,
                 applicationMode: data.applicationMode,
@@ -198,12 +211,28 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
             }
         });
 
-        // Create Admission Details
+        // Create Admission Details. Defaults to REGULAR year-1 if caller doesn't
+        // specify; laterals pass entryType=LATERAL, entryYearOfStudy=2 so the
+        // admission record carries the right cohort tag from day one.
+        const entryType        = data.entryType ?? 'REGULAR';
+        const entryYearOfStudy = data.entryYearOfStudy
+            ?? (entryType === 'LATERAL' ? 2 : entryType === 'TRANSFER' ? 3 : 1);
+        const entryAcademicYearId = activeAcademicYear?.id;
+        const feeCohortAcademicYearId = entryAcademicYearId;
+
+        // Default to VVIG. Admin sets VVITU/VVITPU explicitly only for 2025-26 batch students.
+        const instituteCode = data.instituteCode ?? 'VVIG';
+
         await tx.studentAdmission.create({
             data: {
                 studentId: newStudent.id,
                 status: AdmissionStatus.REGISTERED,
-                academicYearId: activeAcademicYear?.id
+                academicYearId: activeAcademicYear?.id,
+                entryType: entryType as any,
+                entryYearOfStudy,
+                entryAcademicYearId,
+                feeCohortAcademicYearId,
+                instituteCode,
             }
         });
 
@@ -385,7 +414,8 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
         });
     }
 
-    // Upsert Documents
+    // Upsert Documents — tag new rows with the active academic year (NULL if none).
+    const uploadYearId = await resolveActiveYearId();
     const docPromises = Object.keys(documentData).map(key => {
         // Accept keys that either end in 'Url' OR start with 'DOC_' (common pattern) OR just treating all remaining string values as potential docs
         const value = documentData[key];
@@ -408,6 +438,7 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
                     documentKey: key,
                     url: documentData[key],
                     status: StudentDocumentStatus.PENDING,
+                    academicYearId: uploadYearId,
                     isDeleted: false
                 }
             });
@@ -449,7 +480,7 @@ export const reUploadDocument = async (studentId: string, documentKey: string, u
     const doc = await prisma.studentDocument.upsert({
         where: { studentId_documentKey: { studentId, documentKey } },
         update: { url, status: StudentDocumentStatus.PENDING, remarks: null, isDeleted: false },
-        create: { studentId, documentKey, url, status: StudentDocumentStatus.PENDING, isDeleted: false }
+        create: { studentId, documentKey, url, status: StudentDocumentStatus.PENDING, academicYearId: await resolveActiveYearId(), isDeleted: false }
     });
 
     // If rejected previously, move back to DOCUMENTS_SUBMITTED so admin can re-verify.
@@ -652,7 +683,6 @@ export const getStudentByUserId = async (userId: string) => {
                     id: true,
                     studentId: true,
                     status: true,
-                    qualificationMode: true,
                     allottedCourseId: true,
                     allottedCourse: {
                         select: { name: true }

@@ -106,16 +106,27 @@ export const FeeService = {
     },
 
     // Fee Structure
-    createFeeStructure: async (courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, courseType?: string, yearOfStudy?: number, dueDate?: Date, degreeId?: string) => {
-        
+    createFeeStructure: async (
+        courseId: string,
+        feeHeadId: string,
+        amount: number,
+        academicYearId: string,
+        userId: string,
+        quotaType?: QuotaType,
+        yearOfStudy?: number,
+        entryAcademicYearId?: string,
+        entryType?: 'REGULAR' | 'LATERAL' | 'TRANSFER',
+        instituteCode?: 'VVITU' | 'VVITPU',
+    ) => {
         const existing = await prisma.feeStructure.findFirst({
             where: {
                 courseId,
                 feeHeadId,
                 academicYearId,
+                entryAcademicYearId: entryAcademicYearId ?? null,
+                entryType: entryType ?? null,
+                instituteCode: instituteCode ?? null,
                 quotaType: quotaType ?? null,
-                courseType: courseType ?? null,
-                degreeId: degreeId ?? null,
                 yearOfStudy: yearOfStudy ?? null,
                 isDeleted: false
             }
@@ -131,18 +142,18 @@ export const FeeService = {
                 feeHeadId,
                 amount,
                 academicYearId,
+                entryAcademicYearId,
+                entryType,
+                instituteCode,
                 quotaType,
-                courseType,
                 yearOfStudy,
-                dueDate,
-                degreeId,
                 createdBy: userId,
                 updatedBy: userId
             }
         });
     },
 
-    createFeeStructureForDegree: async (degree: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, courseType?: string, yearOfStudy?: number, dueDate?: Date) => {
+    createFeeStructureForDegree: async (degree: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, yearOfStudy?: number) => {
         // 1. Find all courses for this degree
         const courses = await prisma.course.findMany({
             where: { degree, isDeleted: false }
@@ -163,7 +174,6 @@ export const FeeService = {
                     feeHeadId,
                     academicYearId,
                     quotaType: quotaType ?? null,
-                    courseType: courseType ?? null,
                     yearOfStudy: yearOfStudy ?? null,
                     isDeleted: false
                 }
@@ -181,9 +191,7 @@ export const FeeService = {
                     amount,
                     academicYearId,
                     quotaType,
-                    courseType,
                     yearOfStudy,
-                    dueDate,
                     createdBy: userId,
                     updatedBy: userId
                 }
@@ -203,32 +211,207 @@ export const FeeService = {
         };
     },
 
-    getFeeStructures: async (filters?: { courseId?: string, academicYearId?: string, feeHeadId?: string, search?: string }) => {
-        const where: any = { isDeleted: false };
-        
-        if (filters?.courseId) where.courseId = filters.courseId;
-        if (filters?.academicYearId) where.academicYearId = filters.academicYearId;
-        if (filters?.feeHeadId) where.feeHeadId = filters.feeHeadId;
-        
-        if (filters?.search) {
-             where.OR = [
-                { course: { name: { contains: filters.search, mode: 'insensitive' } } },
-                { course: { code: { contains: filters.search, mode: 'insensitive' } } },
-                { feeHead: { name: { contains: filters.search, mode: 'insensitive' } } }
-             ];
+    /**
+     * Create FeeStructure rows for many fee heads in one call. All rows share the
+     * same (course, year, entryType, quota, etc.) combination — only the
+     * (feeHeadId, amount) varies per row.
+     * Idempotent: rows that already exist for the same combination are skipped.
+     */
+    createFeeStructuresForCombination: async (params: {
+        courseId:            string;
+        academicYearId:      string;
+        entryAcademicYearId?: string;
+        entryType?:          'REGULAR' | 'LATERAL' | 'TRANSFER';
+        instituteCode?:      'VVIG' | 'VVITU' | 'VVITPU';
+        quotaType?:          QuotaType;
+        yearOfStudy?:        number;
+        feeHeads:            Array<{ feeHeadId: string; amount: number }>;
+        userId:              string;
+    }) => {
+        // ── Defensive guards (also enforced by zod validator) ──────────────
+        if (!params.feeHeads.length) {
+            throw new AppError('feeHeads must contain at least one entry', 400);
+        }
+        if (params.feeHeads.length > 50) {
+            throw new AppError('feeHeads cannot exceed 50 entries per call', 400);
+        }
+        const dupCheck = new Set(params.feeHeads.map(h => h.feeHeadId));
+        if (dupCheck.size !== params.feeHeads.length) {
+            throw new AppError('Duplicate feeHeadId(s) in array — each fee head can appear only once', 400);
+        }
+        for (const h of params.feeHeads) {
+            if (h.amount <= 0 || !Number.isFinite(h.amount)) {
+                throw new AppError(`amount must be a positive finite number (feeHeadId=${h.feeHeadId})`, 400);
+            }
+            if (h.amount > 100_000_000) {
+                throw new AppError(`amount exceeds reasonable limit (feeHeadId=${h.feeHeadId})`, 400);
+            }
+        }
+        if (params.entryType === 'LATERAL' && (params.yearOfStudy ?? 2) < 2) {
+            throw new AppError('LATERAL entry requires yearOfStudy >= 2', 400);
+        }
+        if (params.userId == null) {
+            throw new AppError('userId is required', 400);
         }
 
-        return prisma.feeStructure.findMany({
-            where,
-            include: {
-                course: true,
-                feeHead: true,
-                academicYear: true
-            }
+        // ── Existence checks ───────────────────────────────────────────────
+        const course = await prisma.course.findUnique({ where: { id: params.courseId } });
+        if (!course || course.isDeleted) throw new AppError('Course not found', 404);
+
+        const ay = await prisma.academicYear.findUnique({ where: { id: params.academicYearId } });
+        if (!ay || ay.isDeleted) throw new AppError('Academic year not found', 404);
+
+        if (params.entryAcademicYearId && params.entryAcademicYearId !== params.academicYearId) {
+            const entryAy = await prisma.academicYear.findUnique({ where: { id: params.entryAcademicYearId } });
+            if (!entryAy || entryAy.isDeleted) throw new AppError('Entry academic year not found', 404);
+        }
+
+        // ── Validate every fee head id resolves ────────────────────────────
+        const headIds = params.feeHeads.map(h => h.feeHeadId);
+        const heads = await prisma.feeHead.findMany({
+            where: { id: { in: headIds }, isDeleted: false },
+            select: { id: true, name: true },
         });
+        const validHeadIds = new Set(heads.map(h => h.id));
+        const missing = headIds.filter(id => !validHeadIds.has(id));
+        if (missing.length) throw new AppError(`FeeHead(s) not found: ${missing.join(', ')}`, 404);
+        const headNameById = new Map(heads.map(h => [h.id, h.name]));
+
+        // Create each row; skip duplicates
+        const created: any[] = [];
+        const skipped: Array<{ feeHeadId: string; feeHeadName: string }> = [];
+
+        for (const entry of params.feeHeads) {
+            const existing = await prisma.feeStructure.findFirst({
+                where: {
+                    courseId:            params.courseId,
+                    feeHeadId:           entry.feeHeadId,
+                    academicYearId:      params.academicYearId,
+                    entryAcademicYearId: params.entryAcademicYearId ?? null,
+                    entryType:           params.entryType ?? null,
+                    instituteCode:       params.instituteCode ?? null,
+                    quotaType:           params.quotaType ?? null,
+                    yearOfStudy:         params.yearOfStudy ?? null,
+                    isDeleted:           false,
+                },
+            });
+            if (existing) {
+                skipped.push({ feeHeadId: entry.feeHeadId, feeHeadName: headNameById.get(entry.feeHeadId) ?? '?' });
+                continue;
+            }
+
+            const row = await prisma.feeStructure.create({
+                data: {
+                    courseId:            params.courseId,
+                    feeHeadId:           entry.feeHeadId,
+                    amount:              entry.amount,
+                    academicYearId:      params.academicYearId,
+                    entryAcademicYearId: params.entryAcademicYearId,
+                    entryType:           params.entryType,
+                    instituteCode:       params.instituteCode,
+                    quotaType:           params.quotaType,
+                    yearOfStudy:         params.yearOfStudy,
+                    createdBy:           params.userId,
+                    updatedBy:           params.userId,
+                },
+            });
+            created.push(row);
+        }
+
+        return {
+            createdCount: created.length,
+            skippedCount: skipped.length,
+            created,
+            skipped,
+        };
     },
 
-    updateFeeStructure: async (id: string, courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, courseType?: string, yearOfStudy?: number, dueDate?: Date, degreeId?: string) => {
+    getFeeStructures: async (filters?: {
+        courseId?:            string;
+        academicYearId?:      string;
+        feeHeadId?:           string;
+        entryAcademicYearId?: string;
+        entryType?:           'REGULAR' | 'LATERAL' | 'TRANSFER';
+        instituteCode?:       'VVIG' | 'VVITU' | 'VVITPU';
+        quotaType?:           QuotaType;
+        yearOfStudy?:         number;
+        minAmount?:           number;
+        maxAmount?:           number;
+        includeDeleted?:      boolean;
+        search?:              string;
+        page?:                number;
+        limit?:               number;
+        sortBy?:              'amount' | 'createdAt' | 'updatedAt' | 'yearOfStudy';
+        sortDir?:             'asc' | 'desc';
+    }) => {
+        const where: any = {};
+
+        // Default to non-deleted unless explicitly asked otherwise
+        if (!filters?.includeDeleted) where.isDeleted = false;
+
+        // Exact-match filters
+        if (filters?.courseId)            where.courseId            = filters.courseId;
+        if (filters?.academicYearId)      where.academicYearId      = filters.academicYearId;
+        if (filters?.feeHeadId)           where.feeHeadId           = filters.feeHeadId;
+        if (filters?.entryAcademicYearId) where.entryAcademicYearId = filters.entryAcademicYearId;
+        if (filters?.entryType)           where.entryType           = filters.entryType;
+        if (filters?.instituteCode)       where.instituteCode       = filters.instituteCode;
+        if (filters?.quotaType)           where.quotaType           = filters.quotaType;
+        if (filters?.yearOfStudy !== undefined) where.yearOfStudy   = filters.yearOfStudy;
+
+        // Amount range
+        if (filters?.minAmount !== undefined || filters?.maxAmount !== undefined) {
+            where.amount = {};
+            if (filters.minAmount !== undefined) where.amount.gte = filters.minAmount;
+            if (filters.maxAmount !== undefined) where.amount.lte = filters.maxAmount;
+        }
+
+        // Free-text search across course name/code and fee head name
+        if (filters?.search) {
+            where.OR = [
+                { course:  { name: { contains: filters.search, mode: 'insensitive' } } },
+                { course:  { code: { contains: filters.search, mode: 'insensitive' } } },
+                { feeHead: { name: { contains: filters.search, mode: 'insensitive' } } },
+            ];
+        }
+
+        // Pagination
+        const page  = Math.max(1, Number(filters?.page  ?? 1));
+        const limit = Math.min(200, Math.max(1, Number(filters?.limit ?? 50)));
+        const skip  = (page - 1) * limit;
+
+        // Sort
+        const sortBy  = filters?.sortBy  ?? 'createdAt';
+        const sortDir = filters?.sortDir ?? 'desc';
+
+        const [rows, total] = await Promise.all([
+            prisma.feeStructure.findMany({
+                where,
+                skip,
+                take: limit,
+                orderBy: { [sortBy]: sortDir },
+                include: {
+                    course:       { select: { id: true, code: true, name: true, degree: true } },
+                    feeHead:      { select: { id: true, name: true, component: true } },
+                    academicYear: { select: { id: true, code: true, isActive: true } },
+                },
+            }),
+            prisma.feeStructure.count({ where }),
+        ]);
+
+        return {
+            data:       rows,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+            filtersApplied: filters ?? {},
+        };
+    },
+
+    updateFeeStructure: async (id: string, courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, yearOfStudy?: number) => {
         return prisma.feeStructure.update({
             where: { id },
             data: {
@@ -237,10 +420,7 @@ export const FeeService = {
                 amount,
                 academicYearId,
                 quotaType,
-                degreeId,
-                courseType,
                 yearOfStudy,
-                dueDate,
                 updatedBy: userId
             }
         });
@@ -251,6 +431,150 @@ export const FeeService = {
             where: { id },
             data: { isDeleted: true }
         });
+    },
+
+    /**
+     * Clone all (non-deleted) FeeStructure rows from one academic year to another.
+     *
+     * Use cases:
+     *   - Setting up fee structures for a NEW academic year — clone the prior year as
+     *     a starting point, then edit individual rows.
+     *   - Back-filling fee structures for a PAST year so back-dated/lateral admissions
+     *     into that cohort have demands seeded correctly by `generateFeeDemands`.
+     *
+     * Skips rows that already exist in the target year for the same
+     * (courseId, feeHeadId, yearOfStudy) tuple — safe to re-run.
+     *
+     * Optional `multiplier` lets admins apply a flat percentage adjustment
+     * (e.g., 1.05 = 5% increase, 0.95 = 5% reduction). Default 1.0.
+     * Optional `courseIds` restricts the clone to specific courses.
+     */
+    cloneFeeStructuresForAcademicYear: async (
+        sourceAcademicYearId: string,
+        targetAcademicYearId: string,
+        userId: string,
+        options?: {
+            multiplier?: number;
+            courseIds?: string[];
+            entryAcademicYearId?: string;
+            entryType?: 'REGULAR' | 'LATERAL' | 'TRANSFER';
+            instituteCode?: 'VVITU' | 'VVITPU';
+        }
+    ) => {
+        const multiplier = options?.multiplier ?? 1.0;
+
+        if (sourceAcademicYearId === targetAcademicYearId) {
+            throw new AppError('Source and target academic years must differ', 400);
+        }
+
+        const [source, target] = await Promise.all([
+            prisma.academicYear.findUnique({ where: { id: sourceAcademicYearId } }),
+            prisma.academicYear.findUnique({ where: { id: targetAcademicYearId } }),
+        ]);
+        if (!source) throw new AppError('Source academic year not found', 404);
+        if (!target) throw new AppError('Target academic year not found', 404);
+
+        // Source filter — read only the rows that match the cohort/type tags so that
+        // a clone tagged for "2024-25 LATERAL" only copies LATERAL rows (not all rows).
+        const sourceWhere: any = {
+            academicYearId: sourceAcademicYearId,
+            isDeleted: false,
+        };
+        if (options?.courseIds && options.courseIds.length > 0) {
+            sourceWhere.courseId = { in: options.courseIds };
+        }
+        if (options?.entryAcademicYearId !== undefined) {
+            sourceWhere.entryAcademicYearId = options.entryAcademicYearId;
+        }
+        if (options?.entryType !== undefined) {
+            sourceWhere.entryType = options.entryType;
+        }
+        if (options?.instituteCode !== undefined) {
+            sourceWhere.instituteCode = options.instituteCode;
+        }
+
+        const sourceStructures = await prisma.feeStructure.findMany({ where: sourceWhere });
+        if (sourceStructures.length === 0) {
+            return { cloned: 0, skipped: 0, total: 0, source: source.code, target: target.code };
+        }
+
+        // Pre-load existing rows in target year for dedup. Dedup key now includes the
+        // cohort/type so that a cloned-for-cohort-A row doesn't dedup against an
+        // already-cloned cohort-B row that happens to share course/feeHead/yearOfStudy.
+        const existing = await prisma.feeStructure.findMany({
+            where: {
+                academicYearId: targetAcademicYearId,
+                isDeleted: false,
+                courseId: { in: Array.from(new Set(sourceStructures.map(s => s.courseId))) },
+            },
+            select: {
+                courseId: true,
+                feeHeadId: true,
+                yearOfStudy: true,
+                entryAcademicYearId: true,
+                entryType: true,
+                instituteCode: true,
+            },
+        });
+        const targetEntryYearId  = options?.entryAcademicYearId ?? null;
+        const targetEntryType    = options?.entryType ?? null;
+        const targetInstitute    = options?.instituteCode ?? null;
+        const existingKey = (s: {
+            courseId: string;
+            feeHeadId: string;
+            yearOfStudy: number | null;
+            entryAcademicYearId: string | null;
+            entryType: string | null;
+            instituteCode: string | null;
+        }) =>
+            `${s.courseId}|${s.feeHeadId}|${s.yearOfStudy ?? ''}|${s.entryAcademicYearId ?? ''}|${s.entryType ?? ''}|${s.instituteCode ?? ''}`;
+        const existingSet = new Set(existing.map(existingKey));
+
+        const toCreate = sourceStructures.filter(s =>
+            !existingSet.has(existingKey({
+                courseId:            s.courseId,
+                feeHeadId:           s.feeHeadId,
+                yearOfStudy:         s.yearOfStudy,
+                entryAcademicYearId: targetEntryYearId,
+                entryType:           targetEntryType,
+                instituteCode:       targetInstitute,
+            }))
+        );
+        const skipped  = sourceStructures.length - toCreate.length;
+
+        if (toCreate.length === 0) {
+            return { cloned: 0, skipped, total: sourceStructures.length, source: source.code, target: target.code };
+        }
+
+        await prisma.feeStructure.createMany({
+            data: toCreate.map(s => ({
+                courseId:            s.courseId,
+                feeHeadId:           s.feeHeadId,
+                amount:              Math.round(s.amount * multiplier * 100) / 100,
+                currency:            s.currency,
+                academicYearId:      targetAcademicYearId,
+                // Provided options override source tags. Source tags carry forward when no override.
+                entryAcademicYearId: options?.entryAcademicYearId ?? s.entryAcademicYearId,
+                entryType:           options?.entryType           ?? s.entryType,
+                instituteCode:       options?.instituteCode       ?? s.instituteCode,
+                quotaType:           s.quotaType,
+                yearOfStudy:         s.yearOfStudy,
+                createdBy:           userId,
+            })),
+            skipDuplicates: true,
+        });
+
+        return {
+            cloned: toCreate.length,
+            skipped,
+            total: sourceStructures.length,
+            multiplier,
+            source: source.code,
+            target: target.code,
+            entryAcademicYearId: options?.entryAcademicYearId,
+            entryType: options?.entryType,
+            instituteCode: options?.instituteCode,
+        };
     },
 
     // Statistics
@@ -349,7 +673,6 @@ export const FeeService = {
                         id: true,
                         name: true,
                         applicationId: true,
-                        courseType: true,
                         degreeType: true,
                         phone: true,
                         email: true,
@@ -598,26 +921,64 @@ export const FeeService = {
         });
     },
 
-    // Automated Fee Generation
-    generateFeeDemands: async (studentId: string, courseId: string, academicYearId: string, userId: string, deleteExisting: boolean = false): Promise<any[]> => {
-        logger.info(`[generateFeeDemands] Request: student=${studentId}, course=${courseId}, year=${academicYearId}`);
-        
-        // 1. Get Fee Structures
-        const feeStructures = await prisma.feeStructure.findMany({
-            where: {
-                courseId,
-                academicYearId,
-                isDeleted: false
-            },
+    // Automated Fee Generation.
+    //
+    // Resolves the fee structures applicable to (student, course, academicYear) using
+    // the student's admission cohort tags (entryAcademicYearId / entryType / instituteCode),
+    // then seeds StudentFeeDemand rows + matching StudentLedger entries.
+    //
+    // The `options.allowLegacyFallback` flag controls the NULL-tagged fallback path:
+    //   - `true` (default): if strict cohort-tagged lookup returns 0 rows, fall back to
+    //                       legacy structures (where all cohort tags are NULL). Logs a
+    //                       WARN if the student's admission HAS cohort tags set, so
+    //                       data-tag gaps surface during prod runs.
+    //   - `false`:          no fallback. Strict-mode for bulk runs over a clean cohort.
+    //
+    // Returns a structured report (NOT a bare array) so callers can distinguish
+    // generated vs skipped vs filtered-out structures.
+    generateFeeDemands: async (
+        studentId: string,
+        courseId: string,
+        academicYearId: string,
+        userId: string,
+        deleteExisting: boolean = false,
+        options: {
+            allowLegacyFallback?: boolean;
+            requireEnrollment?: boolean;
+            dueDateFallbackDays?: number;
+        } = {}
+    ): Promise<{
+        demands: any[];
+        generated: number;
+        skipped: number;
+        considered: number;
+        fallbackUsed: boolean;
+        scholarshipApplied: number;
+        structuresStrict: number;
+        structuresFallback: number;
+    }> => {
+        const allowLegacyFallback = options.allowLegacyFallback ?? true;
+        const requireEnrollment   = options.requireEnrollment   ?? false;
+        const dueDateFallbackDays = options.dueDateFallbackDays ?? 30;
 
-            include: { feeHead: true }
-        });
-        logger.debug(`[generateFeeDemands] Found ${feeStructures.length} potential fee structures`);
+        logger.info(
+            `[generateFeeDemands] Request: student=${studentId}, course=${courseId}, ` +
+            `year=${academicYearId}, allowFallback=${allowLegacyFallback}, requireEnrollment=${requireEnrollment}`
+        );
 
-        // Get student quota type and course type to filter
-        const student = await prisma.student.findUnique({ 
+        const student = await prisma.student.findUnique({
             where: { id: studentId },
-            include: { enrollments: { orderBy: { createdAt: 'desc' }, take: 1 } }
+            include: {
+                enrollments: { orderBy: { createdAt: 'desc' }, take: 1 },
+                admissionDetails: {
+                    select: {
+                        feeCohortAcademicYearId: true,
+                        entryAcademicYearId:     true,
+                        entryType:               true,
+                        instituteCode:           true,
+                    }
+                },
+            }
         });
 
         if (!student) {
@@ -625,124 +986,222 @@ export const FeeService = {
             throw new AppError("Student not found", 404);
         }
 
-        const studentQuota = student.quotaType;
-        const studentCourseType = student.courseType;
-
-        // Calculate Year of Study from latest enrollment
-        const latestEnrollment = student.enrollments?.[0];
-        const currentYear = latestEnrollment?.currentSemester ? Math.ceil(latestEnrollment.currentSemester / 2) : 1;
-        logger.debug(`[generateFeeDemands] Student Context: Quota=${studentQuota}, Type=${studentCourseType}, Year=${currentYear}`);
-
-        const applicableFees = feeStructures.filter(fs => 
-            (!fs.quotaType || (studentQuota && fs.quotaType === studentQuota)) &&
-            (!fs.courseType || (studentCourseType && fs.courseType === studentCourseType)) &&
-            (!fs.yearOfStudy || fs.yearOfStudy === currentYear)
-        );
-        logger.info(`[generateFeeDemands] Applicable Fees: ${applicableFees.length}`);
-
-        if (applicableFees.length === 0) {
-            logger.warn(`[generateFeeDemands] No applicable fees found.
-                Student: ${student.id} (Quota: ${studentQuota}, Type: ${studentCourseType}, Year: ${currentYear})
-                Total Structures Found: ${feeStructures.length}
-                Structures Info: ${JSON.stringify(feeStructures.map(f => ({ id: f.id, quota: f.quotaType, type: f.courseType, year: f.yearOfStudy })))}
-            `);
-            return []; 
+        if (requireEnrollment) {
+            // Presence of an enrollment row (any status) proves the student was enrolled
+            // in that year — supports back-fill flows where admins enter old students'
+            // demands long after they've graduated (status='COMPLETED').
+            const enrollment = await prisma.studentEnrollment.findFirst({
+                where: { studentId, academicYearId },
+            });
+            if (!enrollment) {
+                throw new AppError(
+                    `No enrollment record for student=${studentId} in academicYearId=${academicYearId}. ` +
+                    `Cannot generate demands for a year the student was never enrolled in.`,
+                    400
+                );
+            }
         }
 
-        // 2. Create Demands & Ledger Entries
-        // Using transaction to ensure ledger matches demands
-        const createdDemands = await prisma.$transaction(async (tx) => {
-            
-            // Delete Existing if requested
+        const studentQuota         = student.quotaType;
+        const studentDegreeType    = student.degreeType ?? null;
+        const cohortYearId =
+            student.admissionDetails?.feeCohortAcademicYearId
+            ?? student.admissionDetails?.entryAcademicYearId
+            ?? null;
+        const studentEntryType     = student.admissionDetails?.entryType ?? null;
+        const studentInstituteCode = student.admissionDetails?.instituteCode ?? null;
+        const hasCohortTags = !!(cohortYearId || studentEntryType || studentInstituteCode);
+
+        // Strict pass — exact cohort tag match.
+        let feeStructures = await prisma.feeStructure.findMany({
+            where: {
+                courseId,
+                academicYearId,
+                entryAcademicYearId: cohortYearId,
+                entryType:           studentEntryType,
+                instituteCode:       studentInstituteCode,
+                isDeleted: false
+            },
+            include: { feeHead: true }
+        });
+        const strictCount = feeStructures.length;
+        logger.debug(
+            `[generateFeeDemands] strict pass: cohort=${cohortYearId} entryType=${studentEntryType} ` +
+            `institute=${studentInstituteCode} found=${strictCount}`
+        );
+
+        // Legacy fallback — only when explicitly allowed. WARN if the admission was tagged
+        // (means cohort-specific structures are missing — admin should clone them).
+        let fallbackUsed = false;
+        if (feeStructures.length === 0 && allowLegacyFallback) {
+            feeStructures = await prisma.feeStructure.findMany({
+                where: {
+                    courseId,
+                    academicYearId,
+                    entryAcademicYearId: null,
+                    entryType:           null,
+                    instituteCode:       null,
+                    isDeleted: false
+                },
+                include: { feeHead: true }
+            });
+            if (feeStructures.length > 0) {
+                fallbackUsed = true;
+                if (hasCohortTags) {
+                    logger.warn(
+                        `[generateFeeDemands] LEGACY FALLBACK used for cohort-tagged student=${studentId} ` +
+                        `(cohort=${cohortYearId}, entryType=${studentEntryType}, institute=${studentInstituteCode}). ` +
+                        `Strict match returned 0 rows; falling back to NULL-tagged legacy rows. ` +
+                        `Clone the appropriate cohort-tagged fee structures to remove this fallback.`
+                    );
+                } else {
+                    logger.debug(`[generateFeeDemands] fallback (NULL-tagged) used; admission has no cohort tags: found=${feeStructures.length}`);
+                }
+            }
+        }
+        const fallbackCount = fallbackUsed ? feeStructures.length : 0;
+
+        // Prefer the enrollment's explicit yearOfStudy; fall back to semester arithmetic.
+        const latestEnrollment = student.enrollments?.[0];
+        const currentYear =
+            latestEnrollment?.yearOfStudy
+            ?? (latestEnrollment?.currentSemester ? Math.ceil(latestEnrollment.currentSemester / 2) : 1);
+        logger.debug(
+            `[generateFeeDemands] Student Context: Quota=${studentQuota}, DegreeType=${studentDegreeType}, ` +
+            `YearOfStudy=${currentYear}`
+        );
+
+        // Filter — quota / yearOfStudy. Null = universal (applies to all).
+        const applicableRaw = feeStructures.filter(fs => {
+            if (fs.quotaType   && fs.quotaType   !== studentQuota)  return false;
+            if (fs.yearOfStudy && fs.yearOfStudy !== currentYear)   return false;
+            return true;
+        });
+
+        // Dedupe by feeHeadId — pick the most-specific row when both a universal and a
+        // narrowed structure exist for the same head (otherwise the student would be
+        // double-charged for the same fee head).
+        const specificity = (fs: typeof feeStructures[number]): number =>
+            (fs.entryAcademicYearId ? 1 : 0) +
+            (fs.entryType           ? 1 : 0) +
+            (fs.instituteCode       ? 1 : 0) +
+            (fs.quotaType           ? 1 : 0) +
+            (fs.yearOfStudy         ? 1 : 0);
+        const bestByHead = new Map<string, typeof feeStructures[number]>();
+        for (const fs of applicableRaw) {
+            const cur = bestByHead.get(fs.feeHeadId);
+            if (!cur || specificity(fs) > specificity(cur)) {
+                bestByHead.set(fs.feeHeadId, fs);
+            }
+        }
+        const applicableFees = Array.from(bestByHead.values());
+
+        const considered = feeStructures.length;
+        const droppedByFilter = feeStructures.length - applicableRaw.length;
+        const droppedByDedup  = applicableRaw.length  - applicableFees.length;
+        logger.info(
+            `[generateFeeDemands] structures: strict=${strictCount}, fallback=${fallbackCount}, ` +
+            `applicableRaw=${applicableRaw.length} (dropped-by-filter=${droppedByFilter}), ` +
+            `applicableFinal=${applicableFees.length} (dropped-by-dedup=${droppedByDedup})`
+        );
+
+        if (applicableFees.length === 0) {
+            logger.warn(
+                `[generateFeeDemands] No applicable fees found. ` +
+                `student=${student.id} (quota=${studentQuota}, degreeType=${studentDegreeType}, ` +
+                `year=${currentYear}, cohort=${cohortYearId}, entryType=${studentEntryType}, ` +
+                `institute=${studentInstituteCode}); structures considered=${considered}`
+            );
+            return {
+                demands: [], generated: 0, skipped: 0, considered,
+                fallbackUsed, scholarshipApplied: 0,
+                structuresStrict: strictCount, structuresFallback: fallbackCount,
+            };
+        }
+
+        // Anchor dueDate to the academic year's start (+ N days), not "today" — so
+        // back-dated cohort runs flag overdue correctly.
+        const academicYear = await prisma.academicYear.findUnique({
+            where: { id: academicYearId },
+            select: { startDate: true },
+        });
+        const fallbackDueDate = academicYear?.startDate
+            ? new Date(academicYear.startDate.getTime() + dueDateFallbackDays * 24 * 60 * 60 * 1000)
+            : new Date();
+
+        const txResult = await prisma.$transaction(async (tx) => {
             if (deleteExisting) {
-                logger.info(`[generateFeeDemands] Cleaning up existing demands for student ${studentId} and course ${courseId}`);
-                
-                // Find old demands to link Ledger updates if necessary?
-                // Or just delete by studentId / course context? 
-                // Since this function is for a specific context (course/year), we should be careful.
-                // However, FeeDemands are linked to FeeStructures. We can find demands linked to THIS course's FeeStructures.
-                
+                logger.info(`[generateFeeDemands] Cleaning up existing demands for student=${studentId} course=${courseId} year=${academicYearId}`);
                 const structuresForThisCourse = await tx.feeStructure.findMany({
                     where: { courseId, academicYearId, isDeleted: false },
                     select: { id: true }
                 });
                 const structureIds = structuresForThisCourse.map(s => s.id);
-                
                 if (structureIds.length > 0) {
-                     // 1. Find the Demands
-                     const oldDemands = await tx.studentFeeDemand.findMany({
-                         where: { 
-                            studentId, 
-                            feeStructureId: { in: structureIds }
-                         }
-                     });
-                     
-                     const oldDemandIds = oldDemands.map(d => d.id);
-                     
-                     if (oldDemandIds.length > 0) {
-                         // 2. Delete Ledger Debits linked to these demands
-                         await tx.studentLedger.deleteMany({
-                             where: {
-                                 type: 'DEBIT',
-                                 referenceType: 'FEE_DEMAND',
-                                 referenceId: { in: oldDemandIds }
-                             }
-                         });
-                         
-                         // 3. Delete Demands
-                         await tx.studentFeeDemand.deleteMany({
-                             where: { id: { in: oldDemandIds } }
-                         });
-                         
-                         // 4. Also Reset Admission Total Fee? No, we will recalculate it below.
-                         // But we need to subtract the amount?
-                         const amountRemoved = oldDemands.reduce((sum, d) => sum + d.amount, 0);
-                         if (amountRemoved > 0) {
-                             await tx.studentAdmission.update({
-                                 where: { studentId },
-                                 data: { totalFee: { decrement: amountRemoved } }
-                             });
-                         }
-                     }
+                    const oldDemands = await tx.studentFeeDemand.findMany({
+                        where: { studentId, feeStructureId: { in: structureIds }, isDeleted: false }
+                    });
+                    const oldDemandIds = oldDemands.map(d => d.id);
+                    if (oldDemandIds.length > 0) {
+                        await tx.studentLedger.deleteMany({
+                            where: { type: 'DEBIT', referenceType: 'FEE_DEMAND', referenceId: { in: oldDemandIds } }
+                        });
+                        await tx.studentFeeDemand.deleteMany({ where: { id: { in: oldDemandIds } } });
+                        const amountRemoved = oldDemands.reduce((sum, d) => sum + d.amount, 0);
+                        if (amountRemoved > 0) {
+                            await tx.studentAdmission.update({
+                                where: { studentId },
+                                data: { totalFee: { decrement: amountRemoved } }
+                            });
+                        }
+                    }
                 }
             }
 
-
-            // Fetch Scholarship Percentage from StudentScholarship table
-            const studentScholarship = await tx.studentScholarship.findFirst({
-                 where: { studentId }
+            // Existing-demand lookup INSIDE the tx so a parallel run can't race past it.
+            // Combined with the partial unique index migration, this makes double-create
+            // impossible (the index would error out as a backstop).
+            const existing = await tx.studentFeeDemand.findMany({
+                where: {
+                    studentId,
+                    isDeleted: false,
+                    feeStructureId: { in: applicableFees.map(f => f.id) }
+                },
+                select: { feeStructureId: true }
             });
-            
-            // Use percentage from the table, default to 0
-            const discountPct = studentScholarship?.scholarshipPercentage || 0;
-            
-            logger.info(`[generateFeeDemands] Scholarship Check: Found Record=${!!studentScholarship}, Pct=${discountPct}%`);
+            const existingSet = new Set(existing.map(e => e.feeStructureId));
 
-            const results = [];
+            // Scholarship — defensive: only apply when explicitly marked eligible.
+            // Note: StudentScholarship has no per-year validity in the schema; this is
+            // a global flag. Per-year cohort policies should drive the scholarship
+            // record's isEligible value (handled in the scholarship admin flow).
+            const studentScholarship = await tx.studentScholarship.findFirst({
+                where: { studentId, isEligible: 'YES' as any }
+            });
+            const discountPct = studentScholarship?.scholarshipPercentage || 0;
+            logger.info(
+                `[generateFeeDemands] Scholarship: hasRecord=${!!studentScholarship}, ` +
+                `eligible=${studentScholarship?.isEligible ?? 'n/a'}, pct=${discountPct}%`
+            );
+
+            const created: any[] = [];
+            let skippedCount = 0;
+            let scholarshipApplied = 0;
             let newDemandsTotal = 0;
-            logger.debug(`[generateFeeDemands] Starting transaction to create demands`);
 
             for (const fee of applicableFees) {
-                // Check for existing if NOT deleted above
-                const existing = await tx.studentFeeDemand.findFirst({
-                    where: { studentId, feeStructureId: fee.id }
-                });
-
-                if (existing) {
-                    logger.debug(`[generateFeeDemands] duplicate demand skipped for structure ${fee.id}`);
-                    continue; // Skip
+                if (existingSet.has(fee.id)) {
+                    skippedCount++;
+                    logger.debug(`[generateFeeDemands] duplicate skipped for structure ${fee.id}`);
+                    continue;
                 }
 
-                // Check if this fee is Tuition fee for Scholarship (strictly Tuition/Tution)
-                const feeName = fee.feeHead.name.toLowerCase();
-                const isTuition = feeName.includes('Tuition') || feeName.includes('Tution');
-                
-                let scholarshipAmt = 0;
-                if (isTuition && discountPct > 0) {
-                    scholarshipAmt = (fee.amount * discountPct) / 100;
-                }
-                
-                const netAmount = fee.amount - scholarshipAmt; // Fine is 0 initially
+                // Use the typed PaymentComponent link (kills the buggy case-sensitive name match).
+                const isTuition = fee.feeHead.component === 'TUITION';
+                const scholarshipAmt = (isTuition && discountPct > 0)
+                    ? (fee.amount * discountPct) / 100
+                    : 0;
+                const netAmount = fee.amount - scholarshipAmt;
 
                 const demand = await tx.studentFeeDemand.create({
                     data: {
@@ -751,21 +1210,17 @@ export const FeeService = {
                         feeHeadId: fee.feeHeadId,
                         academicYearId: fee.academicYearId,
                         yearOfStudy: fee.yearOfStudy ?? undefined,
-                        amount: fee.amount, // Base
-
-                        // New Fields
-                        discountAmount: scholarshipAmt, // Initial discount (scholarship)
+                        amount: fee.amount,
+                        discountAmount:    scholarshipAmt,
                         scholarshipAmount: scholarshipAmt,
-                        netAmount: netAmount,
-
+                        netAmount,
                         status: 'PENDING',
-                        dueDate: fee.dueDate || new Date(),
+                        dueDate: fallbackDueDate,
                         createdBy: userId,
                         remarks: scholarshipAmt > 0 ? `Scholarship Applied: ${discountPct}%` : undefined
                     } as any
                 });
 
-                // Ledger Debit (Full Demand)
                 await tx.studentLedger.create({
                     data: {
                         studentId,
@@ -774,14 +1229,13 @@ export const FeeService = {
                         description: `Fee: ${fee.feeHead.name}`,
                         referenceId: demand.id,
                         referenceType: 'FEE_DEMAND',
-                        feeHeadId: fee.feeHeadId, 
+                        feeHeadId: fee.feeHeadId,
                         createdBy: userId
                     }
                 });
-                
-                // Ledger Credit (Scholarship Discount)
+
                 if (scholarshipAmt > 0) {
-                     await tx.studentLedger.create({
+                    await tx.studentLedger.create({
                         data: {
                             studentId,
                             type: 'CREDIT',
@@ -793,27 +1247,185 @@ export const FeeService = {
                             createdBy: userId
                         }
                     });
+                    scholarshipApplied++;
                 }
 
-                results.push(demand);
+                created.push(demand);
                 newDemandsTotal += fee.amount;
             }
-            
-            // Update Student Admission Total Fee (Base Amount usually)
+
+            // totalFee retains the historical "sum of base/gross amounts" semantic to
+            // avoid disturbing existing rows. Reports that need net-of-scholarship should
+            // aggregate from StudentFeeDemand.netAmount directly.
             if (newDemandsTotal > 0) {
-                 logger.debug(`[generateFeeDemands] Updating Total Fee in Admission table. Increment=${newDemandsTotal}`);
-                 await tx.studentAdmission.upsert({
-                     where: { studentId },
-                     create: { studentId, totalFee: newDemandsTotal },
-                     update: { totalFee: { increment: newDemandsTotal } }
-                 });
+                await tx.studentAdmission.upsert({
+                    where: { studentId },
+                    create: { studentId, totalFee: newDemandsTotal },
+                    update: { totalFee: { increment: newDemandsTotal } }
+                });
             }
 
-            return results;
+            return { created, skippedCount, scholarshipApplied };
         });
 
-        logger.info(`[generateFeeDemands] Successfully generated ${createdDemands.length} demands.`);
-        return createdDemands;
+        logger.info(
+            `[generateFeeDemands] success: generated=${txResult.created.length}, ` +
+            `skipped=${txResult.skippedCount}, scholarshipApplied=${txResult.scholarshipApplied}, ` +
+            `fallback=${fallbackUsed}`
+        );
+
+        return {
+            demands: txResult.created,
+            generated: txResult.created.length,
+            skipped: txResult.skippedCount,
+            considered,
+            fallbackUsed,
+            scholarshipApplied: txResult.scholarshipApplied,
+            structuresStrict:   strictCount,
+            structuresFallback: fallbackCount,
+        };
+    },
+
+    // Bulk orchestrator — runs generateFeeDemands across every student matching a filter
+    // for the target academic year. Designed for end-of-promotion/year-rollover runs.
+    //
+    // Filters narrow the student set by admission cohort tags. Default is the *active*
+    // year's enrollments. Each student is processed in its own transaction (per-student
+    // failures don't roll back the whole run); the report aggregates outcomes so admins
+    // can see exactly which students were skipped/why.
+    generateFeeDemandsBulk: async (
+        academicYearId: string,
+        userId: string,
+        filters: {
+            courseIds?:     string[];
+            entryTypes?:    Array<'REGULAR' | 'LATERAL' | 'TRANSFER'>;
+            instituteCodes?: string[];
+            entryAcademicYearIds?: string[];
+            quotaTypes?:    QuotaType[];
+            studentIds?:    string[];
+        } = {},
+        runOptions: {
+            allowLegacyFallback?: boolean;
+            requireEnrollment?:   boolean;
+            deleteExisting?:      boolean;
+            dueDateFallbackDays?: number;
+        } = {}
+    ) => {
+        logger.info(
+            `[generateFeeDemandsBulk] year=${academicYearId} filters=${JSON.stringify(filters)} ` +
+            `runOptions=${JSON.stringify(runOptions)}`
+        );
+
+        // Find target students via enrollments for this academic year, optionally
+        // narrowed by admission cohort tags. Includes COMPLETED enrollments so the
+        // orchestrator can back-fill demands for graduated batches (admin enters
+        // historical payment records for old students post-fact).
+        const enrollmentWhere: any = { academicYearId };
+        if (filters.studentIds && filters.studentIds.length > 0) {
+            enrollmentWhere.studentId = { in: filters.studentIds };
+        }
+
+        const enrollments = await prisma.studentEnrollment.findMany({
+            where: enrollmentWhere,
+            select: {
+                studentId: true,
+                student: {
+                    select: {
+                        quotaType: true,
+                        admissionDetails: {
+                            select: {
+                                allottedCourseId:    true,
+                                entryType:           true,
+                                instituteCode:       true,
+                                entryAcademicYearId: true,
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Apply admission-side filters in memory (single SQL pass; the result set is
+        // already bounded by the year's enrollments).
+        const targets = enrollments.filter(e => {
+            const a = e.student.admissionDetails;
+            if (!a?.allottedCourseId) return false; // can't generate demands without a course
+            if (filters.courseIds            && !filters.courseIds.includes(a.allottedCourseId))   return false;
+            if (filters.entryTypes           && !filters.entryTypes.includes(a.entryType as any))  return false;
+            if (filters.instituteCodes       && (!a.instituteCode || !filters.instituteCodes.includes(a.instituteCode))) return false;
+            if (filters.entryAcademicYearIds && (!a.entryAcademicYearId || !filters.entryAcademicYearIds.includes(a.entryAcademicYearId))) return false;
+            if (filters.quotaTypes           && (!e.student.quotaType || !filters.quotaTypes.includes(e.student.quotaType))) return false;
+            return true;
+        });
+
+        logger.info(`[generateFeeDemandsBulk] resolved ${targets.length} target students from ${enrollments.length} enrollments`);
+
+        const perStudent: Array<{
+            studentId: string;
+            courseId:  string;
+            ok:        boolean;
+            generated: number;
+            skipped:   number;
+            considered: number;
+            fallbackUsed: boolean;
+            scholarshipApplied: number;
+            error?:    string;
+        }> = [];
+
+        for (const t of targets) {
+            const courseId = t.student.admissionDetails!.allottedCourseId!;
+            try {
+                const result = await FeeService.generateFeeDemands(
+                    t.studentId,
+                    courseId,
+                    academicYearId,
+                    userId,
+                    runOptions.deleteExisting ?? false,
+                    {
+                        allowLegacyFallback: runOptions.allowLegacyFallback ?? false, // strict by default for bulk
+                        requireEnrollment:   runOptions.requireEnrollment   ?? true,  // bulk must verify
+                        dueDateFallbackDays: runOptions.dueDateFallbackDays,
+                    }
+                );
+                perStudent.push({
+                    studentId: t.studentId,
+                    courseId,
+                    ok: true,
+                    generated: result.generated,
+                    skipped: result.skipped,
+                    considered: result.considered,
+                    fallbackUsed: result.fallbackUsed,
+                    scholarshipApplied: result.scholarshipApplied,
+                });
+            } catch (err: any) {
+                logger.error(`[generateFeeDemandsBulk] student=${t.studentId} failed: ${err.message}`);
+                perStudent.push({
+                    studentId: t.studentId,
+                    courseId,
+                    ok: false,
+                    generated: 0, skipped: 0, considered: 0,
+                    fallbackUsed: false, scholarshipApplied: 0,
+                    error: err.message,
+                });
+            }
+        }
+
+        const summary = perStudent.reduce(
+            (acc, r) => {
+                acc.studentsProcessed += 1;
+                acc.studentsOk        += r.ok ? 1 : 0;
+                acc.studentsFailed    += r.ok ? 0 : 1;
+                acc.demandsGenerated  += r.generated;
+                acc.demandsSkipped    += r.skipped;
+                acc.fallbackHits      += r.fallbackUsed ? 1 : 0;
+                acc.scholarshipsApplied += r.scholarshipApplied;
+                return acc;
+            },
+            { studentsProcessed: 0, studentsOk: 0, studentsFailed: 0, demandsGenerated: 0, demandsSkipped: 0, fallbackHits: 0, scholarshipsApplied: 0 }
+        );
+
+        logger.info(`[generateFeeDemandsBulk] complete: ${JSON.stringify(summary)}`);
+        return { summary, perStudent };
     },
 
     // Get Full Ledger/Statement

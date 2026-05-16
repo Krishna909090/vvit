@@ -59,3 +59,10 @@ deploy.zip
 *.txt
 
 *.test.ts
+
+*.sql
+
+*.json
+*.html
+*.pdf
+*.sql

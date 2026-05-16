@@ -213,9 +213,6 @@ export const AdminService = {
         const user = await prisma.user.findFirst({
             where: {
                 OR: searchConditions
-            },
-            include: {
-                agentStudents: { select: { id: true, name: true, applicationId: true } }
             }
         });
 

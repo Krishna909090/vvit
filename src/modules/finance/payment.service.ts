@@ -2311,7 +2311,12 @@ export const processUnifiedPayment = async (data: any) => {
 
 // Enhanced History
 // Enhanced History
-export const getStudentFinancialHistory = async (studentId: string) => {
+export const getStudentFinancialHistory = async (
+    studentId: string,
+    options: { academicYearId?: string } = {}
+) => {
+    const { academicYearId } = options;
+
     // 1. Parallel Data Fetching
     // 1. Fetch Student Details First (Required for context)
     const student = await prisma.student.findUnique({
@@ -2329,11 +2334,24 @@ export const getStudentFinancialHistory = async (studentId: string) => {
     // 2. Fetch Configuration Data
     const allFeeHeads = await prisma.feeHead.findMany();
 
-    // 3. Fetch Financial Records (Parallel)
+    // 3. Fetch Financial Records (Parallel).
+    // When `academicYearId` is set, every per-year-tagged record is filtered to that
+    // year. Records that have no `academicYearId` (older payments / ledger entries
+    // pre-denormalization) are still included so reports remain complete.
+    const yearFilter = academicYearId
+        ? { academicYearId }
+        : {};
+    const yearOrNullFilter = academicYearId
+        ? { OR: [{ academicYearId }, { academicYearId: null }] }
+        : {};
+
     const [ledgers, payments, feeDemands, feeCorrections] = await Promise.all([
-        prisma.studentLedger.findMany({ where: { studentId, isDeleted: false }, orderBy: { date: 'desc' } }),
+        prisma.studentLedger.findMany({
+            where: { studentId, isDeleted: false, ...yearOrNullFilter },
+            orderBy: { date: 'desc' }
+        }),
         prisma.payment.findMany({
-            where: { studentId, status: PaymentStatus.SUCCESS, isDeleted: false },
+            where: { studentId, status: PaymentStatus.SUCCESS, isDeleted: false, ...yearOrNullFilter },
             include: {
                 feeDemand: {
                     include: { feeStructure: { include: { feeHead: true } } }
@@ -2341,14 +2359,14 @@ export const getStudentFinancialHistory = async (studentId: string) => {
             }
         }),
         prisma.studentFeeDemand.findMany({
-            where: { studentId, isDeleted: false },
+            where: { studentId, isDeleted: false, ...yearOrNullFilter },
             include: {
                 feeStructure: { include: { feeHead: true } },
                 feeHead: true
             }
         }),
         (prisma as any).feeCorrection.findMany({
-            where: { studentId },
+            where: { studentId, ...yearFilter },
             orderBy: { createdAt: 'desc' },
         }),
     ]);
@@ -2496,6 +2514,7 @@ export const getStudentFinancialHistory = async (studentId: string) => {
         'TRANSPORT_REASSIGNMENT',
         'TRANSPORT_CANCELLATION',
         'ACCOMMODATION_SWITCH',
+        'WAIVER',  // app-fee waivers (e.g., lateral + management quota); shown separately, not as discount
     ]);
     ledgers.forEach(entry => {
         // Skip cancellation/reassign/switch — those are reflected in FeeCorrection, not here.

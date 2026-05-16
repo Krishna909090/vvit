@@ -308,7 +308,6 @@ export const InvoiceService = {
                     email: fullStudentRef.email || '',
                     address: `${fullStudentRef.address}, ${fullStudentRef.city}, ${fullStudentRef.state} - ${fullStudentRef.pincode}`,
                     degreeType: fullStudentRef.degreeType || '',
-                    courseType: fullStudentRef.courseType || '',
                     pref1: fullStudentRef.pref1Course?.name,
                     pref2: fullStudentRef.pref2Course?.name,
                     pref3: fullStudentRef.pref3Course?.name,

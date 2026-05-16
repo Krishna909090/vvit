@@ -200,6 +200,199 @@ export const resolveFeeDemandContext = async (
     };
 };
 
+/* ──────────────────── Academic year guards (write-path safety) ───────────────────── */
+
+/**
+ * Assert the academic year is writable: exists, not soft-deleted, not locked.
+ *
+ * Use this in any flow that writes financial or enrollment data tied to a specific
+ * academic year — admissions, fee demands, payments, ledger entries, reassign /
+ * switch / cancel flows. Locking a year (via AcademicYear.isLocked=true) is the
+ * year-end "books closed" signal — once locked, no further writes against that
+ * year's records should be allowed.
+ *
+ * Use 423 Locked (HTTP) for the lock case so the client UI can render a clear
+ * "this year is closed" message instead of a generic 400.
+ *
+ * Pass `tx` when calling inside a transaction so the read sees pending changes.
+ */
+export const assertAcademicYearWritable = async (academicYearId: string, tx?: any): Promise<{
+    id: string;
+    code: string;
+    startDate: Date;
+    endDate: Date;
+}> => {
+    const client = tx || prisma;
+    const ay = await client.academicYear.findUnique({
+        where: { id: academicYearId },
+        select: { id: true, code: true, startDate: true, endDate: true, isActive: true, isLocked: true, isDeleted: true },
+    });
+    if (!ay) {
+        throw new AppError(`Academic year ${academicYearId} not found`, 404);
+    }
+    if (ay.isDeleted) {
+        throw new AppError(`Academic year ${ay.code} has been deleted`, 410);
+    }
+    if (ay.isLocked) {
+        // 423 Locked — client should render "this year is closed" rather than retry
+        throw new AppError(`Academic year ${ay.code} is locked; financial / enrollment writes are not permitted`, 423);
+    }
+    return { id: ay.id, code: ay.code, startDate: ay.startDate, endDate: ay.endDate };
+};
+
+/**
+ * Returns the current active academic year. Throws if none configured or multiple
+ * are flagged active (which is a data-integrity error — at most one year should be
+ * isActive=true at a time).
+ *
+ * Use this whenever a flow needs to default to "the year we're currently in" —
+ * for example, when an admin creates an admission without specifying a year.
+ *
+ * For back-dated admissions, callers should NOT use this — they should accept an
+ * explicit `academicYearId` from the caller (since "current year" wouldn't apply).
+ */
+export const getActiveAcademicYear = async (tx?: any): Promise<{
+    id: string;
+    code: string;
+    startDate: Date;
+    endDate: Date;
+}> => {
+    const client = tx || prisma;
+    const candidates = await client.academicYear.findMany({
+        where: { isActive: true, isDeleted: false },
+        orderBy: { startDate: 'desc' },
+        select: { id: true, code: true, startDate: true, endDate: true },
+    });
+    if (candidates.length === 0) {
+        throw new AppError('No active academic year configured. Create one and mark isActive=true.', 500);
+    }
+    if (candidates.length > 1) {
+        // Data-integrity warning, not a fatal — pick the most recent and log
+        logger.warn(
+            `[getActiveAcademicYear] Multiple active academic years detected (${candidates.map((c: any) => c.code).join(', ')}). ` +
+            `Returning the most recent (${candidates[0].code}). Fix data so only one year is isActive=true.`
+        );
+    }
+    return candidates[0];
+};
+
+/* ─────────────────── Hostel credit accounting (idempotent) ───────────────────── */
+
+/**
+ * Available hostel credit = paid-in cash minus already-promised refunds.
+ *
+ * Returns the amount of student-paid hostel money that is still "in" the college's
+ * hostel ledger and available to be applied as a discount on a NEW hostel demand
+ * during reassign / switch / cancel flows.
+ *
+ *   availableCredit = max(0, gross_hostel_payments
+ *                          − sum(FeeCorrection.amount for accommodation/branch refunds))
+ *
+ * Why subtract FeeCorrection rows (settled AND unsettled): each row represents
+ * cash that is either already disbursed back to the student (settled), or
+ * earmarked for disbursement (unsettled). In both cases the cash is no longer
+ * available to credit against new demands.
+ *
+ * Without this clamp, the same paid-in money gets reused as discount across
+ * multiple reassign cycles (SHARING_4 → SHARING_8 → SHARING_4 → SHARING_8),
+ * creating phantom refund rows and over-stating what the college owes back.
+ *
+ * Pass `tx` when calling inside a Prisma transaction.
+ */
+export const getAvailableHostelCredit = async (studentId: string, tx?: any): Promise<{
+    grossPaid: number;
+    priorRefunds: number;
+    availableCredit: number;
+}> => {
+    const client = tx || prisma;
+
+    const [paidAgg, refundAgg] = await Promise.all([
+        client.payment.aggregate({
+            where: {
+                studentId,
+                status: 'SUCCESS',
+                isDeleted: false,
+                component: { in: [
+                    'HOSTEL',
+                    'HOSTEL_ACCOMMODATION',
+                    'HOSTEL_MESS',
+                    'HOSTEL_LAUNDRY',
+                    'HOSTEL_REGISTRATION',
+                ]},
+            },
+            _sum: { amount: true },
+        }),
+        client.feeCorrection.aggregate({
+            where: {
+                studentId,
+                type: { in: ['ACCOMMODATION_CHANGE_REFUND', 'BRANCH_CHANGE_REFUND'] },
+            },
+            _sum: { amount: true },
+        }),
+    ]);
+
+    const grossPaid     = paidAgg._sum.amount ?? 0;
+    const priorRefunds  = refundAgg._sum.amount ?? 0;
+    const availableCredit = Math.max(0, grossPaid - priorRefunds);
+
+    return { grossPaid, priorRefunds, availableCredit };
+};
+
+/**
+ * Resolve the active HostelPriceCategory for a (sharing, roomType, academicYearId)
+ * tuple. Prefers a year-scoped row; falls back to the legacy year-null row so the
+ * pre-year-aware-pricing era keeps working without a hard data migration.
+ *
+ * Returns null if neither exists — caller should treat as "no pricing configured."
+ *
+ * Pass `tx` when calling inside a Prisma transaction.
+ */
+export const resolveHostelPriceCategory = async (
+    args: { sharing: number; roomType: string; academicYearId?: string | null },
+    tx?: any
+): Promise<any | null> => {
+    const client = tx || prisma;
+    const { sharing, roomType, academicYearId } = args;
+
+    if (academicYearId) {
+        const yearScoped = await client.hostelPriceCategory.findFirst({
+            where: { sharing, roomType, isActive: true, academicYearId }
+        });
+        if (yearScoped) return yearScoped;
+    }
+    const legacy = await client.hostelPriceCategory.findFirst({
+        where: { sharing, roomType, isActive: true, academicYearId: null }
+    });
+    return legacy ?? null;
+};
+
+/**
+ * Resolve transport route cost for a given academic year. Prefers the year-specific
+ * override in TransportRouteYearlyPrice; falls back to TransportRoute.cost.
+ *
+ * Useful for back-dated / lateral admissions billed against a past year's route fee.
+ *
+ * Pass `tx` when calling inside a Prisma transaction.
+ */
+export const resolveTransportRouteCost = async (
+    routeId: string,
+    academicYearId: string | null | undefined,
+    tx?: any
+): Promise<number> => {
+    const client = tx || prisma;
+    if (academicYearId) {
+        const override = await client.transportRouteYearlyPrice.findFirst({
+            where: { routeId, academicYearId }
+        });
+        if (override) return override.cost;
+    }
+    const route = await client.transportRoute.findUnique({
+        where: { id: routeId },
+        select: { cost: true }
+    });
+    return route?.cost ?? 0;
+};
+
 /* ────────────── Self-healing accommodation pricing snapshot ──────────────── */
 
 /**
@@ -270,12 +463,13 @@ export const getOrCreateAccommodationPricing = async (studentId: string, tx?: an
     const sharing = room.capacity;
     const roomType = room.type;
 
-    // 4. Resolve active price tier
-    const priceCategory = await client.hostelPriceCategory.findFirst({
-        where: { sharing, roomType, isActive: true }
-    });
+    // 4. Resolve active price tier (year-scoped, falls back to legacy year-null row).
+    const priceCategory = await resolveHostelPriceCategory(
+        { sharing, roomType, academicYearId: admission.academicYearId },
+        client
+    );
     if (!priceCategory) {
-        logger.warn(`[getOrCreateAccommodationPricing] No active price tier for sharing=${sharing}, roomType=${roomType} — cannot create snapshot for student ${studentId}`);
+        logger.warn(`[getOrCreateAccommodationPricing] No active price tier for sharing=${sharing}, roomType=${roomType}, academicYearId=${admission.academicYearId ?? '<null>'} — cannot create snapshot for student ${studentId}`);
         return null;
     }
 

@@ -410,20 +410,28 @@ export const DashboardService = {
     },
 
     /**
-     * Get Allocated Seats Count by Degree Type
+     * Get Allocated Seats Count by Degree Type.
+     * Per-year scoped: sums CourseCapacity for the active academic year.
+     * Falls back to Course.totalSeats if no CourseCapacity rows exist yet.
      */
     async getDegreeSeatAllocatedStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
         const whereDate = dateFilter ? { createdAt: dateFilter } : {};
 
-        const [studentStats, courseStats] = await Promise.all([
+        const activeYear = await prisma.academicYear.findFirst({
+            where: { isActive: true, isDeleted: false },
+            select: { id: true },
+        });
+
+        const [studentStats, capacityRows] = await Promise.all([
             // 1. Count actual students with allotted seats (Filled Count)
             prisma.student.groupBy({
                 by: ['degreeType'],
                 where: {
                     ...whereDate,
                     admissionDetails: {
-                        allottedCourseId: { not: null }
+                        allottedCourseId: { not: null },
+                        ...(activeYear ? { academicYearId: activeYear.id } : {}),
                     }
                 },
                 _count: {
@@ -431,37 +439,34 @@ export const DashboardService = {
                 }
             }),
 
-            // 2. Sum total seats from Courses (Total Capacity - Master Data)
-            // Use isDeleted: { not: true } to include nulls if any, though default is false.
-            prisma.course.groupBy({
-                by: ['degree'],
-                _sum: {
-                    totalSeats: true
-                },
-                where: {
-                    isDeleted: { not: true }
-                }
-            })
+            // 2. Per-year total seats from CourseCapacity, joined to Course.degree.
+            //    If no active year (fresh install), this returns [] and we fall back below.
+            activeYear
+                ? prisma.courseCapacity.findMany({
+                    where: { academicYearId: activeYear.id },
+                    select: { totalSeats: true, course: { select: { degree: true, isDeleted: true } } },
+                })
+                : Promise.resolve([] as Array<{ totalSeats: number; course: { degree: string | null; isDeleted: boolean | null } }>),
         ]);
 
         // Merge results
         const stats: Record<string, { total: number, filled: number }> = {};
 
-        // Process Course Capacity first - Ensure all available degrees are listed
-        courseStats.forEach(c => {
-            if (c.degree) {
-                stats[c.degree] = { 
-                    total: c._sum.totalSeats || 0, 
-                    filled: 0 
-                };
-            }
-        });
+        if (capacityRows.length > 0) {
+            capacityRows.forEach(row => {
+                if (row.course.isDeleted) return;
+                const degree = row.course.degree;
+                if (!degree) return;
+                if (!stats[degree]) stats[degree] = { total: 0, filled: 0 };
+                stats[degree].total += row.totalSeats;
+            });
+        }
+        // No fallback — if CourseCapacity is empty for the active year,
+        // admin needs to seed via POST /admin/academic/capacity.
 
-        // Overlay Student Filled Counts
         studentStats.forEach(s => {
             if (s.degreeType) {
                 if (!stats[s.degreeType]) {
-                    // This happens if a student has a degreeType that isn't in Courses (or mismatched spelling)
                     stats[s.degreeType] = { total: 0, filled: 0 };
                 }
                 stats[s.degreeType].filled = s._count.id;
@@ -862,17 +867,24 @@ export const DashboardService = {
 
 
     /**
-     * Get Course Statistics (Seats Filled vs Total)
+     * Get Course Statistics (Seats Filled vs Total) for the active academic year.
+     * Falls back to Course.totalSeats if no CourseCapacity row exists for that course/year.
      */
     async getCourseSeatStats() {
-        // Compute filled seats dynamically from StudentAdmission, excluding CANCELLED students
+        const activeYear = await prisma.academicYear.findFirst({
+            where: { isActive: true, isDeleted: false },
+            select: { id: true },
+        });
+
         const courses = await prisma.course.findMany({
             where: { isDeleted: false },
             select: {
                 id: true,
                 code: true,
                 name: true,
-                totalSeats: true,
+                capacities: activeYear
+                    ? { where: { academicYearId: activeYear.id }, select: { totalSeats: true } }
+                    : undefined,
                 _count: {
                     select: {
                         allottedStudents: {
@@ -881,7 +893,8 @@ export const DashboardService = {
                                 OR: [
                                     { status: null },
                                     { status: { not: 'CANCELLED' } }
-                                ]
+                                ],
+                                ...(activeYear ? { academicYearId: activeYear.id } : {}),
                             }
                         }
                     }
@@ -892,7 +905,7 @@ export const DashboardService = {
 
         return courses.map(c => {
             const filled = c._count.allottedStudents;
-            const total = c.totalSeats || 0;
+            const total  = c.capacities?.[0]?.totalSeats ?? 0;
             return {
                 id: c.id,
                 code: c.code,

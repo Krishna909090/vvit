@@ -70,7 +70,6 @@ export const getMyProStudents = async (userId: string, query: any) => {
                 degreeType: true,
                 profilePhotoUrl: true,
                 aadharNumber: true,
-                proCommissionAmount: true,
                 createdAt: true,
                 admissionDetails: {
                     select: {
@@ -110,17 +109,11 @@ export const getMyProStudents = async (userId: string, query: any) => {
 export const getMyProCommissionSummary = async (userId: string) => {
     const pro = await getProByUserId(userId);
 
-    const [totalStudents, commission] = await Promise.all([
-        prisma.student.count({ where: { proId: pro.id } }),
-        prisma.student.aggregate({
-            where: { proId: pro.id },
-            _sum: { proCommissionAmount: true }
-        })
-    ]);
+    const totalStudents = await prisma.student.count({ where: { proId: pro.id } });
 
     return {
         pro,
         totalStudents,
-        totalCommission: commission._sum.proCommissionAmount || 0
+        totalCommission: 0
     };
 };

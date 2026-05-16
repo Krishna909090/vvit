@@ -97,10 +97,10 @@ export const deleteDepartment = catchAsync(async (req: Request, res: Response, n
 
 // Course
 export const createCourse = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { name, code, departmentId, degree, totalSeats, omrId } = req.body;
+    const { name, code, departmentId, degree, omrId } = req.body;
     const adminId = req.user?.userId;
 
-    const course = await AcademicService.createCourse(name, code, departmentId, degree, totalSeats, adminId, omrId !== undefined ? Number(omrId) : undefined);
+    const course = await AcademicService.createCourse(name, code, departmentId, degree, adminId, omrId !== undefined ? Number(omrId) : undefined);
     
     sendResponse({
         res,
@@ -132,9 +132,9 @@ export const getCourseById = catchAsync(async (req: Request, res: Response, next
 
 export const updateCourse = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { name, code, departmentId, totalSeats, omrId } = req.body;
+    const { name, code, departmentId, omrId } = req.body;
 
-    const updatedCourse = await AcademicService.updateCourse(id, name, code, departmentId, totalSeats, req.user?.userId, omrId !== undefined ? Number(omrId) : undefined);
+    const updatedCourse = await AcademicService.updateCourse(id, name, code, departmentId, req.user?.userId, omrId !== undefined ? Number(omrId) : undefined);
     
     sendResponse({ res, statusCode: 200, success: true, message: "Course updated successfully", data: updatedCourse });
 });
@@ -149,10 +149,10 @@ export const deleteCourse = catchAsync(async (req: Request, res: Response, next:
 
 // Specialization
 export const createSpecialization = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { code, name, totalSeats, courseId } = req.body;
+    const { code, name, courseId } = req.body;
     const adminId = req.user?.userId;
 
-    const specialization = await AcademicService.createSpecialization(code, name, totalSeats, courseId, adminId);
+    const specialization = await AcademicService.createSpecialization(code, name, courseId, adminId);
     
     sendResponse({
         res,
@@ -186,9 +186,9 @@ export const getSpecializationById = catchAsync(async (req: Request, res: Respon
 
 export const updateSpecialization = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { code, name, totalSeats } = req.body;
-    
-    const updatedSpecialization = await AcademicService.updateSpecialization(id, code, name, totalSeats, req.user?.userId);
+    const { code, name } = req.body;
+
+    const updatedSpecialization = await AcademicService.updateSpecialization(id, code, name, req.user?.userId);
     
     sendResponse({ res, statusCode: 200, success: true, message: "Specialization updated successfully", data: updatedSpecialization });
 });
@@ -240,11 +240,11 @@ export const deleteAcademicYear = catchAsync(async (req: Request, res: Response,
 
 // Batch
 export const createBatch = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { name, specializationId, startDate, endDate } = req.body;
+    const { name, courseId, startDate, endDate } = req.body;
     const adminId = req.user?.userId;
 
-    const batch = await AcademicService.createBatch(name, specializationId, startDate, endDate, adminId);
-    
+    const batch = await AcademicService.createBatch(name, courseId, startDate, endDate, adminId);
+
     sendResponse({
         res,
         statusCode: 201,
@@ -255,10 +255,10 @@ export const createBatch = catchAsync(async (req: Request, res: Response, next: 
 });
 
 export const getBatches = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { specializationId } = req.query;
-    
-    const batches = await AcademicService.getBatches(specializationId as string);
-    
+    const { courseId } = req.query;
+
+    const batches = await AcademicService.getBatches(courseId as string);
+
     sendResponse({ res, statusCode: 200, success: true, data: batches });
 });
 
@@ -270,10 +270,10 @@ export const getBatchById = catchAsync(async (req: Request, res: Response, next:
 
 export const updateBatch = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { name, specializationId, startDate, endDate } = req.body;
-    
-    const updatedBatch = await AcademicService.updateBatch(id, name, specializationId, startDate, endDate, req.user?.userId);
-    
+    const { name, courseId, startDate, endDate } = req.body;
+
+    const updatedBatch = await AcademicService.updateBatch(id, name, courseId, startDate, endDate, req.user?.userId);
+
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.BATCH_UPDATED, data: updatedBatch });
 });
 

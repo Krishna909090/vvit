@@ -1,9 +1,24 @@
 import { Router } from 'express';
 import { sendOtp, verifyOtp, generateAadhaarOtp, submitAadhaarOtp, login, logout } from './auth.controller';
+import {
+    studentLogin,
+    studentInitialSetup,
+    adminIssueStudentResetOtp,
+    studentResetPassword,
+} from './student-auth.controller';
 import { validateRequest } from '../../middlewares/validationMiddleware';
-import { sendOtpSchema, verifyOtpSchema, generateAadhaarOtpSchema, submitAadhaarOtpSchema } from '../../validators/authValidators';
+import {
+    sendOtpSchema,
+    verifyOtpSchema,
+    generateAadhaarOtpSchema,
+    submitAadhaarOtpSchema,
+    studentLoginSchema,
+    studentInitialSetupSchema,
+    adminIssueStudentOtpSchema,
+    studentResetPasswordSchema,
+} from '../../validators/authValidators';
 import { authRateLimiter } from '../../middlewares/rateLimitMiddleware';
-import { authenticate } from '../../middleware/rbac.middleware';
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 
 const router = Router();
 
@@ -66,5 +81,63 @@ router.post('/aadhaar/submit-otp', authRateLimiter, validateRequest(submitAadhaa
  * Response: { status, message: 'Logged out successfully' }
  */
 router.post('/logout', authenticate, logout);
+
+/**
+ * POST /auth/student/login
+ * Student password login by rollNumber. Resolves rollNumber via the active
+ * AcademicYear and an ACTIVE StudentEnrollment. Returns JWT carrying tokenVersion.
+ * If User.password is null, responds 403 directing the student to first-time setup
+ * or to admin for an OTP — see /auth/student/initial-setup and /auth/student/reset-password.
+ * Body: { rollNumber, password }
+ */
+router.post(
+    '/student/login',
+    authRateLimiter,
+    validateRequest(studentLoginSchema),
+    studentLogin
+);
+
+/**
+ * POST /auth/student/initial-setup
+ * One-shot self-service first-time password set. Verifies PII (DOB + Aadhaar last 4)
+ * against the Student record. Only succeeds when User.password is currently null.
+ * Body: { rollNumber, dob (YYYY-MM-DD), aadhaarLast4, newPassword }
+ */
+router.post(
+    '/student/initial-setup',
+    authRateLimiter,
+    validateRequest(studentInitialSetupSchema),
+    studentInitialSetup
+);
+
+/**
+ * POST /auth/student/admin/issue-otp
+ * Admin-mediated forgot-password. Generates an 8-digit OTP, valid 6 hours, with
+ * issuance cooldown (10 min) and daily cap (3/student). Returns OTP plaintext to
+ * admin once for in-person handoff to the student. Audit-logged.
+ * Permission: student.password.reset
+ * Body: { rollNumber }
+ */
+router.post(
+    '/student/admin/issue-otp',
+    authenticate,
+    authorizePermission('student.password.reset'),
+    validateRequest(adminIssueStudentOtpSchema),
+    adminIssueStudentResetOtp
+);
+
+/**
+ * POST /auth/student/reset-password
+ * Student consumes an admin-issued OTP and sets a new password. Atomic attempt
+ * counter; on success, password is updated and tokenVersion bumped to invalidate
+ * any prior tokens. Does NOT auto-login — student must call /auth/student/login.
+ * Body: { rollNumber, otp, newPassword }
+ */
+router.post(
+    '/student/reset-password',
+    authRateLimiter,
+    validateRequest(studentResetPasswordSchema),
+    studentResetPassword
+);
 
 export default router;

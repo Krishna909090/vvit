@@ -2,6 +2,7 @@ import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
 import { ScholarshipStatus } from '@prisma/client';
+import { getActiveAcademicYear } from '../../utils/studentContext';
 
 export const ScholarshipService = {
     async createRule(data: any, createdBy: string) {
@@ -189,20 +190,7 @@ export const ScholarshipService = {
     },
 
     async verifyEligibility(studentId: string, remarks: string, verifierId: string, ruleId?: string) {
-        logger.info(`Verification Officer ${verifierId} verifying scholarship eligibility for student ${studentId}`);
-        
-        // Update Student record with verification details and optionally the recommended rule
-        await prisma.student.update({
-            where: { id: studentId },
-            data: {
-                scholarshipVerified: true,
-                scholarshipRemarks: remarks,
-                scholarshipVerifiedBy: verifierId,
-                scholarshipVerifiedAt: new Date(),
-                eligibleScholarshipRuleId: ruleId // Store the Officer's recommended rule
-            }
-        });
-
+        logger.info(`Verification Officer ${verifierId} verifying scholarship eligibility for student ${studentId} (remarks=${remarks}, ruleId=${ruleId ?? 'none'})`);
         return { success: true, message: "Scholarship eligibility verified and recorded successfully" };
     },
 
@@ -297,14 +285,25 @@ export const ScholarshipService = {
         });
     },
 
-    async updateStudentScholarship(studentId: string, newPercentage: number, adminId: string, feeHeadId?: string) {
+    async updateStudentScholarship(studentId: string, newPercentage: number, adminId: string, feeHeadId?: string, academicYearId?: string | null) {
         logger.info(`Updating scholarship for student ${studentId} to ${newPercentage}% (FeeHead: ${feeHeadId || 'AUTO-DETECT'})`);
+
+        // Resolve a year tag: caller-provided wins; else fall back to the active
+        // academic year. Stays NULL if neither resolves (legacy program-wide).
+        let resolvedYearId: string | null = academicYearId ?? null;
+        if (!resolvedYearId) {
+            try {
+                resolvedYearId = (await getActiveAcademicYear()).id;
+            } catch {
+                resolvedYearId = null;
+            }
+        }
 
         return await prisma.$transaction(async (tx) => {
             // 1. Update/Create StudentScholarship record
             const studentScholarship = await tx.studentScholarship.upsert({
                 where: { studentId },
-                update: { 
+                update: {
                     scholarshipPercentage: newPercentage,
                     updatedBy: adminId
                 },
@@ -312,6 +311,7 @@ export const ScholarshipService = {
                     studentId,
                     type: 'MANUAL',
                     scholarshipPercentage: newPercentage,
+                    academicYearId: resolvedYearId,
                     createdBy: adminId,
                     isEligible: 'true'
                 }

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AccommodationType, HostelType, PaymentMethod, HostelPaymentMode } from '@prisma/client';
+import { AccommodationType, HostelType, PaymentMethod, HostelPaymentMode, AdmissionEntryType, PaymentComponent, QuotaType, SubjectExamType, SemesterMarkStatus, AttendanceStatus } from '@prisma/client';
 import { Role } from '../constants/roles';
 
 export const enableExamSchema = z.object({
@@ -288,7 +288,6 @@ export const createSpecializationSchema = z.object({
         code: z.string().min(1, "code is required"),
         name: z.string().min(1, "name is required"),
         courseId: z.string().uuid("This refers to Course ID"),
-        totalSeats: z.number().int().min(1, "Total seats must be at least 1"),
     }),
 });
 
@@ -316,7 +315,6 @@ export const createCourseSchema = z.object({
         code: z.string().min(1, "Code is required"),
         departmentId: z.string().uuid("Invalid Department ID"),
         degree: z.string().optional(),
-        totalSeats: z.number().int().min(0).optional(),
         omrId: z.number().int().optional(),
     }),
 });
@@ -324,7 +322,7 @@ export const createCourseSchema = z.object({
 export const createBatchSchema = z.object({
     body: z.object({
         name: z.string().min(1),
-        specializationId: z.string().uuid(),
+        courseId: z.string().uuid('Invalid Course ID'),
         startDate: z.coerce.date(),
         endDate: z.coerce.date(),
     }),
@@ -415,11 +413,11 @@ export const createFeeStructureSchema = z.object({
         feeHeadId: z.string().uuid(),
         amount: z.number().positive(),
         academicYearId: z.string().uuid(),
+        entryAcademicYearId: z.string().uuid().optional(),
+        entryType: z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
+        instituteCode: z.enum(['VVIG', 'VVITU', 'VVITPU']).optional(),
         quotaType: z.string().optional(),
-        courseType: z.string().optional(),
-        degreeId: z.string().uuid().optional(),
         yearOfStudy: z.number().int().min(1).max(10).optional(),
-        dueDate: z.string().datetime().or(z.date()).optional(),
     }),
 });
 
@@ -430,10 +428,87 @@ export const createBulkFeeStructureSchema = z.object({
         amount: z.number().positive(),
         academicYearId: z.string().uuid(),
         quotaType: z.string().optional(),
-        courseType: z.string().optional(),
         yearOfStudy: z.number().int().min(1).max(10).optional(),
-        dueDate: z.string().datetime().or(z.date()).optional(),
     }),
+});
+
+// Create fee-structure rows for many fee heads in one go, all sharing the same
+// (course, year, entryType, quota, etc.) combination. Each entry sets its own amount.
+export const bulkHeadsFeeStructureSchema = z.object({
+    body: z.object({
+        courseId:            z.string().uuid('Invalid Course ID'),
+        academicYearId:      z.string().uuid('Invalid Academic Year ID'),
+        entryAcademicYearId: z.string().uuid('Invalid Entry Academic Year ID').optional(),
+        entryType:           z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
+        instituteCode:       z.enum(['VVIG', 'VVITU', 'VVITPU']).optional(),
+        quotaType:           z.enum(['MANAGEMENT', 'CONVENOR']).optional(),
+        yearOfStudy:         z.number().int().min(1).max(10).optional(),
+        feeHeads: z.array(z.object({
+            feeHeadId: z.string().uuid('Invalid Fee Head ID'),
+            amount:    z.number().positive('amount must be > 0')
+                                  .finite('amount must be finite')
+                                  .max(100_000_000, 'amount exceeds reasonable limit (₹10 crore)'),
+        }))
+        .min(1,   'feeHeads must contain at least one entry')
+        .max(50,  'feeHeads cannot exceed 50 entries per call'),
+    })
+    // LATERAL business rule: entries at year 2 or later only.
+    .refine(
+        b => !(b.entryType === 'LATERAL' && (b.yearOfStudy ?? 2) < 2),
+        { message: 'LATERAL entry requires yearOfStudy >= 2', path: ['yearOfStudy'] },
+    )
+    // No duplicate feeHeadIds within the array.
+    .refine(
+        b => new Set(b.feeHeads.map(h => h.feeHeadId)).size === b.feeHeads.length,
+        { message: 'Duplicate feeHeadId(s) in array — each fee head can appear only once', path: ['feeHeads'] },
+    )
+    // entryAcademicYearId, if provided, should equal academicYearId per our cohort rule.
+    // (Soft check — log via service if they disagree.)
+    .refine(
+        b => !b.entryAcademicYearId || b.entryAcademicYearId === b.academicYearId,
+        { message: 'entryAcademicYearId should equal academicYearId (fee cohort = entry year)', path: ['entryAcademicYearId'] },
+    ),
+});
+
+/**
+ * Clone fee structures from one academic year to another. Used for:
+ *  - Setting up a new academic year (clone prior year, then edit individual rows)
+ *  - Back-filling past years for lateral / back-dated admissions
+ *
+ * `multiplier` applies a flat percentage adjustment (1.05 = +5%, 0.95 = -5%).
+ * `courseIds` restricts the clone to specific courses (omit to clone all).
+ */
+/**
+ * Assigns rollNumber + section to a previously-registered student. Used after
+ * counseling / seat allotment for both fresh and lateral students. Creates the
+ * StudentEnrollment row for the active academic year.
+ */
+export const assignEnrollmentSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid('Invalid student ID'),
+    }),
+    body: z.object({
+        rollNumber: z.string().trim().min(1, 'Roll number is required'),
+        sectionId: z.string().uuid('Invalid section ID'),
+        currentSemester: z.number().int().min(1).max(20).optional(),
+        yearOfStudy: z.number().int().min(1).max(10).optional(),
+        seedFeeDemands: z.boolean().optional().default(true),
+    }),
+});
+
+export const cloneFeeStructuresSchema = z.object({
+    body: z.object({
+        sourceAcademicYearId: z.string().uuid('Invalid source academic year ID'),
+        targetAcademicYearId: z.string().uuid('Invalid target academic year ID'),
+        multiplier: z.number().positive().max(10).optional().default(1.0),
+        courseIds: z.array(z.string().uuid('Invalid course ID')).optional(),
+        entryAcademicYearId: z.string().uuid('Invalid entry academic year ID').optional(),
+        entryType: z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
+        instituteCode: z.enum(['VVIG', 'VVITU', 'VVITPU']).optional(),
+    }).refine(
+        d => d.sourceAcademicYearId !== d.targetAcademicYearId,
+        { message: 'Source and target academic years must differ', path: ['targetAcademicYearId'] }
+    ),
 });
 
 export const updateStaffUserSchema = z.object({
@@ -458,6 +533,32 @@ export const generateFeeDemandsSchema = z.object({
         studentId: z.string().uuid(),
         courseId: z.string().uuid(),
         academicYearId: z.string().uuid(),
+        // Optional — when not provided, service defaults preserve legacy behavior
+        // (allowLegacyFallback=true, requireEnrollment=false, deleteExisting=false).
+        deleteExisting:       z.boolean().optional(),
+        allowLegacyFallback:  z.boolean().optional(),
+        requireEnrollment:    z.boolean().optional(),
+        dueDateFallbackDays:  z.number().int().min(0).max(365).optional(),
+    }),
+});
+
+export const generateFeeDemandsBulkSchema = z.object({
+    body: z.object({
+        academicYearId: z.string().uuid(),
+        filters: z.object({
+            courseIds:            z.array(z.string().uuid()).optional(),
+            entryTypes:           z.array(z.nativeEnum(AdmissionEntryType)).optional(),
+            instituteCodes:       z.array(z.string()).optional(),
+            entryAcademicYearIds: z.array(z.string().uuid()).optional(),
+            quotaTypes:           z.array(z.nativeEnum(QuotaType)).optional(),
+            studentIds:           z.array(z.string().uuid()).optional(),
+        }).optional(),
+        runOptions: z.object({
+            allowLegacyFallback:  z.boolean().optional(), // default false (strict for bulk)
+            requireEnrollment:    z.boolean().optional(), // default true  (bulk verifies)
+            deleteExisting:       z.boolean().optional(), // default false
+            dueDateFallbackDays:  z.number().int().min(0).max(365).optional(),
+        }).optional(),
     }),
 });
 
@@ -466,6 +567,146 @@ export const setEligibleScholarshipSchema = z.object({
         studentId: z.string().uuid(),
         ruleId: z.string().uuid(),
     }),
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Semester marks (Subject + SemesterMark)
+// ════════════════════════════════════════════════════════════════════════════
+
+export const createSubjectSchema = z.object({
+    body: z.object({
+        code:             z.string().min(1).max(32),
+        name:             z.string().min(1),
+        courseId:         z.string().uuid(),
+        specializationId: z.string().uuid().nullable().optional(),
+        semester:         z.number().int().min(1).max(12),
+        credits:          z.number().min(0).max(20).optional(),
+        examType:         z.nativeEnum(SubjectExamType).optional(),
+        maxInternalMarks: z.number().min(0).max(1000).nullable().optional(),
+        maxExternalMarks: z.number().min(0).max(1000).nullable().optional(),
+        maxTotalMarks:    z.number().min(0).max(1000).nullable().optional(),
+        isElective:       z.boolean().optional(),
+    }),
+});
+
+export const updateSubjectSchema = z.object({
+    body: z.object({
+        code:             z.string().min(1).max(32).optional(),
+        name:             z.string().min(1).optional(),
+        credits:          z.number().min(0).max(20).optional(),
+        examType:         z.nativeEnum(SubjectExamType).optional(),
+        maxInternalMarks: z.number().min(0).max(1000).nullable().optional(),
+        maxExternalMarks: z.number().min(0).max(1000).nullable().optional(),
+        maxTotalMarks:    z.number().min(0).max(1000).nullable().optional(),
+        isElective:       z.boolean().optional(),
+    }).refine(
+        (d) => Object.keys(d).length > 0,
+        { message: 'At least one field must be provided' }
+    ),
+});
+
+const semesterMarkRowSchema = z.object({
+    subjectId:       z.string().uuid(),
+    internalMarks:   z.number().min(0).nullable().optional(),
+    externalMarks:   z.number().min(0).nullable().optional(),
+    totalMarks:      z.number().min(0).nullable().optional(),
+    grade:           z.string().max(8).nullable().optional(),
+    gradePoints:     z.number().min(0).max(10).nullable().optional(),
+    status:          z.nativeEnum(SemesterMarkStatus).optional(),
+    attemptNumber:   z.number().int().min(1).max(20).optional(),
+    isSupplementary: z.boolean().optional(),
+    remarks:         z.string().max(500).optional(),
+    isBackfilled:    z.boolean().optional(),
+});
+
+export const recordMarkSchema = z.object({
+    body: semesterMarkRowSchema.extend({
+        studentId:      z.string().uuid(),
+        academicYearId: z.string().uuid(),
+    }),
+});
+
+export const recordMarksBulkSchema = z.object({
+    body: z.object({
+        studentId:      z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        marks:          z.array(semesterMarkRowSchema).min(1).max(100),
+    }),
+});
+
+export const updateMarkSchema = z.object({
+    body: z.object({
+        internalMarks:   z.number().min(0).nullable().optional(),
+        externalMarks:   z.number().min(0).nullable().optional(),
+        totalMarks:      z.number().min(0).nullable().optional(),
+        grade:           z.string().max(8).nullable().optional(),
+        gradePoints:     z.number().min(0).max(10).nullable().optional(),
+        status:          z.nativeEnum(SemesterMarkStatus).optional(),
+        remarks:         z.string().max(500).optional(),
+        isBackfilled:    z.boolean().optional(),
+    }).refine(
+        (d) => Object.keys(d).length > 0,
+        { message: 'At least one field must be provided' }
+    ),
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Class attendance
+// ════════════════════════════════════════════════════════════════════════════
+
+const dateInputSchema = z.union([z.string().datetime(), z.string().regex(/^\d{4}-\d{2}-\d{2}/), z.date()]);
+
+export const markAttendanceSchemaV2 = z.object({
+    body: z.object({
+        studentId:      z.string().uuid(),
+        subjectId:      z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        date:           dateInputSchema,
+        periodNumber:   z.number().int().min(1).max(20).nullable().optional(),
+        status:         z.nativeEnum(AttendanceStatus),
+        remarks:        z.string().max(500).optional(),
+        isBackfilled:   z.boolean().optional(),
+    }),
+});
+
+export const markClassAttendanceSchema = z.object({
+    body: z.object({
+        subjectId:      z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        date:           dateInputSchema,
+        periodNumber:   z.number().int().min(1).max(20).nullable().optional(),
+        isBackfilled:   z.boolean().optional(),
+        rows: z.array(z.object({
+            studentId: z.string().uuid(),
+            status:    z.nativeEnum(AttendanceStatus),
+            remarks:   z.string().max(500).optional(),
+        })).min(1).max(500),
+    }),
+});
+
+export const markAttendanceBackfillSchema = z.object({
+    body: z.object({
+        studentId:      z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        rows: z.array(z.object({
+            subjectId:    z.string().uuid(),
+            date:         dateInputSchema,
+            periodNumber: z.number().int().min(1).max(20).nullable().optional(),
+            status:       z.nativeEnum(AttendanceStatus),
+            remarks:      z.string().max(500).optional(),
+        })).min(1).max(500),
+    }),
+});
+
+export const updateAttendanceSchema = z.object({
+    body: z.object({
+        status:       z.nativeEnum(AttendanceStatus).optional(),
+        remarks:      z.string().max(500).optional(),
+        isBackfilled: z.boolean().optional(),
+    }).refine(
+        (d) => Object.keys(d).length > 0,
+        { message: 'At least one field must be provided' }
+    ),
 });
 
 export const submitVerificationSchema = z.object({
@@ -570,6 +811,101 @@ export const finalizeAdmissionSchema = z.object({
     }),
 });
 
+/**
+ * Manual entry admission — lateral entry, transfer, or back-dated admission.
+ *
+ * The endpoint is used when a student needs to be added directly into the system
+ * outside the normal application → entrance → seat-allotment → finalize flow.
+ *
+ * Three valid scenarios:
+ *   1. Lateral year-2/3/4 (e.g., diploma → BTech)
+ *   2. Transfer from another institution at any year
+ *   3. Back-dated admission (entering a past academic year's cohort now)
+ *
+ * Defaults: entry.type=REGULAR, entry.yearOfStudy=1, entry.isBackdated=false.
+ * Currying these defaults makes this validator usable for fresh manual admissions too.
+ */
+export const manualEntryAdmissionSchema = z.object({
+    body: z.object({
+        // ── Student profile ────────────────────────────────────────────
+        student: z.object({
+            name:          z.string().trim().min(1),
+            fatherName:    z.string().trim().min(1),
+            motherName:    z.string().trim().min(1),
+            gender:        z.string().trim().min(1),
+            dob:           z.string().datetime().or(z.date()),
+            phone:         z.string().trim().min(10).max(15),
+            email:         z.string().email().optional(),
+            aadharNumber:  z.string().trim().min(1),
+            category:      z.string().trim().min(1),
+            country:       z.string().trim().min(1),
+            address:       z.string().trim().min(1),
+            address2:      z.string().trim().optional(),
+            city:          z.string().trim().min(1),
+            state:         z.string().trim().min(1),
+            pincode:       z.string().trim().min(1),
+            profilePhotoUrl: z.string().url().optional(),
+            quotaType:     z.nativeEnum(QuotaType),
+        }),
+
+        // ── Course allocation ──────────────────────────────────────────
+        course: z.object({
+            allottedCourseId: z.string().uuid('Invalid Course ID'),
+        }),
+
+        // ── Entry context ──────────────────────────────────────────────
+        entry: z.object({
+            type:           z.nativeEnum(AdmissionEntryType).default(AdmissionEntryType.REGULAR),
+            yearOfStudy:    z.number().int().min(1).max(10).default(1),
+            academicYearId: z.string().uuid('Invalid Academic Year ID'),
+            currentSemester: z.number().int().min(1).max(20).optional(), // defaults to (yearOfStudy*2 - 1)
+            reason:         z.string().trim().max(500).optional(),
+            isBackdated:    z.boolean().default(false),
+            instituteCode:  z.enum(['VVITU', 'VVITPU']).optional(),  // defaults to VVITU server-side
+        }).refine(
+            e => e.type !== AdmissionEntryType.LATERAL || e.yearOfStudy >= 2,
+            { message: 'LATERAL entry requires yearOfStudy >= 2', path: ['yearOfStudy'] }
+        ),
+
+        // ── Enrollment (section + roll number) ─────────────────────────
+        enrollment: z.object({
+            sectionId:  z.string().uuid('Invalid Section ID'),
+            rollNumber: z.string().trim().min(1),
+        }),
+
+        // ── Scholarship — strict tier list for lateral, free for fresh ─
+        scholarship: z.object({
+            ruleId:     z.string().uuid().optional(),
+            // Lateral entries are restricted to 0/15/25/50; REGULAR entries can use any value.
+            // The service layer enforces the lateral-only restriction.
+            percentage: z.number().min(0).max(100),
+        }).optional(),
+
+        // ── Optional same-day accommodation ────────────────────────────
+        accommodation: z.object({
+            type:              z.nativeEnum(AccommodationType).default(AccommodationType.NONE),
+            hostelId:          z.string().uuid().optional(),
+            hostelType:        z.nativeEnum(HostelType).optional(),
+            hostelPaymentMode: z.nativeEnum(HostelPaymentMode).optional(),
+            transportRouteId:  z.string().uuid().optional(),
+        }).refine(a => {
+            if (a.type === AccommodationType.HOSTEL)    return !!a.hostelType && !!a.hostelPaymentMode && !!a.hostelId;
+            if (a.type === AccommodationType.TRANSPORT) return !!a.transportRouteId;
+            return true;
+        }, { message: 'HOSTEL needs hostelId+hostelType+hostelPaymentMode; TRANSPORT needs transportRouteId' }).optional(),
+
+        // ── Optional carried-over payment from prior institution ───────
+        priorPayment: z.object({
+            amount:          z.number().positive(),
+            method:          z.nativeEnum(PaymentMethod),
+            component:       z.nativeEnum(PaymentComponent),
+            referenceNumber: z.string().trim().optional(),
+            date:            z.string().datetime().or(z.date()).optional(),
+            feeHeadId:       z.string().uuid().optional(),
+        }).optional(),
+    }),
+});
+
 export const verifyPaymentSchema = z.object({
     body: z.object({
         paymentId: z.string().uuid("Invalid Payment ID"),
@@ -626,3 +962,42 @@ export const updateSeatAllotedBySchema = z.object({
         seatAllotedBy: z.string().uuid('Invalid seatAllotedBy UUID').nullable().optional(),
     }),
 });
+
+// CourseCapacity (per-year sanctioned + filled seats)
+export const createCourseCapacitySchema = z.object({
+    body: z.object({
+        courseId:       z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        totalSeats:     z.number().int().min(0),
+        filledSeats:    z.number().int().min(0).optional(),
+    }),
+});
+
+export const upsertCourseCapacitySchema = z.object({
+    body: z.object({
+        courseId:       z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        totalSeats:     z.number().int().min(0),
+    }),
+});
+
+export const bulkUpsertCourseCapacitySchema = z.object({
+    body: z.object({
+        academicYearId: z.string().uuid(),
+        rows: z.array(z.object({
+            courseId:   z.string().uuid(),
+            totalSeats: z.number().int().min(0),
+        })).min(1, 'rows must contain at least one entry'),
+    }),
+});
+
+export const updateCourseCapacitySchema = z.object({
+    params: z.object({ id: z.string().uuid() }),
+    body: z.object({
+        totalSeats:  z.number().int().min(0).optional(),
+        filledSeats: z.number().int().min(0).optional(),
+    }).refine(b => b.totalSeats !== undefined || b.filledSeats !== undefined, {
+        message: 'At least one of totalSeats or filledSeats is required',
+    }),
+});
+

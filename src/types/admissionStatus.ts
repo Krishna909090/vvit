@@ -19,18 +19,21 @@
  * ============================================================================
  */
 
-import { 
+import {
   AdmissionStatus as PrismaAdmissionStatus,
-  QualificationMode,
   EnrollmentStatus
 } from '@prisma/client';
 
 // Re-export Prisma enums
-export { 
+export {
   AdmissionStatus,
-  QualificationMode,
   EnrollmentStatus
 } from '@prisma/client';
+
+// Local type — QualificationMode is no longer a stored Prisma enum.
+// Kept as a string-union to preserve the helper-function signatures that
+// branch on EXAM vs DIRECT logic at runtime (e.g., dashboard breakdowns).
+export type QualificationMode = 'EXAM' | 'DIRECT';
 
 
 /**

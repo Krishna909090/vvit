@@ -1,5 +1,6 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, CancellationStatus, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType, PaymentMethod, PaymentStatus, PaymentMode, PaymentComponent, LedgerTransactionType, HostelPaymentMode, WaitingListStatus } from '@prisma/client';
+import { AdmissionStatus, CancellationStatus, RequestStatus, StudentDocumentStatus, AccommodationType, FeeStatus, Prisma, HostelType, PaymentMethod, PaymentStatus, PaymentMode, PaymentComponent, LedgerTransactionType, HostelPaymentMode, WaitingListStatus, AdmissionEntryType, ApplicationMode, QuotaType } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 import { Role } from '../../constants/roles';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
@@ -10,11 +11,17 @@ import path from 'path';
 import archiver from 'archiver';
 import axios from 'axios';
 import { registerStudent } from '../student/student.service';
-import { FeeService } from '../finance/fee.service';
+import { FeeService, getApplicationFeeAmount } from '../finance/fee.service';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { maskAadhaar } from '../../utils/mask';
 import { generateApplicationPDF } from '../../utils/applicationPdfGenerator';
 import { getHostelCostTx, getSemwiseSurchargeTx } from '../../utils/hostelPricing';
+import {
+    incrementCourseCapacity,
+    decrementCourseCapacity,
+    tryAtomicIncrementCourseCapacity,
+    getCourseCapacity,
+} from '../../utils/courseCapacity';
 import { assertHostelHasCapacity } from '../infrastructure/hostel.service';
 import {
     getStudentContext,
@@ -23,7 +30,12 @@ import {
     assertHostelAccommodation,
     assertNoBedAllocated,
     resolveFeeHeadsByComponent,
-    resolveFeeDemandContext
+    resolveFeeDemandContext,
+    getAvailableHostelCredit,
+    assertAcademicYearWritable,
+    resolveHostelPriceCategory,
+    resolveTransportRouteCost,
+    getActiveAcademicYear,
 } from '../../utils/studentContext';
 import { getEnv } from '../../config/envValidator';
 import { sendAdmissionFeeReceipt, sendPaymentReceipt, sendScholarshipUpdateEmail } from '../../utils/emailService';
@@ -459,7 +471,6 @@ export const AdminStudentService = {
                     examDetails: true,
                     documents: true,
                     academicQualifications: true,
-                    eligibleScholarshipRule: true,
                     scholarshipAllocation: { include: { rule: true } },
                     pref1Course: true,
                     pref2Course: true,
@@ -701,7 +712,6 @@ export const AdminStudentService = {
                     examDetails: true,
                     documents: true,
                     academicQualifications: true,
-                    eligibleScholarshipRule: true,
                     scholarshipAllocation: { include: { rule: true } },
                     pref1Course: true,
                     pref2Course: true,
@@ -809,7 +819,7 @@ export const AdminStudentService = {
                     profilePhotoUrl: studentData.profile_photo_url || 'https://via.placeholder.com/150',
                 };
 
-                const student = await registerStudent(mappedData, null, null, currentUserId || null);
+                const student = await registerStudent(mappedData, null, currentUserId || null);
                 results.push({ email: student.email, status: 'Success', id: student.applicationId });
             } catch (err: any) {
                 results.push({ email: studentData.email, status: 'Failed', error: err.message });
@@ -866,11 +876,12 @@ export const AdminStudentService = {
                     data: { status: AdmissionStatus.CANCELLED }
                 });
 
-                if (request.student.admissionDetails?.allottedCourseId) {
-                    await tx.course.update({
-                        where: { id: request.student.admissionDetails.allottedCourseId },
-                        data: { filledSeats: { decrement: 1 } }
-                    });
+                if (request.student.admissionDetails?.allottedCourseId && request.student.admissionDetails.academicYearId) {
+                    await decrementCourseCapacity(
+                        tx,
+                        request.student.admissionDetails.allottedCourseId,
+                        request.student.admissionDetails.academicYearId,
+                    );
                 }
             }
         });
@@ -899,18 +910,18 @@ export const AdminStudentService = {
         if (!course) throw new AppError("Course not found", 404);
 
         await prisma.$transaction(async (tx) => {
-            await tx.studentAdmission.update({
+            const admission = await tx.studentAdmission.update({
                 where: { studentId },
                 data: {
                     status: AdmissionStatus.SEAT_ALLOTTED,
                     allottedCourseId: allottedCourseId
-                }
+                },
+                select: { academicYearId: true }
             });
 
-            await tx.course.update({
-                where: { id: allottedCourseId },
-                data: { filledSeats: { increment: 1 } }
-            });
+            if (admission.academicYearId) {
+                await incrementCourseCapacity(tx, allottedCourseId, admission.academicYearId);
+            }
 
             await tx.seatAllocation.create({
                 data: {
@@ -929,23 +940,7 @@ export const AdminStudentService = {
         // Since ScholarshipService handles its own transaction for slots, we call it separately logic-wise, 
         // but ideally we should wait for it.
         
-        try {
-            // Need to dynamic import or regular import. Using regular import at top of file is better.
-            // For now, assuming import is added.
-            const { ScholarshipService } = require('./scholarship.service'); 
-            
-            // Manual Scholarship Allocation
-            // Admission team sets eligibleScholarshipRuleId during verification
-            const ruleId = student.eligibleScholarshipRuleId;
-            
-            if (ruleId) {
-                await ScholarshipService.allocateManualRule(studentId, ruleId);
-            } else {
-                logger.info(`No eligible scholarship rule set for student ${studentId}. Skipping allocation.`);
-            }
-        } catch (err) {
-            logger.error(`Failed to allocate scholarship for ${studentId}: ${err}`);
-        }
+        logger.info(`Skipping scholarship allocation for student ${studentId}: eligibleScholarshipRuleId removed from Student.`);
 
         return { success: true, message: MESSAGES.SUCCESS.SEAT_ALLOTTED };
     },
@@ -1248,14 +1243,24 @@ export const AdminStudentService = {
             });
 
             if (approved) {
-                // #7 FIX: Check seat capacity before incrementing
+                const admission = await tx.studentAdmission.findUnique({
+                    where: { studentId: request.studentId },
+                    select: { academicYearId: true }
+                });
+                if (!admission?.academicYearId) {
+                    throw new AppError('Student admission / academic year not found', 404);
+                }
+                const ayId = admission.academicYearId;
+
+                // Check seat capacity (per academic year) before swapping
                 const toCourse = await tx.course.findUnique({ where: { id: request.toCourse } });
                 if (!toCourse) throw new AppError('Target course not found', 404);
-                if ((toCourse.filledSeats ?? 0) >= (toCourse.totalSeats ?? 0)) {
-                    throw new AppError(`Target course "${toCourse.code || toCourse.name}" is fully booked (${toCourse.filledSeats}/${toCourse.totalSeats}). Cannot process branch change.`, 400);
+                const toCapacity = await getCourseCapacity(tx, request.toCourse, ayId);
+                if (toCapacity.filledSeats >= toCapacity.totalSeats) {
+                    throw new AppError(`Target course "${toCourse.code || toCourse.name}" is fully booked (${toCapacity.filledSeats}/${toCapacity.totalSeats}). Cannot process branch change.`, 400);
                 }
 
-                // 1. Update Admission & Seats
+                // 1. Update Admission
                 await tx.studentAdmission.update({
                     where: { studentId: request.studentId },
                     data: { allottedCourseId: request.toCourse }
@@ -1269,14 +1274,8 @@ export const AdminStudentService = {
                     });
                 }
 
-                await tx.course.update({
-                    where: { id: request.fromCourse },
-                    data: { filledSeats: { decrement: 1 } }
-                });
-                await tx.course.update({
-                    where: { id: request.toCourse },
-                    data: { filledSeats: { increment: 1 } }
-                });
+                await decrementCourseCapacity(tx, request.fromCourse, ayId);
+                await incrementCourseCapacity(tx, request.toCourse, ayId);
 
                 await tx.courseChangeLog.create({
                     data: {
@@ -2035,6 +2034,8 @@ export const AdminStudentService = {
                     amount: { gt: 0 },
                 },
             },
+            // Exclude students who already have an ACTIVE bed allocation.
+            NOT: { hostelAllocation: { status: 'ACTIVE' } },
             ...(gender ? { gender: { equals: gender, mode: 'insensitive' } } : {}),
             ...(search
                 ? {
@@ -2116,6 +2117,129 @@ export const AdminStudentService = {
                 hostelTotal: hostelDemandTotal,
                 hostelPaid,
                 balance: Math.max(0, hostelDemandTotal - hostelPaid),
+            };
+        });
+
+        return {
+            students: shaped,
+            pagination: fetchAll
+                ? { total, page: 1, limit: total, totalPages: 1 }
+                : {
+                      total,
+                      page: pageNum,
+                      limit: limitNum,
+                      totalPages: Math.ceil(total / limitNum),
+                  },
+        };
+    },
+
+    /**
+     * List all students with accommodationType=TRANSPORT who have paid at least
+     * ₹1 toward the TRANSPORT component. Optional routeId filters to a single route.
+     */
+    async getTransportPaidStudents(query: any) {
+        const { page = 1, limit = 10, search, gender, routeId, all } = query;
+
+        const pageNum = Number(page) || 1;
+        const limitNum = Number(limit) || 10;
+        const skip = (pageNum - 1) * limitNum;
+        const fetchAll = !!all;
+
+        const where: Prisma.StudentWhereInput = {
+            admissionDetails: {
+                accommodationType: AccommodationType.TRANSPORT,
+                ...(routeId ? { transportRouteId: routeId } : {}),
+            },
+            // At least one successful TRANSPORT payment exists for this student.
+            payments: {
+                some: {
+                    component: PaymentComponent.TRANSPORT,
+                    status: PaymentStatus.SUCCESS,
+                    isDeleted: false,
+                    amount: { gt: 0 },
+                },
+            },
+            ...(gender ? { gender: { equals: gender, mode: 'insensitive' } } : {}),
+            ...(search
+                ? {
+                      OR: [
+                          { name: { contains: search, mode: 'insensitive' } },
+                          { phone: { contains: search } },
+                          { applicationId: { contains: search, mode: 'insensitive' } },
+                      ],
+                  }
+                : {}),
+        };
+
+        const [students, total] = await prisma.$transaction([
+            prisma.student.findMany({
+                where,
+                ...(fetchAll ? {} : { skip, take: limitNum }),
+                orderBy: [{ name: 'asc' }],
+                select: {
+                    id: true,
+                    applicationId: true,
+                    name: true,
+                    fatherName: true,
+                    phone: true,
+                    gender: true,
+                    degreeType: true,
+                    admissionDetails: {
+                        select: {
+                            transportRouteId: true,
+                            allottedCourse: { select: { id: true, name: true } },
+                            transportRoute: {
+                                select: { id: true, name: true, cost: true, busNumber: true, city: true },
+                            },
+                        },
+                    },
+                    feeDemands: {
+                        where: {
+                            isDeleted: false,
+                            feeHead: { component: PaymentComponent.TRANSPORT },
+                        },
+                        select: { netAmount: true, amount: true },
+                    },
+                    payments: {
+                        where: {
+                            component: PaymentComponent.TRANSPORT,
+                            status: PaymentStatus.SUCCESS,
+                            isDeleted: false,
+                        },
+                        select: { amount: true },
+                    },
+                },
+            }),
+            prisma.student.count({ where }),
+        ]);
+
+        const shaped = students.map((s: any) => {
+            const route = s.admissionDetails?.transportRoute;
+            const demandTotal = (s.feeDemands as any[]).reduce(
+                (sum, d) => sum + (d.netAmount ?? d.amount ?? 0),
+                0
+            );
+            const paidTotal = (s.payments as any[]).reduce(
+                (sum, p) => sum + (p.amount ?? 0),
+                0
+            );
+            const transportRouteFee = demandTotal > 0 ? demandTotal : (route?.cost ?? 0);
+            return {
+                id: s.id,
+                applicationId: s.applicationId,
+                name: s.name,
+                fatherName: s.fatherName,
+                phone: s.phone,
+                gender: s.gender,
+                degreeType: s.degreeType,
+                courseName: s.admissionDetails?.allottedCourse?.name ?? null,
+                routeId: route?.id ?? null,
+                routeName: route?.name ?? null,
+                busNumber: route?.busNumber ?? null,
+                city: route?.city ?? null,
+                transportRouteFee,
+                transportFeePaid: paidTotal,
+                balance: Math.max(0, transportRouteFee - paidTotal),
             };
         });
 
@@ -2613,6 +2737,10 @@ export const AdminStudentService = {
         if (!oldPricing) {
             throw new AppError('Student has no allocated bed yet. Use allocate-bed first.', 400);
         }
+        // Reject if the year these demands belong to has been closed.
+        if (admission.academicYearId) {
+            await assertAcademicYearWritable(admission.academicYearId);
+        }
 
         // 2. Find old allocation
         const oldAllocation = await (prisma.hostelAllocation as any).findUnique({
@@ -2646,14 +2774,14 @@ export const AdminStudentService = {
             await assertHostelHasCapacity(args.hostelId);
         }
 
-        // 5. Compute new pricing
+        // 5. Compute new pricing — year-scoped (falls back to legacy year-null row)
         const sharing = newBed.room.capacity;
         const roomType = newBed.room.type;
-        const priceCategory = await prisma.hostelPriceCategory.findFirst({
-            where: { sharing, roomType: roomType as any, isActive: true }
-        });
+        const priceCategory = await resolveHostelPriceCategory(
+            { sharing, roomType, academicYearId: admission.academicYearId }
+        );
         if (!priceCategory) {
-            throw new AppError(`No active price tier found for sharing=${sharing}, roomType=${roomType}.`, 400);
+            throw new AppError(`No active price tier found for sharing=${sharing}, roomType=${roomType} in academic year ${admission.academicYearId ?? '<none>'}.`, 400);
         }
 
         const isSemwise = args.hostelPaymentMode === 'SEMWISE';
@@ -2667,39 +2795,6 @@ export const AdminStudentService = {
         const oldEffectiveTotal = oldPricing.effectiveTotal ?? 0;
         const totalFeeDelta = newEffectiveTotal - oldEffectiveTotal;
         const academicYearId = oldPricing.academicYearId ?? admission.academicYearId ?? undefined;
-
-        // 5b. Compute "already paid for hostel" credit + refund split.
-        // The old hostel demands stay in history (only PENDING ones get soft-deleted later);
-        // the payments tied to them stay too. To represent the financial reality after
-        // a sharing-tier change, we apply the already-paid amount as a discount across
-        // the NEW demands; any excess (paid > newCost) becomes a refund FeeCorrection.
-        const hostelPaidAgg = await prisma.payment.aggregate({
-            where: {
-                studentId,
-                status: PaymentStatus.SUCCESS,
-                isDeleted: false,
-                component: { in: [
-                    PaymentComponent.HOSTEL,
-                    PaymentComponent.HOSTEL_ACCOMMODATION,
-                    PaymentComponent.HOSTEL_MESS,
-                    PaymentComponent.HOSTEL_LAUNDRY,
-                    PaymentComponent.HOSTEL_REGISTRATION,
-                ]},
-            },
-            _sum: { amount: true },
-        });
-        const hostelPaid = hostelPaidAgg._sum.amount ?? 0;
-        const appliedToNew = Math.min(hostelPaid, newEffectiveTotal);
-        const leftoverRefund = Math.max(0, hostelPaid - newEffectiveTotal);
-
-        // Distribute appliedToNew proportionally across the 4 new demands.
-        // Last (registration) absorbs rounding so discounts sum exactly to appliedToNew.
-        const distribute = (componentPrice: number) =>
-            newEffectiveTotal > 0 ? Math.round((componentPrice / newEffectiveTotal) * appliedToNew) : 0;
-        const accDiscount = distribute(accommodationPrice);
-        const messDiscount = distribute(messPrice);
-        const laundryDiscount = distribute(laundryPrice);
-        const regDiscount = appliedToNew - accDiscount - messDiscount - laundryDiscount;
 
         // 6. Resolve hostel-related FeeHeads via component tag (with name-keyword fallback)
         const feeHeadMap = await resolveFeeHeadsByComponent([
@@ -2715,8 +2810,27 @@ export const AdminStudentService = {
 
         const hostelHeadIds = [accHead?.id, messHead?.id, laundryHead?.id, regHead?.id].filter(Boolean) as string[];
 
-        // 7. Atomic transition
+        // 7. Atomic transition. Uses Serializable isolation so two concurrent reassign
+        // calls can't both read the same `availableCredit` and create duplicate
+        // FeeCorrection refunds. Postgres will retry one if they collide.
         const result = await prisma.$transaction(async (tx) => {
+            // 7a. Compute available hostel credit INSIDE the tx (was outside — race condition).
+            // availableCredit = grossPaid − sum(prior FeeCorrection refunds, settled + pending).
+            // See `getAvailableHostelCredit` in studentContext.ts.
+            const credit          = await getAvailableHostelCredit(studentId, tx);
+            const hostelPaid      = credit.grossPaid;
+            const availableCredit = credit.availableCredit;
+            const appliedToNew    = Math.min(availableCredit, newEffectiveTotal);
+            const leftoverRefund  = Math.max(0, availableCredit - newEffectiveTotal);
+
+            // Distribute appliedToNew proportionally across the 4 new demands.
+            // Last (registration) absorbs rounding so discounts sum exactly to appliedToNew.
+            const distribute = (componentPrice: number) =>
+                newEffectiveTotal > 0 ? Math.round((componentPrice / newEffectiveTotal) * appliedToNew) : 0;
+            const accDiscount     = distribute(accommodationPrice);
+            const messDiscount    = distribute(messPrice);
+            const laundryDiscount = distribute(laundryPrice);
+            const regDiscount     = appliedToNew - accDiscount - messDiscount - laundryDiscount;
             // a. Vacate old bed (only if changing beds)
             if (newBed.id !== oldAllocation.bedId) {
                 await tx.hostelBed.update({
@@ -2847,7 +2961,7 @@ export const AdminStudentService = {
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: oldPricing.hostelId,
                         referenceType: 'HOSTEL_REASSIGNMENT',
-                        remarks: `hostelPaid: ${hostelPaid}, oldEffectiveTotal: ${oldEffectiveTotal}, newEffectiveTotal: ${newEffectiveTotal}, appliedToNew: ${appliedToNew}, leftover: ${leftoverRefund}`,
+                        remarks: `grossPaid: ${hostelPaid}, priorRefunds: ${credit.priorRefunds}, availableCredit: ${availableCredit}, oldEffectiveTotal: ${oldEffectiveTotal}, newEffectiveTotal: ${newEffectiveTotal}, appliedToNew: ${appliedToNew}, leftover: ${leftoverRefund}`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -2932,6 +3046,11 @@ export const AdminStudentService = {
                     : null,
                 reason: args.reason
             };
+        }, {
+            // Serializable isolation prevents two concurrent reassign requests from
+            // both reading the same `availableCredit` and creating duplicate
+            // FeeCorrection refunds. Postgres will retry one of them automatically.
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
 
         // Refresh hostel allotment order PDF post-reassignment (best-effort).
@@ -2962,6 +3081,9 @@ export const AdminStudentService = {
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'assign hostel');
         const admission = ctx.admission!;
+        if (admission.academicYearId) {
+            await assertAcademicYearWritable(admission.academicYearId);
+        }
 
         // TRANSPORT/other → HOSTEL is a different flow. Block it.
         if (
@@ -2993,13 +3115,13 @@ export const AdminStudentService = {
         const sharing = parseInt(hostelType.split('_')[1], 10);
         const roomType = 'AC';
 
-        // Look up active price tier for (sharing, roomType=AC)
-        const priceCategory = await prisma.hostelPriceCategory.findFirst({
-            where: { sharing, roomType: roomType as any, isActive: true }
-        });
+        // Look up active price tier — year-scoped first, falls back to legacy year-null
+        const priceCategory = await resolveHostelPriceCategory(
+            { sharing, roomType, academicYearId: admission.academicYearId }
+        );
         if (!priceCategory) {
             throw new AppError(
-                `No active price tier found for sharing=${sharing}, roomType=${roomType}. Create one in HostelPriceCategory first.`,
+                `No active price tier found for sharing=${sharing}, roomType=${roomType} in academic year ${admission.academicYearId ?? '<none>'}. Create one in HostelPriceCategory first.`,
                 400
             );
         }
@@ -3172,6 +3294,9 @@ export const AdminStudentService = {
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'assign transport');
         const admission = ctx.admission!;
+        if (admission.academicYearId) {
+            await assertAcademicYearWritable(admission.academicYearId);
+        }
 
         // HOSTEL/other → TRANSPORT is a different flow. Block it.
         if (
@@ -3211,8 +3336,9 @@ export const AdminStudentService = {
         const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
         const transportHead = feeHeadMap.get(PaymentComponent.TRANSPORT);
 
-        const newCost = route.cost ?? 0;
+        // Year-aware route cost: prefer per-year override, fall back to route.cost
         const academicYearId = admission.academicYearId ?? undefined;
+        const newCost = await resolveTransportRouteCost(transportRouteId, academicYearId ?? null);
 
         // Diff against existing PENDING TRANSPORT demand (if any) to compute totalFee delta.
         let previousCost = 0;
@@ -3338,6 +3464,9 @@ export const AdminStudentService = {
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'reassign transport');
         const admission = ctx.admission!;
+        if (admission.academicYearId) {
+            await assertAcademicYearWritable(admission.academicYearId);
+        }
 
         if (admission.accommodationType !== AccommodationType.TRANSPORT) {
             throw new AppError(
@@ -3486,6 +3615,9 @@ export const AdminStudentService = {
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'cancel hostel');
         const admission = ctx.admission!;
+        if (admission.academicYearId) {
+            await assertAcademicYearWritable(admission.academicYearId);
+        }
 
         if (admission.accommodationType !== AccommodationType.HOSTEL) {
             throw new AppError(
@@ -3507,27 +3639,8 @@ export const AdminStudentService = {
         ]);
         const hostelHeadIds = Array.from(feeHeadMap.values()).filter(Boolean).map((h: any) => h.id);
 
-        // Sum hostel-tagged successful payments
-        const paidAgg = await prisma.payment.aggregate({
-            where: {
-                studentId,
-                status: PaymentStatus.SUCCESS,
-                isDeleted: false,
-                component: {
-                    in: [
-                        PaymentComponent.HOSTEL,
-                        PaymentComponent.HOSTEL_ACCOMMODATION,
-                        PaymentComponent.HOSTEL_MESS,
-                        PaymentComponent.HOSTEL_LAUNDRY,
-                        PaymentComponent.HOSTEL_REGISTRATION,
-                    ],
-                },
-            },
-            _sum: { amount: true },
-        });
-        const paid = paidAgg._sum.amount ?? 0;
-
-        // Sum pending hostel demand (to back out from totalFee)
+        // Sum pending hostel demand (to back out from totalFee). Read outside tx —
+        // the value is just a totalFee delta and doesn't affect availableCredit.
         let pendingDemandTotal = 0;
         if (hostelHeadIds.length > 0) {
             const pendingAgg = await prisma.studentFeeDemand.aggregate({
@@ -3542,12 +3655,19 @@ export const AdminStudentService = {
             pendingDemandTotal = pendingAgg._sum.netAmount ?? 0;
         }
 
-        const refundAmount = Math.max(0, paid - cancellationFee);
         const previousHostelId = admission.hostelId;
         const previousHostelType = admission.hostelType;
         const allocation = await prisma.hostelAllocation.findUnique({ where: { studentId } });
 
         const result = await prisma.$transaction(async (tx) => {
+            // Compute availableCredit INSIDE the tx (race-condition-safe).
+            // availableCredit = grossPaid − sum(prior FeeCorrection refunds).
+            // refundAmount uses availableCredit so prior unsettled FeeCorrection rows
+            // are not double-counted into this cancellation refund.
+            const credit = await getAvailableHostelCredit(studentId, tx);
+            const paid = credit.grossPaid;
+            const availableCredit = credit.availableCredit;
+            const refundAmount = Math.max(0, availableCredit - cancellationFee);
             // 1. Vacate bed if active
             if (allocation && allocation.status === 'ACTIVE') {
                 await (tx.hostelAllocation as any).update({
@@ -3605,7 +3725,7 @@ export const AdminStudentService = {
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: previousHostelId,
                         referenceType: 'HOSTEL_CANCELLATION',
-                        remarks: `Paid: ${paid}, cancellationFee: ${cancellationFee}, refund: ${refundAmount}`,
+                        remarks: `grossPaid: ${paid}, priorRefunds: ${credit.priorRefunds}, availableCredit: ${availableCredit}, cancellationFee: ${cancellationFee}, refund: ${refundAmount}`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -3641,6 +3761,8 @@ export const AdminStudentService = {
                 bedVacated: !!(allocation && allocation.status === 'ACTIVE'),
                 feeCorrectionId: feeCorrection?.id ?? null,
             };
+        }, {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
 
         return result;
@@ -3662,6 +3784,9 @@ export const AdminStudentService = {
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'cancel transport');
         const admission = ctx.admission!;
+        if (admission.academicYearId) {
+            await assertAcademicYearWritable(admission.academicYearId);
+        }
 
         if (admission.accommodationType !== AccommodationType.TRANSPORT) {
             throw new AppError(
@@ -3819,6 +3944,7 @@ export const AdminStudentService = {
         }
         const academicYearId = admission.academicYearId;
         if (!academicYearId) throw new AppError('Cannot switch: student has no academicYearId on admission', 400);
+        await assertAcademicYearWritable(academicYearId);
 
         // Resolve fee heads
         const hostelHeadMap = await resolveFeeHeadsByComponent([
@@ -3830,24 +3956,6 @@ export const AdminStudentService = {
         const hostelHeadIds = Array.from(hostelHeadMap.values()).filter(Boolean).map((h: any) => h.id);
         const transportHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
         const transportHead = transportHeadMap.get(PaymentComponent.TRANSPORT);
-
-        // Compute hostelPaid + pendingHostelTotal
-        const paidAgg = await prisma.payment.aggregate({
-            where: {
-                studentId,
-                status: PaymentStatus.SUCCESS,
-                isDeleted: false,
-                component: { in: [
-                    PaymentComponent.HOSTEL,
-                    PaymentComponent.HOSTEL_ACCOMMODATION,
-                    PaymentComponent.HOSTEL_MESS,
-                    PaymentComponent.HOSTEL_LAUNDRY,
-                    PaymentComponent.HOSTEL_REGISTRATION,
-                ]},
-            },
-            _sum: { amount: true },
-        });
-        const hostelPaid = paidAgg._sum.amount ?? 0;
 
         let pendingHostelTotal = 0;
         if (hostelHeadIds.length > 0) {
@@ -3874,17 +3982,24 @@ export const AdminStudentService = {
             throw new AppError('Transport route is full', 400);
         }
 
-        const refundPool = Math.max(0, hostelPaid - chargeRetained);
-        const newCost = route.cost ?? 0;
-        const appliedToNew = Math.min(refundPool, newCost);
-        const leftover = refundPool - appliedToNew;
-        const newDemandNet = Math.max(0, newCost - appliedToNew);
-
+        // Year-aware route cost: prefer per-year override, fall back to route.cost
+        const newCost = await resolveTransportRouteCost(transportRouteId, academicYearId);
         const previousHostelId = admission.hostelId;
         const previousHostelType = admission.hostelType;
         const allocation = await prisma.hostelAllocation.findUnique({ where: { studentId } });
 
         const result = await prisma.$transaction(async (tx) => {
+            // Compute availableCredit INSIDE the tx (race-condition-safe).
+            // refundPool uses availableCredit (paid − prior FeeCorrection refunds), NOT gross
+            // hostelPaid — otherwise prior refunds get re-counted into this one.
+            const credit          = await getAvailableHostelCredit(studentId, tx);
+            const hostelPaid      = credit.grossPaid;
+            const availableCredit = credit.availableCredit;
+            const refundPool      = Math.max(0, availableCredit - chargeRetained);
+            const appliedToNew    = Math.min(refundPool, newCost);
+            const leftover        = refundPool - appliedToNew;
+            const newDemandNet    = Math.max(0, newCost - appliedToNew);
+
             // ── 1. Cancel hostel ──
             if (allocation && allocation.status === 'ACTIVE') {
                 await (tx.hostelAllocation as any).update({
@@ -3968,7 +4083,7 @@ export const AdminStudentService = {
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: previousHostelId,
                         referenceType: 'HOSTEL_TO_TRANSPORT_SWITCH',
-                        remarks: `hostelPaid: ${hostelPaid}, chargeRetained: ${chargeRetained}, refundPool: ${refundPool}, appliedToNewTransport: ${appliedToNew}, leftover: ${leftover}`,
+                        remarks: `grossPaid: ${hostelPaid}, priorRefunds: ${credit.priorRefunds}, availableCredit: ${availableCredit}, chargeRetained: ${chargeRetained}, refundPool: ${refundPool}, appliedToNewTransport: ${appliedToNew}, leftover: ${leftover}`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -4031,6 +4146,8 @@ export const AdminStudentService = {
                     ? 'No FeeHead tagged with component=TRANSPORT — fee demand was NOT created.'
                     : null,
             };
+        }, {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
 
         return result;
@@ -4068,6 +4185,7 @@ export const AdminStudentService = {
         }
         const academicYearId = admission.academicYearId;
         if (!academicYearId) throw new AppError('Cannot switch: student has no academicYearId on admission', 400);
+        await assertAcademicYearWritable(academicYearId);
 
         // Resolve fee heads
         const transportHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
@@ -4091,11 +4209,11 @@ export const AdminStudentService = {
 
         const sharing = parseInt(hostelType.split('_')[1], 10);
         const roomType = 'AC';
-        const priceCategory = await prisma.hostelPriceCategory.findFirst({
-            where: { sharing, roomType: roomType as any, isActive: true },
-        });
+        const priceCategory = await resolveHostelPriceCategory(
+            { sharing, roomType, academicYearId }
+        );
         if (!priceCategory) {
-            throw new AppError(`No active price tier for sharing=${sharing}, roomType=${roomType}.`, 400);
+            throw new AppError(`No active price tier for sharing=${sharing}, roomType=${roomType} in academic year ${academicYearId}.`, 400);
         }
         const isSemwise = hostelPaymentMode === 'SEMWISE';
         const accommodationPrice = (isSemwise ? priceCategory.accommodationSemwise : priceCategory.accommodationYearwise) ?? 0;
@@ -4640,8 +4758,7 @@ export const AdminStudentService = {
                 },
                 academicQualifications: true,
                 documents: true,
-                pref1Course: true,
-                eligibleScholarshipRule: true
+                pref1Course: true
             }
         });
 
@@ -4741,10 +4858,8 @@ export const AdminStudentService = {
         if (!rule) throw new AppError('Scholarship Rule not found', 404);
         if (!rule.isActive) throw new AppError('Scholarship Rule is inactive', 400);
 
-        return await prisma.student.update({
-            where: { id: studentId },
-            data: { eligibleScholarshipRuleId: ruleId }
-        });
+        logger.info(`setScholarshipEligibility: eligibleScholarshipRuleId field removed from Student; no-op for student ${studentId}, rule ${ruleId}`);
+        return student;
     },
 
     async updateStudentScores(studentId: string, scores: any, adminId: string) {
@@ -4862,7 +4977,6 @@ export const AdminStudentService = {
                 examDetails: true,
                 documents: true,
                 academicQualifications: true,
-                eligibleScholarshipRule: true,
                 scholarshipAllocation: { include: { rule: true } },
                 studentScholarship: true,
                 pref1Course: true,
@@ -4948,7 +5062,6 @@ export const AdminStudentService = {
                 examDetails: true,
                 documents: true,
                 academicQualifications: true,
-                eligibleScholarshipRule: true,
                 scholarshipAllocation: { include: { rule: true } },
                 studentScholarship: true,
                 pref1Course: true,
@@ -5154,7 +5267,13 @@ export const AdminStudentService = {
              return updated;
          }
 
-         // CREATE New
+         // CREATE New — tag with the active academic year (NULL if none resolves).
+         let newScholarshipYearId: string | null = null;
+         try {
+             newScholarshipYearId = (await getActiveAcademicYear()).id;
+         } catch {
+             newScholarshipYearId = null;
+         }
          const newScholarship = await prisma.studentScholarship.create({
              data: {
                  studentId,
@@ -5164,6 +5283,7 @@ export const AdminStudentService = {
                  remarks,
                  scholarshipPercentage: scholarshipPercentage !== undefined ? Number(scholarshipPercentage) : undefined,
                  qualificationId,
+                 academicYearId: newScholarshipYearId,
                  isEligible: (scholarshipPercentage !== undefined && Number(scholarshipPercentage) > 0) ? 'YES' : isEligible,
                  createdBy: adminId,
                  updatedBy: adminId
@@ -5572,6 +5692,11 @@ export const AdminStudentService = {
             const student = await tx.student.findUnique({ where: { id: studentId }, include: { admissionDetails: true } });
             const oldAdmission = student?.admissionDetails;
 
+            const ayId = oldAdmission?.academicYearId;
+            if (!ayId) {
+                throw new AppError('Student admission / academic year not found', 404);
+            }
+
             // Release old seats if any
             if (oldAdmission) {
                 if (oldAdmission.transportRouteId && (oldAdmission.transportRouteId !== allocation.transportRouteId || allocation.type !== AccommodationType.TRANSPORT)) {
@@ -5581,7 +5706,7 @@ export const AdminStudentService = {
                 // Course Seat (Decrement old if different)
                 if (oldAdmission.allottedCourseId && oldAdmission.allottedCourseId !== course.allottedCourseId) {
                      logger.debug(`[executeAdmissionUpdates] Releasing old course seat: ${oldAdmission.allottedCourseId}`);
-                     await tx.course.update({ where: { id: oldAdmission.allottedCourseId }, data: { filledSeats: { decrement: 1 } } });
+                     await decrementCourseCapacity(tx, oldAdmission.allottedCourseId, ayId);
                 }
             }
 
@@ -5594,17 +5719,11 @@ export const AdminStudentService = {
             // --- 2. Course Allocation ---
             if (!oldAdmission?.allottedCourseId || oldAdmission.allottedCourseId !== course.allottedCourseId) {
                 logger.debug(`[executeAdmissionUpdates] Assigning new course seat: ${course.allottedCourseId}`);
-                // Atomic check-and-increment using raw SQL to prevent TOCTOU overbooking:
-                // UPDATE only fires when filledSeats < totalSeats — no separate read needed
-                const result = await tx.$executeRaw`
-                    UPDATE "Course"
-                    SET "filledSeats" = "filledSeats" + 1
-                    WHERE id = ${course.allottedCourseId} AND "filledSeats" < "totalSeats"
-                `;
-                if (result === 0) {
-                    const courseRecord = await tx.course.findUnique({ where: { id: course.allottedCourseId } });
-                    if (!courseRecord) throw new AppError("Invalid Course ID", 400);
-                    logger.warn(`[executeAdmissionUpdates] Course ${course.allottedCourseId} is fully booked (${courseRecord.filledSeats}/${courseRecord.totalSeats})`);
+                // Atomic check-and-increment via helper (prevents TOCTOU overbooking).
+                const claimed = await tryAtomicIncrementCourseCapacity(tx, course.allottedCourseId, ayId);
+                if (!claimed) {
+                    const cap = await getCourseCapacity(tx, course.allottedCourseId, ayId);
+                    logger.warn(`[executeAdmissionUpdates] Course ${course.allottedCourseId} is fully booked (${cap.filledSeats}/${cap.totalSeats}) for AY ${ayId}`);
                     throw new AppError("Course is fully booked. No seats available.", 400);
                 }
             }
@@ -5733,6 +5852,10 @@ export const AdminStudentService = {
         if (student.admissionDetails?.status && blockedStatuses.includes(student.admissionDetails.status)) {
              logger.info(`[finalizeAdmission] Student ${studentId} cannot be finalized (Status: ${student.admissionDetails?.status})`);
              throw new AppError("Student admission cannot be finalized in its current status.", 400);
+        }
+        // Refuse if the admission's academic year has been locked.
+        if (student.admissionDetails?.academicYearId) {
+            await assertAcademicYearWritable(student.admissionDetails.academicYearId);
         }
 
         if (!validCourse) {
@@ -6385,7 +6508,10 @@ export const AdminStudentService = {
 
         const course = await prisma.course.findUnique({
             where: { id: courseId },
-            select: { id: true, code: true, name: true, totalSeats: true, filledSeats: true }
+            select: {
+                id: true, code: true, name: true,
+                capacities: { select: { academicYearId: true, totalSeats: true, filledSeats: true } },
+            }
         });
         if (!course) throw new AppError('Course not found', 404);
 
@@ -6426,7 +6552,7 @@ export const AdminStudentService = {
             counts: {
                 totalAdmissionsForCourse: allAdmissions.length,
                 activeAdmissions: activeAdmissions.length,
-                cachedFilledSeatsCounter: course.filledSeats,
+                capacities: course.capacities,
                 byStatus
             },
             allAdmissions
@@ -6462,31 +6588,26 @@ export const AdminStudentService = {
         ]);
 
         const courseIds = [...new Set(requests.flatMap((r: any) => [r.fromCourse, r.toCourse].filter(Boolean)))];
+
+        const activeYear = await prisma.academicYear.findFirst({
+            where: { isActive: true, isDeleted: false },
+            select: { id: true },
+        });
+
         const courses = await prisma.course.findMany({
             where: { id: { in: courseIds } },
             select: {
                 id: true,
                 name: true,
-                totalSeats: true,
-                _count: {
-                    select: {
-                        allottedStudents: {
-                            where: {
-                                allottedCourseId: { not: null },
-                                OR: [
-                                    { status: null },
-                                    { status: { not: 'CANCELLED' } }
-                                ]
-                            }
-                        }
-                    }
-                }
+                capacities: activeYear
+                    ? { where: { academicYearId: activeYear.id }, select: { totalSeats: true, filledSeats: true } }
+                    : undefined,
             }
         });
         const courseMap = Object.fromEntries(courses.map(c => [c.id, {
             name: c.name,
-            totalSeats: c.totalSeats,
-            filledSeats: c._count.allottedStudents
+            totalSeats:  c.capacities?.[0]?.totalSeats  ?? null,
+            filledSeats: c.capacities?.[0]?.filledSeats ?? null,
         }]));
 
         const data = requests.map((r: any) => {
@@ -6616,13 +6737,10 @@ export const AdminStudentService = {
             await tx.payment.delete({ where: { id: paymentId } });
             logger.info(`[reverseAdmissionPayment] Deleted payment record ${paymentId}`);
 
-            // 2e. Decrement course filledSeats
-            if (allottedCourseId) {
-                await tx.course.update({
-                    where: { id: allottedCourseId },
-                    data: { filledSeats: { decrement: 1 } }
-                });
-                logger.info(`[reverseAdmissionPayment] Decremented filledSeats for course=${allottedCourseId}`);
+            // 2e. Decrement course capacity for the admission's academic year
+            if (allottedCourseId && admission?.academicYearId) {
+                await decrementCourseCapacity(tx, allottedCourseId, admission.academicYearId);
+                logger.info(`[reverseAdmissionPayment] Decremented CourseCapacity for course=${allottedCourseId} year=${admission.academicYearId}`);
             }
 
             // 2f. Release transport seat (hostel "filled" is computed on-demand from StudentAdmission.hostelId)
@@ -7021,7 +7139,7 @@ export const AdminStudentService = {
         // Validate all courses exist
         const courses = await prisma.course.findMany({
             where: { id: { in: courseIds }, isDeleted: false },
-            select: { id: true, name: true, degree: true, filledSeats: true, totalSeats: true }
+            select: { id: true, name: true, degree: true }
         });
         if (courses.length !== courseIds.length) {
             const foundIds = courses.map(c => c.id);
@@ -7079,6 +7197,7 @@ export const AdminStudentService = {
 
     /**
      * Get the waiting list for a specific course or all courses.
+     * availableSeats is scoped to the active academic year.
      */
     async getWaitingList(query: { courseId?: string; status?: string; page?: number; limit?: number }) {
         const { courseId, status, page = 1, limit = 50 } = query;
@@ -7089,6 +7208,11 @@ export const AdminStudentService = {
         if (courseId) where.courseId = courseId;
         if (status) where.status = status;
         else where.status = WaitingListStatus.WAITING;
+
+        const activeYear = await prisma.academicYear.findFirst({
+            where: { isActive: true, isDeleted: false },
+            select: { id: true },
+        });
 
         const [entries, total] = await Promise.all([
             prisma.waitingList.findMany({
@@ -7101,51 +7225,103 @@ export const AdminStudentService = {
                         select: { id: true, name: true, applicationId: true, phone: true, email: true, degreeType: true }
                     },
                     course: {
-                        select: { id: true, name: true, degree: true, filledSeats: true, totalSeats: true }
+                        select: { id: true, name: true, degree: true }
                     }
                 }
             }),
             prisma.waitingList.count({ where })
         ]);
 
+        // Batch-load CourseCapacity for the active year, keyed by courseId
+        const uniqueCourseIds = Array.from(new Set(entries.map(e => e.courseId)));
+        const capacities = activeYear
+            ? await prisma.courseCapacity.findMany({
+                where: { courseId: { in: uniqueCourseIds }, academicYearId: activeYear.id },
+                select: { courseId: true, totalSeats: true, filledSeats: true },
+            })
+            : [];
+        const capacityByCourse = new Map(capacities.map(c => [c.courseId, c]));
+
         return {
-            entries: entries.map((e, i) => ({
-                id: e.id,
-                position: skip + i + 1,
-                student: e.student,
-                course: e.course,
-                status: e.status,
-                remarks: e.remarks,
-                createdAt: e.createdAt,
-            })),
+            entries: entries.map((e, i) => {
+                const cap = capacityByCourse.get(e.courseId);
+                const total  = cap?.totalSeats  ?? 0;
+                const filled = cap?.filledSeats ?? 0;
+                return {
+                    id: e.id,
+                    position: skip + i + 1,
+                    student: e.student,
+                    course: {
+                        id: e.course.id,
+                        name: e.course.name,
+                        degree: e.course.degree,
+                        totalSeats: total,
+                        filledSeats: filled,
+                        availableSeats: Math.max(0, total - filled),
+                    },
+                    status: e.status,
+                    remarks: e.remarks,
+                    createdAt: e.createdAt,
+                };
+            }),
             pagination: { total, page: Number(page), limit: Number(limit), totalPages: Math.ceil(total / take) }
         };
     },
 
     /**
      * Get waiting list entries for a specific student.
+     * availableSeats is scoped to the student's admission academic year
+     * (falls back to active year if no admission yet).
      */
     async getStudentWaitingList(studentId: string) {
         if (!studentId) throw new AppError('Student ID is required', 400);
+
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            select: { admissionDetails: { select: { academicYearId: true } } },
+        });
+
+        let yearId = student?.admissionDetails?.academicYearId;
+        if (!yearId) {
+            const activeYear = await prisma.academicYear.findFirst({
+                where: { isActive: true, isDeleted: false },
+                select: { id: true },
+            });
+            yearId = activeYear?.id;
+        }
 
         const entries = await prisma.waitingList.findMany({
             where: { studentId },
             orderBy: { createdAt: 'asc' },
             include: {
-                course: { select: { id: true, name: true, degree: true, filledSeats: true, totalSeats: true } }
+                course: { select: { id: true, name: true, degree: true } }
             }
         });
 
-        return entries.map(e => ({
-            id: e.id,
-            courseId: e.courseId,
-            courseName: e.course.name,
-            degree: e.course.degree,
-            availableSeats: (e.course.totalSeats || 0) - (e.course.filledSeats || 0),
-            status: e.status,
-            remarks: e.remarks,
-            createdAt: e.createdAt,
-        }));
+        const uniqueCourseIds = Array.from(new Set(entries.map(e => e.courseId)));
+        const capacities = yearId
+            ? await prisma.courseCapacity.findMany({
+                where: { courseId: { in: uniqueCourseIds }, academicYearId: yearId },
+                select: { courseId: true, totalSeats: true, filledSeats: true },
+            })
+            : [];
+        const capacityByCourse = new Map(capacities.map(c => [c.courseId, c]));
+
+        return entries.map(e => {
+            const cap = capacityByCourse.get(e.courseId);
+            const total  = cap?.totalSeats  ?? 0;
+            const filled = cap?.filledSeats ?? 0;
+            return {
+                id: e.id,
+                courseId: e.courseId,
+                courseName: e.course.name,
+                degree: e.course.degree,
+                availableSeats: Math.max(0, total - filled),
+                status: e.status,
+                remarks: e.remarks,
+                createdAt: e.createdAt,
+            };
+        });
     },
 
     /**
@@ -7166,17 +7342,20 @@ export const AdminStudentService = {
         if (!entry) throw new AppError('Waiting list entry not found', 404);
         if (entry.status !== WaitingListStatus.WAITING) throw new AppError(`Entry is already ${entry.status}`, 400);
         if (!entry.student.admissionDetails) throw new AppError('Student has no admission record', 400);
+        const ayId = entry.student.admissionDetails.academicYearId;
+        if (!ayId) throw new AppError('Admission has no academic year', 400);
 
-        // Check seat availability
-        const availableSeats = (entry.course.totalSeats || 0) - (entry.course.filledSeats || 0);
+        // Check seat availability for this academic year
+        const capacity = await getCourseCapacity(prisma, entry.courseId, ayId);
+        const availableSeats = capacity.totalSeats - capacity.filledSeats;
         if (availableSeats <= 0) throw new AppError(`No seats available in ${entry.course.name}`, 400);
 
         await prisma.$transaction(async (tx) => {
-            // 1. Allot the seat
-            await tx.course.update({
-                where: { id: entry.courseId },
-                data: { filledSeats: { increment: 1 } }
-            });
+            // 1. Atomic check-and-increment for this year's capacity
+            const claimed = await tryAtomicIncrementCourseCapacity(tx, entry.courseId, ayId);
+            if (!claimed) {
+                throw new AppError(`No seats available in ${entry.course.name}`, 400);
+            }
 
             // 2. Update admission
             await tx.studentAdmission.update({
@@ -7258,6 +7437,595 @@ export const AdminStudentService = {
         }
 
         throw new AppError('Either waitingListId or studentId is required', 400);
+    },
+
+    /**
+     * Manual entry admission — admin-driven backfill / lateral / transfer admission.
+     *
+     * Bypasses the standard application + entrance exam + seat-allotment flow.
+     * Creates User + Student + StudentAdmission (status=ADMISSION_CONFIRMED) +
+     * StudentEnrollment in a single transaction, then layers on optional
+     * accommodation, prior payment, and scholarship intent.
+     *
+     * Payload shape is defined by `manualEntryAdmissionSchema` in adminValidators.ts.
+     */
+    async manualEntryAdmission(payload: any, adminId: string) {
+        logger.info(`[manualEntryAdmission] Request by admin=${adminId} for ${payload?.student?.email || payload?.student?.phone} entry=${payload?.entry?.type}/${payload?.entry?.yearOfStudy}`);
+        logger.debug(`[manualEntryAdmission] Full Payload: ${JSON.stringify(payload)}`);
+
+        const { student: studentData, course, entry, enrollment, scholarship, accommodation, priorPayment } = payload;
+
+        // ── Stage 1: Validation ──────────────────────────────────────────
+        const [academicYear, validCourse, validSection, existingStudent] = await Promise.all([
+            prisma.academicYear.findUnique({ where: { id: entry.academicYearId } }),
+            prisma.course.findUnique({ where: { id: course.allottedCourseId } }),
+            prisma.section.findUnique({ where: { id: enrollment.sectionId } }),
+            prisma.student.findFirst({
+                where: {
+                    OR: [
+                        ...(studentData.email ? [{ email: studentData.email }] : []),
+                        { aadharNumber: studentData.aadharNumber },
+                    ],
+                },
+            }),
+        ]);
+
+        if (!academicYear || academicYear.isDeleted) {
+            logger.warn(`[manualEntryAdmission] Invalid academic year: ${entry.academicYearId}`);
+            throw new AppError('Invalid Academic Year ID', 400);
+        }
+        // Locked / closed years are off-limits even for back-dated admissions —
+        // the books for that year have been finalized.
+        await assertAcademicYearWritable(entry.academicYearId);
+        if (entry.isBackdated && new Date(academicYear.startDate) >= new Date()) {
+            throw new AppError('Backdated entry requires an academic year whose startDate is in the past', 400);
+        }
+        if (!validCourse || validCourse.isDeleted) {
+            throw new AppError('Invalid Course ID', 400);
+        }
+        if (!validSection || validSection.isDeleted) {
+            throw new AppError('Invalid Section ID', 400);
+        }
+        if (entry.type === AdmissionEntryType.LATERAL && entry.yearOfStudy < 2) {
+            throw new AppError('LATERAL entry requires yearOfStudy >= 2', 400);
+        }
+        if (entry.type === AdmissionEntryType.LATERAL && scholarship && ![0, 15, 25, 50].includes(scholarship.percentage)) {
+            throw new AppError('Lateral entry scholarship must be 0, 15, 25, or 50', 400);
+        }
+
+        // Reject duplicate rollNumber within the entry academic year. Schema has no
+        // `@unique` on rollNumber so this check is application-level. The bulk validator
+        // also catches within-batch dupes; this catches DB collisions for both single
+        // and bulk paths.
+        const dupRoll = await prisma.studentEnrollment.findFirst({
+            where: {
+                rollNumber: enrollment.rollNumber,
+                academicYearId: entry.academicYearId,
+                status: { not: 'DROPPED' },
+            },
+            select: { id: true, studentId: true },
+        });
+        if (dupRoll) {
+            throw new AppError(
+                `Roll number "${enrollment.rollNumber}" already assigned to another active enrollment in this academic year`,
+                409
+            );
+        }
+
+        // Duplicate check — match registerStudent semantics: email OR aadhar last4 + dob
+        if (existingStudent) {
+            throw new AppError('Student already exists with this email or Aadhar', 409);
+        }
+        if (studentData.aadharNumber && studentData.dob) {
+            const dobDate = studentData.dob instanceof Date ? studentData.dob : new Date(studentData.dob);
+            const last4 = studentData.aadharNumber.toString().trim().replace(/\s/g, '').slice(-4);
+            const maskedPattern = `XXXX XXXX ${last4}`;
+            const dobStart = new Date(dobDate.getFullYear(), dobDate.getMonth(), dobDate.getDate());
+            const dobEnd = new Date(dobDate.getFullYear(), dobDate.getMonth(), dobDate.getDate(), 23, 59, 59, 999);
+            const dupByAadhar = await prisma.student.findFirst({
+                where: {
+                    aadharNumber: maskedPattern,
+                    dob: { gte: dobStart, lte: dobEnd },
+                },
+            });
+            if (dupByAadhar) {
+                throw new AppError('Student already exists with this Aadhar + DOB', 409);
+            }
+        }
+
+        // ── Stage 2: Defaults ────────────────────────────────────────────
+        const currentSemester = entry.currentSemester ?? (entry.yearOfStudy * 2 - 1);
+        const dobDate = studentData.dob instanceof Date ? studentData.dob : new Date(studentData.dob);
+
+        // Mask the Aadhaar before storage (matches registerStudent convention)
+        const last4 = studentData.aadharNumber.toString().trim().replace(/\s/g, '').slice(-4);
+        const storedAadhar = `XXXX XXXX ${last4}`;
+
+        // ── Stage 3: Atomic transaction (User + Student + Admission + Enrollment + ApplicationFee) ──
+        const APPLICATION_FEE_AMOUNT = await getApplicationFeeAmount();
+        const appFeeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.APPLICATION_FEE]);
+        const appFeeHead = appFeeHeadMap.get(PaymentComponent.APPLICATION_FEE);
+
+        const isAppFeeWaived = entry.type === AdmissionEntryType.LATERAL
+            && studentData.quotaType === QuotaType.MANAGEMENT;
+
+        const txResult = await prisma.$transaction(async (tx) => {
+            // 1. ApplicationId — MAN prefix marks manual-entry admissions
+            const applicationId = `MAN${Date.now()}${Math.floor(Math.random() * 100)}`;
+
+            // 2. Hash default password
+            const hashedPassword = await bcrypt.hash('Welcome@123', 10);
+
+            // 3. Create User
+            const user = await tx.user.create({
+                data: {
+                    name: studentData.name,
+                    email: studentData.email,
+                    phone: studentData.phone,
+                    password: hashedPassword,
+                    role: Role.STUDENT,
+                    isDeleted: false,
+                    createdBy: adminId,
+                    updatedBy: adminId,
+                },
+            });
+
+            // 4. Create Student
+            const newStudent = await tx.student.create({
+                data: {
+                    applicationId,
+                    name: studentData.name,
+                    fatherName: studentData.fatherName,
+                    motherName: studentData.motherName,
+                    gender: studentData.gender,
+                    dob: dobDate,
+                    phone: studentData.phone,
+                    email: studentData.email,
+                    aadharNumber: storedAadhar,
+                    category: studentData.category,
+                    country: studentData.country,
+                    address: studentData.address,
+                    address2: studentData.address2,
+                    city: studentData.city,
+                    state: studentData.state,
+                    pincode: studentData.pincode,
+                    profilePhotoUrl: studentData.profilePhotoUrl,
+                    quotaType: studentData.quotaType,
+                    applicationMode: ApplicationMode.OFFLINE,
+                    isOffline: true,
+                    isKycVerified: true,
+                    userId: user.id,
+                    createdBy: adminId,
+                    updatedBy: adminId,
+                } as any,
+            });
+
+            // 5. Create StudentAdmission — status ADMISSION_CONFIRMED, skip exam flow
+            // feeCohortAcademicYearId always equals entryAcademicYearId — the student's
+            // own batch year drives their fee schedule, with FeeStructure.entryType
+            // differentiating REGULAR vs LATERAL fees within that year.
+            const feeCohortAcademicYearId = entry.academicYearId;
+
+            const newAdmission = await tx.studentAdmission.create({
+                data: {
+                    studentId: newStudent.id,
+                    status: AdmissionStatus.ADMISSION_CONFIRMED,
+                    allottedCourseId: course.allottedCourseId,
+                    academicYearId: entry.academicYearId,
+                    entryType: entry.type,
+                    entryYearOfStudy: entry.yearOfStudy,
+                    entryAcademicYearId: entry.academicYearId,
+                    feeCohortAcademicYearId,
+                    instituteCode: entry.instituteCode ?? 'VVIG',
+                    entryReason: entry.reason,
+                    isBackdated: entry.isBackdated,
+                    paidFee: 0,
+                    totalFee: 0,
+                    feeStatus: FeeStatus.PENDING,
+                    accommodationType: AccommodationType.NONE,
+                } as any,
+            });
+
+            // 6. Create StudentExam (matches registerStudent convention; harmless empty row)
+            await tx.studentExam.create({
+                data: { studentId: newStudent.id },
+            });
+
+            // 7. Create StudentEnrollment
+            const newEnrollment = await tx.studentEnrollment.create({
+                data: {
+                    studentId: newStudent.id,
+                    sectionId: enrollment.sectionId,
+                    rollNumber: enrollment.rollNumber,
+                    currentSemester,
+                    yearOfStudy: entry.yearOfStudy,
+                    academicYearId: entry.academicYearId,
+                    status: 'ACTIVE',
+                    createdBy: adminId,
+                    updatedBy: adminId,
+                } as any,
+            });
+
+            // 8. Application fee handling
+            if (appFeeHead) {
+                if (isAppFeeWaived) {
+                    // Lateral + Management → fully-waived APPLICATION_FEE demand
+                    const waivedDemand = await tx.studentFeeDemand.create({
+                        data: {
+                            studentId: newStudent.id,
+                            feeHeadId: appFeeHead.id,
+                            academicYearId: entry.academicYearId,
+                            yearOfStudy: entry.yearOfStudy,
+                            amount: APPLICATION_FEE_AMOUNT,
+                            discountAmount: APPLICATION_FEE_AMOUNT,
+                            netAmount: 0,
+                            status: FeeStatus.FULL,
+                            dueDate: new Date(),
+                            remarks: 'Application fee waived: lateral entry, management quota',
+                            createdBy: adminId,
+                            updatedBy: adminId,
+                        } as any,
+                    });
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId: newStudent.id,
+                            type: LedgerTransactionType.CREDIT,
+                            amount: APPLICATION_FEE_AMOUNT,
+                            description: 'Application fee waiver: lateral + management quota',
+                            referenceId: waivedDemand.id,
+                            referenceType: 'WAIVER',
+                            feeHeadId: appFeeHead.id,
+                            academicYearId: entry.academicYearId,
+                            yearOfStudy: entry.yearOfStudy,
+                            createdBy: adminId,
+                        } as any,
+                    });
+                } else {
+                    // Normal PENDING APPLICATION_FEE demand
+                    await tx.studentFeeDemand.create({
+                        data: {
+                            studentId: newStudent.id,
+                            feeHeadId: appFeeHead.id,
+                            academicYearId: entry.academicYearId,
+                            yearOfStudy: entry.yearOfStudy,
+                            amount: APPLICATION_FEE_AMOUNT,
+                            netAmount: APPLICATION_FEE_AMOUNT,
+                            status: FeeStatus.PENDING,
+                            dueDate: new Date(),
+                            remarks: 'Application fee — manual entry admission',
+                            createdBy: adminId,
+                            updatedBy: adminId,
+                        } as any,
+                    });
+                }
+            } else {
+                logger.warn(`[manualEntryAdmission] No FeeHead tagged with PaymentComponent.APPLICATION_FEE — skipping application fee demand for student=${newStudent.id}`);
+            }
+
+            return { user, student: newStudent, admission: newAdmission, enrollment: newEnrollment };
+        });
+
+        const { student, admission, enrollment: createdEnrollment } = txResult;
+        logger.info(`[manualEntryAdmission] Core records created. studentId=${student.id} applicationId=${student.applicationId}`);
+
+        // ── Stage 4: Side effects (outside main transaction — they own their own TXs) ──
+
+        // 9. Tuition / yearly fee demand seeding.
+        // For lateral / back-dated admissions, the entry academicYear must already have
+        // FeeStructure rows for the chosen course. If absent (e.g. admin forgot to clone
+        // from current year), we proceed with the admission but flag in the response so
+        // admin can run POST /finance/fees/fee-structure/clone-academic-year and then
+        // call generateFeeDemands manually.
+        let totalFeeDemandsCreated = 0;
+        let feeStructureMissing = false;
+        try {
+            const fsCount = await prisma.feeStructure.count({
+                where: {
+                    courseId: course.allottedCourseId,
+                    academicYearId: entry.academicYearId,
+                    isDeleted: false,
+                },
+            });
+            if (fsCount === 0) {
+                feeStructureMissing = true;
+                logger.warn(
+                    `[manualEntryAdmission] No FeeStructure rows for course=${course.allottedCourseId} ` +
+                    `academicYearId=${entry.academicYearId}. Admission created but tuition demands NOT seeded. ` +
+                    `Clone fee structures from a prior year via POST /finance/fees/fee-structure/clone-academic-year, ` +
+                    `then run generateFeeDemands for student=${student.id}.`
+                );
+            } else {
+                const seeded = await FeeService.generateFeeDemands(
+                    student.id,
+                    course.allottedCourseId,
+                    entry.academicYearId,
+                    adminId,
+                    false
+                    // allowLegacyFallback defaults to true → preserves legacy behavior for manual entries
+                );
+                totalFeeDemandsCreated = seeded?.generated ?? 0;
+                logger.info(`[manualEntryAdmission] generateFeeDemands seeded ${totalFeeDemandsCreated} demand(s) for student=${student.id} (fallback=${seeded?.fallbackUsed})`);
+            }
+        } catch (err) {
+            logger.error(`[manualEntryAdmission] generateFeeDemands failed for student=${student.id}: ${err}`);
+        }
+
+        // 10. Optional accommodation
+        let hostelAllocated = false;
+        let transportAllocated = false;
+        if (accommodation && accommodation.type === AccommodationType.HOSTEL && accommodation.hostelId && accommodation.hostelType && accommodation.hostelPaymentMode) {
+            try {
+                await AdminStudentService.assignHostel(
+                    student.id,
+                    accommodation.hostelId,
+                    accommodation.hostelPaymentMode as 'YEARWISE' | 'SEMWISE',
+                    accommodation.hostelType as HostelType,
+                    adminId
+                );
+                hostelAllocated = true;
+                logger.info(`[manualEntryAdmission] Hostel assigned student=${student.id} hostelId=${accommodation.hostelId}`);
+            } catch (err) {
+                logger.error(`[manualEntryAdmission] assignHostel failed for student=${student.id}: ${err}`);
+            }
+        } else if (accommodation && accommodation.type === AccommodationType.TRANSPORT && accommodation.transportRouteId) {
+            try {
+                await AdminStudentService.assignTransport(student.id, accommodation.transportRouteId, adminId);
+                transportAllocated = true;
+                logger.info(`[manualEntryAdmission] Transport assigned student=${student.id} routeId=${accommodation.transportRouteId}`);
+            } catch (err) {
+                logger.error(`[manualEntryAdmission] assignTransport failed for student=${student.id}: ${err}`);
+            }
+        }
+
+        // 11. Optional priorPayment — record carried-over payment
+        let priorPaymentRecorded = false;
+        if (priorPayment && priorPayment.amount > 0) {
+            try {
+                const providerTxId = `MAN_${Date.now()}_${student.id.substring(0, 8)}`;
+                await prisma.$transaction(async (tx) => {
+                    const payment = await tx.payment.create({
+                        data: {
+                            studentId: student.id,
+                            amount: priorPayment.amount,
+                            method: priorPayment.method,
+                            mode: PaymentMode.OFFLINE,
+                            status: PaymentStatus.SUCCESS,
+                            component: priorPayment.component,
+                            providerTxId,
+                            idempotencyKey: `${providerTxId}_${priorPayment.component}`,
+                            referenceNumber: priorPayment.referenceNumber || null,
+                            feeHeadId: priorPayment.feeHeadId,
+                            academicYearId: entry.academicYearId,
+                            yearOfStudy: entry.yearOfStudy,
+                            collectedBy: adminId,
+                            createdBy: adminId,
+                            updatedBy: adminId,
+                            metadata: { source: 'manual-entry', adminId },
+                        } as any,
+                    });
+
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId: student.id,
+                            type: LedgerTransactionType.CREDIT,
+                            amount: priorPayment.amount,
+                            description: `Prior payment carried over (${priorPayment.component}) — manual entry`,
+                            referenceId: payment.id,
+                            referenceType: 'PAYMENT',
+                            feeHeadId: priorPayment.feeHeadId,
+                            academicYearId: entry.academicYearId,
+                            yearOfStudy: entry.yearOfStudy,
+                            createdBy: adminId,
+                        } as any,
+                    });
+
+                    await tx.studentAdmission.update({
+                        where: { studentId: student.id },
+                        data: { paidFee: { increment: priorPayment.amount } },
+                    });
+                });
+                priorPaymentRecorded = true;
+                logger.info(`[manualEntryAdmission] Prior payment recorded student=${student.id} amount=${priorPayment.amount} component=${priorPayment.component}`);
+            } catch (err) {
+                logger.error(`[manualEntryAdmission] priorPayment recording failed for student=${student.id}: ${err}`);
+            }
+        }
+
+        // 12. Optional scholarship — store intent only (Phase 1)
+        let scholarshipRecorded = false;
+        if (scholarship && typeof scholarship.percentage === 'number') {
+            try {
+                await prisma.studentScholarship.create({
+                    data: {
+                        studentId: student.id,
+                        type: entry.type === AdmissionEntryType.LATERAL ? 'LATERAL' : 'MANUAL_ENTRY',
+                        scholarshipPercentage: scholarship.percentage,
+                        remarks: scholarship.ruleId ? `Manual entry — ruleId=${scholarship.ruleId}` : 'Manual entry scholarship intent',
+                        // Tag with the cohort's entry year — manual entry has explicit year context.
+                        academicYearId: entry.academicYearId,
+                        createdBy: adminId,
+                        updatedBy: adminId,
+                    } as any,
+                });
+                scholarshipRecorded = true;
+                logger.info(`[manualEntryAdmission] Scholarship intent stored student=${student.id} pct=${scholarship.percentage}`);
+            } catch (err) {
+                logger.error(`[manualEntryAdmission] scholarship intent storage failed for student=${student.id}: ${err}`);
+            }
+        }
+
+        // ── Stage 5: Audit ─────────────────────────────────────────────
+        logger.info(`[manualEntryAdmission] DONE student=${student.id} app=${student.applicationId} admission=${admission.id} entry=${entry.type}/${entry.yearOfStudy} appFeeWaived=${isAppFeeWaived} hostel=${hostelAllocated} transport=${transportAllocated} priorPayment=${priorPaymentRecorded} scholarship=${scholarshipRecorded} demands=${totalFeeDemandsCreated}`);
+
+        return {
+            success: true,
+            studentId: student.id,
+            applicationId: student.applicationId,
+            admissionId: admission.id,
+            enrollmentId: createdEnrollment.id,
+            entryType: entry.type,
+            entryYearOfStudy: entry.yearOfStudy,
+            applicationFeeWaived: isAppFeeWaived,
+            hostelAllocated,
+            transportAllocated,
+            priorPaymentRecorded,
+            scholarshipRecorded,
+            totalFeeDemandsCreated,
+            // True when no FeeStructure rows existed for this course+academicYear at admission time.
+            // Admission was created but tuition demands were skipped — admin must clone fee
+            // structures and re-trigger generateFeeDemands.
+            feeStructureMissing,
+            warning: feeStructureMissing
+                ? `No FeeStructure rows for course ${course.allottedCourseId} in academic year ${entry.academicYearId}. ` +
+                  `Tuition demands were not seeded. Clone fee structures via ` +
+                  `POST /finance/fees/fee-structure/clone-academic-year, then re-run generateFeeDemands.`
+                : undefined,
+        };
+    },
+
+    /**
+     * Assigns rollNumber + section to a registered student. Used after counseling /
+     * seat allotment to create the StudentEnrollment row that backs roll-number-based
+     * login and fee billing. Works for both fresh and lateral students — the entry
+     * data was already captured during /student/register.
+     */
+    async assignEnrollment(
+        studentId: string,
+        rollNumber: string,
+        sectionId: string,
+        adminId: string,
+        opts?: { currentSemester?: number; yearOfStudy?: number; seedFeeDemands?: boolean }
+    ) {
+        logger.info(`[assignEnrollment] studentId=${studentId} roll=${rollNumber} sectionId=${sectionId} admin=${adminId}`);
+
+        // 1. Load student + admission to get entry data and active year
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: { admissionDetails: true }
+        });
+        if (!student) {
+            throw new AppError('Student not found', 404);
+        }
+        if (!student.admissionDetails) {
+            throw new AppError('Student admission record not found', 404);
+        }
+
+        // 2. Resolve active academic year (the year the enrollment will be tied to)
+        const activeYear = await prisma.academicYear.findFirst({
+            where: { isActive: true, isDeleted: false },
+            orderBy: { startDate: 'desc' },
+            select: { id: true, code: true },
+        });
+        if (!activeYear) {
+            throw new AppError('No active academic year configured', 400);
+        }
+
+        // 3. Reject if student already has an enrollment for the active year
+        const existing = await prisma.studentEnrollment.findFirst({
+            where: { studentId, academicYearId: activeYear.id }
+        });
+        if (existing) {
+            throw new AppError(
+                `Student already has an enrollment for ${activeYear.code} (rollNumber=${existing.rollNumber})`,
+                409
+            );
+        }
+
+        // 4. Reject if rollNumber is already used in the active year
+        const dupRoll = await prisma.studentEnrollment.findFirst({
+            where: {
+                rollNumber: rollNumber.trim(),
+                academicYearId: activeYear.id,
+                status: { not: 'DROPPED' },
+            },
+            select: { id: true, studentId: true },
+        });
+        if (dupRoll) {
+            throw new AppError(
+                `Roll number "${rollNumber}" already assigned to another active enrollment in ${activeYear.code}`,
+                409
+            );
+        }
+
+        // 5. Validate section exists
+        const section = await prisma.section.findUnique({ where: { id: sectionId } });
+        if (!section) {
+            throw new AppError('Section not found', 404);
+        }
+
+        // 6. Defaults from entryYearOfStudy when caller doesn't specify
+        const entryYos = student.admissionDetails.entryYearOfStudy ?? 1;
+        const yearOfStudy     = opts?.yearOfStudy ?? entryYos;
+        const currentSemester = opts?.currentSemester ?? (yearOfStudy * 2 - 1);
+
+        // 7. Create the enrollment in a transaction; also bump admission status to
+        //    SEAT_ALLOTTED if it's still REGISTERED (don't downgrade further-along statuses).
+        const result = await prisma.$transaction(async (tx) => {
+            const enrollment = await tx.studentEnrollment.create({
+                data: {
+                    studentId,
+                    sectionId,
+                    rollNumber: rollNumber.trim(),
+                    academicYearId: activeYear.id,
+                    currentSemester,
+                    yearOfStudy,
+                    status: 'ACTIVE',
+                    createdBy: adminId,
+                    updatedBy: adminId,
+                }
+            });
+
+            if (student.admissionDetails!.status === AdmissionStatus.REGISTERED) {
+                await tx.studentAdmission.update({
+                    where: { studentId },
+                    data: {
+                        status: AdmissionStatus.SEAT_ALLOTTED,
+                        seatAllotedBy: adminId,
+                        seatAllottedAt: new Date(),
+                    }
+                });
+            }
+
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'STUDENT_ENROLLMENT_ASSIGNED',
+                    entity: 'StudentEnrollment',
+                    entityId: enrollment.id,
+                    details: { studentId, rollNumber: enrollment.rollNumber, sectionId, academicYearCode: activeYear.code },
+                }
+            });
+
+            return enrollment;
+        });
+
+        logger.info(`[assignEnrollment] success enrollmentId=${result.id} studentId=${studentId} roll=${rollNumber}`);
+
+        // 8. Optionally seed fee demands for the active year
+        let feeDemandsSeeded = 0;
+        const seedFeeDemands = opts?.seedFeeDemands ?? true;
+        if (seedFeeDemands && student.admissionDetails.allottedCourseId) {
+            try {
+                const { FeeService } = require('../finance/fee.service');
+                const result = await FeeService.generateFeeDemands(
+                    studentId,
+                    student.admissionDetails.allottedCourseId,
+                    activeYear.id,
+                    adminId,
+                    false
+                );
+                feeDemandsSeeded = result?.generated ?? 0;
+                logger.info(`[assignEnrollment] seeded ${feeDemandsSeeded} fee demands for studentId=${studentId} (fallback=${result?.fallbackUsed})`);
+            } catch (err: any) {
+                logger.error(`[assignEnrollment] generateFeeDemands failed for studentId=${studentId}: ${err.message}`);
+            }
+        }
+
+        return {
+            enrollment: result,
+            admissionStatus: AdmissionStatus.SEAT_ALLOTTED,
+            feeDemandsSeeded,
+        };
     },
 };
 

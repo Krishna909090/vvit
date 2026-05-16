@@ -28,11 +28,26 @@ interface StudentImportRow {
     city: string;
     state: string;
     pincode: string;
-    degreeType: string; 
+    degreeType: string;
     category: string;
-    quotaType?: string; 
-    amount?: number; 
+    quotaType?: string;
+    amount?: number;
 }
+
+// ── Helpers ───────────────────────────────────────────────────────────
+// Resolve an academic year identifier that may be either a UUID or a code
+// (e.g. "2025-26"). Admins typically know the code, not the UUID.
+const resolveAcademicYearId = async (codeOrId: string): Promise<string | null> => {
+    if (!codeOrId) return null;
+    // UUID v4 detection
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(codeOrId);
+    if (isUuid) {
+        const ay = await prisma.academicYear.findUnique({ where: { id: codeOrId } });
+        return ay?.id ?? null;
+    }
+    const ay = await prisma.academicYear.findFirst({ where: { code: codeOrId, isDeleted: false } });
+    return ay?.id ?? null;
+};
 
 export const processOfflineRegistration = async (fileBuffer: any, adminId: string) => {
     const workbook = new ExcelJS.Workbook();
@@ -314,7 +329,6 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 feeStatus: FeeStatus.PARTIAL,
                 paidFee: tokenAmount,
                 totalFee: 0, // Will be updated later
-                qualificationMode: 'DIRECT' // Likely DIRECT if seat booking? But they take exam... let's keep it null or EXAM
             }
         });
 
@@ -708,4 +722,248 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
     }
 
     return results;
+};
+
+// ── Bulk Manual-Entry Admission ────────────────────────────────────────
+// Pre-flight validation for the bulk manual-entry flow (lateral / transfer /
+// back-dated admissions). Mirrors validateOfflineApplications: accepts a JSON
+// array (frontend parses CSV/Excel client-side and posts JSON), returns
+// detailed per-row errors and does NOT touch the DB beyond reads.
+export const validateBulkManualEntry = async (rows: any[]) => {
+    const results = {
+        total: rows.length,
+        valid: 0,
+        invalid: 0,
+        validRecords: [] as any[],
+        invalidRecords: [] as (any & { errors: string[] })[]
+    };
+
+    // Track within-batch duplicates
+    const seenEmails = new Set<string>();
+    const seenPhones = new Set<string>();
+    const seenAadhars = new Set<string>();
+    const seenRollNumbers = new Set<string>();  // rollNumber must be unique within batch
+
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const errors: string[] = [];
+
+        // 1. Required field presence
+        if (!row.student?.name)         errors.push('student.name is required');
+        if (!row.student?.phone)        errors.push('student.phone is required');
+        if (!row.student?.aadharNumber) errors.push('student.aadharNumber is required');
+        if (!row.student?.dob)          errors.push('student.dob is required');
+        if (!row.student?.quotaType)    errors.push('student.quotaType is required');
+        if (!row.course?.allottedCourseId) errors.push('course.allottedCourseId is required');
+        if (!row.entry?.academicYearId) errors.push('entry.academicYearId is required');
+        if (!row.entry?.yearOfStudy)    errors.push('entry.yearOfStudy is required');
+        if (!row.enrollment?.sectionId) errors.push('enrollment.sectionId is required');
+        if (!row.enrollment?.rollNumber) errors.push('enrollment.rollNumber is required');
+
+        // 2. Lateral-specific rules
+        if (row.entry?.type === 'LATERAL' && (row.entry?.yearOfStudy ?? 1) < 2) {
+            errors.push('LATERAL entry requires yearOfStudy >= 2');
+        }
+        if (row.entry?.type === 'LATERAL' && row.scholarship?.percentage !== undefined) {
+            const pct = row.scholarship.percentage;
+            if (![0, 15, 25, 50].includes(pct)) {
+                errors.push(`LATERAL entry scholarship must be 0/15/25/50; got ${pct}`);
+            }
+        }
+
+        // 3. Within-batch duplicates
+        if (row.student?.email) {
+            if (seenEmails.has(row.student.email)) errors.push(`Duplicate email '${row.student.email}' within batch`);
+            else seenEmails.add(row.student.email);
+        }
+        if (row.student?.phone) {
+            if (seenPhones.has(row.student.phone)) errors.push(`Duplicate phone '${row.student.phone}' within batch`);
+            else seenPhones.add(row.student.phone);
+        }
+        if (row.student?.aadharNumber) {
+            if (seenAadhars.has(row.student.aadharNumber)) errors.push(`Duplicate aadhar '${row.student.aadharNumber}' within batch`);
+            else seenAadhars.add(row.student.aadharNumber);
+        }
+        if (row.enrollment?.rollNumber) {
+            if (seenRollNumbers.has(row.enrollment.rollNumber)) errors.push(`Duplicate rollNumber '${row.enrollment.rollNumber}' within batch`);
+            else seenRollNumbers.add(row.enrollment.rollNumber);
+        }
+
+        // 4. Resolve academic year code → id (in-place for the row, so process step doesn't redo it)
+        if (row.entry?.academicYearId) {
+            const resolvedId = await resolveAcademicYearId(row.entry.academicYearId);
+            if (!resolvedId) {
+                errors.push(`Academic year not found: '${row.entry.academicYearId}'`);
+            } else {
+                row.entry.academicYearId = resolvedId;
+            }
+        }
+
+        // 5. DB existence checks (only if no critical errors so far)
+        if (errors.length === 0) {
+            const [course, section, dbDuplicate] = await Promise.all([
+                prisma.course.findUnique({ where: { id: row.course.allottedCourseId } }),
+                prisma.section.findUnique({ where: { id: row.enrollment.sectionId } }),
+                prisma.student.findFirst({
+                    where: {
+                        OR: [
+                            row.student.email ? { email: row.student.email } : undefined,
+                            row.student.phone ? { phone: row.student.phone } : undefined,
+                            row.student.aadharNumber ? { aadharNumber: row.student.aadharNumber } : undefined,
+                        ].filter(Boolean) as any
+                    }
+                })
+            ]);
+            if (!course)  errors.push(`Invalid courseId: ${row.course.allottedCourseId}`);
+            if (!section) errors.push(`Invalid sectionId: ${row.enrollment.sectionId}`);
+            if (dbDuplicate) errors.push(`Student already exists (email/phone/aadhar match)`);
+
+            // Backdated check: academic year startDate must be < NOW()
+            if (row.entry?.isBackdated) {
+                const ay = await prisma.academicYear.findUnique({ where: { id: row.entry.academicYearId } });
+                if (ay && ay.startDate > new Date()) {
+                    errors.push('isBackdated=true but academic year has not started yet');
+                }
+            }
+        }
+
+        if (errors.length > 0) {
+            results.invalid++;
+            results.invalidRecords.push({ ...row, _rowIndex: i, errors });
+        } else {
+            results.valid++;
+            results.validRecords.push(row);
+        }
+    }
+
+    return results;
+};
+
+// Process a validated batch of manual-entry admissions. Re-runs validation on
+// the backend (can't trust the client), then invokes
+// AdminStudentService.manualEntryAdmission per valid row sequentially. Lazy
+// import is used to dodge any circular-dep risk between admin services.
+export const processBulkManualEntry = async (rows: any[], adminId: string) => {
+    // Re-validate on backend
+    const validation = await validateBulkManualEntry(rows);
+
+    const results = {
+        total: rows.length,
+        success: 0,
+        failed: validation.invalid,
+        errors: validation.invalidRecords.map(r => ({
+            rowIndex: r._rowIndex,
+            email: r.student?.email,
+            phone: r.student?.phone,
+            errors: r.errors
+        })),
+        created: [] as { rowIndex: number, studentId: string, applicationId: string, entryType: string }[]
+    };
+
+    // Process valid rows one at a time (the underlying service uses transactions; running in parallel
+    // would multiply DB connection use and complicate error attribution)
+    for (let i = 0; i < validation.validRecords.length; i++) {
+        const row = validation.validRecords[i];
+        try {
+            // Lazy-import to avoid circular dep risk
+            const { AdminStudentService } = await import('./adminStudent.service');
+            const result = await AdminStudentService.manualEntryAdmission(row, adminId);
+            results.success++;
+            results.created.push({
+                rowIndex: rows.indexOf(row),
+                studentId: result.studentId,
+                applicationId: result.applicationId ?? '',
+                entryType: result.entryType
+            });
+        } catch (err: any) {
+            results.failed++;
+            results.errors.push({
+                rowIndex: rows.indexOf(row),
+                email: row.student?.email,
+                phone: row.student?.phone,
+                errors: [err?.message ?? 'Unknown error']
+            });
+            logger.error(`[processBulkManualEntry] Row ${rows.indexOf(row)} failed: ${err?.message}`);
+        }
+    }
+
+    logger.info(`[processBulkManualEntry] Completed: total=${results.total}, success=${results.success}, failed=${results.failed}`);
+    return results;
+};
+
+/**
+ * Generate a CSV template for the bulk manual-entry import.
+ *
+ * The template uses a flat (non-nested) header structure for ease of editing in
+ * Excel. Frontend parses CSV → re-nests into the manualEntryAdmissionSchema shape
+ * before POSTing to /admin/bulk-import/manual-entry. The header names match the
+ * dot-paths of the validator schema fields.
+ */
+export const generateManualEntryTemplate = (): string => {
+    const headers = [
+        // Student profile
+        'student.name', 'student.fatherName', 'student.motherName', 'student.gender', 'student.dob',
+        'student.phone', 'student.email', 'student.aadharNumber', 'student.category',
+        'student.country', 'student.address', 'student.address2', 'student.city',
+        'student.state', 'student.pincode', 'student.profilePhotoUrl', 'student.quotaType',
+        // Course allocation
+        'course.allottedCourseId',
+        // Entry context
+        'entry.type', 'entry.yearOfStudy', 'entry.academicYearId',
+        'entry.currentSemester', 'entry.reason', 'entry.isBackdated',
+        // Enrollment
+        'enrollment.sectionId', 'enrollment.rollNumber',
+        // Scholarship (optional)
+        'scholarship.percentage', 'scholarship.ruleId',
+        // Accommodation (optional)
+        'accommodation.type', 'accommodation.hostelId', 'accommodation.hostelType',
+        'accommodation.hostelPaymentMode', 'accommodation.transportRouteId',
+        // Prior payment (optional)
+        'priorPayment.amount', 'priorPayment.method', 'priorPayment.component',
+        'priorPayment.referenceNumber', 'priorPayment.date', 'priorPayment.feeHeadId',
+    ];
+
+    // One example row showing a lateral-entry management-quota student with 50% scholarship
+    const exampleRow = [
+        'Ravi Kumar', 'Mohan Kumar', 'Sita Devi', 'MALE', '2003-06-15',
+        '9876543210', 'ravi@example.com', '123456789012', 'OC',
+        'India', 'Plot 12, Main Road', '', 'Vijayawada',
+        'AP', '520001', '', 'MANAGEMENT',
+        // course.allottedCourseId — paste a course UUID from your DB
+        '00000000-0000-0000-0000-000000000000',
+        // entry
+        'LATERAL', '2', '2025-26', '3', 'Diploma → BTech 2nd year', 'false',
+        // enrollment
+        '00000000-0000-0000-0000-000000000000', 'L25BTC001',
+        // scholarship
+        '50', '',
+        // accommodation
+        'NONE', '', '', '', '',
+        // prior payment
+        '', '', '', '', '', '',
+    ];
+
+    // Properly escape commas/quotes/newlines in CSV cells
+    const escapeCsv = (cell: string): string => {
+        if (cell == null) return '';
+        const s = String(cell);
+        if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+            return `"${s.replace(/"/g, '""')}"`;
+        }
+        return s;
+    };
+
+    const headerLine = headers.map(escapeCsv).join(',');
+    const exampleLine = exampleRow.map(escapeCsv).join(',');
+
+    // Add a leading explanatory comment row (CSVs commonly tolerate this; admins can delete it)
+    const notesLine = [
+        '# Bulk manual-entry template. Replace the example row below with real data, then upload via your admin UI.',
+        '# entry.academicYearId can be either a UUID or a code like "2025-26".',
+        '# entry.type ∈ REGULAR | LATERAL | TRANSFER. LATERAL requires yearOfStudy >= 2.',
+        '# scholarship.percentage for LATERAL must be 0, 15, 25, or 50.',
+        '# Optional fields can be left blank. Date format: ISO 8601 (YYYY-MM-DD).',
+    ].join('\n');
+
+    return `${notesLine}\n${headerLine}\n${exampleLine}\n`;
 };

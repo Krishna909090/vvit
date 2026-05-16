@@ -89,4 +89,48 @@ router.post(
     bulkImportController.importOfflineApplications
 );
 
+// ═══════════════════════════════════════════════════════════
+//  BULK MANUAL ENTRY (lateral / transfer / back-dated cohort)
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * @route   POST /manual-entry/validate
+ * @desc    Dry-run validation of an array of manual-entry admission records.
+ *          Returns per-row validation results so the admin can fix errors before final import.
+ * @side    None (read-only).
+ * @body    Array<manualEntryAdmissionSchema.body>  (max 500 rows)
+ * @returns 200 - { status: 'success', data: { total, valid, invalid, validRecords, invalidRecords } }
+ */
+router.post(
+    '/manual-entry/validate',
+    authorizePermission(['student.create.lateral']),
+    bulkImportController.validateBulkManualEntry
+);
+
+/**
+ * @route   POST /manual-entry
+ * @desc    Bulk-import manual-entry admissions. Each row creates a Student + Admission +
+ *          Enrollment + fee demands via AdminStudentService.manualEntryAdmission. Used for
+ *          lateral entry, transfer, and back-dated cohort imports.
+ * @side    Creates students, admissions, enrollments, and seeds fee demands.
+ * @body    Array<manualEntryAdmissionSchema.body>  (max 500 rows)
+ * @returns 200 - { status: 'success', data: { total, success, failed, created, errors } }
+ */
+router.post(
+    '/manual-entry',
+    authorizePermission(['student.create.lateral']),
+    bulkImportController.importBulkManualEntry
+);
+
+/**
+ * @route   GET /manual-entry/template
+ * @desc    Download a CSV template for bulk manual-entry imports. The template includes
+ *          all columns and one example row demonstrating a lateral-entry admission.
+ * @returns 200 - text/csv attachment "manual-entry-template.csv"
+ */
+router.get(
+    '/manual-entry/template',
+    bulkImportController.downloadManualEntryTemplate
+);
+
 export default router;

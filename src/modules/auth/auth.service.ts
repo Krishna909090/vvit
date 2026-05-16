@@ -41,6 +41,31 @@ const STAFF_OTP_EXPIRY_MIN = 5;
 // Generate 6-digit numeric OTP securely
 const generateOtp = () => crypto.randomInt(100000, 999999).toString();
 
+// Returns true if the student is enrolled in the active academic year (i.e. has
+// a rollNumber). Such students must log in via /auth/student/login (rollNumber +
+// password); the phone-OTP path is only for pre-admission applicants.
+const studentHasActiveEnrollment = async (userId: string): Promise<boolean> => {
+  const activeYear = await prisma.academicYear.findFirst({
+    where: { isActive: true, isDeleted: false },
+    orderBy: { startDate: "desc" },
+    select: { id: true },
+  });
+  if (!activeYear) return false;
+
+  const enrollment = await prisma.studentEnrollment.findFirst({
+    where: {
+      academicYearId: activeYear.id,
+      status: "ACTIVE",
+      student: { userId },
+    },
+    select: { id: true },
+  });
+  return !!enrollment;
+};
+
+const ENROLLED_STUDENT_OTP_BLOCK_MSG =
+  "Please use the ERP application, not the CMS platform. Log in with your roll number and password.";
+
 // Service: Verifies user identity, auto-registers student users by phone,
 // generates a hashed OTP, stores it in UserOtp, and triggers notification(s).
 export const sendOtp = async (identifier: { phone?: string; email?: string }) => {
@@ -97,6 +122,15 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
   } else {
     if (user.isDeleted) {
       throw new AppError("Admin blocked you", 403);
+    }
+
+    if (user.role === Role.STUDENT && (await studentHasActiveEnrollment(user.id))) {
+      logger.warn(
+        `[sendOtp] reject reason=enrolled_student_must_use_erp userId=${user.id} phone=${maskPhone(
+          user.phone
+        )}`
+      );
+      throw new AppError(ENROLLED_STUDENT_OTP_BLOCK_MSG, 400);
     }
 
     logger.info(
@@ -196,6 +230,13 @@ export const verifyOtp = async (
       )}, email=${maskEmail(identifier.email)}`
     );
     throw new AppError(MESSAGES.ERROR.INVALID_OTP_REQUEST, 400);
+  }
+
+  if (user.role === Role.STUDENT && (await studentHasActiveEnrollment(user.id))) {
+    logger.warn(
+      `[verifyOtp] reject reason=enrolled_student_must_use_erp userId=${user.id}`
+    );
+    throw new AppError(ENROLLED_STUDENT_OTP_BLOCK_MSG, 400);
   }
 
   const now = new Date();

@@ -17,7 +17,6 @@ export const registerStudent = catchAsync(async (req: Request, res: Response, ne
     logger.info(`[registerStudent] attempt by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[registerStudent] payload=${JSON.stringify(req.body)}`);
 
-    const agentId = req.user?.role === Role.AGENT ? (req.user?.userId || null) : null;
     let userId = req.user?.role === Role.STUDENT ? (req.user?.userId || null) : null;
     const currentUserId = req.user?.userId || null;
 
@@ -62,7 +61,7 @@ export const registerStudent = catchAsync(async (req: Request, res: Response, ne
         userId = studentUser.id;
     }
 
-    const student = await registerStudentService(req.body, agentId, userId, currentUserId);
+    const student = await registerStudentService(req.body, userId, currentUserId);
 
     logger.info(`[registerStudent] success applicationId=${student.applicationId}`);
     sendResponse({
@@ -329,7 +328,6 @@ export const getApplicationSummary = catchAsync(async (req: Request, res: Respon
         email: student.email || '',
         address: `${student.address}, ${student.city}, ${student.state} - ${student.pincode}`,
         degreeType: student.degreeType || '',
-        courseType: student.courseType || '',
         pref1: student.pref1Course?.name,
         pref2: student.pref2Course?.name,
         pref3: student.pref3Course?.name,

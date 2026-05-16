@@ -11,6 +11,8 @@ import dashboardRoutes from './dashboard.routes';
 import bulkImportRoutes from './bulkImport.routes';
 import scholarshipRoutes from './scholarship.routes';
 import verificationRoutes from './verification.routes';
+import marksRoutes from '../marks/marks.routes';
+import attendanceRoutes from '../attendance/attendance.routes';
 
 const router = Router();
 
@@ -25,5 +27,7 @@ router.use('/transport', transportRoutes);
 router.use('/bulk-import', bulkImportRoutes);
 router.use('/scholarship', scholarshipRoutes);
 router.use('/verification', verificationRoutes);
+router.use('/marks', marksRoutes);
+router.use('/attendance', attendanceRoutes);
 
 export default router;

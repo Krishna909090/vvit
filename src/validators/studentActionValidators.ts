@@ -212,6 +212,17 @@ export const hostelPaidStudentsQuerySchema = z.object({
     }),
 });
 
+export const transportPaidStudentsQuerySchema = z.object({
+    query: z.object({
+        page: z.string().optional().transform(v => v ? Number(v) : 1),
+        limit: z.string().optional().transform(v => v ? Number(v) : 10),
+        search: z.string().trim().optional(),
+        gender: z.string().trim().optional(),
+        routeId: z.string().uuid("Invalid Route ID").optional(),
+        all: z.string().optional().transform(v => v === 'true' || v === '1'),
+    }),
+});
+
 export const studentsByHostelSchema = z.object({
     params: z.object({
         hostelId: z.string().uuid("Invalid Hostel ID"),

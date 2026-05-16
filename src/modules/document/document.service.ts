@@ -5,6 +5,7 @@ import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 import { StudentDocumentStatus, AdmissionStatus } from '@prisma/client';
 import { deleteFileFromS3, convertToPresignedUrl } from '../../utils/s3Utils';
+import { getActiveAcademicYear } from '../../utils/studentContext';
 import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
@@ -81,7 +82,24 @@ export const deleteDocumentRequirement = async (id: string) => {
     return { message: 'Requirement deleted' };
 };
 
-export const upsertStudentDocuments = async (studentId: string, documentData: any, currentUserId: string | null) => {
+export const upsertStudentDocuments = async (
+    studentId: string,
+    documentData: any,
+    currentUserId: string | null,
+    academicYearId?: string | null
+) => {
+    // Resolve a year tag once: caller-provided wins; else fall back to the active
+    // academic year so new documents are year-tagged going forward. If neither
+    // resolves, the column stays NULL (legacy program-wide semantics).
+    let resolvedYearId: string | null = academicYearId ?? null;
+    if (!resolvedYearId) {
+        try {
+            resolvedYearId = (await getActiveAcademicYear()).id;
+        } catch {
+            resolvedYearId = null;
+        }
+    }
+
     const docPromises = Object.keys(documentData).map(key => {
         if (key.endsWith('Url')) {
             return prisma.studentDocument.upsert({
@@ -103,6 +121,7 @@ export const upsertStudentDocuments = async (studentId: string, documentData: an
                     documentKey: key,
                     url: documentData[key],
                     status: StudentDocumentStatus.PENDING,
+                    academicYearId: resolvedYearId,
                     createdBy: currentUserId,
                     updatedBy: currentUserId,
                     isDeleted: false

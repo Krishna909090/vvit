@@ -18,6 +18,7 @@ import {
     editStudentScholarship,
     downloadApplication,
     finalizeAdmission,
+    manualEntryAdmission,
     verifyPayment,
     getAdmissionInvoice,
     sendStatusEmail,
@@ -46,11 +47,13 @@ import {
     getPendingHostelAllocations,
     getStudentsByHostel,
     getTransportAllocatedStudents,
+    getTransportPaidStudents,
     reassignHostel,
     reassignTransport,
     switchHostelToTransport,
     switchTransportToHostel,
-    bulkAllocateRoomBeds
+    bulkAllocateRoomBeds,
+    assignEnrollment
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -61,13 +64,15 @@ import {
     updateAcademicQualificationSchema,
     deleteAcademicQualificationSchema,
     finalizeAdmissionSchema,
+    manualEntryAdmissionSchema,
+    assignEnrollmentSchema,
     verifyPaymentSchema,
     getApplicationsExtendedSchema,
     assignProSchema,
     editProSchema,
     updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
-import { assignHostelSchema, assignTransportSchema, allocateBedSchema, availableBedsQuerySchema, bedAllocatedStudentsQuerySchema, cancelHostelSchema, cancelTransportSchema, hostelPaidStudentsQuerySchema, pendingHostelAllocationsQuerySchema, studentsByHostelSchema, switchHostelToTransportSchema, switchTransportToHostelSchema, transportAllocatedStudentsQuerySchema, reassignHostelSchema, reassignTransportSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
+import { assignHostelSchema, assignTransportSchema, allocateBedSchema, availableBedsQuerySchema, bedAllocatedStudentsQuerySchema, cancelHostelSchema, cancelTransportSchema, hostelPaidStudentsQuerySchema, pendingHostelAllocationsQuerySchema, studentsByHostelSchema, switchHostelToTransportSchema, switchTransportToHostelSchema, transportAllocatedStudentsQuerySchema, transportPaidStudentsQuerySchema, reassignHostelSchema, reassignTransportSchema, bulkAllocateRoomSchema } from '../../validators/studentActionValidators';
 
 import upload from '../../config/multer';
 import {
@@ -382,6 +387,15 @@ router.get('/bed-allocated', authenticate, authorizePermission(['student.read.al
 router.get('/transport-allocated', authenticate, authorizePermission(['student.read.all']), validateRequest(transportAllocatedStudentsQuerySchema), getTransportAllocatedStudents);
 
 /**
+ * GET /admin/student/transport-paid
+ * Lists students with accommodationType=TRANSPORT who have at least one SUCCESS
+ * TRANSPORT payment (amount > 0). Optional routeId filters to a single route.
+ * Query: { page?, limit?, search? (name/phone/applicationId), gender?, routeId?, all? (true|1) }
+ * Response: { status, data: { students[], pagination } }
+ */
+router.get('/transport-paid', authenticate, authorizePermission(['student.read.all']), validateRequest(transportPaidStudentsQuerySchema), getTransportPaidStudents);
+
+/**
  * POST /admin/student/finalize-admission
  * Finalizes a student's admission by processing payment, setting course allocation, and optional scholarship/accommodation.
  * Online payment: creates PENDING payment, initiates PhonePe transaction, returns redirect URL.
@@ -390,6 +404,34 @@ router.get('/transport-allocated', authenticate, authorizePermission(['student.r
  * Response: { status, data: { paymentId, redirectUrl? (online) | invoiceUrl? (offline), message } }
  */
 router.post('/finalize-admission', authenticate, authorizePermission(['student.update.all']), validateRequest(finalizeAdmissionSchema), finalizeAdmission);
+
+/**
+ * POST /admin/student/manual-entry
+ * Manually create a student admission outside the normal application/entrance/seat-allotment flow.
+ * Used for: lateral entry, transfer students, back-dated cohort entries.
+ *
+ * Permission: `student.create.lateral` — restricted to admins authorised to create direct admissions.
+ * Body: see manualEntryAdmissionSchema in adminValidators.ts.
+ */
+router.post('/manual-entry', authenticate, authorizePermission(['student.create.lateral']), validateRequest(manualEntryAdmissionSchema), manualEntryAdmission);
+
+/**
+ * POST /admin/student/:studentId/assign-enrollment
+ * Step 2 of the two-step admission flow: assigns rollNumber + section to a
+ * previously-registered student (after counseling / seat allotment). Creates
+ * the StudentEnrollment row that backs roll-number-based login and fee billing.
+ * Works for both fresh and lateral students — entry data was captured during /student/register.
+ *
+ * Permission: `student.update.all` — restricted to admins running seat allotment.
+ * Body: { rollNumber, sectionId, currentSemester?, yearOfStudy?, seedFeeDemands? }
+ */
+router.post(
+    '/:studentId/assign-enrollment',
+    authenticate,
+    authorizePermission(['student.update.all']),
+    validateRequest(assignEnrollmentSchema),
+    assignEnrollment
+);
 
 /**
  * POST /admin/student/verify-payment
