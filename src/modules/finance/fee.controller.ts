@@ -433,14 +433,15 @@ export const collectFee = catchAsync(async (req: Request, res: Response, next: N
 // Student Ledger
 export const getStudentLedger = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    
+    const academicYearId = req.query.academicYearId as string | undefined;
+
     // Security: Students can only see their own
     if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
         // Simple unauthorized check, can be expanded
         // throw new AppError("Unauthorized", 403);
     }
 
-    const ledger = await FeeService.getStudentFeeDetails(studentId);
+    const ledger = await FeeService.getStudentFeeDetails(studentId, academicYearId);
 
     sendResponse({
         res,
@@ -471,13 +472,14 @@ export const downloadAllotmentOrder = catchAsync(async (req: Request, res: Respo
 // Get Student Fee Demands (Simplified View)
 export const getStudentFeeDemands = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
+    const academicYearId = req.query.academicYearId as string | undefined;
 
     // Security check: Only allow access if user is admin/staff or the student themselves
     if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
          // throw new AppError("Unauthorized", 403); // Uncomment if strict security needed, for now implicit trust in token vs id check usually handled by middleware or simpler checks
     }
 
-    const feeDetails = await FeeService.getStudentFeeDetails(studentId);
+    const feeDetails = await FeeService.getStudentFeeDetails(studentId, academicYearId);
 
     // Map to simplified list: { feeHeadName, amount, dueDate, status }
     const demands = feeDetails.demands.map(d => ({

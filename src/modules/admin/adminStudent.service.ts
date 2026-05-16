@@ -2450,12 +2450,16 @@ export const AdminStudentService = {
         }
 
         const result = await prisma.$transaction(async (tx) => {
+            // Year-tag the allocation with the active academic year (NULL if none).
+            let hostelAllocYearId: string | null = null;
+            try { hostelAllocYearId = (await getActiveAcademicYear(tx)).id; } catch { hostelAllocYearId = null; }
             await (tx.hostelAllocation as any).create({
                 data: {
                     studentId,
                     bedId,
                     startDate: new Date(),
                     status: 'ACTIVE',
+                    academicYearId: hostelAllocYearId,
                     createdBy: adminId
                 }
             });
@@ -2645,6 +2649,9 @@ export const AdminStudentService = {
 
         const allocated: any[] = [];
         await prisma.$transaction(async (tx) => {
+            // Resolve the active academic year once for the whole batch (NULL if none).
+            let hostelAllocYearId: string | null = null;
+            try { hostelAllocYearId = (await getActiveAcademicYear(tx)).id; } catch { hostelAllocYearId = null; }
             for (const { studentId, bed } of pairs) {
                 const student = studentMap.get(studentId)!;
 
@@ -2654,6 +2661,7 @@ export const AdminStudentService = {
                         bedId: bed.id,
                         startDate: new Date(),
                         status: 'ACTIVE',
+                        academicYearId: hostelAllocYearId,
                         createdBy: adminId
                     }
                 });

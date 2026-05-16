@@ -205,11 +205,14 @@ export const verifyStudentDocument = async (studentId: string, documentKey: stri
     return doc;
 };
 
-export const getStudentDocuments = async (studentId: string) => {
+// Pass `academicYearId` to return only that year's documents. Omit for all years.
+export const getStudentDocuments = async (studentId: string, academicYearId?: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         include: {
-            documents: true,
+            documents: academicYearId
+                ? { where: { academicYearId } }
+                : true,
             examDetails: true
         }
     });

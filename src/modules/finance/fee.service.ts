@@ -1429,27 +1429,33 @@ export const FeeService = {
     },
 
     // Get Full Ledger/Statement
-    getStudentFeeDetails: async (studentId: string) => {
-        logger.info(`[getStudentFeeDetails] Request for student=${studentId}`);
+    // Pass `academicYearId` to scope the whole fee picture (demands, payments,
+    // ledgers) to a single year. Omit it for the all-years view (legacy behavior).
+    getStudentFeeDetails: async (studentId: string, academicYearId?: string) => {
+        logger.info(`[getStudentFeeDetails] Request for student=${studentId}${academicYearId ? ` year=${academicYearId}` : ' (all years)'}`);
+        // When a year is given, filter strictly to it — legacy rows with a NULL
+        // academicYearId are intentionally excluded from a year-scoped view.
+        const yearFilter = academicYearId ? { academicYearId } : {};
         const demands: any[] = await prisma.studentFeeDemand.findMany({
-            where: { studentId },
-            include: { 
+            where: { studentId, ...yearFilter },
+            include: {
                 feeStructure: { include: { feeHead: true } },
                 feeHead: true // Include direct feeHead relation
             } as any
         });
 
         const payments = await prisma.payment.findMany({
-            where: { studentId, status: 'SUCCESS' }
+            where: { studentId, status: 'SUCCESS', ...yearFilter }
         });
-        
+
         logger.debug(`[getStudentFeeDetails] Found ${demands.length} demands and ${payments.length} successful payments.`);
 
         // Fetch Discounts/Scholarships from Ledger (Net of Credits and Debits)
         const scholarshipLedgers = await prisma.studentLedger.findMany({
-            where: { 
-                studentId, 
-                referenceType: { in: ['SCHOLARSHIP', 'DISCOUNT'] }
+            where: {
+                studentId,
+                referenceType: { in: ['SCHOLARSHIP', 'DISCOUNT'] },
+                ...yearFilter
             }
         });
 
@@ -1539,9 +1545,10 @@ export const FeeService = {
 
         // Map Ledger Adjustments (Fee Transfers/Deductions like Course Change Fees)
         const adjustmentLedgers = await prisma.studentLedger.findMany({
-            where: { 
-                studentId, 
-                referenceType: 'COURSE_CHANGE' 
+            where: {
+                studentId,
+                referenceType: 'COURSE_CHANGE',
+                ...yearFilter
             }
         });
 
