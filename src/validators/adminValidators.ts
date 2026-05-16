@@ -380,7 +380,10 @@ export const createAcademicYearSchema = z.object({
         startDate: z.string().datetime().or(z.date()),
         endDate: z.string().datetime().or(z.date()),
         isActive: z.boolean().optional(),
-    }),
+    }).refine(
+        (d) => new Date(d.endDate) > new Date(d.startDate),
+        { message: "endDate must be after startDate", path: ["endDate"] }
+    ),
 });
 
 const PAYMENT_COMPONENT_ENUM = [

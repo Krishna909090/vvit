@@ -452,14 +452,25 @@ export const AcademicService = {
             throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_EXISTS, 409);
         }
 
-        return await prisma.academicYear.create({
-            data: {
-                code,
-                startDate: new Date(startDate),
-                endDate: new Date(endDate),
-                isActive: isActive !== undefined ? isActive : true,
-                createdBy
+        const shouldActivate = isActive !== undefined ? isActive : true;
+
+        return await prisma.$transaction(async (tx) => {
+            if (shouldActivate) {
+                await tx.academicYear.updateMany({
+                    where: { isActive: true },
+                    data: { isActive: false }
+                });
             }
+
+            return tx.academicYear.create({
+                data: {
+                    code,
+                    startDate: new Date(startDate),
+                    endDate: new Date(endDate),
+                    isActive: shouldActivate,
+                    createdBy
+                }
+            });
         });
     },
 
@@ -485,11 +496,94 @@ export const AcademicService = {
         });
     },
 
-    async deleteAcademicYear(id: string) {
+    /**
+     * Soft-delete an academic year — heavily guarded.
+     *
+     * An AcademicYear is referenced by ~19 tables (admissions, enrollments, fee
+     * demands, payments, ledger, corrections, pricing, capacities, marks,
+     * attendance, ...). Deleting a year that has real data would orphan all of it
+     * and corrupt every year-scoped report and metric. So this is allowed ONLY when:
+     *   - the year is not already deleted
+     *   - the year is not the active year
+     *   - the year is not locked (a locked year is a closed financial period)
+     *   - the year has ZERO student data (admissions / enrollments / demands /
+     *     payments / ledger / corrections / marks / attendance / allocations)
+     *
+     * Config-only leftovers (FeeStructure / HostelPriceCategory / TransportRouteYearlyPrice
+     * / CourseCapacity) do NOT block deletion — a year that was set up but never
+     * admitted into is safe to remove. Those rows are filtered out of every picker
+     * by the year's isDeleted flag.
+     */
+    async deleteAcademicYear(id: string, adminId?: string) {
         const academicYear = await prisma.academicYear.findUnique({ where: { id } });
         if (!academicYear) throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_NOT_FOUND, 404);
+        if (academicYear.isDeleted) throw new AppError('Academic year is already deleted', 400);
 
-        return await prisma.academicYear.update({ where: { id }, data: { isDeleted: true } });
+        // The active year is the system's current context — never deletable.
+        if (academicYear.isActive) {
+            throw new AppError(
+                `Cannot delete the active academic year "${academicYear.code}". Mark another year active first.`,
+                409
+            );
+        }
+        // A locked year is a closed financial period — its books are sealed.
+        if (academicYear.isLocked) {
+            throw new AppError(
+                `Cannot delete locked academic year "${academicYear.code}" — it is a closed financial period.`,
+                423
+            );
+        }
+
+        // Count every student-data dependent. ANY non-zero count blocks deletion.
+        const [
+            admissions, admissionsEntry, enrollments, demands, payments,
+            ledger, corrections, marks, attendance,
+            hostelAllocations, transportAllocations, scholarships, studentDocuments,
+        ] = await Promise.all([
+            prisma.studentAdmission.count({ where: { academicYearId: id } }),
+            prisma.studentAdmission.count({ where: { entryAcademicYearId: id } }),
+            prisma.studentEnrollment.count({ where: { academicYearId: id } }),
+            prisma.studentFeeDemand.count({ where: { academicYearId: id } }),
+            prisma.payment.count({ where: { academicYearId: id } }),
+            prisma.studentLedger.count({ where: { academicYearId: id } }),
+            (prisma as any).feeCorrection.count({ where: { academicYearId: id } }),
+            (prisma as any).semesterMark.count({ where: { academicYearId: id } }),
+            (prisma as any).classAttendance.count({ where: { academicYearId: id } }),
+            (prisma as any).hostelAllocation.count({ where: { academicYearId: id } }),
+            (prisma as any).transportAllocation.count({ where: { academicYearId: id } }),
+            (prisma as any).studentScholarship.count({ where: { academicYearId: id } }),
+            (prisma as any).studentDocument.count({ where: { academicYearId: id } }),
+        ]);
+
+        const blockers: string[] = [];
+        if (admissions)           blockers.push(`${admissions} admission(s)`);
+        if (admissionsEntry)      blockers.push(`${admissionsEntry} entry-year admission(s)`);
+        if (enrollments)          blockers.push(`${enrollments} enrollment(s)`);
+        if (demands)              blockers.push(`${demands} fee demand(s)`);
+        if (payments)             blockers.push(`${payments} payment(s)`);
+        if (ledger)               blockers.push(`${ledger} ledger entr(ies)`);
+        if (corrections)          blockers.push(`${corrections} fee correction(s)`);
+        if (marks)                blockers.push(`${marks} semester mark(s)`);
+        if (attendance)           blockers.push(`${attendance} attendance record(s)`);
+        if (hostelAllocations)    blockers.push(`${hostelAllocations} hostel allocation(s)`);
+        if (transportAllocations) blockers.push(`${transportAllocations} transport allocation(s)`);
+        if (scholarships)         blockers.push(`${scholarships} scholarship(s)`);
+        if (studentDocuments)     blockers.push(`${studentDocuments} student document(s)`);
+
+        if (blockers.length > 0) {
+            throw new AppError(
+                `Cannot delete academic year "${academicYear.code}" — it has real data: ` +
+                blockers.join(', ') + '. Deleting would orphan these records and corrupt ' +
+                'year-scoped reports, payments and metrics. If the year is over, ' +
+                'lock it (isLocked=true) instead of deleting.',
+                409
+            );
+        }
+
+        return await prisma.academicYear.update({
+            where: { id },
+            data: { isDeleted: true, updatedBy: adminId },
+        });
     },
 
     // Batch — keyed by Course (cohort container)

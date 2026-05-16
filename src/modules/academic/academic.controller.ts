@@ -232,9 +232,9 @@ export const updateAcademicYear = catchAsync(async (req: Request, res: Response,
 
 export const deleteAcademicYear = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    
-    await AcademicService.deleteAcademicYear(id);
-    
+
+    await AcademicService.deleteAcademicYear(id, req.user?.userId);
+
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.ACADEMIC_YEAR_DELETED });
 });
 
