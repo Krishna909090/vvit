@@ -211,9 +211,9 @@ export const createBatch = catchAsync(async (req: Request, res: Response, next: 
 });
 
 export const getBatches = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { courseId } = req.query;
+    const { courseId, academicYearId } = req.query;
 
-    const batches = await AcademicService.getBatches(courseId as string);
+    const batches = await AcademicService.getBatches(courseId as string, academicYearId as string);
 
     sendResponse({ res, statusCode: 200, success: true, data: batches });
 });
@@ -282,8 +282,8 @@ export const updateSection = catchAsync(async (req: Request, res: Response, next
 
 export const deleteSection = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    
-    await AcademicService.deleteSection(id);
-    
+
+    await AcademicService.deleteSection(id, req.user?.userId);
+
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.SECTION_DELETED });
 });

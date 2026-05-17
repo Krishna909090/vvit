@@ -594,14 +594,16 @@ export const AcademicService = {
         });
     },
 
-    async getBatches(courseId?: string) {
+    async getBatches(courseId?: string, academicYearId?: string) {
         const where: any = { isDeleted: false };
-        if (courseId) where.courseId = String(courseId);
+        if (courseId)       where.courseId       = String(courseId);
+        if (academicYearId) where.academicYearId = String(academicYearId);
 
         const batches = await prisma.batch.findMany({
             where,
             include: {
-                course: { select: { id: true, code: true, name: true, degree: true } },
+                course:       { select: { id: true, code: true, name: true, degree: true } },
+                academicYear: { select: { id: true, code: true } },
             },
             orderBy: { startDate: 'desc' }
         });
@@ -784,10 +786,27 @@ export const AcademicService = {
         });
     },
 
-    async deleteSection(id: string) {
+    /**
+     * Soft-delete a section — refused if any student is enrolled in it.
+     * Deleting a section with students would orphan their enrollment records.
+     */
+    async deleteSection(id: string, adminId?: string) {
         const section = await prisma.section.findUnique({ where: { id } });
         if (!section) throw new AppError(MESSAGES.ERROR.SECTION_NOT_FOUND, 404);
+        if (section.isDeleted) throw new AppError('Section is already deleted', 400);
 
-        return await prisma.section.update({ where: { id }, data: { isDeleted: true } });
+        const enrolled = await prisma.studentEnrollment.count({ where: { sectionId: id } });
+        if (enrolled > 0) {
+            throw new AppError(
+                `Cannot delete section "${section.name}" — ${enrolled} student enrollment(s) exist in it. ` +
+                `Reassign or remove those students first.`,
+                409
+            );
+        }
+
+        return await prisma.section.update({
+            where: { id },
+            data: { isDeleted: true, updatedBy: adminId },
+        });
     }
 };
