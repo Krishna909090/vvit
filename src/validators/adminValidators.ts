@@ -315,6 +315,7 @@ export const createBatchSchema = z.object({
     body: z.object({
         name: z.string().min(1),
         courseId: z.string().uuid('Invalid Course ID'),
+        academicYearId: z.string().uuid('Invalid Academic Year ID'),
         startDate: z.coerce.date(),
         endDate: z.coerce.date(),
     }),

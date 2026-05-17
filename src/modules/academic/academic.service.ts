@@ -547,6 +547,7 @@ export const AcademicService = {
     async createBatch(
         name: string,
         courseId: string,
+        academicYearId: string,
         startDate: string,
         endDate: string,
         createdBy?: string,
@@ -554,10 +555,19 @@ export const AcademicService = {
         if (!courseId) {
             throw new AppError("courseId is required", 400);
         }
+        if (!academicYearId) {
+            throw new AppError("academicYearId is required", 400);
+        }
 
-        const course = await prisma.course.findUnique({ where: { id: courseId } });
+        const [course, academicYear] = await Promise.all([
+            prisma.course.findUnique({ where: { id: courseId } }),
+            prisma.academicYear.findUnique({ where: { id: academicYearId } }),
+        ]);
         if (!course || course.isDeleted) {
             throw new AppError("Course not found", 404);
+        }
+        if (!academicYear || academicYear.isDeleted) {
+            throw new AppError("Academic year not found", 404);
         }
 
         const existingBatch = await prisma.batch.findFirst({
@@ -576,6 +586,7 @@ export const AcademicService = {
             data: {
                 name,
                 courseId,
+                academicYearId,
                 startDate: new Date(startDate),
                 endDate: new Date(endDate),
                 createdBy
@@ -587,13 +598,37 @@ export const AcademicService = {
         const where: any = { isDeleted: false };
         if (courseId) where.courseId = String(courseId);
 
-        return await prisma.batch.findMany({
+        const batches = await prisma.batch.findMany({
             where,
             include: {
                 course: { select: { id: true, code: true, name: true, degree: true } },
             },
             orderBy: { startDate: 'desc' }
         });
+
+        if (batches.length === 0) return [];
+
+        // Count DISTINCT students currently in each batch. A student gets one
+        // StudentEnrollment row per academic year (year promotion reuses the
+        // section), so counting raw rows would multi-count across years —
+        // COUNT(DISTINCT "studentId") gives the true headcount.
+        // Counts ACTIVE + DETAINED (detained students are held back but still in
+        // college); excludes SUSPENDED, DROPPED and COMPLETED.
+        const batchIds = batches.map(b => b.id);
+        const counts = await prisma.$queryRaw<{ batchId: string; count: bigint }[]>`
+            SELECT s."batchId" AS "batchId", COUNT(DISTINCT e."studentId") AS count
+              FROM "StudentEnrollment" e
+              JOIN "Section" s ON s.id = e."sectionId"
+             WHERE s."batchId" = ANY(${batchIds})
+               AND e."status" IN ('ACTIVE', 'DETAINED')
+             GROUP BY s."batchId"
+        `;
+        const countMap = new Map(counts.map(c => [c.batchId, Number(c.count)]));
+
+        return batches.map(b => ({
+            ...b,
+            studentCount: countMap.get(b.id) ?? 0,
+        }));
     },
 
     async getBatchById(id: string) {
@@ -607,7 +642,15 @@ export const AcademicService = {
         return batch;
     },
 
-    async updateBatch(id: string, name: string, courseId: string | undefined, startDate: string, endDate: string, updatedBy?: string) {
+    async updateBatch(
+        id: string,
+        name: string,
+        courseId: string | undefined,
+        academicYearId: string | undefined,
+        startDate: string,
+        endDate: string,
+        updatedBy?: string,
+    ) {
         const batch = await prisma.batch.findUnique({ where: { id } });
         if (!batch) throw new AppError(MESSAGES.ERROR.BATCH_NOT_FOUND, 404);
 
@@ -616,17 +659,46 @@ export const AcademicService = {
         if (startDate) data.startDate = new Date(startDate);
         if (endDate)   data.endDate   = new Date(endDate);
 
+        if (academicYearId) {
+            const academicYear = await prisma.academicYear.findUnique({ where: { id: academicYearId } });
+            if (!academicYear || academicYear.isDeleted) {
+                throw new AppError("Academic year not found", 404);
+            }
+            data.academicYearId = academicYearId;
+        }
+
         return await prisma.batch.update({
             where: { id },
             data
         });
     },
 
-    async deleteBatch(id: string) {
+    /**
+     * Soft-delete a batch — refused if any student is enrolled in one of its
+     * sections. Deleting a batch with students would orphan their enrollment
+     * records and break batch-scoped reports.
+     */
+    async deleteBatch(id: string, adminId?: string) {
         const batch = await prisma.batch.findUnique({ where: { id } });
         if (!batch) throw new AppError(MESSAGES.ERROR.BATCH_NOT_FOUND, 404);
+        if (batch.isDeleted) throw new AppError('Batch is already deleted', 400);
 
-        return await prisma.batch.update({ where: { id }, data: { isDeleted: true } });
+        // Students attach to a batch via its sections (Section → StudentEnrollment).
+        const enrolled = await prisma.studentEnrollment.count({
+            where: { section: { batchId: id } },
+        });
+        if (enrolled > 0) {
+            throw new AppError(
+                `Cannot delete batch "${batch.name}" — ${enrolled} student enrollment(s) exist in its sections. ` +
+                `Reassign or remove those students first.`,
+                409
+            );
+        }
+
+        return await prisma.batch.update({
+            where: { id },
+            data: { isDeleted: true, updatedBy: adminId },
+        });
     },
 
     // Section

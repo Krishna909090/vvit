@@ -438,6 +438,7 @@ export function getEnrollmentStatusLabel(status: EnrollmentStatus): string {
   const labels: Record<EnrollmentStatus, string> = {
     ACTIVE: 'Active',
     SUSPENDED: 'Suspended',
+    DETAINED: 'Detained',
     DROPPED: 'Dropped Out',
     COMPLETED: 'Graduated'
   };

@@ -196,10 +196,10 @@ export const deleteAcademicYear = catchAsync(async (req: Request, res: Response,
 
 // Batch
 export const createBatch = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { name, courseId, startDate, endDate } = req.body;
+    const { name, courseId, academicYearId, startDate, endDate } = req.body;
     const adminId = req.user?.userId;
 
-    const batch = await AcademicService.createBatch(name, courseId, startDate, endDate, adminId);
+    const batch = await AcademicService.createBatch(name, courseId, academicYearId, startDate, endDate, adminId);
 
     sendResponse({
         res,
@@ -226,18 +226,18 @@ export const getBatchById = catchAsync(async (req: Request, res: Response, next:
 
 export const updateBatch = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { name, courseId, startDate, endDate } = req.body;
+    const { name, courseId, academicYearId, startDate, endDate } = req.body;
 
-    const updatedBatch = await AcademicService.updateBatch(id, name, courseId, startDate, endDate, req.user?.userId);
+    const updatedBatch = await AcademicService.updateBatch(id, name, courseId, academicYearId, startDate, endDate, req.user?.userId);
 
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.BATCH_UPDATED, data: updatedBatch });
 });
 
 export const deleteBatch = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    
-    await AcademicService.deleteBatch(id);
-    
+
+    await AcademicService.deleteBatch(id, req.user?.userId);
+
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.BATCH_DELETED });
 });
 

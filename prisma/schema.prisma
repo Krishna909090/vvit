@@ -126,13 +126,20 @@ model Batch {
   startDate        DateTime
   endDate          DateTime
   courseId         String
+  // The academic year the batch (cohort) was admitted in — its entry year.
+  // Nullable for backward compatibility with batches created before this field;
+  // new batches always set it (createBatch requires it).
+  academicYearId   String?
   createdAt        DateTime?  @default(now())
   updatedAt        DateTime   @updatedAt
   createdBy        String?
   updatedBy        String?
   isDeleted        Boolean?   @default(false)
-  course           Course     @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course           Course        @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear     AcademicYear? @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections         Section[]
+
+  @@index([academicYearId])
 }
 
 model Section {
@@ -179,6 +186,7 @@ model AcademicYear {
   studentScholarships       StudentScholarship[]
   hostelAllocations         HostelAllocation[]
   transportAllocations      TransportAllocation[]
+  batches                   Batch[]
 }
 
 model StudentEnrollment {
@@ -1372,10 +1380,11 @@ enum AdmissionEntryType {
 }
 
 enum EnrollmentStatus {
-  ACTIVE
-  SUSPENDED
-  DROPPED
-  COMPLETED
+  ACTIVE      // normally progressing
+  SUSPENDED   // disciplinary suspension
+  DETAINED    // academically held back (attendance shortage / backlogs) — repeats the year, still in college
+  DROPPED     // left / dropped out of college
+  COMPLETED   // finished the program
 }
 
 enum AdmissionSource {
