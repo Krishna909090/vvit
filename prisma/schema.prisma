@@ -93,7 +93,6 @@ model Course {
   omrId            Int?               @unique
   department       Department         @relation(fields: [departmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeStructures    FeeStructure[]
-  specializations  Specialization[]
   studentsPref1    Student[]          @relation("Pref1")
   studentsPref2    Student[]          @relation("Pref2")
   studentsPref3    Student[]          @relation("Pref3")
@@ -397,20 +396,6 @@ model StudentDocument {
 
   @@unique([studentId, documentKey])
   @@index([academicYearId])
-}
-
-model Specialization {
-  id          String    @id @default(dbgenerated("gen_random_uuid()"))
-  code        String?
-  name        String
-  courseId    String
-  createdAt   DateTime? @default(now())
-  updatedAt   DateTime  @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  isDeleted   Boolean?  @default(false)
-  course      Course    @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  subjects    Subject[]
 }
 
 model Hostel {
@@ -1631,15 +1616,13 @@ model PRO {
   students Student[]
 }
 
-// Subject — curriculum unit offered by (Course, Specialization?, Semester).
-// One row per subject in the course catalog. specializationId=null means the
-// subject is shared across all specializations of the course.
+// Subject — curriculum unit offered by (Course, Semester).
+// One row per subject in the course catalog.
 model Subject {
   id                String           @id @default(dbgenerated("gen_random_uuid()"))
   code              String
   name              String
   courseId          String
-  specializationId  String?
   semester          Int
   credits           Float            @default(0)
   examType          SubjectExamType  @default(THEORY)
@@ -1653,13 +1636,11 @@ model Subject {
   createdBy         String?
   updatedBy         String?
   course            Course           @relation(fields: [courseId],         references: [id], onDelete: NoAction, onUpdate: NoAction)
-  specialization    Specialization?  @relation(fields: [specializationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   marks             SemesterMark[]
   classAttendance   ClassAttendance[]
 
-  @@unique([courseId, specializationId, semester, code])
+  @@unique([courseId, semester, code])
   @@index([courseId, semester])
-  @@index([specializationId, semester])
 }
 
 // SemesterMark — student's marks for a (subject, academicYear, attempt).

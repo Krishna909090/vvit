@@ -6,13 +6,13 @@ import {
     createSchool, getSchools, getSchoolById, updateSchool, deleteSchool,
     createDepartment, getDepartments, getDepartmentById, updateDepartment, deleteDepartment,
     createCourse, getCourses, getCourseById, updateCourse, deleteCourse, getDegrees,
-    createSpecialization, getSpecializations, getSpecializationById, updateSpecialization, deleteSpecialization, getSeatStatus,
+    getSeatStatus,
     createBatch, getBatches, getBatchById, updateBatch, deleteBatch,
     createSection, getSections, getSectionById, updateSection, deleteSection
 } from './academic.controller';
 import {
     createAcademicYearSchema, createSchoolSchema, createDepartmentSchema,
-    createCourseSchema, createSpecializationSchema, createBatchSchema, createSectionSchema,
+    createCourseSchema, createBatchSchema, createSectionSchema,
     createCourseCapacitySchema, upsertCourseCapacitySchema,
     bulkUpsertCourseCapacitySchema, updateCourseCapacitySchema,
 } from '../../validators/adminValidators';
@@ -215,68 +215,23 @@ router.put('/course/:id', authenticate, authorizePermission('academic.update.all
 /**
  * @route   DELETE /course/:id
  * @desc    Permanently delete a course.
- * @side    Removes the course record; may cascade to child specializations.
+ * @side    Removes the course record; may cascade to child batches.
  * @params  id - UUID of the course to delete.
  * @returns 200 - { success: true, message: string }
  */
 router.delete('/course/:id', authenticate, authorizePermission('academic.delete.all'), deleteCourse);
 
 // ═══════════════════════════════════════════════════════════
-//  SPECIALIZATION ROUTES
+//  SEAT STATUS
 // ═══════════════════════════════════════════════════════════
 
 /**
- * @route   POST /specialization
- * @desc    Create a new specialization (branch) under a course with seat allocation.
- * @side    Inserts a specialization record linked to the given course.
- * @body    { code: string, name: string, totalSeats: number, courseId: string }
- * @returns 201 - { success: true, message: string, data: Specialization }
- */
-router.post('/specialization', authenticate, authorizePermission('academic.create.all'), validateRequest(createSpecializationSchema), createSpecialization);
-
-/**
- * @route   GET /specialization/check-seat-status
- * @desc    Retrieve seat availability status across all specializations (filled vs total).
+ * @route   GET /seat-status
+ * @desc    Retrieve seat availability status across all courses (filled vs total).
  * @side    None (read-only).
  * @returns 200 - { success: true, data: SeatStatus[] }
  */
-router.get('/specialization/check-seat-status', authenticate, authorizePermission(['academic.read.all', 'student.create.own', 'student.create.all']), getSeatStatus);
-
-/**
- * @route   GET /specialization
- * @desc    Retrieve all specializations.
- * @side    None (read-only).
- * @returns 200 - { success: true, data: Specialization[] }
- */
-router.get('/specialization', authenticate, authorizePermission(['academic.read.all', 'student.create.own', 'student.create.all']), getSpecializations);
-
-/**
- * @route   GET /specialization/:id
- * @desc    Retrieve a single specialization by its ID.
- * @side    None (read-only).
- * @params  id - UUID of the specialization.
- * @returns 200 - { success: true, data: Specialization }
- */
-router.get('/specialization/:id', authenticate, authorizePermission(['academic.read.all', 'student.create.own', 'student.create.all']), getSpecializationById);
-
-/**
- * @route   PUT /specialization/:id
- * @desc    Update a specialization's code, name, or total seats.
- * @side    Mutates the specialization record in the database.
- * @params  id - UUID of the specialization to update.
- * @body    { code?: string, name?: string, totalSeats?: number }
- * @returns 200 - { success: true, message: string, data: Specialization }
- */
-router.put('/specialization/:id', authenticate, authorizePermission('academic.update.all'), updateSpecialization);
-
-/**
- * @route   DELETE /specialization/:id
- * @desc    Permanently delete a specialization.
- * @side    Removes the specialization record; may cascade to child batches.
- * @params  id - UUID of the specialization to delete.
- * @returns 200 - { success: true, message: string }
- */
-router.delete('/specialization/:id', authenticate, authorizePermission('academic.delete.all'), deleteSpecialization);
+router.get('/seat-status', authenticate, authorizePermission(['academic.read.all', 'student.create.own', 'student.create.all']), getSeatStatus);
 
 // ═══════════════════════════════════════════════════════════
 //  BATCH ROUTES
@@ -284,18 +239,18 @@ router.delete('/specialization/:id', authenticate, authorizePermission('academic
 
 /**
  * @route   POST /batch
- * @desc    Create a new batch (intake group) under a specialization with a date range.
- * @side    Inserts a batch record linked to the given specialization.
- * @body    { name: string, specializationId: string, startDate: string, endDate: string }
+ * @desc    Create a new batch (intake group) under a course with a date range.
+ * @side    Inserts a batch record linked to the given course.
+ * @body    { name: string, courseId: string, startDate: string, endDate: string }
  * @returns 201 - { success: true, message: string, data: Batch }
  */
 router.post('/batch', authenticate, authorizePermission('academic.create.all'), validateRequest(createBatchSchema), createBatch);
 
 /**
  * @route   GET /batch
- * @desc    Retrieve batches, optionally filtered by specialization.
+ * @desc    Retrieve batches, optionally filtered by course.
  * @side    None (read-only).
- * @query   specializationId? - UUID to filter batches by specialization.
+ * @query   courseId? - UUID to filter batches by course.
  * @returns 200 - { success: true, data: Batch[] }
  */
 router.get('/batch', authenticate, authorizePermission(['academic.read.all', 'student.create.own', 'student.create.all']), getBatches);
@@ -311,10 +266,10 @@ router.get('/batch/:id', authenticate, authorizePermission(['academic.read.all',
 
 /**
  * @route   PUT /batch/:id
- * @desc    Update a batch's name, specialization, or date range.
+ * @desc    Update a batch's name, course, or date range.
  * @side    Mutates the batch record in the database.
  * @params  id - UUID of the batch to update.
- * @body    { name?: string, specializationId?: string, startDate?: string, endDate?: string }
+ * @body    { name?: string, courseId?: string, startDate?: string, endDate?: string }
  * @returns 200 - { success: true, message: string, data: Batch }
  */
 router.put('/batch/:id', authenticate, authorizePermission('academic.update.all'), updateBatch);

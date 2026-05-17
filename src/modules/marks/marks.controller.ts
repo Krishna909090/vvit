@@ -14,10 +14,9 @@ export const createSubject = catchAsync(async (req: Request, res: Response, _nex
 });
 
 export const listSubjects = catchAsync(async (req: Request, _res: Response, _next: NextFunction) => {
-    const { courseId, specializationId, semester, examType, isElective } = req.query as any;
+    const { courseId, semester, examType, isElective } = req.query as any;
     const subjects = await MarksService.listSubjects({
         courseId,
-        specializationId: specializationId === 'null' ? null : specializationId,
         semester:   semester    ? parseInt(semester, 10)        : undefined,
         examType,
         isElective: isElective !== undefined ? isElective === 'true' : undefined,
@@ -82,11 +81,11 @@ export const getStudentMarks = catchAsync(async (req: Request, res: Response, _n
 });
 
 export const getSemesterMarks = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
-    const { academicYearId, semester, subjectId, status, courseId, specializationId } = req.query as any;
+    const { academicYearId, semester, subjectId, status, courseId } = req.query as any;
     const data = await MarksService.getSemesterMarks(
         academicYearId,
         parseInt(semester, 10),
-        { subjectId, status, courseId, specializationId }
+        { subjectId, status, courseId }
     );
     sendResponse({ res, statusCode: 200, success: true, data });
 });

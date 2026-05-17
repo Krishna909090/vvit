@@ -19,10 +19,10 @@ const router = Router();
 
 /**
  * POST /admin/marks/subjects
- * Create a curriculum subject under (Course, Specialization?, Semester).
- * Body: { code, name, courseId, specializationId?, semester, credits?, examType?,
+ * Create a curriculum subject under (Course, Semester).
+ * Body: { code, name, courseId, semester, credits?, examType?,
  *         maxInternalMarks?, maxExternalMarks?, maxTotalMarks?, isElective? }
- * Conflict: returns 409 if (courseId, specializationId, semester, code) exists.
+ * Conflict: returns 409 if (courseId, semester, code) exists.
  */
 router.post('/subjects',
     authenticate, authorizePermission('academic.create.all'),
@@ -30,8 +30,7 @@ router.post('/subjects',
 
 /**
  * GET /admin/marks/subjects
- * List subjects. Query: { courseId?, specializationId?, semester?, examType?, isElective? }
- * Pass `specializationId=null` (string) to filter for shared-across-specializations subjects.
+ * List subjects. Query: { courseId?, semester?, examType?, isElective? }
  */
 router.get('/subjects',
     authenticate, authorizePermission('academic.read.all'),
@@ -39,7 +38,7 @@ router.get('/subjects',
 
 /**
  * PUT /admin/marks/subjects/:id
- * Update a subject. Cannot change (courseId, specializationId, semester) — create a new one.
+ * Update a subject. Cannot change (courseId, semester) — create a new one.
  */
 router.put('/subjects/:id',
     authenticate, authorizePermission('academic.update.all'),
@@ -111,7 +110,7 @@ router.get('/student/:studentId',
 /**
  * GET /admin/marks/semester
  * Marks roll for (academicYearId, semester) — admin view of all students.
- * Query: { academicYearId, semester, subjectId?, status?, courseId?, specializationId? }
+ * Query: { academicYearId, semester, subjectId?, status?, courseId? }
  */
 router.get('/semester',
     authenticate, authorizePermission('academic.read.all'),

@@ -222,7 +222,7 @@ export const AcademicService = {
 
         const courses = await prisma.course.findMany({
             where,
-            include: { department: true, specializations: true }
+            include: { department: true }
         });
         return courses.map((c: any) => ({
             ...c,
@@ -231,7 +231,7 @@ export const AcademicService = {
         }));
     },
 
-    async getDegrees() {
+    async  getDegrees() {
         const result = await prisma.course.findMany({
             select: { degree: true },
             distinct: ['degree'],
@@ -249,7 +249,7 @@ export const AcademicService = {
     async getCourseById(id: string) {
         const course = await prisma.course.findUnique({
             where: { id },
-            include: { department: true, specializations: true }
+            include: { department: true }
         });
         if (!course) throw new AppError("Course not found", 404);
         return course;
@@ -310,82 +310,6 @@ export const AcademicService = {
         if (!course) throw new AppError("Course not found", 404);
 
         return await prisma.course.update({ where: { id }, data: { isDeleted: true } });
-    },
-
-    // Specialization
-    async createSpecialization(code: string, name: string, courseId: string, createdBy?: string) {
-        if (!code || !name || !courseId) throw new AppError('code, name and courseId are required', 400);
-
-        const course = await prisma.course.findUnique({ where: { id: courseId } });
-        if (!course) {
-            throw new AppError("Course (Specialization Parent) not found", 404);
-        }
-
-        const existingSpecialization = await prisma.specialization.findFirst({ where: { code, isDeleted: false } });
-        if (existingSpecialization) {
-            throw new AppError("Specialization code exists", 409);
-        }
-
-        return await prisma.specialization.create({
-            data: {
-                code,
-                name,
-                courseId,
-                createdBy
-            }
-        });
-    },
-
-    async getSpecializations() {
-        const specs = await prisma.specialization.findMany({
-            where: { isDeleted: false },
-            include: { course: true }
-        });
-        return specs.map(s => ({
-            ...s,
-            courseName: s.course.name,
-            course: undefined
-        }));
-    },
-
-    async getSpecializationById(id: string) {
-        const specialization = await prisma.specialization.findUnique({
-            where: { id },
-            include: { course: { include: { department: true } } }
-        });
-        if (!specialization) throw new AppError("Specialization not found", 404);
-        return specialization;
-    },
-
-    async updateSpecialization(id: string, code: string, name: string, updatedBy?: string) {
-        const specialization = await prisma.specialization.findUnique({ where: { id } });
-        if (!specialization) throw new AppError("Specialization not found", 404);
-
-        const newCode = code !== undefined ? code : specialization.code;
-        const newName = name !== undefined ? name : specialization.name;
-
-        if (
-            specialization.code === newCode &&
-            specialization.name === newName
-        ) {
-            throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
-        }
-
-        return await prisma.specialization.update({
-            where: { id },
-            data: {
-                code: newCode,
-                name: newName,
-                updatedBy
-            }
-        });
-    },
-
-    async deleteSpecialization(id: string) {
-        const specialization = await prisma.specialization.findUnique({ where: { id } });
-        if (!specialization) throw new AppError("Specialization not found", 404);
-
-        return await prisma.specialization.update({ where: { id }, data: { isDeleted: true } });
     },
 
     async getSeatStatus(academicYearId?: string) {

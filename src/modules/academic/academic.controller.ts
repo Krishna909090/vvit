@@ -147,58 +147,14 @@ export const deleteCourse = catchAsync(async (req: Request, res: Response, next:
     sendResponse({ res, statusCode: 200, success: true, message: "Course deleted successfully" });
 });
 
-// Specialization
-export const createSpecialization = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { code, name, courseId } = req.body;
-    const adminId = req.user?.userId;
-
-    const specialization = await AcademicService.createSpecialization(code, name, courseId, adminId);
-    
-    sendResponse({
-        res,
-        statusCode: 201,
-        success: true,
-        message: "Specialization created successfully",
-        data: specialization
-    });
-});
-
-export const getSpecializations = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const specializations = await AcademicService.getSpecializations();
-    sendResponse({ res, statusCode: 200, success: true, data: specializations });
-});
-
 export const getSeatStatus = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const seatStatus = await AcademicService.getSeatStatus();
-    sendResponse({ 
-        res, 
-        statusCode: 200, 
-        success: true, 
-        data: seatStatus 
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        data: seatStatus
     });
-});
-
-export const getSpecializationById = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { id } = req.params;
-    const specialization = await AcademicService.getSpecializationById(id);
-    sendResponse({ res, statusCode: 200, success: true, data: specialization });
-});
-
-export const updateSpecialization = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { id } = req.params;
-    const { code, name } = req.body;
-
-    const updatedSpecialization = await AcademicService.updateSpecialization(id, code, name, req.user?.userId);
-    
-    sendResponse({ res, statusCode: 200, success: true, message: "Specialization updated successfully", data: updatedSpecialization });
-});
-
-export const deleteSpecialization = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { id } = req.params;
-    
-    await AcademicService.deleteSpecialization(id);
-    
-    sendResponse({ res, statusCode: 200, success: true, message: "Specialization deleted successfully" });
 });
 
 // Academic Year

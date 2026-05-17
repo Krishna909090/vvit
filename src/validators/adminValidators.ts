@@ -283,14 +283,6 @@ export const getAgentCommissionsSchema = z.object({
     }),
 });
 
-export const createSpecializationSchema = z.object({
-    body: z.object({
-        code: z.string().min(1, "code is required"),
-        name: z.string().min(1, "name is required"),
-        courseId: z.string().uuid("This refers to Course ID"),
-    }),
-});
-
 // ERP Schemas
 
 // Academics
@@ -581,7 +573,6 @@ export const createSubjectSchema = z.object({
         code:             z.string().min(1).max(32),
         name:             z.string().min(1),
         courseId:         z.string().uuid(),
-        specializationId: z.string().uuid().nullable().optional(),
         semester:         z.number().int().min(1).max(12),
         credits:          z.number().min(0).max(20).optional(),
         examType:         z.nativeEnum(SubjectExamType).optional(),

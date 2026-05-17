@@ -63,7 +63,6 @@ export const MarksService = {
             code:             string;
             name:             string;
             courseId:         string;
-            specializationId?: string | null;
             semester:         number;
             credits?:         number;
             examType?:        SubjectExamType;
@@ -79,27 +78,18 @@ export const MarksService = {
         const course = await prisma.course.findUnique({ where: { id: data.courseId } });
         if (!course) throw new AppError('Course not found', 404);
 
-        if (data.specializationId) {
-            const spec = await prisma.specialization.findUnique({ where: { id: data.specializationId } });
-            if (!spec) throw new AppError('Specialization not found', 404);
-            if (spec.courseId !== data.courseId) {
-                throw new AppError('Specialization does not belong to the provided course', 400);
-            }
-        }
-
-        // Idempotency: schema has @@unique on (courseId, specializationId, semester, code).
+        // Idempotency: schema has @@unique on (courseId, semester, code).
         // Surface a clean 409 instead of a P2002 stack trace.
         const dup = await prisma.subject.findFirst({
             where: {
                 courseId:         data.courseId,
-                specializationId: data.specializationId ?? null,
                 semester:         data.semester,
                 code:             data.code,
                 isDeleted:        false,
             }
         });
         if (dup) {
-            throw new AppError(`Subject ${data.code} already exists for this course/specialization/semester`, 409);
+            throw new AppError(`Subject ${data.code} already exists for this course/semester`, 409);
         }
 
         return prisma.subject.create({
@@ -107,7 +97,6 @@ export const MarksService = {
                 code:             data.code,
                 name:             data.name,
                 courseId:         data.courseId,
-                specializationId: data.specializationId ?? null,
                 semester:         data.semester,
                 credits:          data.credits ?? 0,
                 examType:         data.examType ?? 'THEORY',
@@ -123,7 +112,6 @@ export const MarksService = {
 
     listSubjects: async (filters: {
         courseId?:         string;
-        specializationId?: string | null;
         semester?:         number;
         examType?:         SubjectExamType;
         isElective?:       boolean;
@@ -133,15 +121,12 @@ export const MarksService = {
         if (filters.semester)         where.semester = filters.semester;
         if (filters.examType)         where.examType = filters.examType;
         if (filters.isElective !== undefined) where.isElective = filters.isElective;
-        // null = explicitly "shared across specializations"; undefined = no filter
-        if (filters.specializationId !== undefined) where.specializationId = filters.specializationId;
 
         return prisma.subject.findMany({
             where,
             orderBy: [{ semester: 'asc' }, { code: 'asc' }],
             include: {
                 course:         { select: { id: true, name: true, code: true } },
-                specialization: { select: { id: true, name: true, code: true } },
             }
         });
     },
@@ -468,15 +453,13 @@ export const MarksService = {
     getSemesterMarks: async (
         academicYearId: string,
         semester: number,
-        filters?: { subjectId?: string; status?: SemesterMarkStatus; courseId?: string; specializationId?: string }
+        filters?: { subjectId?: string; status?: SemesterMarkStatus; courseId?: string }
     ) => {
         const where: any = { academicYearId, semester, isDeleted: false };
         if (filters?.subjectId) where.subjectId = filters.subjectId;
         if (filters?.status)    where.status    = filters.status;
-        if (filters?.courseId || filters?.specializationId) {
-            where.subject = {};
-            if (filters.courseId)         where.subject.courseId         = filters.courseId;
-            if (filters.specializationId) where.subject.specializationId = filters.specializationId;
+        if (filters?.courseId) {
+            where.subject = { courseId: filters.courseId };
         }
 
         return prisma.semesterMark.findMany({
