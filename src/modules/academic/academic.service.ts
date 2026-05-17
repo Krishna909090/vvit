@@ -179,11 +179,17 @@ export const AcademicService = {
         }
 
         if (omrId !== undefined && omrId !== null) {
+            // No isDeleted filter — OMR IDs are unique across ALL courses (the DB
+            // unique index spans soft-deleted rows too). A physical OMR scan-sheet
+            // ID must never be reused, even after a course is removed.
             const omrIdConflict = await prisma.course.findFirst({
-                where: { omrId, isDeleted: false }
+                where: { omrId }
             });
             if (omrIdConflict) {
-                throw new AppError("A course with this OMR ID already exists", 409);
+                throw new AppError(
+                    `OMR ID ${omrId} is already assigned to course "${omrIdConflict.name}"`,
+                    409
+                );
             }
         }
 
@@ -277,11 +283,16 @@ export const AcademicService = {
         }
 
         if (omrId !== undefined && omrId !== null && omrId !== course.omrId) {
+            // No isDeleted filter — matches the DB-level unique index, which spans
+            // soft-deleted courses. OMR scan-sheet IDs are never reused.
             const omrIdConflict = await prisma.course.findFirst({
-                where: { omrId, id: { not: id }, isDeleted: false }
+                where: { omrId, id: { not: id } }
             });
             if (omrIdConflict) {
-                throw new AppError("A course with this OMR ID already exists", 409);
+                throw new AppError(
+                    `OMR ID ${omrId} is already assigned to course "${omrIdConflict.name}"`,
+                    409
+                );
             }
         }
 

@@ -87,7 +87,10 @@ model Course {
   updatedBy        String?
   isDeleted        Boolean?           @default(false)
   degree           String?
-  omrId            Int?
+  // OMR ID = physical OMR scan-sheet identifier. Unique across all courses.
+  // Nullable: courses without OMR scanning don't need one — Postgres allows
+  // multiple NULLs under a unique index, so unset courses never collide.
+  omrId            Int?               @unique
   department       Department         @relation(fields: [departmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeStructures    FeeStructure[]
   specializations  Specialization[]
