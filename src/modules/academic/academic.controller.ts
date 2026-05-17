@@ -141,9 +141,9 @@ export const updateCourse = catchAsync(async (req: Request, res: Response, next:
 
 export const deleteCourse = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    
-    await AcademicService.deleteCourse(id);
-    
+
+    await AcademicService.deleteCourse(id, req.user?.userId);
+
     sendResponse({ res, statusCode: 200, success: true, message: "Course deleted successfully" });
 });
 

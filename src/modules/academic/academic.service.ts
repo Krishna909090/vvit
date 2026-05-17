@@ -305,11 +305,33 @@ export const AcademicService = {
         });
     },
 
-    async deleteCourse(id: string) {
+    /**
+     * Soft-delete a course — guarded.
+     *
+     * Refused if any student is allotted this course (StudentAdmission.allottedCourseId).
+     * Deleting a course with allotted students would orphan their admission records
+     * and break course-scoped reports.
+     */
+    async deleteCourse(id: string, adminId?: string) {
         const course = await prisma.course.findUnique({ where: { id } });
         if (!course) throw new AppError("Course not found", 404);
+        if (course.isDeleted) throw new AppError("Course is already deleted", 400);
 
-        return await prisma.course.update({ where: { id }, data: { isDeleted: true } });
+        const allotted = await prisma.studentAdmission.count({
+            where: { allottedCourseId: id },
+        });
+        if (allotted > 0) {
+            throw new AppError(
+                `Cannot delete course "${course.name}" — ${allotted} student(s) are allotted to it. ` +
+                `Reassign them to another course first.`,
+                409
+            );
+        }
+
+        return await prisma.course.update({
+            where: { id },
+            data: { isDeleted: true, updatedBy: adminId },
+        });
     },
 
     async getSeatStatus(academicYearId?: string) {
