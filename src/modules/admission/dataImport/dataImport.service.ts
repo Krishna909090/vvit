@@ -9,6 +9,13 @@ interface ExcelRow {
   [key: string]: any;
 }
 
+/**
+ * Stream-process an uploaded Excel sheet of admissions per a saved column-mapping
+ * (DataImportMapping). Iterates rows in a transaction, creates Student + User +
+ * StudentAdmission + optional ConvenorAdmission records, and aggregates per-row
+ * success/failure. The `importType` (REGULAR / CONVENOR / OFFLINE) drives which
+ * extra fields the row is expected to carry.
+ */
 export const processExcelImport = async (
   fileBuffer: Buffer,
   mappingId: string,

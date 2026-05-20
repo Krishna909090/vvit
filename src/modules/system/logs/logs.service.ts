@@ -179,7 +179,12 @@ export const searchLocalLogs = async (
     };
 };
 
-// Extract module from legacy log messages like "[initiateApplicationFeePayment]" or "[InvoiceService]"
+/**
+ * Extract a coarse module name from legacy log messages like
+ * "[initiateApplicationFeePayment]" or "[InvoiceService]". Maps prefixes to
+ * canonical module tags (PAYMENT / INVOICE / LEDGER / etc.) so the UI
+ * timeline can color-code by domain. Falls back to "SYSTEM".
+ */
 function extractModule(message: string): string {
     const match = message?.match(/\[(\w+?)(?:Service|Controller)?\]/);
     if (match) {
@@ -199,7 +204,11 @@ function extractModule(message: string): string {
     return 'SYSTEM';
 }
 
-// Extract action from legacy log messages
+/**
+ * Extract a coarse action tag (INITIATE / SUCCESS / FAILED / GENERATED / …)
+ * from legacy log message text. Used to render timeline entries with the
+ * right icon/badge in the UI. Returns "" when no verb matches.
+ */
 function extractAction(message: string): string {
     if (!message) return '';
     const lower = message.toLowerCase();

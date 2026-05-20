@@ -11,6 +11,7 @@ import path from 'path';
 import archiver from 'archiver';
 import axios from 'axios';
 
+/** Create a per-degree document requirement (e.g. "B.Tech students must upload 10th memo"). Rejects duplicates by (degreeType, documentKey). */
 export const createDocumentRequirement = async (data: any) => {
     const existingRequirement = await prisma.documentRequirement.findFirst({
         where: {
@@ -35,6 +36,7 @@ export const createDocumentRequirement = async (data: any) => {
     return requirement;
 };
 
+/** List requirements, optionally narrowed by degree type. Used to render the upload checklist. */
 export const getDocumentRequirements = async (degreeType?: string) => {
     const where = degreeType ? { degreeType } : {};
     const requirements = await prisma.documentRequirement.findMany({
@@ -45,6 +47,7 @@ export const getDocumentRequirements = async (degreeType?: string) => {
     return requirements;
 };
 
+/** Update fields on a requirement row. Throws 400 if no actual change is present (avoid no-op writes). */
 export const updateDocumentRequirement = async (id: string, data: any) => {
     const existing = await prisma.documentRequirement.findUnique({ where: { id } });
     if (!existing) {
@@ -68,6 +71,7 @@ export const updateDocumentRequirement = async (id: string, data: any) => {
     return requirement;
 };
 
+/** Soft-delete a requirement (sets isDeleted=true). Preserves history for already-uploaded student documents that referenced it. */
 export const deleteDocumentRequirement = async (id: string) => {
     const existing = await prisma.documentRequirement.findUnique({ where: { id } });
     if (!existing) {
@@ -82,6 +86,12 @@ export const deleteDocumentRequirement = async (id: string) => {
     return { message: 'Requirement deleted' };
 };
 
+/**
+ * Bulk-upsert a student's documents keyed by `documentKey`. Re-upload of an
+ * existing doc resets its status to PENDING + clears prior remarks so the
+ * admin re-verifies it. Bumps admission status to DOCUMENTS_SUBMITTED at end.
+ * Year-tags new rows with the resolved academic year.
+ */
 export const upsertStudentDocuments = async (
     studentId: string,
     documentData: any,
@@ -136,6 +146,7 @@ export const upsertStudentDocuments = async (
     return { studentId, status: admission.status };
 };
 
+/** Soft-delete a specific student document + remove its S3 object. Idempotent on invalid S3 URLs (warns and continues). */
 export const deleteStudentDocument = async (studentId: string, documentKey: string) => {
     const doc = await prisma.studentDocument.findUnique({
         where: {
@@ -167,6 +178,7 @@ export const deleteStudentDocument = async (studentId: string, documentKey: stri
     return { message: 'Document deleted successfully' };
 };
 
+/** Set a student document's verification status (APPROVED / REJECTED / PENDING) with optional admin remarks. */
 export const verifyStudentDocument = async (studentId: string, documentKey: string, status: StudentDocumentStatus, remarks?: string) => {
     const existingDoc = await prisma.studentDocument.findUnique({
         where: {
@@ -198,7 +210,11 @@ export const verifyStudentDocument = async (studentId: string, documentKey: stri
     return doc;
 };
 
-// Pass `academicYearId` to return only that year's documents. Omit for all years.
+/**
+ * Get every document for a student, presigned for S3 access. Pass
+ * `academicYearId` to scope to a specific year, otherwise returns all years.
+ * Includes profile photo + hall ticket URLs, presigned alongside.
+ */
 export const getStudentDocuments = async (studentId: string, academicYearId?: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
@@ -241,6 +257,12 @@ export const getStudentDocuments = async (studentId: string, academicYearId?: st
     };
 };
 
+/**
+ * Pull every student document (profile photo, hall ticket, uploaded docs,
+ * discount-request attachment) from S3 and stream them into a single zip on
+ * local /tmp. Used by the "download all" admin button. Returns the path so the
+ * controller can stream it to the response then unlink.
+ */
 export const createStudentDocumentZip = async (studentId: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
