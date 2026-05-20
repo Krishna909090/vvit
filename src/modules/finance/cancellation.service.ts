@@ -387,9 +387,13 @@ export const CancellationService = {
 
         logger.info(`[CancellationService.createCancellationRequest] Student=${data.studentId}, ConditionType=${data.conditionType}, RecommendedByMgmt=${data.recommendedByManagement}, Fee=${effectiveFee}`);
 
+        const cancelYear = await prisma.academicYear.findFirstOrThrow({
+            where: { isActive: true, isDeleted: false }
+        });
         return await prisma.cancellationRequest.create({
             data: {
                 studentId:        data.studentId,
+                academicYearId:   cancelYear.id,
                 reason:           data.reason,
                 conditionType:    data.conditionType as any,
                 oldQuotaFee:      data.oldQuotaFee,

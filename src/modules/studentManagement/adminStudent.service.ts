@@ -44,439 +44,19 @@ import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-
 import { InvoiceService } from '../finance/invoice.service';
 import { getPhonePeClient, initiatePhonePePayment, generateAndSaveAllotmentOrder, generateAndSaveHostelAllotmentOrder } from '../finance/payment.service';
 
-// --- CONFIGURATION CONSTANTS ---
-const PHONEPE_MERCHANT_ID = process.env.PHONEPE_MERCHANT_ID || '';
-const PHONEPE_SALT_KEY = process.env.PHONEPE_SALT_KEY || '';
-const PHONEPE_SALT_INDEX = parseInt(process.env.PHONEPE_SALT_INDEX || '1', 10);
-const PHONEPE_ENV = process.env.PHONEPE_ENV === 'PROD' ? Env.PRODUCTION : Env.SANDBOX;
-const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://localhost:5173';
+// Helpers + constants moved to ./adminStudent/_shared.ts as part of the file split.
+// Re-imported here so existing in-file callers keep working unchanged.
+import {
+    PHONEPE_MERCHANT_ID,
+    PHONEPE_SALT_KEY,
+    PHONEPE_SALT_INDEX,
+    PHONEPE_ENV,
+    FRONTEND_URL_ADMISSION,
+    PREF_COURSE_WITH_CAPACITY,
+    attachCourseCapacity,
+    buildApplicationFilters,
+} from './adminStudent/_shared';
 
-/**
- * Prisma include fragment for a preference course: pulls the active-year
- * capacity row (totalSeats / filledSeats) plus its academic year tag.
- */
-const PREF_COURSE_WITH_CAPACITY = {
-    include: {
-        capacities: {
-            where: { academicYear: { isActive: true } },
-            take: 1,
-            include: { academicYear: { select: { id: true, code: true, isActive: true } } },
-        },
-    },
-} as const;
-
-/**
- * Flatten the `capacities[0]` into top-level `totalSeats / filledSeats / academicYear`
- * on a pref-course object so the UI doesn't have to dig into the array.
- * Returns null/undefined unchanged.
- */
-const attachCourseCapacity = (course: any): any => {
-    if (!course) return course;
-    const cap = course.capacities?.[0];
-    const { capacities: _ignored, ...rest } = course;
-    return {
-        ...rest,
-        totalSeats: cap?.totalSeats ?? null,
-        filledSeats: cap?.filledSeats ?? null,
-        academicYear: cap?.academicYear ?? null,
-    };
-};
-
-const buildApplicationFilters = async (query: any): Promise<any> => {
-    const { search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, examStartDate, examEndDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate, seatAllotedBy, proCode, proReq } = query;
-
-    const where: any = {};
-    if (search) {
-        where.OR = [
-            { name: { contains: String(search), mode: 'insensitive' } },
-            { email: { contains: String(search), mode: 'insensitive' } },
-            { phone: { contains: String(search), mode: 'insensitive' } },
-            { applicationId: { contains: String(search), mode: 'insensitive' } }
-        ];
-    }
-
-    if (applicationId) {
-        where.applicationId = String(applicationId);
-    }
-
-    if (status && status !== AdmissionStatus.CANCELLED) {
-        where.admissionDetails = {
-            status: status
-        };
-    }
-
-    // Always exclude students whose admission has been CANCELLED — irrespective of
-    // any other filter the caller passes in.
-    where.NOT = [
-        ...(Array.isArray(where.NOT) ? where.NOT : []),
-        { admissionDetails: { status: AdmissionStatus.CANCELLED } }
-    ];
-
-    if (quotaType) {
-        where.quotaType = quotaType;
-    }
-
-    if (degreeType) {
-        where.degreeType = degreeType;
-    }
-
-    if (isScholarshipEligible) {
-        if (String(isScholarshipEligible).toUpperCase() === 'NULL') {
-            where.studentScholarship = null;
-        } else if (String(isScholarshipEligible).toUpperCase() === 'NOT_NULL') {
-            where.studentScholarship = { isNot: null };
-        } else {
-            where.studentScholarship = {
-                isEligible: String(isScholarshipEligible)
-            };
-        }
-    }
-
-    if (query.hasDocuments === 'true') {
-        where.documents = {
-            some: {}
-        };
-    } else if (query.hasDocuments === 'false') {
-         where.documents = {
-            none: {}
-        };
-    }
-
-    if (createdBy) {
-        where.createdBy = String(createdBy);
-    }
-
-    if (qualificationVerifiedBy) {
-        if (!where.AND) where.AND = [];
-        where.AND.push({
-            academicQualifications: {
-                some: { verifiedBy: String(qualificationVerifiedBy) }
-            }
-        });
-    }
-
-    if (seatAllotedBy) {
-        if (!where.admissionDetails) where.admissionDetails = {};
-        where.admissionDetails.seatAllotedBy = String(seatAllotedBy);
-    }
-
-    // proReq=true: only students with a linked PRO whose proNumber is not '0'
-    if (proReq === 'true' || proReq === true) {
-        where.proId = { not: null };
-        where.pro = { proNumber: { not: '0' } };
-    }
-
-    if (proCode) {
-        const pro = await prisma.pRO.findUnique({ where: { proNumber: String(proCode) } });
-        if (pro) {
-            where.proId = pro.id;
-        } else {
-            where.id = 'NO_MATCH';
-        }
-    }
-
-    if (gender) {
-        where.gender = { equals: String(gender), mode: 'insensitive' };
-    }
-
-    if (pref1) {
-        const values = String(pref1).split(',').map(v => v.trim()).filter(Boolean);
-        where.pref1 = values.length === 1 ? values[0] : { in: values };
-    }
-
-    if (pref2) {
-        const values = String(pref2).split(',').map(v => v.trim()).filter(Boolean);
-        where.pref2 = values.length === 1 ? values[0] : { in: values };
-    }
-
-    if (pref3) {
-        const values = String(pref3).split(',').map(v => v.trim()).filter(Boolean);
-        where.pref3 = values.length === 1 ? values[0] : { in: values };
-    }
-
-    // Exam date range: supports examStartDate + examEndDate (range), or examDate (single day)
-    if (examStartDate || examEndDate) {
-        const testDateFilter: any = {};
-        if (examStartDate) {
-            const start = new Date(String(examStartDate));
-            start.setHours(0, 0, 0, 0);
-            testDateFilter.gte = start;
-        }
-        if (examEndDate) {
-            const end = new Date(String(examEndDate));
-            end.setHours(23, 59, 59, 999);
-            testDateFilter.lte = end;
-        }
-        where.examDetails = { testDate: testDateFilter };
-    } else if (examDate) {
-        const start = new Date(String(examDate));
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(String(examDate));
-        end.setHours(23, 59, 59, 999);
-        where.examDetails = {
-            testDate: { gte: start, lte: end }
-        };
-    }
-
-    if (qualificationVerified) {
-        if (!where.AND) where.AND = [];
-        where.AND.push({ academicQualifications: { some: {} } });
-        const values = String(qualificationVerified).split(',').map(v => v.trim().toUpperCase()).filter(Boolean);
-        const verificationOrConditions: any[] = [];
-        for (const val of values) {
-            if (val === 'VERIFIED') {
-                verificationOrConditions.push({
-                    academicQualifications: {
-                        every: { verificationStatus: 'APPROVED' }
-                    }
-                });
-            } else if (val === 'UNVERIFIED') {
-                verificationOrConditions.push({
-                    academicQualifications: {
-                        none: { verificationStatus: 'APPROVED' }
-                    }
-                });
-            } else {
-                verificationOrConditions.push({
-                    academicQualifications: {
-                        some: { verificationStatus: val }
-                    }
-                });
-            }
-        }
-        if (verificationOrConditions.length === 1) {
-            where.AND.push(verificationOrConditions[0]);
-        } else if (verificationOrConditions.length > 1) {
-            where.AND.push({ OR: verificationOrConditions });
-        }
-    }
-
-    const academicQualificationConditions: any[] = [];
-
-    if (qualificationLevel) {
-        const levels = String(qualificationLevel).split(',').map(l => l.trim()).filter(Boolean);
-        academicQualificationConditions.push({
-            academicQualifications: {
-                some: { level: levels.length === 1 ? levels[0] : { in: levels } }
-            }
-        });
-    }
-
-    if (qualificationBoard) {
-        academicQualificationConditions.push({
-            academicQualifications: {
-                some: { board: { contains: String(qualificationBoard), mode: 'insensitive' } }
-            }
-        });
-    }
-
-    if (marks10thMin || marks10thMax) {
-        const conditions: string[] = [`"level" = '10th'`, `"gpaOrMarks" IS NOT NULL`];
-        if (marks10thMin) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${Number(marks10thMin)}`);
-        if (marks10thMax) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${Number(marks10thMax)}`);
-        const studentIds10th: { studentId: string }[] = await prisma.$queryRawUnsafe(
-            `SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE ${conditions.join(' AND ')}`
-        );
-        academicQualificationConditions.push({
-            id: { in: studentIds10th.map(r => r.studentId) }
-        });
-    }
-
-    if (marks12thMin || marks12thMax) {
-        const conditions: string[] = [`"level" = '12th'`, `"gpaOrMarks" IS NOT NULL`];
-        if (marks12thMin) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${Number(marks12thMin)}`);
-        if (marks12thMax) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${Number(marks12thMax)}`);
-        const studentIds12th: { studentId: string }[] = await prisma.$queryRawUnsafe(
-            `SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE ${conditions.join(' AND ')}`
-        );
-        academicQualificationConditions.push({
-            id: { in: studentIds12th.map(r => r.studentId) }
-        });
-    }
-
-    if (academicQualificationConditions.length > 0) {
-        where.AND = [...(where.AND || []), ...academicQualificationConditions];
-    }
-
-    if (certificateStatus) {
-        if (!where.AND) where.AND = [];
-        where.AND.push(
-            { documents: { some: {} } },
-            { documents: { every: { status: String(certificateStatus).toUpperCase() } } }
-        );
-    }
-
-    if (certificatesApproved) {
-        const val = String(certificatesApproved).toUpperCase();
-        if (val === 'YES') {
-            where.documents = { some: { status: 'APPROVED' } };
-        } else if (val === 'NO') {
-            where.documents = { none: { status: 'APPROVED' } };
-        } else if (val === 'PENDING') {
-            where.documents = { some: { status: 'PENDING' } };
-        }
-    }
-
-    if (seatStatus) {
-        const val = String(seatStatus).toUpperCase();
-        if (val === 'ALLOTTED') {
-            where.admissionDetails = { ...where.admissionDetails, allottedCourseId: { not: null } };
-        } else if (val === 'PENDING') {
-            where.admissionDetails = { ...where.admissionDetails, allottedCourseId: null };
-        }
-    }
-
-    if (scholarship) {
-        const val = String(scholarship).toUpperCase();
-        where.studentScholarship = {
-            isEligible: val === 'YES' ? 'YES' : 'NO'
-        };
-    }
-
-    if (scholarshipPercentage) {
-        where.studentScholarship = {
-            ...where.studentScholarship,
-            scholarshipPercentage: Number(scholarshipPercentage)
-        };
-    }
-
-    if (program) {
-        const values = String(program).split(',').map(v => v.trim()).filter(Boolean);
-        where.admissionDetails = {
-            ...where.admissionDetails,
-            allottedCourse: { degree: values.length === 1 ? values[0] : { in: values } }
-        };
-    }
-
-    if (branch) {
-        const values = String(branch).split(',').map(v => v.trim()).filter(Boolean);
-        where.admissionDetails = {
-            ...where.admissionDetails,
-            allottedCourseId: values.length === 1 ? values[0] : { in: values }
-        };
-    }
-
-    if (facilities) {
-        where.admissionDetails = {
-            ...where.admissionDetails,
-            accommodationType: String(facilities).toUpperCase()
-        };
-    }
-
-    if (discountApplied) {
-        const val = String(discountApplied).toUpperCase();
-        if (val === 'YES') {
-            where.discountRequests = { some: {} };
-        } else if (val === 'NO') {
-            where.discountRequests = { none: {} };
-        }
-    }
-
-    if (branchChange) {
-        const val = String(branchChange).toUpperCase();
-        if (val === 'YES') {
-            where.courseChangeLogs = { some: {} };
-        } else if (val === 'NO') {
-            where.courseChangeLogs = { none: {} };
-        }
-    }
-
-    if (seatCancellation) {
-        const val = String(seatCancellation).toUpperCase();
-        if (val === 'YES') {
-            where.cancellationRequests = { some: {} };
-        } else if (val === 'NO') {
-            where.cancellationRequests = { none: {} };
-        }
-    }
-
-    if (cancellationReason) {
-        where.cancellationRequests = {
-            some: { conditionType: String(cancellationReason) }
-        };
-    }
-
-    if (allotmentOrder) {
-        const val = String(allotmentOrder).toUpperCase();
-        if (val === 'YES') {
-            where.documents = { some: { documentKey: 'ALLOTMENT_ORDER' } };
-        } else if (val === 'NO') {
-            where.documents = { none: { documentKey: 'ALLOTMENT_ORDER' } };
-        }
-    }
-
-    if (applicationFeePaid === 'UNPAID') {
-        where.payments = {
-            none: {
-                component: PaymentComponent.APPLICATION_FEE,
-                status: PaymentStatus.SUCCESS
-            }
-        };
-    } else if (applicationFeePaid === 'PAID') {
-        where.payments = {
-            some: {
-                component: PaymentComponent.APPLICATION_FEE,
-                status: PaymentStatus.SUCCESS
-            }
-        };
-    }
-
-    // Date range filter — applies to `seatAllottedAt` when seatStatus=ALLOTTED,
-    // otherwise to `createdAt` (student registration date)
-    if (dateRange) {
-        const now = new Date();
-        const startOfDayFn = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-        const endOfDayFn = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-
-        let gte: Date | undefined;
-        let lte: Date | undefined;
-
-        const val = String(dateRange).toLowerCase();
-
-        if (val === 'today') {
-            gte = startOfDayFn(now);
-            lte = endOfDayFn(now);
-        } else if (val === 'yesterday') {
-            const d = new Date(now);
-            d.setDate(now.getDate() - 1);
-            gte = startOfDayFn(d);
-            lte = endOfDayFn(d);
-        } else if (val === '7d') {
-            const d = new Date(now);
-            d.setDate(now.getDate() - 7);
-            gte = startOfDayFn(d);
-            lte = endOfDayFn(now);
-        } else if (val === '15d') {
-            const d = new Date(now);
-            d.setDate(now.getDate() - 15);
-            gte = startOfDayFn(d);
-            lte = endOfDayFn(now);
-        } else if (val === '30d') {
-            const d = new Date(now);
-            d.setDate(now.getDate() - 30);
-            gte = startOfDayFn(d);
-            lte = endOfDayFn(now);
-        } else if (val === 'custom' && startDate && endDate) {
-            gte = startOfDayFn(new Date(String(startDate)));
-            lte = endOfDayFn(new Date(String(endDate)));
-        }
-
-        if (gte && lte) {
-            const seatStatusUpper = seatStatus ? String(seatStatus).toUpperCase() : null;
-            if (seatStatusUpper === 'ALLOTTED') {
-                // Filter by seat allotment date
-                where.admissionDetails = {
-                    ...where.admissionDetails,
-                    seatAllottedAt: { gte, lte }
-                };
-            } else {
-                where.createdAt = { gte, lte };
-            }
-        }
-    }
-
-    return where;
-};
 
 export const AdminStudentService = {
     async getAllApplications(query: any) {
@@ -529,7 +109,12 @@ export const AdminStudentService = {
                         orderBy: { startDate: 'desc' },
                         include: { academicYear: { select: { id: true, code: true, isActive: true } } },
                     },
-                    transportAllocation: true,
+                    transportAllocations: {
+                        where: { status: 'ACTIVE' },
+                        take: 1,
+                        orderBy: { startDate: 'desc' },
+                        include: { academicYear: { select: { id: true, code: true, isActive: true } } },
+                    },
                     convenorDetails: true,
                     pro: true
                 }
@@ -547,14 +132,16 @@ export const AdminStudentService = {
             // Convert profile photo URL
             const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
+            const { transportAllocations: _ta, ...studentRest } = student;
             return {
-                ...student,
+                ...studentRest,
                 aadharNumber: maskAadhaar(student.aadharNumber),
                 profilePhotoUrl,
                 documents: documentsWithPresignedUrls,
                 pref1Course: attachCourseCapacity(student.pref1Course),
                 pref2Course: attachCourseCapacity(student.pref2Course),
                 pref3Course: attachCourseCapacity(student.pref3Course),
+                transportAllocation: _ta?.[0] ?? null,
             };
         }));
 
@@ -778,7 +365,12 @@ export const AdminStudentService = {
                         orderBy: { startDate: 'desc' },
                         include: { academicYear: { select: { id: true, code: true, isActive: true } } },
                     },
-                    transportAllocation: true,
+                    transportAllocations: {
+                        where: { status: 'ACTIVE' },
+                        take: 1,
+                        orderBy: { startDate: 'desc' },
+                        include: { academicYear: { select: { id: true, code: true, isActive: true } } },
+                    },
                     convenorDetails: true,
                     pro: true
                 }
@@ -796,14 +388,16 @@ export const AdminStudentService = {
             // Convert profile photo URL
             const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
+            const { transportAllocations: _ta, ...studentRest } = student;
             return {
-                ...student,
+                ...studentRest,
                 aadharNumber: maskAadhaar(student.aadharNumber),
                 profilePhotoUrl,
                 documents: documentsWithPresignedUrls,
                 pref1CourseName: student.pref1Course?.name || null,
                 pref2CourseName: student.pref2Course?.name || null,
                 pref3CourseName: student.pref3Course?.name || null,
+                transportAllocation: _ta?.[0] ?? null,
             };
         }));
 
@@ -880,9 +474,11 @@ export const AdminStudentService = {
             throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         }
 
+        const adminCancelYear = await getActiveAcademicYear();
         return await prisma.cancellationRequest.create({
             data: {
                 studentId,
+                academicYearId: adminCancelYear.id,
                 reason,
                 refundAmount: Number(refundAmount),
                 status: CancellationStatus.REQUESTED
@@ -970,6 +566,7 @@ export const AdminStudentService = {
             await tx.seatAllocation.create({
                 data: {
                     studentId,
+                    academicYearId: admission.academicYearId,
                     newCourse: course.name, // Storing Name for readability
                     allocatedBy: adminId || 'ADMIN',
                     notes: 'Initial Seat Allotment'
@@ -1474,7 +1071,8 @@ export const AdminStudentService = {
                                         referenceType: 'SCHOLARSHIP',
                                         referenceId: existingDemand.id,
                                         feeHeadId: struct.feeHeadId,
-                                        createdBy: adminId
+                                        createdBy: adminId,
+                                        academicYearId: academicYearId
                                     }
                                 });
                             }
@@ -3072,7 +2670,8 @@ export const AdminStudentService = {
                     description: `Hostel re-assigned: ${oldAllocation.bed.room.number} → ${newBed.room.number} (${newHostelType}, ${args.hostelPaymentMode}). Reason: ${args.reason}`,
                     referenceType: 'HOSTEL_REASSIGNMENT',
                     referenceId: studentId,
-                    createdBy: adminId
+                    createdBy: adminId,
+                    academicYearId: academicYearId
                 }
             });
 
@@ -3225,7 +2824,7 @@ export const AdminStudentService = {
         const registrationFee    = priceCategory.registrationFee ?? 0;
         const effectiveTotal     = accommodationPrice + messPrice + laundryPrice + registrationFee;
 
-        const academicYearId = admission.academicYearId ?? undefined;
+        const academicYearId = admission.academicYearId;
 
         // Resolve hostel fee heads
         const feeHeadMap = await resolveFeeHeadsByComponent([
@@ -3402,8 +3001,8 @@ export const AdminStudentService = {
         }
 
         // Block re-assignment after a TransportAllocation has been created.
-        const existingAllocation = await prisma.transportAllocation.findUnique({ where: { studentId } });
-        if (existingAllocation && existingAllocation.status === 'ACTIVE') {
+        const existingAllocation = await prisma.transportAllocation.findFirst({ where: { studentId, status: 'ACTIVE' } });
+        if (existingAllocation) {
             throw new AppError('Student already has an active transport allocation. Use the reassign-transport flow.', 409);
         }
 
@@ -3429,7 +3028,7 @@ export const AdminStudentService = {
         const transportHead = feeHeadMap.get(PaymentComponent.TRANSPORT);
 
         // Year-aware route cost: prefer per-year override, fall back to route.cost
-        const academicYearId = admission.academicYearId ?? undefined;
+        const academicYearId = admission.academicYearId;
         const newCost = await resolveTransportRouteCost(transportRouteId, academicYearId ?? null);
 
         // Diff against existing PENDING TRANSPORT demand (if any) to compute totalFee delta.
@@ -3607,7 +3206,7 @@ export const AdminStudentService = {
         }
         const totalFeeDelta = newCost - previousCost;
 
-        const academicYearId = admission.academicYearId ?? undefined;
+        const academicYearId = admission.academicYearId;
 
         const result = await prisma.$transaction(async (tx) => {
             // 1. Update admission
@@ -5097,7 +4696,7 @@ export const AdminStudentService = {
                      }
                 },
                 hostelAllocations: { where: { status: 'ACTIVE' }, take: 1, orderBy: { startDate: 'desc' }, include: { bed: { include: { room: { include: { hostel: true } } } }, academicYear: { select: { id: true, code: true, isActive: true } } } },
-                transportAllocation: { include: { route: true, stop: true } },
+                transportAllocations: { where: { status: 'ACTIVE' }, take: 1, orderBy: { startDate: 'desc' }, include: { route: true, stop: true, academicYear: { select: { id: true, code: true, isActive: true } } } },
                 convenorDetails: true,
                 pro: true,
                 user: { select: { id: true, email: true, phone: true, role: true, isDeleted: true } }
@@ -5120,10 +4719,11 @@ export const AdminStudentService = {
             hallTicketUrl = await convertToPresignedUrl(student.examDetails.hallTicketUrl);
         }
 
-        const { hostelAllocations: _hostelAllocations, ...studentRest } = student as any;
+        const { hostelAllocations: _hostelAllocations, transportAllocations: _transportAllocations, ...studentRest } = student as any;
         return {
             ...studentRest,
             hostelAllocation: _hostelAllocations?.[0] ?? null,
+            transportAllocation: _transportAllocations?.[0] ?? null,
             pref1Course: attachCourseCapacity((student as any).pref1Course),
             pref2Course: attachCourseCapacity((student as any).pref2Course),
             pref3Course: attachCourseCapacity((student as any).pref3Course),
@@ -5187,7 +4787,7 @@ export const AdminStudentService = {
                      }
                 },
                 hostelAllocations: { where: { status: 'ACTIVE' }, take: 1, orderBy: { startDate: 'desc' }, include: { bed: { include: { room: { include: { hostel: true } } } }, academicYear: { select: { id: true, code: true, isActive: true } } } },
-                transportAllocation: { include: { route: true, stop: true } },
+                transportAllocations: { where: { status: 'ACTIVE' }, take: 1, orderBy: { startDate: 'desc' }, include: { route: true, stop: true, academicYear: { select: { id: true, code: true, isActive: true } } } },
                 convenorDetails: true,
                 pro: true,
                 user: { select: { id: true, email: true, phone: true, role: true, isDeleted: true } }
@@ -5210,10 +4810,11 @@ export const AdminStudentService = {
             hallTicketUrl = await convertToPresignedUrl(student.examDetails.hallTicketUrl);
         }
 
-        const { hostelAllocations: _hostelAllocations, ...studentRest } = student as any;
+        const { hostelAllocations: _hostelAllocations, transportAllocations: _transportAllocations, ...studentRest } = student as any;
         return {
             ...studentRest,
             hostelAllocation: _hostelAllocations?.[0] ?? null,
+            transportAllocation: _transportAllocations?.[0] ?? null,
             pref1Course: attachCourseCapacity((student as any).pref1Course),
             pref2Course: attachCourseCapacity((student as any).pref2Course),
             pref3Course: attachCourseCapacity((student as any).pref3Course),
@@ -5369,13 +4970,8 @@ export const AdminStudentService = {
              return updated;
          }
 
-         // CREATE New — tag with the active academic year (NULL if none resolves).
-         let newScholarshipYearId: string | null = null;
-         try {
-             newScholarshipYearId = (await getActiveAcademicYear()).id;
-         } catch {
-             newScholarshipYearId = null;
-         }
+         // CREATE New — tag with the active academic year (required since the phase-3 year-tag migration).
+         const newScholarshipYearId: string = (await getActiveAcademicYear()).id;
          const newScholarship = await prisma.studentScholarship.create({
              data: {
                  studentId,
@@ -7249,9 +6845,16 @@ export const AdminStudentService = {
             throw new AppError(`Courses not found: ${missing.join(', ')}`, 404);
         }
 
-        // Check for existing WAITING entries for this student
+        // Year-scoped duplicate check: same student + course is allowed across years,
+        // but not twice in the same active year.
+        const dupYear = await getActiveAcademicYear();
         const existing = await prisma.waitingList.findMany({
-            where: { studentId, courseId: { in: courseIds }, status: WaitingListStatus.WAITING }
+            where: {
+                studentId,
+                courseId: { in: courseIds },
+                academicYearId: dupYear.id,
+                status: WaitingListStatus.WAITING,
+            }
         });
         const existingCourseIds = new Set(existing.map(e => e.courseId));
 
@@ -7262,6 +6865,9 @@ export const AdminStudentService = {
             throw new AppError('Student is already on the waiting list for all selected courses', 409);
         }
 
+        // Year-tag waitlist entries with the active academic year.
+        const waitingYearId = (await getActiveAcademicYear()).id;
+
         // Get current max priority for each course to assign next position
         const entries = await prisma.$transaction(
             newCourseIds.map(courseId =>
@@ -7269,6 +6875,7 @@ export const AdminStudentService = {
                     data: {
                         studentId,
                         courseId,
+                        academicYearId: waitingYearId,
                         remarks,
                         status: WaitingListStatus.WAITING,
                         createdBy: adminId,
@@ -7284,7 +6891,7 @@ export const AdminStudentService = {
 
         return {
             student: { id: student.id, name: student.name, applicationId: student.applicationId },
-            added: entries.map(e => ({
+            added: (entries as any[]).map((e: any) => ({
                 id: e.id,
                 courseId: e.courseId,
                 courseName: e.course.name,
@@ -7483,9 +7090,11 @@ export const AdminStudentService = {
             });
 
             // 5. Log seat allocation
+            const seatAllocYearId = (await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } })).id;
             await tx.seatAllocation.create({
                 data: {
                     studentId: entry.studentId,
+                    academicYearId: seatAllocYearId,
                     newCourse: entry.courseId,
                     allocatedBy: adminId,
                     notes: `Allotted from waiting list`,

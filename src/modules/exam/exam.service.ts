@@ -865,6 +865,9 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         const currentAdmission = await tx.studentAdmission.findUnique({ where: { studentId } });
         const shouldUpdateStatus = !currentAdmission || !protectedStatuses.includes(currentAdmission.status as AdmissionStatus);
 
+        const examYear = await tx.academicYear.findFirstOrThrow({
+            where: { isActive: true, isDeleted: false }
+        });
         await tx.studentAdmission.upsert({
             where: { studentId },
             update: {
@@ -872,6 +875,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             },
             create: {
                 studentId,
+                academicYearId: examYear.id,
                 status: AdmissionStatus.EXAM_SCHEDULED,
             }
         });
@@ -894,6 +898,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             : await tx.hallTicket.create({
                 data: {
                     studentId,
+                    academicYearId: examYear.id,
                     qrHash: encryptedContent,
                     url: null,
                     createdBy: userId,

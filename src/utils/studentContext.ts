@@ -30,7 +30,7 @@ export interface StudentContext {
         hostelType: HostelType | null;
         hostelPaymentMode: HostelPaymentMode | null;
         roomNumber: string | null;
-        academicYearId: string | null;
+        academicYearId: string;
         allottedCourseId: string | null;
         totalFee: number | null;
         paidFee: number | null;
@@ -62,7 +62,7 @@ export interface StudentContext {
     // Derived fields — already resolved with sensible fallbacks
     yearOfStudy: number;          // never null: enrollment.yearOfStudy → derived from semester → 1
     currentSemester: number;      // never null: enrollment.currentSemester → 1
-    academicYearId: string | null; // admission.academicYearId → enrollment.academicYearId → null
+    academicYearId: string | null; // admission.academicYearId → enrollment.academicYearId → null (kept nullable for callers that lack admission)
     quotaType: QuotaType | null;
     courseType: string | null;
     proId: string | null;
@@ -187,17 +187,23 @@ export const getStudentYearOfStudy = async (studentId: string, tx?: any): Promis
 export const resolveFeeDemandContext = async (
     feeDemandId: string | null | undefined,
     tx?: any
-): Promise<{ academicYearId: string | undefined; yearOfStudy: number | undefined }> => {
-    if (!feeDemandId) return { academicYearId: undefined, yearOfStudy: undefined };
+): Promise<{ academicYearId: string; yearOfStudy: number | undefined }> => {
     const client = tx || prisma;
-    const demand = await client.studentFeeDemand.findUnique({
-        where: { id: feeDemandId },
-        select: { academicYearId: true, yearOfStudy: true }
-    });
-    return {
-        academicYearId: demand?.academicYearId ?? undefined,
-        yearOfStudy: demand?.yearOfStudy ?? undefined,
-    };
+    if (feeDemandId) {
+        const demand = await client.studentFeeDemand.findUnique({
+            where: { id: feeDemandId },
+            select: { academicYearId: true, yearOfStudy: true }
+        });
+        if (demand) {
+            return {
+                academicYearId: demand.academicYearId,
+                yearOfStudy: demand.yearOfStudy ?? undefined,
+            };
+        }
+    }
+    // No demand → fall back to the active academic year so Payment.academicYearId is always set.
+    const active = await getActiveAcademicYear(tx);
+    return { academicYearId: active.id, yearOfStudy: undefined };
 };
 
 /* ──────────────────── Academic year guards (write-path safety) ───────────────────── */
@@ -340,30 +346,23 @@ export const getAvailableHostelCredit = async (studentId: string, tx?: any): Pro
 
 /**
  * Resolve the active HostelPriceCategory for a (sharing, roomType, academicYearId)
- * tuple. Prefers a year-scoped row; falls back to the legacy year-null row so the
- * pre-year-aware-pricing era keeps working without a hard data migration.
+ * tuple. academicYearId is required since the year-tag migration — every price row
+ * is now bound to a specific academic year.
  *
- * Returns null if neither exists — caller should treat as "no pricing configured."
+ * Returns null if no matching active price exists — caller should treat as
+ * "no pricing configured for this year."
  *
  * Pass `tx` when calling inside a Prisma transaction.
  */
 export const resolveHostelPriceCategory = async (
-    args: { sharing: number; roomType: string; academicYearId?: string | null },
+    args: { sharing: number; roomType: string; academicYearId: string },
     tx?: any
 ): Promise<any | null> => {
     const client = tx || prisma;
     const { sharing, roomType, academicYearId } = args;
-
-    if (academicYearId) {
-        const yearScoped = await client.hostelPriceCategory.findFirst({
-            where: { sharing, roomType, isActive: true, academicYearId }
-        });
-        if (yearScoped) return yearScoped;
-    }
-    const legacy = await client.hostelPriceCategory.findFirst({
-        where: { sharing, roomType, isActive: true, academicYearId: null }
-    });
-    return legacy ?? null;
+    return await client.hostelPriceCategory.findFirst({
+        where: { sharing, roomType, isActive: true, academicYearId }
+    }) ?? null;
 };
 
 /**

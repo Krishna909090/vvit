@@ -119,6 +119,11 @@ export const processExcelImport = async (
 
     try {
       await prisma.$transaction(async (tx) => {
+        // Active academic year — required by StudentAdmission since the year-tag migration.
+        const activeYear = await tx.academicYear.findFirstOrThrow({
+            where: { isActive: true, isDeleted: false }
+        });
+
         // A. Create/Find User
         let user = await tx.user.findUnique({ where: { phone } });
         if (!user) {
@@ -183,7 +188,7 @@ export const processExcelImport = async (
             admissionDetails: {
                // Ensure admission details exist
                upsert: {
-                  create: { status: AdmissionStatus.REGISTERED },
+                  create: { status: AdmissionStatus.REGISTERED, academicYear: { connect: { id: activeYear.id } } },
                   update: {}
                }
             }
@@ -199,6 +204,7 @@ export const processExcelImport = async (
                 await tx.studentAdmission.create({
                     data: {
                         studentId: student.id,
+                        academicYearId: activeYear.id,
                         status: AdmissionStatus.REGISTERED
                     }
                 })
@@ -229,6 +235,7 @@ export const processExcelImport = async (
                 where: { studentId: student.id },
                 create: {
                     studentId: student.id,
+                    academicYearId: activeYear.id,
                     status: AdmissionStatus.SEAT_ALLOTTED
                 },
                 update: {

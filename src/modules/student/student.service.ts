@@ -14,13 +14,11 @@ import { formatDate, formatTime, formatDateTime } from '../../utils/dateFormatte
 import { maskAadhaar } from '../../utils/mask';
 import { getActiveAcademicYear } from '../../utils/studentContext';
 
-// Resolve the active academic year id for year-tagging new rows; NULL if none.
-const resolveActiveYearId = async (): Promise<string | null> => {
-    try {
-        return (await getActiveAcademicYear()).id;
-    } catch {
-        return null;
-    }
+// Resolve the active academic year id for year-tagging new rows. Throws (via getActiveAcademicYear)
+// if no active year is configured — academicYearId is required on StudentDocument since the
+// year-tag migration.
+const resolveActiveYearId = async (): Promise<string> => {
+    return (await getActiveAcademicYear()).id;
 };
 
 export const registerStudent = async (data: any, userId: string | null, currentUserId: string | null) => {
@@ -150,10 +148,13 @@ export const registerStudent = async (data: any, userId: string | null, currentU
 
     logger.info(`[registerStudent] Generated applicationId: ${applicationId}`);
 
-    // Fetch Active Academic Year
+    // Fetch Active Academic Year — required for StudentAdmission since the year-tag migration.
     const activeAcademicYear = await prisma.academicYear.findFirst({
         where: { isActive: true, isDeleted: false }
     });
+    if (!activeAcademicYear) {
+        throw new AppError('No active academic year is set. Configure one before registering students.', 400);
+    }
 
     // Handle PRO Number mapping
     let proIdToStore: string | null = null;
@@ -217,7 +218,7 @@ export const registerStudent = async (data: any, userId: string | null, currentU
         const entryType        = data.entryType ?? 'REGULAR';
         const entryYearOfStudy = data.entryYearOfStudy
             ?? (entryType === 'LATERAL' ? 2 : entryType === 'TRANSFER' ? 3 : 1);
-        const entryAcademicYearId = activeAcademicYear?.id;
+        const entryAcademicYearId = activeAcademicYear.id;
         const feeCohortAcademicYearId = entryAcademicYearId;
 
         // Default to VVIG. Admin sets VVITU/VVITPU explicitly only for 2025-26 batch students.
@@ -227,7 +228,7 @@ export const registerStudent = async (data: any, userId: string | null, currentU
             data: {
                 studentId: newStudent.id,
                 status: AdmissionStatus.REGISTERED,
-                academicYearId: activeAcademicYear?.id,
+                academicYearId: activeAcademicYear.id,
                 entryType: entryType as any,
                 entryYearOfStudy,
                 entryAcademicYearId,
@@ -1029,9 +1030,11 @@ export const changeServicePreferences = async (studentId: string, data: any, cur
             throw new AppError(`You are already allocated to ${targetValue}`, 400);
         }
 
+        const svcReqYear = await getActiveAcademicYear();
         await prisma.serviceChangeRequest.create({
             data: {
                 studentId,
+                academicYearId: svcReqYear.id,
                 type: 'FACILITY',
                 fromValue: currentVal,
                 toValue: targetValue,

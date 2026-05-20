@@ -5,6 +5,7 @@ import { HostelRoomType } from '@prisma/client';
 interface PriceCategoryInput {
     sharing: number;
     roomType: HostelRoomType;
+    academicYearId: string;
     accommodationYearwise?: number;
     messYearwise?: number;
     laundryYearwise?: number;
@@ -17,16 +18,21 @@ interface PriceCategoryInput {
 }
 
 export const createPriceCategory = async (data: PriceCategoryInput, userId: string | null) => {
-    // Check if exists
+    if (!data.academicYearId) {
+        throw new AppError('academicYearId is required when creating a hostel price category', 400);
+    }
+
+    // Duplicate check is year-scoped: same (sharing, roomType) in a different year is allowed.
     const existing = await prisma.hostelPriceCategory.findFirst({
         where: {
             sharing: data.sharing,
-            roomType: data.roomType
+            roomType: data.roomType,
+            academicYearId: data.academicYearId,
         }
     });
 
     if (existing) {
-        throw new AppError('Price category for this sharing and room type already exists', 409);
+        throw new AppError('Price category for this sharing, room type, and academic year already exists', 409);
     }
 
     return prisma.hostelPriceCategory.create({

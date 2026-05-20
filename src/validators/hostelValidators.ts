@@ -113,6 +113,7 @@ export const createHostelPriceCategorySchema = z.object({
     body: z.object({
         sharing: z.any().transform(val => Number(val)).refine(val => [2, 4, 6, 8, 10].includes(val), "Sharing must be 2, 4, 6, 8, or 10"),
         roomType: z.string().transform(v => v.toUpperCase()).pipe(z.enum(['AC', 'NON_AC'])),
+        academicYearId: z.string().uuid('academicYearId must be a valid UUID'),
 
         // Yearwise (Single Instalment)
         accommodationYearwise: z.number().min(0).optional(),

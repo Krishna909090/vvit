@@ -7,10 +7,12 @@ import { getActiveAcademicYear } from '../../utils/studentContext';
 export const ScholarshipService = {
     async createRule(data: any, createdBy: string) {
         const { name, minPercentile, discountPercentage, totalSlots } = data;
-        
+        const ruleYear = await getActiveAcademicYear();
+
         return await prisma.scholarshipRule.create({
             data: {
                 name,
+                academicYearId: ruleYear.id,
                 minPercentile: Number(minPercentile),
                 discountPercentage: Number(discountPercentage),
                 totalSlots: Number(totalSlots),
@@ -211,11 +213,13 @@ export const ScholarshipService = {
                 data: { filledSlots: { increment: 1 } }
              });
 
+             const lockYearId = (await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } })).id;
              // Create Allocation
              return await tx.scholarshipAllocation.create({
                 data: {
                     studentId,
                     ruleId,
+                    academicYearId: lockYearId,
                     status: ScholarshipStatus.LOCKED,
                     reservedAt: new Date(),
                     lockedAt: new Date()
@@ -274,10 +278,12 @@ export const ScholarshipService = {
                 });
             }
 
+            const reserveYearId = (await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } })).id;
             return await tx.scholarshipAllocation.create({
                 data: {
                     studentId,
                     ruleId,
+                    academicYearId: reserveYearId,
                     status: ScholarshipStatus.RESERVED,
                     reservedAt: new Date()
                 }
@@ -288,16 +294,9 @@ export const ScholarshipService = {
     async updateStudentScholarship(studentId: string, newPercentage: number, adminId: string, feeHeadId?: string, academicYearId?: string | null) {
         logger.info(`Updating scholarship for student ${studentId} to ${newPercentage}% (FeeHead: ${feeHeadId || 'AUTO-DETECT'})`);
 
-        // Resolve a year tag: caller-provided wins; else fall back to the active
-        // academic year. Stays NULL if neither resolves (legacy program-wide).
-        let resolvedYearId: string | null = academicYearId ?? null;
-        if (!resolvedYearId) {
-            try {
-                resolvedYearId = (await getActiveAcademicYear()).id;
-            } catch {
-                resolvedYearId = null;
-            }
-        }
+        // Resolve a year tag: caller-provided wins; else fall back to the active academic year.
+        // academicYearId is now required on StudentScholarship — error if neither resolves.
+        const resolvedYearId: string = academicYearId ?? (await getActiveAcademicYear()).id;
 
         return await prisma.$transaction(async (tx) => {
             // 1. Update/Create StudentScholarship record
@@ -371,6 +370,7 @@ export const ScholarshipService = {
                                 referenceId: demand.id,
                                 feeHeadId: demand.feeHeadId,
                                 createdBy: adminId,
+                                academicYearId: resolvedYearId,
                                 date: new Date()
                             }
                         });

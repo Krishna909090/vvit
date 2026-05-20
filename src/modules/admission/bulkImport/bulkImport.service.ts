@@ -245,9 +245,13 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
         });
 
         // 4. Admission Status
+        const activeYear = await tx.academicYear.findFirstOrThrow({
+            where: { isActive: true, isDeleted: false }
+        });
         await tx.studentAdmission.create({
             data: {
                 studentId: student.id,
+                academicYearId: activeYear.id,
                 status: AdmissionStatus.REGISTERED
             }
         });
@@ -322,9 +326,13 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
         // RECORD TOKEN PAYMENT
         const tokenAmount = data.amount || 10000;
         
+        const activeYear = await tx.academicYear.findFirstOrThrow({
+            where: { isActive: true, isDeleted: false }
+        });
         await tx.studentAdmission.create({
             data: {
                 studentId: student.id,
+                academicYearId: activeYear.id,
                 status: AdmissionStatus.ENTRANCE_FEE_PAID,
                 feeStatus: FeeStatus.PARTIAL,
                 paidFee: tokenAmount,
@@ -336,9 +344,7 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
             data: { studentId: student.id }
         });
 
-        // Create Payment Record (Token).
-        // academicYearId is not set on the admission in this flow, so skip it on the payment too
-        // (no source of truth — would be guessing). yearOfStudy=1 since this is a new admission.
+        // Create Payment Record (Token). Year-tag with the active academic year.
         const tokenTxnId = `OFF_TOK_${Date.now()}_${student.applicationId}`;
         await tx.payment.create({
             data: {
@@ -350,6 +356,7 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 providerTxId: tokenTxnId,
                 idempotencyKey: `${tokenTxnId}_SCHOLARSHIP_TOKEN`,
                 yearOfStudy: 1,
+                academicYearId: activeYear.id,
                 metadata: { notes: 'Bulk Upload Seat Booking' }
             }
         });
@@ -362,6 +369,7 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 amount: tokenAmount,
                 description: 'Seat Booking Token Fee (Offline)',
                 referenceType: 'PAYMENT',
+                academicYearId: activeYear.id,
                 date: new Date()
             }
         });
@@ -390,7 +398,7 @@ export const verifyOfflinePayment = async (studentId: string, amount: number, ty
     
     const component = type === 'ENTRANCE' ? PaymentComponent.APPLICATION_FEE : PaymentComponent.SCHOLARSHIP_TOKEN;
     const nextStatus = type === 'ENTRANCE' ? AdmissionStatus.ENTRANCE_FEE_PAID : AdmissionStatus.ADMISSION_CONFIRMED;
-    const academicYearId = student.admissionDetails.academicYearId ?? undefined;
+    const academicYearId = student.admissionDetails.academicYearId;
 
     return await prisma.$transaction(async (tx) => {
         // Create Payment
@@ -429,6 +437,7 @@ export const verifyOfflinePayment = async (studentId: string, amount: number, ty
                 description: `${type} Fee Verified by Admin`,
                 referenceType: 'PAYMENT',
                 referenceId: payment.id,
+                academicYearId,
                 date: new Date()
             }
         });
@@ -586,10 +595,13 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
         created: [] as { applicationId: string; studentId: string }[]
     };
 
-    // Pre-fetch shared data
+    // Pre-fetch shared data — fail fast if no active year configured.
     const activeAcademicYear = await prisma.academicYear.findFirst({
         where: { isActive: true, isDeleted: false }
     });
+    if (!activeAcademicYear) {
+        throw new AppError('No active academic year is set. Configure one before bulk-importing applications.', 400);
+    }
 
     const uniqueProNumbers = [...new Set(applications.map(a => a.pro).filter(Boolean))] as string[];
     const proRecords = uniqueProNumbers.length > 0
@@ -676,7 +688,7 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                         status: AdmissionStatus.ENTRANCE_FEE_PAID,
                         feeStatus: FeeStatus.PARTIAL,
                         paidFee: 500,
-                        academicYearId: activeAcademicYear?.id
+                        academicYearId: activeAcademicYear.id
                     }
                 });
 
@@ -690,7 +702,7 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                         method: PaymentMethod.CASH,
                         providerTxId: appTxnId,
                         idempotencyKey: `${appTxnId}_APPLICATION_FEE`,
-                        academicYearId: activeAcademicYear?.id,
+                        academicYearId: activeAcademicYear.id,
                         yearOfStudy: 1,
                         metadata: { notes: 'Offline Application - Bulk Import', verifiedBy: adminId }
                     }
@@ -704,6 +716,7 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                         description: 'Application Fee (Offline)',
                         referenceType: 'PAYMENT',
                         referenceId: payment.id,
+                        academicYearId: activeAcademicYear.id,
                         date: new Date()
                     }
                 });

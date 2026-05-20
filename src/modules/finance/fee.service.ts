@@ -7,6 +7,7 @@ import logger from '../../utils/logger';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { getHostelCostTx } from '../../utils/hostelPricing';
 import { assertHostelHasCapacity } from '../accommodation/hostel/hostel.service';
+import { getActiveAcademicYear } from '../../utils/studentContext';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';
@@ -882,6 +883,7 @@ export const FeeService = {
                              referenceType: 'DISCOUNT',
                              feeHeadId: targetDemand?.feeHeadId,
                              createdBy: adminId,
+                             academicYearId: (await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } })).id,
                              date: new Date()
                          }
                      });
@@ -1230,7 +1232,8 @@ export const FeeService = {
                         referenceId: demand.id,
                         referenceType: 'FEE_DEMAND',
                         feeHeadId: fee.feeHeadId,
-                        createdBy: userId
+                        createdBy: userId,
+                        academicYearId
                     }
                 });
 
@@ -1244,7 +1247,8 @@ export const FeeService = {
                             referenceId: demand.id,
                             referenceType: 'SCHOLARSHIP',
                             feeHeadId: fee.feeHeadId,
-                            createdBy: userId
+                            createdBy: userId,
+                            academicYearId
                         }
                     });
                     scholarshipApplied++;
@@ -1260,7 +1264,7 @@ export const FeeService = {
             if (newDemandsTotal > 0) {
                 await tx.studentAdmission.upsert({
                     where: { studentId },
-                    create: { studentId, totalFee: newDemandsTotal },
+                    create: { studentId, academicYearId, totalFee: newDemandsTotal },
                     update: { totalFee: { increment: newDemandsTotal } }
                 });
             }
@@ -1852,16 +1856,21 @@ export const FeeService = {
             } else {
                 // Case: Ad-Hoc Fine where no previous demand exists
                 if (type === 'FINE') {
+                    // Year-tag the fine with the active academic year (required since the phase-3 migration).
+                    const activeYear = await tx.academicYear.findFirstOrThrow({
+                        where: { isActive: true, isDeleted: false }
+                    });
                     const newDemand = await tx.studentFeeDemand.create({
                         data: {
                             studentId,
                             feeHeadId,
-                            amount: 0, 
+                            amount: 0,
                             fineAmount: amount,
                             status: 'PENDING',
                             dueDate: new Date(),
                             remarks: `Ad-Hoc Fine: ${reason}`,
-                            createdBy: userId
+                            createdBy: userId,
+                            academicYearId: activeYear.id
                         } as any
                     });
                     demandId = newDemand.id;
@@ -2021,6 +2030,7 @@ export const FeeService = {
                 if (transferAmount > 0) {
                     const oldServiceName = oldType === 'HOSTEL' ? 'Hostel' : 'Transport';
 
+                    const svcChangeYearId = (await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } })).id;
                     if (newType === 'NONE') {
                         // → NONE: record the paid amount as a refundable credit
                         await tx.studentLedger.create({
@@ -2031,6 +2041,7 @@ export const FeeService = {
                                 description: `${oldServiceName} cancelled — ₹${transferAmount.toLocaleString()} paid, refund due (service change: ${oldType} → NONE)`,
                                 referenceType: 'SERVICE_CHANGE',
                                 createdBy: adminId,
+                                academicYearId: svcChangeYearId,
                             }
                         });
                     } else {
@@ -2045,6 +2056,7 @@ export const FeeService = {
                                 description: `${oldServiceName} payment transferred to ${newServiceName} (service change: ${oldType} → ${newType})`,
                                 referenceType: 'SERVICE_CHANGE',
                                 createdBy: adminId,
+                                academicYearId: svcChangeYearId,
                             }
                         });
 
@@ -2056,6 +2068,7 @@ export const FeeService = {
                                 description: `Payment received from ${oldServiceName} transfer (service change: ${oldType} → ${newType})`,
                                 referenceType: 'SERVICE_CHANGE',
                                 createdBy: adminId,
+                                academicYearId: svcChangeYearId,
                             }
                         });
                     }
@@ -2063,9 +2076,11 @@ export const FeeService = {
             }
 
             // --- Log as ServiceChangeRequest ---
+            const svcYear = await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } });
             await tx.serviceChangeRequest.create({
                 data: {
                     studentId,
+                    academicYearId: svcYear.id,
                     type: 'FACILITY',
                     fromValue: oldType,
                     toValue: newType,

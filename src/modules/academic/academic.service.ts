@@ -447,6 +447,19 @@ export const AcademicService = {
         if (data.endDate) updateData.endDate = new Date(data.endDate);
         if (data.isActive !== undefined) updateData.isActive = data.isActive;
 
+        // If we're activating this year, deactivate every other active year in the same tx.
+        // The partial unique on AcademicYear(isActive) WHERE isActive=true would otherwise reject
+        // the update with a uniqueness violation.
+        if (data.isActive === true) {
+            return await prisma.$transaction(async (tx) => {
+                await tx.academicYear.updateMany({
+                    where: { isActive: true, id: { not: id } },
+                    data: { isActive: false, updatedBy }
+                });
+                return tx.academicYear.update({ where: { id }, data: updateData });
+            });
+        }
+
         return await prisma.academicYear.update({
             where: { id },
             data: updateData

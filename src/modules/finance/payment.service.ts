@@ -9,7 +9,7 @@ const ledgerLog = createModuleLogger('LEDGER');
 import { format } from 'date-fns';
 import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod, PaymentMode, HostelPaymentMode, AccommodationType } from '@prisma/client';
 import { getApplicationFeeAmount } from './fee.service';
-import { getOrCreateAccommodationPricing, resolveFeeDemandContext } from '../../utils/studentContext';
+import { getOrCreateAccommodationPricing, resolveFeeDemandContext, getActiveAcademicYear } from '../../utils/studentContext';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { ScholarshipService } from './scholarship.service';
@@ -274,6 +274,9 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     let createdPayment: any = null;
 
     await prisma.$transaction(async (tx) => {
+        const activeYear = await tx.academicYear.findFirstOrThrow({
+            where: { isActive: true, isDeleted: false }
+        });
         const existingPending = await tx.payment.findFirst({
             where: {
                 studentId,
@@ -308,7 +311,8 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
                         component: PaymentComponent.APPLICATION_FEE,
                         providerTxId: transactionId,
                         idempotencyKey: `${transactionId}_APPLICATION_FEE`,
-                        method: PaymentMethod.UPI
+                        method: PaymentMethod.UPI,
+                        academicYearId: activeYear.id
                     }
                 });
                 logger.info(`[initiateApplicationFeePayment] Created fresh payment ${createdPayment.id} txnId=${transactionId}`);
@@ -324,7 +328,8 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
                     component: PaymentComponent.APPLICATION_FEE,
                     providerTxId: transactionId,
                     idempotencyKey: `${transactionId}_APPLICATION_FEE`,
-                    method: PaymentMethod.UPI
+                    method: PaymentMethod.UPI,
+                    academicYearId: activeYear.id
                 }
             });
             logger.info(`[initiateApplicationFeePayment] Created new PENDING payment ${createdPayment.id} txnId=${transactionId}`);
@@ -487,6 +492,10 @@ export const initiateMultiComponentPayment = async (
     const createdPayments: any[] = [];
 
     await prisma.$transaction(async (tx) => {
+        const activeYear = await tx.academicYear.findFirstOrThrow({
+            where: { isActive: true, isDeleted: false }
+        });
+
         // Double-check inside transaction to prevent race condition (skip for CASH)
         if (isOffline && referenceNumber && paymentMethod !== PaymentMethod.CASH) {
             const duplicate = await tx.payment.findFirst({
@@ -512,7 +521,8 @@ export const initiateMultiComponentPayment = async (
                     createdBy: userId,
                     collectedBy: paymentMethod === PaymentMethod.CASH ? userId : undefined,
                     metadata: remarks ? { remarks, mode: 'OFFLINE_ENTRY' } : undefined,
-                    feeHeadId: item.feeHeadId
+                    feeHeadId: item.feeHeadId,
+                    academicYearId: activeYear.id
                 }
             });
             paymentIds.push(payment.id);
@@ -899,6 +909,10 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
 
     // Transaction to prevent race conditions and ensure atomicity
     const result = await prisma.$transaction(async (tx) => {
+        const activeYear = await tx.academicYear.findFirstOrThrow({
+            where: { isActive: true, isDeleted: false }
+        });
+
         // Duplicate check inside transaction to prevent race conditions
         const existingPayment = await tx.payment.findFirst({
             where: {
@@ -926,7 +940,8 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
                 collectedBy: adminId,
                 createdBy: adminId,
                 updatedBy: adminId,
-                metadata: { remarks, mode: 'OFFLINE_ENTRY' }
+                metadata: { remarks, mode: 'OFFLINE_ENTRY' },
+                academicYearId: activeYear.id
             }
         });
 
@@ -1564,6 +1579,10 @@ export const approveDiscount = async (requestId: string, approvedAmount: number,
     const approvedItems = [{ component, approvedAmount }];
 
     return await prisma.$transaction(async (tx) => {
+         const activeYear = await tx.academicYear.findFirstOrThrow({
+             where: { isActive: true, isDeleted: false }
+         });
+
          const updated = await tx.discountRequest.update({
             where: { id: requestId },
             data: {
@@ -1576,12 +1595,12 @@ export const approveDiscount = async (requestId: string, approvedAmount: number,
                 approvedAt: new Date()
             } as any
          });
-         
+
          // Create Ledger Entry
-         // Logic to find demand is skipped here for simplicity as this is legacy approve flow, 
+         // Logic to find demand is skipped here for simplicity as this is legacy approve flow,
          // but ideally should match FeeService logic.
          // Let's just create Ledger Entry as before.
-         
+
          await tx.studentLedger.create({
             data: {
                 studentId: request.studentId,
@@ -1591,6 +1610,7 @@ export const approveDiscount = async (requestId: string, approvedAmount: number,
                 referenceId: updated.id,
                 referenceType: 'DISCOUNT',
                 createdBy: adminId,
+                academicYearId: activeYear.id,
                 // feeHeadId: ??? Find it?
                 date: new Date()
             }
@@ -1733,6 +1753,7 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
 
     const transactionId = `TOK_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
 
+    const activeYear = await getActiveAcademicYear();
     const createdPayment = await prisma.payment.create({
         data: {
             studentId,
@@ -1741,7 +1762,8 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
             component: PaymentComponent.SCHOLARSHIP_TOKEN,
             providerTxId: transactionId,
             idempotencyKey: `${transactionId}_SCHOLARSHIP_TOKEN`,
-            method: PaymentMethod.UPI
+            method: PaymentMethod.UPI,
+            academicYearId: activeYear.id
         }
     });
 
@@ -2013,6 +2035,7 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
             const s3Key = `student/${student.phone}/documents/ProvisionalAllotmentOrder_${timestamp}.pdf`;
             const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
 
+            const allotmentYear = await getActiveAcademicYear();
             await prisma.studentDocument.upsert({
                 where: {
                     studentId_documentKey: {
@@ -2025,7 +2048,8 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                     documentKey: 'ALLOTMENT_ORDER',
                     url: url,
                     status: StudentDocumentStatus.APPROVED,
-                    remarks: 'Generated after Fee Payment'
+                    remarks: 'Generated after Fee Payment',
+                    academicYearId: allotmentYear.id
                 },
                 update: {
                     url: url,
@@ -2123,6 +2147,7 @@ export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
         const s3Key = `student/${student.phone}/documents/HostelAllotmentOrder_${timestamp}.pdf`;
         const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
 
+        const hostelDocYear = await getActiveAcademicYear();
         await prisma.studentDocument.upsert({
             where: {
                 studentId_documentKey: {
@@ -2136,6 +2161,7 @@ export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
                 url,
                 status: StudentDocumentStatus.APPROVED,
                 remarks: 'Generated on hostel bed allocation',
+                academicYearId: hostelDocYear.id,
             },
             update: {
                 url,
@@ -2231,6 +2257,7 @@ export const processUnifiedPayment = async (data: any) => {
     // 4. Create Payment Record
     logger.info(`[processUnifiedPayment] Creating payment record with status=PENDING`);
 
+    const unifiedYear = await getActiveAcademicYear();
     const payment = await prisma.payment.create({
         data: {
             studentId,
@@ -2245,7 +2272,8 @@ export const processUnifiedPayment = async (data: any) => {
             idempotencyKey: `${providerTxId}_${component}`,
             collectedBy: initiatedBy,
             createdBy: initiatedBy, // Strict data
-            metadata: { remarks, source: 'UNIFIED_API' }
+            metadata: { remarks, source: 'UNIFIED_API' },
+            academicYearId: unifiedYear.id
         }
     });
 
@@ -2335,23 +2363,20 @@ export const getStudentFinancialHistory = async (
     const allFeeHeads = await prisma.feeHead.findMany();
 
     // 3. Fetch Financial Records (Parallel).
-    // When `academicYearId` is set, every per-year-tagged record is filtered to that
-    // year. Records that have no `academicYearId` (older payments / ledger entries
-    // pre-denormalization) are still included so reports remain complete.
+    // academicYearId is now NOT NULL on every financial table (Payment, StudentLedger,
+    // StudentFeeDemand) after the year-tag migration — so a strict year filter is enough,
+    // no NULL-fallback OR-branch needed.
     const yearFilter = academicYearId
         ? { academicYearId }
-        : {};
-    const yearOrNullFilter = academicYearId
-        ? { OR: [{ academicYearId }, { academicYearId: null }] }
         : {};
 
     const [ledgers, payments, feeDemands, feeCorrections] = await Promise.all([
         prisma.studentLedger.findMany({
-            where: { studentId, isDeleted: false, ...yearOrNullFilter },
+            where: { studentId, isDeleted: false, ...yearFilter },
             orderBy: { date: 'desc' }
         }),
         prisma.payment.findMany({
-            where: { studentId, status: PaymentStatus.SUCCESS, isDeleted: false, ...yearOrNullFilter },
+            where: { studentId, status: PaymentStatus.SUCCESS, isDeleted: false, ...yearFilter },
             include: {
                 feeDemand: {
                     include: { feeStructure: { include: { feeHead: true } } }
@@ -2359,7 +2384,8 @@ export const getStudentFinancialHistory = async (
             }
         }),
         prisma.studentFeeDemand.findMany({
-            where: { studentId, isDeleted: false, ...yearOrNullFilter },
+            // StudentFeeDemand.academicYearId is now NOT NULL (phase 3 migration) — no legacy NULL rows to OR-include.
+            where: { studentId, isDeleted: false, ...yearFilter },
             include: {
                 feeStructure: { include: { feeHead: true } },
                 feeHead: true

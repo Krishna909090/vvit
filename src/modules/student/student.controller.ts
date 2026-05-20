@@ -11,6 +11,7 @@ import { catchAsync } from '../../utils/catchAsync';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 import { sendResponse } from '../../utils/response';
+import { getActiveAcademicYear } from '../../utils/studentContext';
 
 // Phase 1: Registration
 export const registerStudent = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -200,9 +201,11 @@ export const requestCourseChange = catchAsync(async (req: Request, res: Response
         throw new AppError(MESSAGES.ERROR.COURSE_CHANGE_ALREADY_REQUESTED || 'Course change request already pending', 409);
     }
 
+    const activeYear = await getActiveAcademicYear();
     const request = await prisma.courseChangeRequest.create({
         data: {
             studentId,
+            academicYearId: activeYear.id,
             fromCourse: student.admissionDetails.allottedCourseId,
             toCourse: newCourseId,
             reason,

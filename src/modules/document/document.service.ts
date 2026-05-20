@@ -89,16 +89,9 @@ export const upsertStudentDocuments = async (
     academicYearId?: string | null
 ) => {
     // Resolve a year tag once: caller-provided wins; else fall back to the active
-    // academic year so new documents are year-tagged going forward. If neither
-    // resolves, the column stays NULL (legacy program-wide semantics).
-    let resolvedYearId: string | null = academicYearId ?? null;
-    if (!resolvedYearId) {
-        try {
-            resolvedYearId = (await getActiveAcademicYear()).id;
-        } catch {
-            resolvedYearId = null;
-        }
-    }
+    // academic year so new documents are year-tagged going forward.
+    // academicYearId is now required on StudentDocument — error if neither resolves.
+    const resolvedYearId: string = academicYearId ?? (await getActiveAcademicYear()).id;
 
     const docPromises = Object.keys(documentData).map(key => {
         if (key.endsWith('Url')) {
