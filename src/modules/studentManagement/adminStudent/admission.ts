@@ -12,7 +12,6 @@ import {
     StudentDocumentStatus,
     AccommodationType,
     FeeStatus,
-    Prisma,
     HostelType,
     PaymentMethod,
     PaymentStatus,
@@ -29,10 +28,8 @@ import { Role } from '../../../constants/roles';
 import logger from '../../../utils/logger';
 import { AppError } from '../../../utils/AppError';
 import { MESSAGES } from '../../../constants/messages';
-import { registerStudent } from '../../student/student.service';
 import { FeeService, getApplicationFeeAmount } from '../../finance/fee.service';
 import { convertToPresignedUrl } from '../../../utils/s3Utils';
-import { maskAadhaar } from '../../../utils/mask';
 import { getHostelCostTx, getSemwiseSurchargeTx } from '../../../utils/hostelPricing';
 import { assertHostelHasCapacity } from '../../accommodation/hostel/hostel.service';
 import {
@@ -42,24 +39,17 @@ import {
     getCourseCapacity,
 } from '../../../utils/courseCapacity';
 import {
-    getStudentContext,
-    getStudentYearOfStudy,
-    assertActiveAdmission,
     resolveFeeHeadsByComponent,
     resolveFeeDemandContext,
     assertAcademicYearWritable,
     getActiveAcademicYear,
 } from '../../../utils/studentContext';
-import { sendAdmissionFeeReceipt, sendPaymentReceipt, sendScholarshipUpdateEmail } from '../../../utils/emailService';
+import { sendPaymentReceipt, sendScholarshipUpdateEmail } from '../../../utils/emailService';
 // @ts-ignore
 import { StandardCheckoutClient, StandardCheckoutPayRequest } from 'pg-sdk-node';
 import { InvoiceService } from '../../finance/invoice.service';
 import { getPhonePeClient, initiatePhonePePayment, generateAndSaveAllotmentOrder } from '../../finance/payment.service';
 import {
-    PHONEPE_MERCHANT_ID,
-    PHONEPE_SALT_KEY,
-    PHONEPE_SALT_INDEX,
-    PHONEPE_ENV,
     FRONTEND_URL_ADMISSION,
     PREF_COURSE_WITH_CAPACITY,
     attachCourseCapacity,
@@ -67,6 +57,11 @@ import {
 import { AccommodationService } from './accommodation';
 
 export const AdmissionService = {
+    /**
+     * Legacy cancellation entrypoint — just records a CancellationRequest row
+     * with a manually-supplied refund amount. New cancellation flows go through
+     * the dedicated cancellation.service which computes the refund.
+     */
     async requestCancellation(studentId: string, reason: string, refundAmount: number) {
         if (!studentId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_REASON_REQUIRED, 400);
 
@@ -87,6 +82,11 @@ export const AdmissionService = {
         });
     },
 
+    /**
+     * SUPER_ADMIN-only approval of a CancellationRequest. On approval, flips
+     * the request status, marks the student's admission CANCELLED, and triggers
+     * downstream cleanup (allocations vacated by the cancellation service).
+     */
     async approveCancellation(requestId: string, approved: boolean, adminRole: string | undefined, adminId: string | undefined) {
         if (adminRole !== Role.SUPER_ADMIN) {
             throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
@@ -130,6 +130,12 @@ export const AdmissionService = {
         return { status };
     },
 
+    /**
+     * Document-verification + seat-allotment in one call. On approve: flips
+     * admission to SEAT_ALLOTTED, assigns allottedCourseId, increments course
+     * capacity, logs a SeatAllocation row. On reject: marks pending documents
+     * as REJECTED so the student is prompted to re-upload.
+     */
     async verifyAndAllotSeat(studentId: string, approved: boolean, allottedCourseId: string, adminId: string | undefined) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
         if (!approved) {
@@ -187,6 +193,11 @@ export const AdmissionService = {
         return { success: true, message: MESSAGES.SUCCESS.SEAT_ALLOTTED };
     },
 
+    /**
+     * Single-document verification: APPROVED / REJECTED / PENDING. When the
+     * full set is approved, downstream verify-and-allot can proceed. Includes
+     * a notification email when the status changes.
+     */
     async verifyStudentDocument(studentId: string, documentKey: string, status: string, remarks: string | undefined) {
         if (!studentId || !documentKey || !status) {
             throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
@@ -407,6 +418,11 @@ export const AdmissionService = {
         });
     },
 
+    /**
+     * Student-initiated request to change allotted course. Creates a PENDING
+     * CourseChangeRequest forwarded to SUPER_ADMIN. Actual seat swap happens
+     * in approveCourseChange.
+     */
     async requestCourseChange(studentId: string, newCourseId: string, reason: string) {
         if (!studentId || !newCourseId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_NEWCOURSE_REASON_REQUIRED, 400);
 
@@ -448,6 +464,13 @@ export const AdmissionService = {
     },
 
 
+    /**
+     * The big one. SUPER_ADMIN approval of a course/branch/program change.
+     * Atomically: decrements old course capacity, increments new, supersedes
+     * fee structures (recalibrates discounts + scholarship), creates a
+     * CourseChangeLog audit row, optionally charges a branch-change fee, and
+     * sends an email. Rolls back cleanly on capacity overflow.
+     */
     async approveCourseChange(requestId: string, approved: boolean, adminRole: string | undefined, adminId: string | undefined, recommendedByManagement?: boolean, branchChangeFee?: number) {
         if (adminRole !== Role.SUPER_ADMIN) {
             throw new AppError(MESSAGES.ERROR.ONLY_SUPER_ADMIN_APPROVE_COURSE, 403);
@@ -568,15 +591,12 @@ export const AdmissionService = {
                 // Track which fee heads exist in new course (for orphan cleanup)
                 const newCourseHeadIds = new Set(newCourseStructures.map(s => s.feeHeadId));
 
-                let tuitionHeadId: string | null = null;
                 const totalPaidAcrossAll = studentDemands.reduce((sum, d) => sum + d.payments.reduce((ps, p) => ps + p.amount, 0), 0);
 
                 // Process each structure in the NEW course
                 for (const struct of newCourseStructures) {
                     const existingDemand = studentDemands.find(d => d.feeHeadId === struct.feeHeadId);
                     const isTuition = (struct.feeHead?.name || '').toLowerCase().includes('tuition');
-
-                    if (isTuition) tuitionHeadId = struct.feeHeadId;
 
                     if (existingDemand) {
                         const oldFee = existingDemand.amount;
@@ -867,6 +887,12 @@ export const AdmissionService = {
 
     ...AccommodationService,
 
+    /**
+     * Broad admin-driven update of a student's accommodation + admission
+     * details (hostel id/type/payment-mode, transport route, paid amount).
+     * Recalculates fee deltas, supersedes pricing snapshot, and adjusts
+     * totalFee accordingly.
+     */
     async updateAdmissionDetails(data: any, adminId: string | undefined) {
         const { studentId, accommodationType, hostelType, hostelId, transportRouteId, paidAmount, hostelPaymentMode } = data;
 
@@ -1081,6 +1107,10 @@ export const AdmissionService = {
     },
 
 
+    /**
+     * Assigns / overwrites a student's roll number for a given section + year.
+     * Upserts the StudentEnrollment row so re-assigning is idempotent.
+     */
     async updateRollNumber(studentId: string, rollNumber: string, sectionId: string, academicYearId: string, userId?: string) {
         const student = await prisma.student.findUnique({
              where: { id: studentId }
@@ -1103,7 +1133,8 @@ export const AdmissionService = {
         return enrollment;
     },
 
-    async updateStudentAdmissionStatus(studentId: string, status: AdmissionStatus, adminId: string | undefined) {
+    /** Admin override of an admission's status (used for manual corrections). */
+    async updateStudentAdmissionStatus(studentId: string, status: AdmissionStatus, _adminId: string | undefined) {
         if (!studentId || !status) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
         if (!Object.values(AdmissionStatus).includes(status)) {
@@ -1121,6 +1152,7 @@ export const AdmissionService = {
         return { success: true, message: `Admission status updated to ${status}` };
     },
 
+    /** Sets the rule a student is eligible under (admin-managed). */
     async setScholarshipEligibility(studentId: string, ruleId: string) {
         if (!studentId || !ruleId) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
@@ -1135,6 +1167,10 @@ export const AdmissionService = {
         return student;
     },
 
+    /**
+     * Updates a student's exam / entrance scores. Triggers scholarship-rule
+     * re-evaluation if the percentile change crosses a rule threshold.
+     */
     async updateStudentScores(studentId: string, scores: any, adminId: string) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
@@ -1168,6 +1204,7 @@ export const AdmissionService = {
     },
 
 
+    /** Admin edit of personal fields (name, dob, contacts, address, photo). */
     async updateStudentPersonalDetails(studentId: string, data: any, adminId: string | undefined) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
@@ -1234,6 +1271,12 @@ export const AdmissionService = {
         return { success: true, message: 'Student personal details updated successfully', profilePhotoUrl: presignedPhotoUrl };
     },
 
+    /**
+     * Full student profile: admission, exam, documents, qualifications,
+     * scholarship, fee demands + payments, ledger, course-change logs,
+     * enrollments, active hostel + transport allocations (with academicYear
+     * tag), pref courses + capacity. The "everything" detail endpoint.
+     */
     async getStudentDetails(studentId: string) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
@@ -1318,6 +1361,10 @@ export const AdmissionService = {
         };
     },
 
+    /**
+     * Same payload as getStudentDetails but looks up by applicationId /
+     * name / email / phone (fuzzy match). Used by admin search bars.
+     */
     async getStudentDetailsByApplicationId(applicationId: string) {
         if (!applicationId) throw new AppError('Application ID is required', 400);
 
@@ -1409,6 +1456,7 @@ export const AdmissionService = {
         };
     },
 
+    /** Admin edit of a single AcademicQualification row (marks/board/year). */
     async updateAcademicQualification(id: string, data: any, adminId: string | undefined) {
         if (!id) throw new AppError('Qualification ID is required', 400);
 
@@ -1427,6 +1475,7 @@ export const AdmissionService = {
         });
     },
 
+    /** Hard-delete of a qualification row (admin-only, used to fix duplicates). */
     async deleteAcademicQualification(id: string) {
         if (!id) throw new AppError('Qualification ID is required', 400);
 
@@ -1443,6 +1492,11 @@ export const AdmissionService = {
         return { success: true, message: 'Qualification deleted successfully' };
     },
 
+    /**
+     * Admin sets a qualification's verificationStatus (APPROVED / REJECTED /
+     * PENDING). Records verifiedBy + remarks for audit. Doesn't cascade —
+     * use verifyStudentDocument for the document-level flow.
+     */
     async validateAcademicQualification(qualificationId: string, status: string, remarks: string | undefined, adminId: string | undefined) {
         if (!qualificationId || !status) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
@@ -1453,7 +1507,7 @@ export const AdmissionService = {
         if (!qualification) throw new AppError('Qualification not found', 404);
 
         // Update verification column via Prisma
-        const updatedQualification = await prisma.academicQualification.update({
+        await prisma.academicQualification.update({
             where: { id: qualificationId },
             data: {
                 verificationStatus: status,
@@ -1466,10 +1520,15 @@ export const AdmissionService = {
         return { success: true, message: 'Qualification status updated successfully' };
     },
     
+    /**
+     * Upsert the student's scholarship: type, percentage, qualification link,
+     * eligibility flag. On percentage change, propagates the new discount into
+     * every PENDING tuition demand via propagateScholarshipUpdate.
+     */
     async updateStudentScholarship(studentId: string, data: any, adminId: string | undefined) {
          if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-         const { id, type, degreeType, score, remarks, scholarshipPercentage, qualificationId, isEligible } = data;
+         const { type, degreeType, score, remarks, scholarshipPercentage, qualificationId, isEligible } = data;
 
          // Check if qualification exists if provided
          if (qualificationId) {
@@ -1609,6 +1668,7 @@ export const AdmissionService = {
          return newScholarship;
     },
 
+    /** Returns the current StudentScholarship row (one per student, latest year). */
     async getStudentScholarships(studentId: string) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
@@ -1619,6 +1679,10 @@ export const AdmissionService = {
         });
     },
 
+    /**
+     * Edit a specific scholarship row by id (vs updateStudentScholarship which
+     * upserts by studentId). Used by the "edit existing scholarship" admin UI.
+     */
     async editStudentScholarship(scholarshipId: string, data: any, adminId: string | undefined) {
         if (!scholarshipId) throw new AppError('Scholarship ID is required', 400);
 
@@ -1696,6 +1760,10 @@ export const AdmissionService = {
         return updatedScholarship;
     },
 
+    /**
+     * Aggregate scholarship dashboard: count of LOCKED vs RESERVED per rule,
+     * total discount approved, remaining slots. Powers the admin overview card.
+     */
     async getScholarshipStats() {
         // Group by degreeType and scholarshipPercentage
         const dbStats = await prisma.studentScholarship.groupBy({
@@ -1771,6 +1839,11 @@ export const AdmissionService = {
 
 
     // --- HELPER: Propagate Scholarship Changes ---
+    /**
+     * Internal helper: when a student's scholarship percentage changes, walk
+     * every PENDING tuition demand and re-apply the discount + matching
+     * ledger DEBIT/CREDIT delta. Must run inside a tx (passed by caller).
+     */
     propagateScholarshipUpdate: async (studentId: string, newPct: number, adminId: string | undefined, tx: any) => {
         logger.info(`[propagateScholarshipUpdate] Updating demands to ${newPct}% for student ${studentId}`);
 
@@ -1909,6 +1982,10 @@ export const AdmissionService = {
         }
     },
 
+    /**
+     * Sends the admission-confirmation email + receipt PDF after a successful
+     * admission-fee payment. Idempotent by paymentId.
+     */
     async sendAdmissionSuccessEmail(paymentId: string) {
          try {
              const p = await prisma.payment.findUnique({ 
@@ -1962,7 +2039,12 @@ export const AdmissionService = {
          }
     },
 
-    async executeAdmissionUpdates(studentId: string, payload: any, paymentId: string, adminId: string, tx: any) {
+    /**
+     * Internal helper run inside finalizeAdmission's transaction. Updates the
+     * StudentAdmission record with allotted course, accommodation choice, and
+     * fee totals based on the finalize payload. Must run in a tx.
+     */
+    async executeAdmissionUpdates(studentId: string, payload: any, _paymentId: string, adminId: string, tx: any) {
         try {
             const { allocation, scholarship, course } = payload;
             logger.info(`[executeAdmissionUpdates] Allocation: ${allocation.type}, Scholarship: ${scholarship.percentage}%`);
@@ -2037,7 +2119,6 @@ export const AdmissionService = {
 
             // --- Determine Base Tuition Fee (For New Admissions) ---
             let baseTuition = 0;
-            const isNewAdmission = !oldAdmission || (oldAdmission.status !== AdmissionStatus.ADMISSION_CONFIRMED && oldAdmission.status !== AdmissionStatus.ENROLLED);
 
             // --- 3. Update Admission Record ---
             logger.debug(`[executeAdmissionUpdates] Updating Student Admission record`);
@@ -2701,6 +2782,7 @@ export const AdmissionService = {
          };
     },
 
+    /** Returns the latest admission-fee invoice URL (presigned) for a student. */
     async getAdmissionInvoice(studentId: string) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
@@ -2746,6 +2828,10 @@ export const AdmissionService = {
 
 
 
+    /**
+     * Generic status-update email: approved / rejected / pending lists for
+     * documents or qualifications. Single template, parameterized by updateType.
+     */
     async sendStatusEmail(data: { studentId: string; updateType: string; approvedItems?: any[]; rejectedItems?: any[]; pendingItems?: any[] }) {
         const { studentId, updateType, approvedItems, rejectedItems, pendingItems } = data;
 
@@ -2783,6 +2869,11 @@ export const AdmissionService = {
         return { success: true };
     },
 
+    /**
+     * Diagnostic endpoint: every student allotted to a course with their
+     * admission status, fee paid, hostel/transport choices. Used to debug
+     * "why does the dashboard say N but I only see M?" mismatches.
+     */
     async debugCourseAllotments(courseId: string) {
         if (!courseId) throw new AppError('courseId is required', 400);
 
@@ -2839,6 +2930,10 @@ export const AdmissionService = {
         };
     },
 
+    /**
+     * List CourseChangeRequest rows with filters (status, dateRange, fromCourse,
+     * toCourse). Used by the super-admin approval queue.
+     */
     async getCourseChangeRequests(filters: any) {
         const { status, studentId, applicationId, page = 1, limit = 10 } = filters;
         const pageNum = Math.max(1, parseInt(page));
@@ -3072,6 +3167,11 @@ export const AdmissionService = {
         };
     },
 
+    /**
+     * Backfill the `seatAllotedBy` column on StudentAdmission (the admin who
+     * allotted the seat). Used to correct historical rows where the column
+     * wasn't populated.
+     */
     async updateSeatAllotedBy(studentId: string, seatAllotedBy: string, adminId: string | undefined) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
         if (!seatAllotedBy) throw new AppError('seatAllotedBy is required', 400);

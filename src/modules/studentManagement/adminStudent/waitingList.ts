@@ -14,6 +14,12 @@ import {
 } from '../../../utils/courseCapacity';
 
 export const WaitingListService = {
+    /**
+     * Bulk-add a student to the waitlist for one or more courses. Year-scoped:
+     * same (student, course) is allowed across years, blocked twice in the
+     * active year. Validates student + courses up front, skips already-waiting
+     * entries silently and reports them in the response.
+     */
     async addToWaitingList(data: { studentId: string; courseIds: string[]; remarks?: string }, adminId: string) {
         const { studentId, courseIds, remarks } = data;
 

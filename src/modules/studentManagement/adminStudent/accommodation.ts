@@ -13,15 +13,9 @@ import {
     LedgerTransactionType,
     HostelPaymentMode,
 } from '@prisma/client';
-import logger from '../../../utils/logger';
 import { AppError } from '../../../utils/AppError';
 import { MESSAGES } from '../../../constants/messages';
 import { convertToPresignedUrl } from '../../../utils/s3Utils';
-import { getHostelCostTx, getSemwiseSurchargeTx } from '../../../utils/hostelPricing';
-import {
-    incrementCourseCapacity,
-    decrementCourseCapacity,
-} from '../../../utils/courseCapacity';
 import { assertHostelHasCapacity } from '../../accommodation/hostel/hostel.service';
 import {
     getStudentContext,

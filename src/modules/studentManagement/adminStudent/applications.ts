@@ -2,7 +2,7 @@
 // split out of adminStudent.service.ts.
 
 import prisma from '../../../config/prisma';
-import { AdmissionStatus, AccommodationType, PaymentStatus, PaymentComponent, LedgerTransactionType } from '@prisma/client';
+import { AccommodationType, PaymentStatus, PaymentComponent, LedgerTransactionType } from '@prisma/client';
 import { registerStudent } from '../../student/student.service';
 import logger from '../../../utils/logger';
 import { AppError } from '../../../utils/AppError';
@@ -22,6 +22,12 @@ import {
 } from './_shared';
 
 export const ApplicationsService = {
+    /**
+     * Paginated student application list with deep eager-loading (admission, exam,
+     * payments, allocations, pref courses with capacity). Used by the main admin
+     * applications grid. Filters resolved by `buildApplicationFilters` (search,
+     * status, quota, exam dates, marks, fee-paid, etc.).
+     */
     async getAllApplications(query: any) {
         const { page = 1, limit = 10 } = query;
         const skip = (Number(page) - 1) * Number(limit);
@@ -119,6 +125,11 @@ export const ApplicationsService = {
         };
     },
 
+    /**
+     * Same filter set as getAllApplications but emits CSV (no pagination).
+     * Resolves verifiedBy user IDs to names so the export shows admin names,
+     * not UUIDs.
+     */
     async exportApplicationsCsv(query: any) {
         const where = await buildApplicationFilters(query);
 
@@ -191,6 +202,11 @@ export const ApplicationsService = {
         return Papa.unparse(rows);
     },
 
+    /**
+     * Widened applications list used by the extended-search admin screen.
+     * Adds preference-name search, allottedCourseId lookup, and exam-attended
+     * filters on top of the standard buildApplicationFilters surface.
+     */
     async getApplicationsExtended(query: any) {
         const { page = 1, limit = 10, search, status, quotaType, courseType, degree, applicationId, isScholarshipEligible, gender, preference, paymentStatus } = query;
         const skip = (Number(page) - 1) * Number(limit);
@@ -375,6 +391,12 @@ export const ApplicationsService = {
         };
     },
 
+    /**
+     * Legacy bulk-create entrypoint: takes a CSV string and runs the public
+     * `registerStudent` flow per row. Returns a list of per-row results
+     * (success / failure with error message). New flows should use the
+     * dedicated bulkImport module instead.
+     */
     async processBulkApplications(fileContent: string, currentUserId: string | undefined) {
         const { data, errors } = Papa.parse(fileContent, {
             header: true,
@@ -428,6 +450,10 @@ export const ApplicationsService = {
         }
         return results;
     },
+    /**
+     * Returns a student's uploaded documents + verification status, with
+     * presigned S3 URLs so the admin UI can render previews.
+     */
     async getStudentCertificates(studentId: string) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     
@@ -466,6 +492,10 @@ export const ApplicationsService = {
         };
     },
 
+    /**
+     * Streams every approved document for a student into a single zip buffer.
+     * Used by the "download all" button on the document-verification screen.
+     */
     async generateStudentDocumentsZip(studentId: string) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     
@@ -531,6 +561,10 @@ export const ApplicationsService = {
         });
     },
 
+    /**
+     * Renders the student's application form as a PDF (the same shape the
+     * student sees on signup confirmation). Used by admins as proof-of-record.
+     */
     async downloadApplication(studentId: string) {
         const student = await prisma.student.findUnique({
             where: { id: studentId },
@@ -591,6 +625,11 @@ export const ApplicationsService = {
         
         return await generateApplicationPDF(pdfData);
     },
+    /**
+     * Financial-only view of applications: per-student totals + fee component
+     * breakdown (application fee, tuition, admission, book bank, hostel total
+     * vs paid, transport yes/no). Used by the finance dashboard.
+     */
     async getFinancialApplications(query: any) {
         const { page = 1, limit = 10, search, applicationId, gender, degree, feeType, dateRange, startDate, endDate, seatAllotedBy } = query;
         const skip = (Number(page) - 1) * Number(limit);
