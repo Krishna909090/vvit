@@ -256,7 +256,7 @@ model Student {
   discountRequests          DiscountRequest[]
   fileUploads               FileUpload[]
   hallTickets               HallTicket[]
-  hostelAllocation          HostelAllocation?
+  hostelAllocations         HostelAllocation[]
   payments                  Payment[]
   scholarshipAllocation     ScholarshipAllocation?
   seatAllocations           SeatAllocation[]
@@ -528,30 +528,30 @@ model HostelBed {
   updatedAt  DateTime          @updatedAt
   createdBy  String?
   updatedBy  String?
-  allocation HostelAllocation?
-  room       HostelRoom        @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  allocations HostelAllocation[]
+  room        HostelRoom        @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model HostelAllocation {
   id        String                  @id @default(dbgenerated("gen_random_uuid()"))
-  studentId String                  @unique
-  bedId     String                  @unique
+  studentId String
+  bedId     String
   startDate DateTime
   endDate   DateTime?
   status    HostelAllocationStatus? @default(ACTIVE)
-  // Optional year tag. NULL = legacy / untagged. NOTE: studentId is still @unique —
-  // one allocation per student. For true per-year hostel history, drop @unique and
-  // add @@unique([studentId, academicYearId]) (turns the relation one-to-many).
-  academicYearId String?
+  academicYearId String
   createdAt DateTime?               @default(now())
   updatedAt DateTime                @updatedAt
   createdBy String?
   updatedBy String?
   bed       HostelBed               @relation(fields: [bedId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student   Student                 @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  academicYear AcademicYear?        @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear AcademicYear         @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
+  @@unique([studentId, academicYearId])
   @@index([academicYearId])
+  @@index([bedId])
+  @@index([studentId, status])
 }
 
 model Vehicle {

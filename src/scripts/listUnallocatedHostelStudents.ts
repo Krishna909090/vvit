@@ -9,10 +9,7 @@ async function listUnallocatedHostelStudents() {
             admissionDetails: {
                 accommodationType: 'HOSTEL',
             },
-            OR: [
-                { hostelAllocation: null },
-                { hostelAllocation: { status: { not: 'ACTIVE' } } },
-            ],
+            hostelAllocations: { none: { status: 'ACTIVE' } },
         },
         select: {
             applicationId: true,
@@ -27,8 +24,15 @@ async function listUnallocatedHostelStudents() {
                     hostel: { select: { name: true } },
                 },
             },
-            hostelAllocation: {
-                select: { status: true },
+            hostelAllocations: {
+                where: { status: 'ACTIVE' },
+                take: 1,
+                orderBy: { startDate: 'desc' },
+                select: {
+                    status: true,
+                    academicYearId: true,
+                    academicYear: { select: { id: true, code: true } },
+                },
             },
         },
         orderBy: [
@@ -54,7 +58,7 @@ async function listUnallocatedHostelStudents() {
         s.admissionDetails?.hostelType ?? '-',
         s.admissionDetails?.hostel?.name ?? '-',
         s.admissionDetails?.hostelPaymentMode ?? '-',
-        s.hostelAllocation?.status ?? 'NOT_ALLOCATED',
+        s.hostelAllocations?.[0]?.status ?? 'NOT_ALLOCATED',
     ]);
 
     const widths = header.map((h, i) =>

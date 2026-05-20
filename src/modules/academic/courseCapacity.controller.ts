@@ -28,12 +28,14 @@ export const bulkUpsertCapacity = catchAsync(async (req: Request, res: Response,
     sendResponse({ res, statusCode: 200, success: true, message: `Saved capacity for ${result.count} course(s)`, data: result });
 });
 
-// GET /admin/academic/capacity?courseId=&academicYearId=
+// GET /admin/academic/capacity?courseId=&academicYearId=&degree=&search=
 export const listCapacity = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
-    const { courseId, academicYearId } = req.query;
+    const { courseId, academicYearId, degree, search } = req.query;
     const rows = await CourseCapacityService.list({
         courseId:       courseId       ? String(courseId)       : undefined,
         academicYearId: academicYearId ? String(academicYearId) : undefined,
+        degree:         degree         ? String(degree)         : undefined,
+        search:         search         ? String(search)         : undefined,
     });
     sendResponse({ res, statusCode: 200, success: true, data: rows });
 });

@@ -2077,8 +2077,8 @@ export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
             ? await prisma.hostel.findUnique({ where: { id: admission.hostelId } })
             : null;
 
-        const allocation = await (prisma.hostelAllocation as any).findUnique({
-            where: { studentId },
+        const allocation = await (prisma.hostelAllocation as any).findFirst({
+            where: { studentId, status: 'ACTIVE' },
             include: { bed: { include: { room: true } } }
         });
 

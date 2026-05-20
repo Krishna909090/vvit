@@ -51,6 +51,37 @@ const PHONEPE_SALT_INDEX = parseInt(process.env.PHONEPE_SALT_INDEX || '1', 10);
 const PHONEPE_ENV = process.env.PHONEPE_ENV === 'PROD' ? Env.PRODUCTION : Env.SANDBOX;
 const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://localhost:5173';
 
+/**
+ * Prisma include fragment for a preference course: pulls the active-year
+ * capacity row (totalSeats / filledSeats) plus its academic year tag.
+ */
+const PREF_COURSE_WITH_CAPACITY = {
+    include: {
+        capacities: {
+            where: { academicYear: { isActive: true } },
+            take: 1,
+            include: { academicYear: { select: { id: true, code: true, isActive: true } } },
+        },
+    },
+} as const;
+
+/**
+ * Flatten the `capacities[0]` into top-level `totalSeats / filledSeats / academicYear`
+ * on a pref-course object so the UI doesn't have to dig into the array.
+ * Returns null/undefined unchanged.
+ */
+const attachCourseCapacity = (course: any): any => {
+    if (!course) return course;
+    const cap = course.capacities?.[0];
+    const { capacities: _ignored, ...rest } = course;
+    return {
+        ...rest,
+        totalSeats: cap?.totalSeats ?? null,
+        filledSeats: cap?.filledSeats ?? null,
+        academicYear: cap?.academicYear ?? null,
+    };
+};
+
 const buildApplicationFilters = async (query: any): Promise<any> => {
     const { search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, examStartDate, examEndDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate, seatAllotedBy, proCode, proReq } = query;
 
@@ -472,9 +503,9 @@ export const AdminStudentService = {
                     documents: true,
                     academicQualifications: true,
                     scholarshipAllocation: { include: { rule: true } },
-                    pref1Course: true,
-                    pref2Course: true,
-                    pref3Course: true,
+                    pref1Course: PREF_COURSE_WITH_CAPACITY,
+                    pref2Course: PREF_COURSE_WITH_CAPACITY,
+                    pref3Course: PREF_COURSE_WITH_CAPACITY,
                     feeDemands: {
                         include: {
                             feeStructure: {
@@ -492,7 +523,12 @@ export const AdminStudentService = {
                     discountRequests: true,
                     user: true,
                     enrollments: true,
-                    hostelAllocation: true,
+                    hostelAllocations: {
+                        where: { status: 'ACTIVE' },
+                        take: 1,
+                        orderBy: { startDate: 'desc' },
+                        include: { academicYear: { select: { id: true, code: true, isActive: true } } },
+                    },
                     transportAllocation: true,
                     convenorDetails: true,
                     pro: true
@@ -516,6 +552,9 @@ export const AdminStudentService = {
                 aadharNumber: maskAadhaar(student.aadharNumber),
                 profilePhotoUrl,
                 documents: documentsWithPresignedUrls,
+                pref1Course: attachCourseCapacity(student.pref1Course),
+                pref2Course: attachCourseCapacity(student.pref2Course),
+                pref3Course: attachCourseCapacity(student.pref3Course),
             };
         }));
 
@@ -713,9 +752,9 @@ export const AdminStudentService = {
                     documents: true,
                     academicQualifications: true,
                     scholarshipAllocation: { include: { rule: true } },
-                    pref1Course: true,
-                    pref2Course: true,
-                    pref3Course: true,
+                    pref1Course: PREF_COURSE_WITH_CAPACITY,
+                    pref2Course: PREF_COURSE_WITH_CAPACITY,
+                    pref3Course: PREF_COURSE_WITH_CAPACITY,
                     feeDemands: {
                         include: {
                             feeStructure: {
@@ -733,7 +772,12 @@ export const AdminStudentService = {
                     discountRequests: true,
                     user: true,
                     enrollments: true,
-                    hostelAllocation: true,
+                    hostelAllocations: {
+                        where: { status: 'ACTIVE' },
+                        take: 1,
+                        orderBy: { startDate: 'desc' },
+                        include: { academicYear: { select: { id: true, code: true, isActive: true } } },
+                    },
                     transportAllocation: true,
                     convenorDetails: true,
                     pro: true
@@ -1640,7 +1684,7 @@ export const AdminStudentService = {
             where: roomWhere,
             include: {
                 beds: {
-                    where: { allocation: null },
+                    where: { allocations: { none: { status: 'ACTIVE' } } },
                     orderBy: { number: 'asc' }
                 }
             },
@@ -1691,10 +1735,8 @@ export const AdminStudentService = {
                 ...(hostelType ? { hostelType: hostelType as HostelType } : {}),
             },
             ...(gender ? { gender: { equals: gender, mode: 'insensitive' } } : {}),
-            OR: [
-                { hostelAllocation: null },
-                { hostelAllocation: { status: { not: 'ACTIVE' } } },
-            ],
+            // "Not currently allocated" = no ACTIVE allocation row (regardless of year).
+            hostelAllocations: { none: { status: 'ACTIVE' } },
             ...(search
                 ? {
                       AND: [
@@ -1735,8 +1777,15 @@ export const AdminStudentService = {
                             allottedCourse: { select: { id: true, name: true } },
                         },
                     },
-                    hostelAllocation: {
-                        select: { id: true, status: true, startDate: true, endDate: true },
+                    hostelAllocations: {
+                        where: { status: 'ACTIVE' },
+                        take: 1,
+                        orderBy: { startDate: 'desc' },
+                        select: {
+                            id: true, status: true, startDate: true, endDate: true,
+                            academicYearId: true,
+                            academicYear: { select: { id: true, code: true, isActive: true } },
+                        },
                     },
                 },
             }),
@@ -1744,11 +1793,16 @@ export const AdminStudentService = {
         ]);
 
         const enhanced = await Promise.all(
-            students.map(async (s) => ({
-                ...s,
-                profilePhotoUrl: await convertToPresignedUrl(s.profilePhotoUrl),
-                allocationStatus: s.hostelAllocation?.status ?? 'NOT_ALLOCATED',
-            }))
+            students.map(async (s: any) => {
+                const activeAlloc = s.hostelAllocations?.[0] ?? null;
+                const { hostelAllocations, ...rest } = s;
+                return {
+                    ...rest,
+                    hostelAllocation: activeAlloc,
+                    profilePhotoUrl: await convertToPresignedUrl(s.profilePhotoUrl),
+                    allocationStatus: activeAlloc?.status ?? 'NOT_ALLOCATED',
+                };
+            })
         );
 
         return {
@@ -1775,7 +1829,7 @@ export const AdminStudentService = {
         const fetchAll = !!all;
 
         const where: Prisma.StudentWhereInput = {
-            hostelAllocation: { status: 'ACTIVE' },
+            hostelAllocations: { some: { status: 'ACTIVE' } },
             ...(gender ? { gender: { equals: gender, mode: 'insensitive' } } : {}),
             ...(search
                 ? {
@@ -1807,11 +1861,16 @@ export const AdminStudentService = {
                             allottedCourse: { select: { id: true, name: true } },
                         },
                     },
-                    hostelAllocation: {
+                    hostelAllocations: {
+                        where: { status: 'ACTIVE' },
+                        take: 1,
+                        orderBy: { startDate: 'desc' },
                         select: {
                             id: true,
                             startDate: true,
                             bedId: true,
+                            academicYearId: true,
+                            academicYear: { select: { id: true, code: true, isActive: true } },
                             bed: {
                                 select: {
                                     id: true,
@@ -1837,8 +1896,8 @@ export const AdminStudentService = {
             prisma.student.count({ where }),
         ]);
 
-        const shaped = students.map(s => {
-            const alloc = s.hostelAllocation;
+        const shaped = students.map((s: any) => {
+            const alloc = s.hostelAllocations?.[0] ?? null;
             const bed = alloc?.bed;
             const room = bed?.room;
             const hostel = room?.hostel;
@@ -2037,8 +2096,8 @@ export const AdminStudentService = {
                     amount: { gt: 0 },
                 },
             },
-            // Exclude students who already have an ACTIVE bed allocation.
-            NOT: { hostelAllocation: { status: 'ACTIVE' } },
+            // Exclude students who already have an ACTIVE bed allocation (in any year).
+            hostelAllocations: { none: { status: 'ACTIVE' } },
             ...(gender ? { gender: { equals: gender, mode: 'insensitive' } } : {}),
             ...(search
                 ? {
@@ -2286,15 +2345,10 @@ export const AdminStudentService = {
 
         const allocationFilter: Prisma.StudentWhereInput = (() => {
             if (allocationStatus === 'ALLOCATED') {
-                return { hostelAllocation: { status: 'ACTIVE' } };
+                return { hostelAllocations: { some: { status: 'ACTIVE' } } };
             }
             if (allocationStatus === 'NOT_ALLOCATED') {
-                return {
-                    OR: [
-                        { hostelAllocation: null },
-                        { hostelAllocation: { status: { not: 'ACTIVE' } } },
-                    ],
-                };
+                return { hostelAllocations: { none: { status: 'ACTIVE' } } };
             }
             return {};
         })();
@@ -2345,10 +2399,15 @@ export const AdminStudentService = {
                             allottedCourse: { select: { id: true, name: true } },
                         },
                     },
-                    hostelAllocation: {
+                    hostelAllocations: {
+                        where: { status: 'ACTIVE' },
+                        take: 1,
+                        orderBy: { startDate: 'desc' },
                         select: {
                             status: true,
                             startDate: true,
+                            academicYearId: true,
+                            academicYear: { select: { id: true, code: true, isActive: true } },
                             bed: {
                                 select: {
                                     number: true,
@@ -2365,26 +2424,29 @@ export const AdminStudentService = {
         ]);
 
         const enhanced = await Promise.all(
-            students.map(async (s) => ({
-                applicationId: s.applicationId,
-                name: s.name,
-                fatherName: s.fatherName,
-                motherName: s.motherName,
-                gender: s.gender,
-                phone: s.phone,
-                profilePhotoUrl: await convertToPresignedUrl(s.profilePhotoUrl),
-                hostelType: s.admissionDetails?.hostelType ?? null,
-                hostelPaymentMode: s.admissionDetails?.hostelPaymentMode ?? null,
-                roomNumber:
-                    s.hostelAllocation?.bed?.room?.number
-                    ?? s.admissionDetails?.roomNumber
-                    ?? null,
-                bedNumber: s.hostelAllocation?.bed?.number ?? null,
-                floor: s.hostelAllocation?.bed?.room?.floor ?? null,
-                allottedCourse: s.admissionDetails?.allottedCourse?.name ?? null,
-                allocationStatus: s.hostelAllocation?.status ?? 'NOT_ALLOCATED',
-                allocatedAt: s.hostelAllocation?.startDate ?? null,
-            }))
+            students.map(async (s) => {
+                const activeAlloc = (s as any).hostelAllocations?.[0] ?? null;
+                return {
+                    applicationId: s.applicationId,
+                    name: s.name,
+                    fatherName: s.fatherName,
+                    motherName: s.motherName,
+                    gender: s.gender,
+                    phone: s.phone,
+                    profilePhotoUrl: await convertToPresignedUrl(s.profilePhotoUrl),
+                    hostelType: s.admissionDetails?.hostelType ?? null,
+                    hostelPaymentMode: s.admissionDetails?.hostelPaymentMode ?? null,
+                    roomNumber:
+                        activeAlloc?.bed?.room?.number
+                        ?? s.admissionDetails?.roomNumber
+                        ?? null,
+                    bedNumber: activeAlloc?.bed?.number ?? null,
+                    floor: activeAlloc?.bed?.room?.floor ?? null,
+                    allottedCourse: s.admissionDetails?.allottedCourse?.name ?? null,
+                    allocationStatus: activeAlloc?.status ?? 'NOT_ALLOCATED',
+                    allocatedAt: activeAlloc?.startDate ?? null,
+                };
+            })
         );
 
         return {
@@ -2418,17 +2480,17 @@ export const AdminStudentService = {
         if (!ctx.accommodationPricing) {
             throw new AppError('No pricing snapshot. Run assign-hostel first.', 400);
         }
-        const existingAllocation = await prisma.hostelAllocation.findUnique({ where: { studentId } });
-        if (existingAllocation && existingAllocation.status === 'ACTIVE') {
+        const existingAllocation = await prisma.hostelAllocation.findFirst({ where: { studentId, status: 'ACTIVE' } });
+        if (existingAllocation) {
             throw new AppError('Student already has an active bed allocation. Use the reassign-hostel flow.', 409);
         }
 
         const bed = await prisma.hostelBed.findUnique({
             where: { id: bedId },
-            include: { room: true, allocation: true }
+            include: { room: true, allocations: { where: { status: 'ACTIVE' }, take: 1 } }
         });
         if (!bed) throw new AppError('Bed not found', 404);
-        if (bed.allocation) throw new AppError('Bed is already allocated to another student', 409);
+        if ((bed as any).allocations?.length > 0) throw new AppError('Bed is already allocated to another student', 409);
         if (bed.room.isDeleted) throw new AppError('Cannot allocate a bed in a deleted room', 400);
 
         // hostelId resolution & consistency check:
@@ -2453,17 +2515,26 @@ export const AdminStudentService = {
         }
 
         const result = await prisma.$transaction(async (tx) => {
-            // Year-tag the allocation with the active academic year (NULL if none).
-            let hostelAllocYearId: string | null = null;
-            try { hostelAllocYearId = (await getActiveAcademicYear(tx)).id; } catch { hostelAllocYearId = null; }
-            await (tx.hostelAllocation as any).create({
-                data: {
+            // academicYearId is required (per-year allocation history). Fail fast if no active year.
+            const hostelAllocYearId = (await getActiveAcademicYear(tx)).id;
+            // Upsert by (studentId, academicYearId): re-allocating in the same year (after a
+            // prior VACATED row in that year) updates the existing row instead of failing.
+            await (tx.hostelAllocation as any).upsert({
+                where: { studentId_academicYearId: { studentId, academicYearId: hostelAllocYearId } },
+                create: {
                     studentId,
                     bedId,
                     startDate: new Date(),
                     status: 'ACTIVE',
                     academicYearId: hostelAllocYearId,
                     createdBy: adminId
+                },
+                update: {
+                    bedId,
+                    startDate: new Date(),
+                    endDate: null,
+                    status: 'ACTIVE',
+                    updatedBy: adminId
                 }
             });
 
@@ -2529,15 +2600,15 @@ export const AdminStudentService = {
         _academicYearIdInput: string | undefined,
         adminId: string | undefined
     ) {
-        // 1. Validate room
+        // 1. Validate room. "Vacant" = bed has no ACTIVE allocation (VACATED rows from prior years are OK).
         const room = await prisma.hostelRoom.findUnique({
             where: { id: roomId },
             include: {
                 hostel: true,
                 beds: {
-                    where: { allocation: null },
+                    where: { allocations: { none: { status: 'ACTIVE' } } },
                     orderBy: { number: 'asc' },
-                    include: { allocation: true }
+                    include: { allocations: { where: { status: 'ACTIVE' }, take: 1 } }
                 }
             }
         });
@@ -2573,8 +2644,9 @@ export const AdminStudentService = {
         const studentMap = new Map(students.map(s => [s.id, s]));
         const validationErrors: { studentId: string; reason: string }[] = [];
 
+        // Only ACTIVE allocations matter for blocking — VACATED rows are historical.
         const allocations = await prisma.hostelAllocation.findMany({
-            where: { studentId: { in: studentIds } }
+            where: { studentId: { in: studentIds }, status: 'ACTIVE' }
         });
         const allocByStudent = new Map(allocations.map(a => [a.studentId, a]));
 
@@ -2590,7 +2662,7 @@ export const AdminStudentService = {
                 continue;
             }
             const existingAlloc = allocByStudent.get(sid);
-            if (existingAlloc && existingAlloc.status === 'ACTIVE') {
+            if (existingAlloc) {
                 validationErrors.push({ studentId: sid, reason: 'Already has an active bed allocation' });
                 continue;
             }
@@ -2652,20 +2724,29 @@ export const AdminStudentService = {
 
         const allocated: any[] = [];
         await prisma.$transaction(async (tx) => {
-            // Resolve the active academic year once for the whole batch (NULL if none).
-            let hostelAllocYearId: string | null = null;
-            try { hostelAllocYearId = (await getActiveAcademicYear(tx)).id; } catch { hostelAllocYearId = null; }
+            // academicYearId is required now (per-year history). Fail fast if no active year configured.
+            const hostelAllocYearId = (await getActiveAcademicYear(tx)).id;
             for (const { studentId, bed } of pairs) {
                 const student = studentMap.get(studentId)!;
 
-                await (tx.hostelAllocation as any).create({
-                    data: {
+                // Upsert by (studentId, academicYearId): if the student previously VACATED in this
+                // same year, reuse that row instead of failing the composite unique.
+                await (tx.hostelAllocation as any).upsert({
+                    where: { studentId_academicYearId: { studentId, academicYearId: hostelAllocYearId } },
+                    create: {
                         studentId,
                         bedId: bed.id,
                         startDate: new Date(),
                         status: 'ACTIVE',
                         academicYearId: hostelAllocYearId,
                         createdBy: adminId
+                    },
+                    update: {
+                        bedId: bed.id,
+                        startDate: new Date(),
+                        endDate: null,
+                        status: 'ACTIVE',
+                        updatedBy: adminId
                     }
                 });
 
@@ -2753,9 +2834,9 @@ export const AdminStudentService = {
             await assertAcademicYearWritable(admission.academicYearId);
         }
 
-        // 2. Find old allocation
-        const oldAllocation = await (prisma.hostelAllocation as any).findUnique({
-            where: { studentId },
+        // 2. Find old allocation (the current ACTIVE row regardless of year)
+        const oldAllocation = await (prisma.hostelAllocation as any).findFirst({
+            where: { studentId, status: 'ACTIVE' },
             include: { bed: { include: { room: true } } }
         });
         if (!oldAllocation) throw new AppError('No active bed allocation found', 404);
@@ -2763,7 +2844,7 @@ export const AdminStudentService = {
         // 3. Validate new bed
         const newBed = await prisma.hostelBed.findUnique({
             where: { id: args.bedId },
-            include: { room: true, allocation: true }
+            include: { room: true, allocations: { where: { status: 'ACTIVE' }, take: 1 } }
         });
         if (!newBed) throw new AppError('New bed not found', 404);
         if (newBed.room.isDeleted) throw new AppError('Cannot allocate a bed in a deleted room', 400);
@@ -2771,7 +2852,8 @@ export const AdminStudentService = {
             throw new AppError('Bed does not belong to the selected hostel', 400);
         }
         // Allow same bed (paymentMode-only change), but block if different student holds it
-        if (newBed.allocation && (newBed.allocation as any).status === 'ACTIVE' && newBed.id !== oldAllocation.bedId) {
+        const newBedActive = (newBed as any).allocations?.[0];
+        if (newBedActive && newBed.id !== oldAllocation.bedId) {
             throw new AppError('New bed is already allocated to another student', 409);
         }
 
@@ -2854,13 +2936,12 @@ export const AdminStudentService = {
                 });
             }
 
-            // b. Update HostelAllocation in place (studentId is @unique, so we update not insert)
-            await (tx.hostelAllocation as any).update({
-                where: { studentId },
+            // b. Update the ACTIVE HostelAllocation row in place (one per student is active at a time).
+            await (tx.hostelAllocation as any).updateMany({
+                where: { studentId, status: 'ACTIVE' },
                 data: {
                     bedId: newBed.id,
                     startDate: new Date(),
-                    status: 'ACTIVE',
                     updatedBy: adminId
                 }
             });
@@ -3108,8 +3189,8 @@ export const AdminStudentService = {
         }
 
         // Block re-assignment after a bed is bound. Use reassign-hostel instead.
-        const existingAllocation = await prisma.hostelAllocation.findUnique({ where: { studentId } });
-        if (existingAllocation && existingAllocation.status === 'ACTIVE') {
+        const existingAllocation = await prisma.hostelAllocation.findFirst({ where: { studentId, status: 'ACTIVE' } });
+        if (existingAllocation) {
             throw new AppError('Bed already allocated. Use the reassign-hostel flow to change hostel/sharing/mode.', 409);
         }
 
@@ -3668,7 +3749,7 @@ export const AdminStudentService = {
 
         const previousHostelId = admission.hostelId;
         const previousHostelType = admission.hostelType;
-        const allocation = await prisma.hostelAllocation.findUnique({ where: { studentId } });
+        const allocation = await prisma.hostelAllocation.findFirst({ where: { studentId, status: 'ACTIVE' } });
 
         const result = await prisma.$transaction(async (tx) => {
             // Compute availableCredit INSIDE the tx (race-condition-safe).
@@ -3679,10 +3760,10 @@ export const AdminStudentService = {
             const paid = credit.grossPaid;
             const availableCredit = credit.availableCredit;
             const refundAmount = Math.max(0, availableCredit - cancellationFee);
-            // 1. Vacate bed if active
-            if (allocation && allocation.status === 'ACTIVE') {
-                await (tx.hostelAllocation as any).update({
-                    where: { studentId },
+            // 1. Vacate active allocation if any
+            if (allocation) {
+                await (tx.hostelAllocation as any).updateMany({
+                    where: { studentId, status: 'ACTIVE' },
                     data: { status: 'VACATED', endDate: new Date(), updatedBy: adminId },
                 });
                 await tx.hostelBed.update({
@@ -3997,7 +4078,7 @@ export const AdminStudentService = {
         const newCost = await resolveTransportRouteCost(transportRouteId, academicYearId);
         const previousHostelId = admission.hostelId;
         const previousHostelType = admission.hostelType;
-        const allocation = await prisma.hostelAllocation.findUnique({ where: { studentId } });
+        const allocation = await prisma.hostelAllocation.findFirst({ where: { studentId, status: 'ACTIVE' } });
 
         const result = await prisma.$transaction(async (tx) => {
             // Compute availableCredit INSIDE the tx (race-condition-safe).
@@ -4012,9 +4093,9 @@ export const AdminStudentService = {
             const newDemandNet    = Math.max(0, newCost - appliedToNew);
 
             // ── 1. Cancel hostel ──
-            if (allocation && allocation.status === 'ACTIVE') {
-                await (tx.hostelAllocation as any).update({
-                    where: { studentId },
+            if (allocation) {
+                await (tx.hostelAllocation as any).updateMany({
+                    where: { studentId, status: 'ACTIVE' },
                     data: { status: 'VACATED', endDate: new Date(), updatedBy: adminId },
                 });
                 await tx.hostelBed.update({
@@ -4990,9 +5071,9 @@ export const AdminStudentService = {
                 academicQualifications: true,
                 scholarshipAllocation: { include: { rule: true } },
                 studentScholarship: true,
-                pref1Course: true,
-                pref2Course: true,
-                pref3Course: true,
+                pref1Course: PREF_COURSE_WITH_CAPACITY,
+                pref2Course: PREF_COURSE_WITH_CAPACITY,
+                pref3Course: PREF_COURSE_WITH_CAPACITY,
                 feeDemands: {
                     include: {
                         feeStructure: {
@@ -5015,7 +5096,7 @@ export const AdminStudentService = {
                          section: { include: { batch: true } }
                      }
                 },
-                hostelAllocation: { include: { bed: { include: { room: { include: { hostel: true } } } } } },
+                hostelAllocations: { where: { status: 'ACTIVE' }, take: 1, orderBy: { startDate: 'desc' }, include: { bed: { include: { room: { include: { hostel: true } } } }, academicYear: { select: { id: true, code: true, isActive: true } } } },
                 transportAllocation: { include: { route: true, stop: true } },
                 convenorDetails: true,
                 pro: true,
@@ -5039,8 +5120,13 @@ export const AdminStudentService = {
             hallTicketUrl = await convertToPresignedUrl(student.examDetails.hallTicketUrl);
         }
 
+        const { hostelAllocations: _hostelAllocations, ...studentRest } = student as any;
         return {
-            ...student,
+            ...studentRest,
+            hostelAllocation: _hostelAllocations?.[0] ?? null,
+            pref1Course: attachCourseCapacity((student as any).pref1Course),
+            pref2Course: attachCourseCapacity((student as any).pref2Course),
+            pref3Course: attachCourseCapacity((student as any).pref3Course),
             profilePhotoUrl,
             documents: documentsWithPresignedUrls,
             examDetails: {
@@ -5075,9 +5161,9 @@ export const AdminStudentService = {
                 academicQualifications: true,
                 scholarshipAllocation: { include: { rule: true } },
                 studentScholarship: true,
-                pref1Course: true,
-                pref2Course: true,
-                pref3Course: true,
+                pref1Course: PREF_COURSE_WITH_CAPACITY,
+                pref2Course: PREF_COURSE_WITH_CAPACITY,
+                pref3Course: PREF_COURSE_WITH_CAPACITY,
                 feeDemands: {
                     include: {
                         feeStructure: {
@@ -5100,7 +5186,7 @@ export const AdminStudentService = {
                          section: { include: { batch: true } }
                      }
                 },
-                hostelAllocation: { include: { bed: { include: { room: { include: { hostel: true } } } } } },
+                hostelAllocations: { where: { status: 'ACTIVE' }, take: 1, orderBy: { startDate: 'desc' }, include: { bed: { include: { room: { include: { hostel: true } } } }, academicYear: { select: { id: true, code: true, isActive: true } } } },
                 transportAllocation: { include: { route: true, stop: true } },
                 convenorDetails: true,
                 pro: true,
@@ -5124,8 +5210,13 @@ export const AdminStudentService = {
             hallTicketUrl = await convertToPresignedUrl(student.examDetails.hallTicketUrl);
         }
 
+        const { hostelAllocations: _hostelAllocations, ...studentRest } = student as any;
         return {
-            ...student,
+            ...studentRest,
+            hostelAllocation: _hostelAllocations?.[0] ?? null,
+            pref1Course: attachCourseCapacity((student as any).pref1Course),
+            pref2Course: attachCourseCapacity((student as any).pref2Course),
+            pref3Course: attachCourseCapacity((student as any).pref3Course),
             profilePhotoUrl,
             documents: documentsWithPresignedUrls,
             examDetails: {

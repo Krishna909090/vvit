@@ -23,15 +23,10 @@ export const getHostelOccupancy = async (hostelId: string, client: any = prisma)
             where: {
                 hostelId,
                 isDeleted: false,
-                // Has at least one bed AND no bed is missing an active allocation.
+                // Has at least one bed AND every bed has an ACTIVE allocation (i.e. fully occupied).
                 beds: {
                     some: {},
-                    none: {
-                        OR: [
-                            { allocation: null },
-                            { allocation: { status: { not: 'ACTIVE' } } }
-                        ]
-                    }
+                    none: { allocations: { none: { status: 'ACTIVE' } } }
                 }
             }
         }),
@@ -476,9 +471,14 @@ export const HostelService = {
                 beds: {
                     orderBy: { number: 'asc' },
                     include: {
-                        allocation: {
+                        allocations: {
+                            where: { status: 'ACTIVE' },
+                            take: 1,
+                            orderBy: { startDate: 'desc' },
                             select: {
                                 id: true, status: true, startDate: true,
+                                academicYearId: true,
+                                academicYear: { select: { id: true, code: true, isActive: true } },
                                 student: {
                                     select: {
                                         id: true, name: true, applicationId: true,
@@ -507,9 +507,9 @@ export const HostelService = {
 
         // Shape the response: per-bed status + room-level counts.
         // Presign occupant profilePhotoUrl + hostelAllotmentOrder PDF URL (S3 keys → 1h presigned URLs).
-        const beds = await Promise.all(room.beds.map(async bed => {
-            const alloc: any = (bed as any).allocation;
-            const isActive = alloc && alloc.status === 'ACTIVE';
+        const beds = await Promise.all(room.beds.map(async (bed: any) => {
+            const alloc: any = bed.allocations?.[0] ?? null;
+            const isActive = !!alloc;
             const student = alloc?.student;
             const allotmentDoc = student?.documents?.[0];
             return {
@@ -529,7 +529,9 @@ export const HostelService = {
                     profilePhotoUrl: await convertToPresignedUrl(student?.profilePhotoUrl ?? null),
                     hostelAllotmentOrderUrl: await convertToPresignedUrl(allotmentDoc?.url ?? null),
                     hostelAllotmentOrderGeneratedAt: allotmentDoc?.updatedAt ?? null,
-                    allocatedAt: alloc.startDate ?? null
+                    allocatedAt: alloc.startDate ?? null,
+                    academicYearId: alloc.academicYearId ?? null,
+                    academicYearCode: alloc.academicYear?.code ?? null,
                 } : null
             };
         }));

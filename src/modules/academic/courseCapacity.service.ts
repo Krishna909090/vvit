@@ -134,10 +134,25 @@ export const CourseCapacityService = {
         return { count: results.length, rows: results };
     },
 
-    async list(filters?: { courseId?: string; academicYearId?: string }) {
+    async list(filters?: { courseId?: string; academicYearId?: string; degree?: string; search?: string }) {
         const where: any = {};
         if (filters?.courseId)       where.courseId       = filters.courseId;
         if (filters?.academicYearId) where.academicYearId = filters.academicYearId;
+
+        // Filter by Course.degree (e.g. "B.Tech", "M.Tech", "MBA"). Case-insensitive equality.
+        const courseFilter: any = {};
+        if (filters?.degree) {
+            courseFilter.degree = { equals: filters.degree, mode: 'insensitive' };
+        }
+        if (filters?.search) {
+            courseFilter.OR = [
+                { name: { contains: filters.search, mode: 'insensitive' } },
+                { code: { contains: filters.search, mode: 'insensitive' } },
+            ];
+        }
+        if (Object.keys(courseFilter).length > 0) {
+            where.course = courseFilter;
+        }
 
         return prisma.courseCapacity.findMany({
             where,
