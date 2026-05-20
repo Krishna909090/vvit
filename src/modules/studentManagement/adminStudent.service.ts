@@ -2008,7 +2008,7 @@ export const AdminStudentService = {
      * No hostelId filter — spans all hostels.
      */
     async getHostelPaidStudents(query: any) {
-        const { page = 1, limit = 10, search, gender, all } = query;
+        const { page = 1, limit = 10, search, gender, hostelType, all } = query;
 
         const pageNum = Number(page) || 1;
         const limitNum = Number(limit) || 10;
@@ -2024,7 +2024,10 @@ export const AdminStudentService = {
         ];
 
         const where: Prisma.StudentWhereInput = {
-            admissionDetails: { accommodationType: AccommodationType.HOSTEL },
+            admissionDetails: {
+                accommodationType: AccommodationType.HOSTEL,
+                ...(hostelType ? { hostelType: hostelType as HostelType } : {}),
+            },
             // At least one successful hostel-tagged payment exists for this student.
             payments: {
                 some: {

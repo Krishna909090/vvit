@@ -208,6 +208,7 @@ export const hostelPaidStudentsQuerySchema = z.object({
         limit: z.string().optional().transform(v => v ? Number(v) : 10),
         search: z.string().trim().optional(),
         gender: z.string().trim().optional(),
+        hostelType: z.enum(['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10']).optional(),
         all: z.string().optional().transform(v => v === 'true' || v === '1'),
     }),
 });
