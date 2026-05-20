@@ -255,7 +255,7 @@ function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
   // Draw border rect for whole table
   // Can draw row by row
   
-  rows.forEach((row, i) => {
+  rows.forEach((row) => {
     // Background for Highlight
     if (row.highlight) {
       doc.rect(tableX, currentY, tableWidth, rowHeight).fill('#FEF5E7'); // Light orange/beige

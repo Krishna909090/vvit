@@ -8,9 +8,9 @@ import {
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { verifyAadhar } from '../integration/integration.service';
-import { deleteFileFromS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
+import { deleteFileFromS3, convertToPresignedUrl } from '../../utils/s3Utils';
 import { MESSAGES } from '../../constants/messages';
-import { formatDate, formatTime, formatDateTime } from '../../utils/dateFormatter';
+import { formatDate, formatTime } from '../../utils/dateFormatter';
 import { maskAadhaar } from '../../utils/mask';
 import { getActiveAcademicYear } from '../../utils/studentContext';
 
@@ -21,7 +21,7 @@ const resolveActiveYearId = async (): Promise<string> => {
     return (await getActiveAcademicYear()).id;
 };
 
-export const registerStudent = async (data: any, userId: string | null, currentUserId: string | null) => {
+export const registerStudent = async (data: any, userId: string | null, _currentUserId: string | null) => {
     // Check for duplicate registration
     const dobDate = data.dob ? new Date(data.dob) : undefined;
 
@@ -81,8 +81,6 @@ export const registerStudent = async (data: any, userId: string | null, currentU
         throw new AppError(`Student conflict: A student is already registered with this ${conflict}`, 400);
     }
 
-    const isOffline = data.isOffline || data.applicationMode === 'SEAT_BOOKING' || data.applicationMode === 'OFFLINE';
-    
     // Determine prefix:
     //   LATERAL entry -> VLE (overrides mode; lateral has its own series)
     //   Offline       -> VOF
@@ -357,7 +355,7 @@ export const getHallTicketByApplicationId = async (applicationId: string) => {
     return getHallTicket(student.id);
 };
 
-export const uploadDocumentsAndPreferences = async (studentId: string, data: any, currentUserId: string | null) => {
+export const uploadDocumentsAndPreferences = async (studentId: string, data: any, _currentUserId: string | null) => {
     const { id, applicationId, email, phone, pref1, pref2, pref3, ...documentData } = data;
 
     // Validate student exists and check qualification status
@@ -485,12 +483,9 @@ export const reUploadDocument = async (studentId: string, documentKey: string, u
     });
 
     // If rejected previously, move back to DOCUMENTS_SUBMITTED so admin can re-verify.
-    // Never downgrade a student who is already at SEAT_ALLOTTED / ADMISSION_CONFIRMED / ENROLLED.
-    const protectedStatuses: AdmissionStatus[] = [
-        AdmissionStatus.SEAT_ALLOTTED,
-        AdmissionStatus.ADMISSION_CONFIRMED,
-        AdmissionStatus.ENROLLED
-    ];
+    // The DOCUMENTS_PENDING → DOCUMENTS_SUBMITTED transition below never downgrades
+    // a student who's already past document review (SEAT_ALLOTTED / ADMISSION_CONFIRMED /
+    // ENROLLED) because the if-block only fires on DOCUMENTS_PENDING.
     const currentStatus = student.admissionDetails?.status as AdmissionStatus | undefined;
     if (currentStatus === AdmissionStatus.DOCUMENTS_PENDING) {
         await prisma.studentAdmission.update({
@@ -573,7 +568,7 @@ export const verifyDocument = async (studentId: string, documentKey: string, sta
 
 
 
-export const addAcademicDetails = async (studentId: string, details: any[], currentUserId: string | null) => {
+export const addAcademicDetails = async (studentId: string, details: any[], _currentUserId: string | null) => {
     // 1. Validate student exists
     const student = await prisma.student.findUnique({
         where: { id: studentId },

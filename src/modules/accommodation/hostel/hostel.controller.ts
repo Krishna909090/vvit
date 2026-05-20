@@ -1,7 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
 import { catchAsync } from '../../../utils/catchAsync';
-import { AppError } from '../../../utils/AppError';
-import logger from '../../../utils/logger';
 import { MESSAGES } from '../../../constants/messages';
 import { sendResponse } from '../../../utils/response';
 import { HostelService } from './hostel.service';

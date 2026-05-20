@@ -3,8 +3,6 @@ import { catchAsync } from '../../utils/catchAsync';
 import { AppError } from '../../utils/AppError';
 import { ScholarshipService } from './scholarship.service';
 import { sendResponse } from '../../utils/response';
-import { MESSAGES } from '../../constants/messages';
-import { ScholarshipStatus } from '@prisma/client';
 
 export const createScholarshipRule = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, minPercentile, discountPercentage, totalSlots } = req.body;

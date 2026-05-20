@@ -4,7 +4,6 @@
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
-import { MESSAGES } from '../../constants/messages';
 
 /**
  * Get all document requirements with optional filtering by degreeType

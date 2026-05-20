@@ -7,8 +7,7 @@ import {
     PaymentStatus,
     PaymentComponent,
     PaymentMethod,
-    FeeStatus,
-    Prisma
+    FeeStatus
 } from '@prisma/client';
 import { Role } from '../../../constants/roles';
 import { AppError } from '../../../utils/AppError';

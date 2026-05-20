@@ -4,7 +4,7 @@ import app from './app';
 import logger from './utils/logger';
 import { getDatabaseSecret } from './config/awsConfig';
 import { version } from '../package.json';
-import { startScholarshipExpiryJob, startStalePaymentCleanupJob, startPaymentReconciliationJob } from './jobs/scheduler';
+import { startStalePaymentCleanupJob, startPaymentReconciliationJob } from './jobs/scheduler';
 
 const PORT = process.env.PORT || 3000;
 const SECRET_NAME = process.env.AWS_SECRET_NAME || "rds-secretname";
@@ -27,7 +27,7 @@ const startServer = async () => {
             try {
                 const dbCredentials = await getDatabaseSecret(SECRET_NAME);
                 if (dbCredentials) {
-                    const { username, password, host, port, dbname } = dbCredentials;
+                    const { username, password, host, port } = dbCredentials;
                     const dbPass = encodeURIComponent(password);
                     const dbHost = host || process.env.DB_HOST;
                     const dbPort = port || process.env.DB_PORT || 5432;

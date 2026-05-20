@@ -2,7 +2,6 @@
 import { getDatabaseSecret } from '../../config/awsConfig';
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
-import { AppError } from '../../utils/AppError';
 import axios from 'axios';
 
 // BSNL OTP API

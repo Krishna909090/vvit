@@ -5,7 +5,7 @@ import { ScholarshipStatus } from '@prisma/client';
 import { getActiveAcademicYear } from '../../utils/studentContext';
 
 export const ScholarshipService = {
-    async createRule(data: any, createdBy: string) {
+    async createRule(data: any, _createdBy: string) {
         const { name, minPercentile, discountPercentage, totalSlots } = data;
         const ruleYear = await getActiveAcademicYear();
 
@@ -196,7 +196,7 @@ export const ScholarshipService = {
         return { success: true, message: "Scholarship eligibility verified and recorded successfully" };
     },
 
-    async allocateScholarship(studentId: string, ruleId: string, adminId: string) {
+    async allocateScholarship(studentId: string, ruleId: string, _adminId: string) {
         // 1. Validate
         // Verify 'verification officer remarks' if applicable (omitted for speed unless table exists)
         

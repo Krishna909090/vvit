@@ -2,7 +2,6 @@ import { Request, Response, NextFunction } from "express";
 import { processExcelImport } from './dataImport.service';
 import { ImportType } from "@prisma/client";
 import { AppError } from '../../../utils/AppError';
-import { MESSAGES } from '../../../constants/messages';
 import prisma from '../../../config/prisma';
 
 export const importAdmissionData = async (

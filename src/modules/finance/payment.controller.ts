@@ -16,7 +16,6 @@ import {
     getStudentFinancialFlow,
     initiateTokenPayment,
     recordOfflineApplicationFeePayment,
-    processUnifiedPayment,
     initiateMultiComponentPayment,
     getAllSuccessPayments,
     getPaymentCreators,

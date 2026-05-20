@@ -1,5 +1,5 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, Payment, ApplicationMode, QuotaType, AccommodationType, Prisma } from '@prisma/client';
+import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, ApplicationMode, QuotaType, AccommodationType, Prisma } from '@prisma/client';
 
 const getDateCondition = (range?: string, startDate?: string, endDate?: string) => {
     const now = new Date();
@@ -530,22 +530,8 @@ export const DashboardService = {
                 dateLimit.setDate(dateLimit.getDate() - 7); // Default 7 days
         }
 
-        // Get daily counts
-        const students = await prisma.student.groupBy({
-            by: ['createdAt'],
-            where: {
-                createdAt: {
-                    gte: dateLimit
-                }
-            },
-            _count: {
-                id: true
-            }
-        });
-
-        // Group by Date String (YYYY-MM-DD) manually since Prisma groupBy on Date includes time
-        // Better approach: Fetch raw records and aggregate in JS for flexibility or use raw query if perf needed
-        // For simplicity and standard usage:
+        // groupBy on createdAt buckets by the full timestamp (not date), so we fetch raw
+        // rows and aggregate by YYYY-MM-DD in JS below.
         const rawStudents = await prisma.student.findMany({
             where: { createdAt: { gte: dateLimit } },
             select: { createdAt: true }

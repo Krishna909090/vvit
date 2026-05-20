@@ -53,7 +53,7 @@ export const updateRequirement = catchAsync(async (req: Request, res: Response, 
 // Admin: Delete Requirement
 export const removeRequirement = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const result = await deleteDocumentRequirement(id);
+    await deleteDocumentRequirement(id);
     sendResponse({
         res,
         statusCode: 200,

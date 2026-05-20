@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
-import { validateRequest } from '../../middleware/validationMiddleware';
 import * as scholarshipController from './scholarship.controller';
 
 const router = Router();

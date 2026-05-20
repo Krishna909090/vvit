@@ -1,13 +1,11 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
-import { FeeStructure, SystemSetting, FeeHead, DiscountStatus, PaymentMethod, PaymentComponent, PaymentStatus, PaymentMode, AdmissionStatus, QuotaType, FeeStatus, AccommodationType, LedgerTransactionType } from '@prisma/client';
+import { SystemSetting, DiscountStatus, PaymentMethod, PaymentComponent, PaymentMode, QuotaType, AccommodationType, LedgerTransactionType } from '@prisma/client';
 import { Role, RoleType } from '../../constants/roles';
-import { MESSAGES } from '../../constants/messages';
 import logger from '../../utils/logger';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { getHostelCostTx } from '../../utils/hostelPricing';
 import { assertHostelHasCapacity } from '../accommodation/hostel/hostel.service';
-import { getActiveAcademicYear } from '../../utils/studentContext';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';
@@ -1669,17 +1667,10 @@ export const FeeService = {
         });
 
         // --- Process Payments ---
-        // Priority: 
+        // Priority:
         // 1. Linked Fee Order/Demand (payment.feeDemand.feeStructure.feeHead)
         // 2. Explicit FeeHeadId (payment.feeHeadId)
-        // 3. Component Heuristics
-        
-        const feeHeadHeuristics: Record<string, string[]> = {
-            'TUITION': ['TUITION', 'COLLEGE', 'ACADEMIC', 'ADMISSION', 'SCHOLARSHIP_TOKEN'],
-            'HOSTEL': ['HOSTEL', 'MESS', 'LODGING'],
-            'TRANSPORT': ['TRANSPORT', 'BUS', 'ROUTE'],
-            'APPLICATION': ['APPLICATION', 'REGISTRATION']
-        };
+        // 3. Fall through to per-payment heuristics inside the loop
 
         payments.forEach(p => {
             let targetFeeHeadId: string | undefined;
@@ -1731,7 +1722,7 @@ export const FeeService = {
              // Determine if this is a scholarship or a standard discount based on referenceType
              const recordType = l.referenceType === 'SCHOLARSHIP' ? 'SCHOLARSHIP' : 'DISCOUNT';
              
-             for (const [id, group] of feeHeadMap.entries()) {
+             for (const [, group] of feeHeadMap.entries()) {
                  const isTuition = group.feeHeadComponent === 'TUITION';
 
                  // Scholarship adjustments target TUITION component only

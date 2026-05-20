@@ -15,7 +15,7 @@ export interface UploadResult {
 
 export const uploadFileToS3 = async (
     file: Express.Multer.File,
-    folder: string = 'documents'
+    _folder: string = 'documents'
 ): Promise<UploadResult> => {
     // Since we are using multer-s3, the file is already uploaded to S3
     // and the file object contains the location (url) and key.

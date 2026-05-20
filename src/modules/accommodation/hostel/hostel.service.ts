@@ -1,7 +1,6 @@
 import prisma from '../../../config/prisma';
 import { AppError } from '../../../utils/AppError';
 import { MESSAGES } from '../../../constants/messages';
-import { HostelType } from '@prisma/client';
 import { convertToPresignedUrl } from '../../../utils/s3Utils';
 
 // Compute occupancy on-demand from source-of-truth tables.

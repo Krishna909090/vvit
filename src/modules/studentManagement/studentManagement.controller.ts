@@ -106,7 +106,7 @@ export const approveCancellation = catchAsync(async (req: Request, res: Response
     // Service has check: if (adminRole !== Role.SUPER_ADMIN).
     // So pass role to service.
     
-    const result = await AdminStudentService.approveCancellation(requestId, approved, req.user?.role, req.user?.userId);
+    await AdminStudentService.approveCancellation(requestId, approved, req.user?.role, req.user?.userId);
 
     sendResponse({
         res,

@@ -83,11 +83,9 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
             currentY += 30;
 
             // --- 2. Personal Information & Photo ---
-            const startX = 40;
             const col1X = 40;
             const col1ValueX = 160;
-            const col2X = 300; // Not using 2 columns for text, but keeping space for photo
-            
+
             // Photo Position (Right side)
             const photoX = 420;
             const photoY = currentY;
@@ -145,7 +143,6 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
             // Using columns for admission details
             const admCol1 = 40;
             const admCol2 = 300;
-            const admRowY = currentY;
 
             doc.font('Helvetica-Bold').text('Course Applied:', admCol1, currentY);
             doc.font('Helvetica').text(data.courseName || 'N/A', admCol1 + 100, currentY);
@@ -225,8 +222,7 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
                     
                     // Checkbox icon (simulated)
                     const isVerified = d.status === 'VERIFIED';
-                    const icon = isVerified ? '[/]' : '[ ]'; // Simple text representation or draw rect
-                    
+
                     doc.rect(x, y, 10, 10).stroke();
                     if (isVerified) {
                         // Draw tick

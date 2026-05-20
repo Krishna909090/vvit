@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { HostelType } from '@prisma/client';
 
 const ROOM_NUMBER_PATTERN = /^[A-Za-z0-9\-_/]+\d+$/;
 

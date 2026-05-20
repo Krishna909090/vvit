@@ -239,8 +239,6 @@ export const studentIdParamSchema = z.object({
     }),
 });
 
-const AllowedRoles = ["ADMIN", "SUPER_ADMIN", "STAFF", "INVIGILATOR", "VERIFICATION_OFFICER"] as const;
-
 export const addAdminSchema = z.object({
   body: z.object({
     phone: z

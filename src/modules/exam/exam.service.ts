@@ -4,7 +4,7 @@
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
-import { AdmissionStatus, Prisma } from '@prisma/client';
+import { AdmissionStatus } from '@prisma/client';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 import Papa from 'papaparse';

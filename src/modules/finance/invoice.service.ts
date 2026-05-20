@@ -10,7 +10,7 @@ export const InvoiceService = {
      * Generates an invoice for a successful payment, uploads it, updates the record, and sends and email.
      * Can be called idempotently (checks if invoiceUrl already exists? Maybe override if requested).
      */
-    async generateInvoiceForPayment(paymentId: string, forceRegenerate = false) {
+    async generateInvoiceForPayment(paymentId: string, _forceRegenerate = false) {
         logger.info(`[InvoiceService] Generating invoice for payment: ${paymentId}`);
         
         const payment = await prisma.payment.findUnique({

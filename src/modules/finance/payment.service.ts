@@ -1,4 +1,3 @@
-import axios from 'axios';
 import crypto from 'crypto';
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
@@ -10,12 +9,10 @@ import { format } from 'date-fns';
 import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod, PaymentMode, HostelPaymentMode, AccommodationType } from '@prisma/client';
 import { getApplicationFeeAmount } from './fee.service';
 import { getOrCreateAccommodationPricing, resolveFeeDemandContext, getActiveAcademicYear } from '../../utils/studentContext';
-import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { ScholarshipService } from './scholarship.service';
 import { generateAllotmentOrderPDF, generateHostelAllotmentOrderPDF } from '../../utils/allotmentGenerator';
 import { StudentDocumentStatus } from '@prisma/client';
-import { sendPaymentReceipt } from '../../utils/emailService';
 
 import { InvoiceService } from './invoice.service';
 import { StandardCheckoutClient, Env, StandardCheckoutPayRequest } from 'pg-sdk-node';
@@ -856,30 +853,6 @@ const _createPaymentLedger = async (payment: any) => {
     }
 };
 
-const _sendPaymentNotification = async (student: any, payments: any[], invoiceResult: any) => {
-    if (!student.email || !invoiceResult.invoiceUrl) return;
-
-    let emailType = 'DEFAULT';
-    if (payments.length === 1 && payments[0].component === PaymentComponent.APPLICATION_FEE) {
-         emailType = 'APPLICATION_FEE';
-    }
-
-    const { invoiceNumber, realTransactionId, invoiceData, invoiceItems } = invoiceResult;
-    
-    await sendPaymentReceipt(student.email, {
-        studentName: student.name,
-        invoiceNumber,
-        applicationId: student.applicationId,
-        transactionId: realTransactionId,
-        amount: invoiceData.amount,
-        date: new Date(),
-        paymentType: emailType as any,
-        customFeeType: `Fee Payment (${invoiceItems.map((i: any) => i.description).join(', ')})`,
-        invoiceUrl: invoiceResult.invoiceUrl,
-        address: invoiceData.address
-    });
-};
-
 const _handleTriggers = async (payments: any[]) => {
     const finalizeTrigger = payments.find(p => p.metadata?.targetAction === 'FINALIZE_ADMISSION');
     if (finalizeTrigger) {
@@ -1126,14 +1099,14 @@ export const handleNewWebhook = async (body: any, authHeader: string) => {
 };
 
 // Functions expected by PaymentController
-export const payTestFee = async (studentId: string, userId: string | null) => {
+export const payTestFee = async (studentId: string, _userId: string | null) => {
     const { redirectUrl, paymentId } = await initiateApplicationFeePayment(studentId);
     return { redirectUrl, paymentId };
 };
 
-export const payCollegeFee = async (studentId: string, data: any, userId: string | null) => {
+export const payCollegeFee = async (studentId: string, data: any, _userId: string | null) => {
     const { hostelSelection, transportSelection, paymentDetails } = data;
-    const { amount } = paymentDetails || {};
+    const { } = paymentDetails || {};
 
     // 1. Get Student Admission Details
     const student = await prisma.student.findUnique({
@@ -1155,10 +1128,6 @@ export const payCollegeFee = async (studentId: string, data: any, userId: string
     const transactionId = `TXN_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
 
     // 3. Calculate Dynamic Fees (Logic Updated for Split)
-    const pendingDemands = await prisma.studentFeeDemand.findMany({
-        where: { studentId, status: { not: 'FULL' } } // Fetch all pending/partial
-    });
-    
     // Check what is already paid logic might be complex if we use Ledger/Demands.
     // Simplifying: Check DB for successful payments OF SPECIFIC COMPONENTS.
     const paidComponents = await prisma.payment.findMany({

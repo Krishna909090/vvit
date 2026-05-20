@@ -5,7 +5,6 @@ import { submitVerificationSchema, setEligibleScholarshipSchema } from '../../va
 import { AdminStudentService } from './adminStudent.service';
 import { catchAsync } from '../../utils/catchAsync';
 import { sendResponse } from '../../utils/response';
-import { MESSAGES } from '../../constants/messages';
 import { setScholarshipEligibility, validateAcademicQualification } from './studentManagement.controller';
 
 const router = Router();

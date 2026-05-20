@@ -16,7 +16,6 @@ import healthRoutes from './modules/health/health.routes';
 import paymentRoutes from './modules/finance/payment.routes';
 import dataImportRoutes from './modules/admission/dataImport/dataImport.routes';
 import verificationRoutes from './modules/studentManagement/verification.routes';
-import academicRoutes from './modules/academic/academic.routes';
 import qualificationRequirementRoutes from './modules/qualification/qualificationRequirement.routes';
 import emailLogRoutes from './modules/system/emailLog/emailLog.routes';
 import logsRoutes from './modules/system/logs/logs.routes';

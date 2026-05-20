@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { Role, RoleType } from '../constants/roles';
+import { RoleType } from '../constants/roles';
 import logger from '../utils/logger';
 import { AppError } from '../utils/AppError';
 import { setContextUser } from '../utils/requestContext';

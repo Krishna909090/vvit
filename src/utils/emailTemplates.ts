@@ -339,7 +339,6 @@ export interface StatusUpdateEmailData {
 export const getStatusUpdateTemplate = (data: StatusUpdateEmailData) => {
     const {
         studentName: rawName,
-        applicationId: rawAppId,
         updateType,
         approvedItems = [],
         rejectedItems = [],
@@ -348,7 +347,6 @@ export const getStatusUpdateTemplate = (data: StatusUpdateEmailData) => {
     } = data;
 
     const studentName = escapeHtml(rawName);
-    const applicationId = escapeHtml(rawAppId);
 
     let title = "Status Update";
     let greeting = "Application Status Update";

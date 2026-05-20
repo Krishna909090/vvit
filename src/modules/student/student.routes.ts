@@ -19,7 +19,6 @@ import {
     payTestFee,
     payCollegeFee,
     payTokenFee,
-    requestDiscount
 } from '../finance/payment.controller';
 
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';

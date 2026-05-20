@@ -5,7 +5,6 @@ import { Request, Response, NextFunction } from 'express';
 import prisma from '../../config/prisma';
 import * as examService from './exam.service';
 import logger from '../../utils/logger';
-import jwt from 'jsonwebtoken';
 import { AdmissionStatus } from '@prisma/client';
 import { Role } from '../../constants/roles';
 import { catchAsync } from '../../utils/catchAsync';
@@ -13,9 +12,6 @@ import { AppError } from '../../utils/AppError';
 import { sendResponse } from '../../utils/response';
 import { MESSAGES } from '../../constants/messages';
 import fs from 'fs';
-
-// JWT_SECRET is validated on startup by envValidator - no fallback needed
-const JWT_SECRET = process.env.JWT_SECRET!;
 
 /* -------------------------------------------------------------------------- */
 /*                               CONTROLLER APIS                              */

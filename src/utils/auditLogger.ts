@@ -2,7 +2,6 @@
 // Audit logging for security-sensitive operations
 
 import logger from './logger';
-import prisma from '../config/prisma';
 
 export enum AuditAction {
     // Authentication
