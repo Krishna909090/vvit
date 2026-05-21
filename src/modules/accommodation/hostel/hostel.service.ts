@@ -9,6 +9,7 @@ import { convertToPresignedUrl } from '../../../utils/s3Utils';
 // filledRooms    = COUNT(HostelRoom where EVERY bed has an active HostelAllocation, and the room has ≥1 bed)
 // filledBeds     = COUNT(active HostelAllocation rows in this hostel)
 // filledStudents = COUNT(StudentAdmission.hostelId = X, not CANCELLED) — students earmarked for the hostel (some may not yet have a bed)
+/** Compute live occupancy (rooms/beds/students filled vs total) for a hostel from source-of-truth tables — see the field-definition comment above. */
 export const getHostelOccupancy = async (hostelId: string, client: any = prisma) => {
     const [totalRooms, bedsAgg, filledRooms, filledBeds, filledStudents] = await Promise.all([
         client.hostelRoom.count({
@@ -48,6 +49,7 @@ export const getHostelOccupancy = async (hostelId: string, client: any = prisma)
     };
 };
 
+/** Throw 400 if the hostel has no free beds. Guard called before assigning a student to a hostel. */
 export const assertHostelHasCapacity = async (hostelId: string, client: any = prisma) => {
     const { totalBeds, filledStudents } = await getHostelOccupancy(hostelId, client);
     if (totalBeds === 0) throw new AppError('Hostel has no rooms configured', 400);
@@ -58,6 +60,7 @@ export const assertHostelHasCapacity = async (hostelId: string, client: any = pr
 
 export const HostelService = {
     // Hostel
+    /** Create a hostel (building). Rejects duplicate name. */
     async createHostel(data: any, createdBy?: string) {
         const { name, type, wardenName, floors, totalRooms, photoUrl,
                 accommodationBank, messBank, laundryBank, registrationBank } = data;
@@ -90,6 +93,7 @@ export const HostelService = {
         });
     },
 
+    /** List all non-deleted hostels with computed occupancy stats per hostel. */
     async getAllHostels() {
         const hostels = await prisma.hostel.findMany({
             where: { isDeleted: false },
@@ -118,6 +122,7 @@ export const HostelService = {
         return { hostels: enriched, totals };
     },
 
+    /** Return the distinct floor numbers present in a hostel (for the floor-picker UI). */
     async getHostelFloors(hostelId: string) {
         const hostel = await prisma.hostel.findUnique({
             where: { id: hostelId },
@@ -143,6 +148,7 @@ export const HostelService = {
         };
     },
 
+    /** Fetch a single hostel with occupancy stats. */
     async getHostelById(id: string) {
         const hostel = await prisma.hostel.findUnique({
             where: { id },
@@ -156,6 +162,7 @@ export const HostelService = {
         };
     },
 
+    /** Patch hostel fields (name/type/warden/bank accounts etc.). */
     async updateHostel(id: string, data: any) {
         const hostel = await prisma.hostel.findUnique({ where: { id } });
         if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
@@ -187,6 +194,7 @@ export const HostelService = {
         });
     },
 
+    /** Soft-delete a hostel. Blocks if students are still assigned or any ACTIVE bed allocation exists. */
     async deleteHostel(id: string) {
         const hostel = await prisma.hostel.findUnique({ where: { id } });
         if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
@@ -231,6 +239,7 @@ export const HostelService = {
     },
 
     // Hostel Room
+    /** Create one room + auto-generate its beds (count = capacity/sharing). Rejects duplicate room number within the hostel. */
     async createHostelRoom(data: any, createdBy?: string) {
         const { hostelId, floor, number, capacity, type } = data;
 
@@ -291,6 +300,7 @@ export const HostelService = {
      * Bulk create rooms by parsing a number range (e.g. A-101 → A-110).
      * Generates one HostelRoom per number, plus beds based on capacity.
      */
+    /** Bulk-create rooms (e.g. "floor 2, rooms 201-220, 4-sharing"). Auto-generates beds for each; skips duplicates. */
     async createHostelRoomsBulk(data: any, createdBy?: string) {
         const { hostelId, floor, roomRangeStart, roomRangeEnd, capacity, type } = data;
 
@@ -386,6 +396,7 @@ export const HostelService = {
         };
     },
 
+    /** List rooms with optional filters (hostel/floor/roomNumber). Pass includeBeds to eager-load bed occupancy. */
     async getHostelRooms(filters?: { blockId?: string, hostelId?: string, floor?: number, includeBeds?: boolean, roomNumber?: string }) {
         const where: any = { isDeleted: false };
         if (filters?.blockId) where.blockId = filters.blockId;
@@ -463,6 +474,7 @@ export const HostelService = {
         });
     },
 
+    /** Fetch one room with per-bed occupancy: each bed shows AVAILABLE/OCCUPIED + the occupant's details (presigned photo + allotment order). */
     async getHostelRoomById(id: string) {
         const room = await prisma.hostelRoom.findUnique({
             where: { id },
@@ -554,6 +566,7 @@ export const HostelService = {
         };
     },
 
+    /** Patch a room. On capacity change, adds/removes beds; blocks capacity reduction if the beds being removed are ACTIVE-allocated. */
     async updateHostelRoom(id: string, data: any, updatedBy?: string) {
         const room = await prisma.hostelRoom.findUnique({
             where: { id },
@@ -633,6 +646,7 @@ export const HostelService = {
         });
     },
 
+    /** Soft-delete a room. Blocks if any bed in it has an ACTIVE allocation — vacate students first. */
     async deleteHostelRoom(id: string) {
         const room = await prisma.hostelRoom.findUnique({ where: { id } });
         if (!room) throw new AppError("Hostel Room not found", 404);

@@ -89,6 +89,11 @@ const buildLoginPayload = async (userId: string) => {
 
 // ─────────────────────── Login ───────────────────────
 
+/**
+ * Student portal login by roll number + password. Resolves the student's
+ * linked User, bcrypt-compares the password, and returns a signed JWT plus
+ * grouped permissions/modules for the portal sidebar.
+ */
 export const studentLogin = async (rollNumber: string, password: string) => {
   logger.info(`[studentLogin] attempt roll=${rollNumber}`);
 
@@ -138,6 +143,12 @@ export const studentLogin = async (rollNumber: string, password: string) => {
 
 // ───────────────────── Initial setup (self-service PII) ─────────────────────
 
+/**
+ * First-time student account activation: verifies the one-time setup
+ * credential (roll + temp secret), then sets the student's chosen password
+ * and marks the account active. Returns a JWT so the student is logged in
+ * immediately after setup.
+ */
 export const studentInitialSetup = async (
   rollNumber: string,
   dob: string,
@@ -251,6 +262,11 @@ export const studentInitialSetup = async (
 
 // ───────────────────── Admin issues forgot-password OTP ─────────────────────
 
+/**
+ * Admin-triggered password reset: issues a reset OTP for a student (e.g. when
+ * the student lost portal access). Encrypts + stores the OTP and dispatches it
+ * to the student's registered contact.
+ */
 export const adminIssueStudentResetOtp = async (
   adminUserId: string,
   rollNumber: string
@@ -395,6 +411,7 @@ export const adminIssueStudentResetOtp = async (
 
 // ───────────────────── Student consumes OTP to set new password ─────────────
 
+/** Complete a student password reset: validate the OTP, set the new bcrypt-hashed password, invalidate the OTP. */
 export const studentResetPassword = async (
   rollNumber: string,
   otp: string,

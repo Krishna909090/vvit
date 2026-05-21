@@ -9,6 +9,7 @@ import bcrypt from 'bcryptjs';
 
 export const AdminService = {
 
+    /** Aggregate counts for the admin home dashboard (students, staff, pending verifications, etc.). */
     async getDashboardStats() {
         const totalApplications = await prisma.student.count();
         const paidApplications = await prisma.studentAdmission.count({ where: { feeStatus: FeeStatus.FULL } });
@@ -61,6 +62,11 @@ export const AdminService = {
         };
     },
 
+    /**
+     * Create a staff/admin user with role + optional group memberships.
+     * Hashes the password, links a PRO record if proNumber given, and rejects
+     * duplicate phone/email.
+     */
     async addAdmin(data: { phone?: string; name?: string; email?: string; role?: any; password?: string; groupIds?: string[]; proNumber?: string }, currentUserId?: string) {
         const { phone, name, email, role, password, groupIds, proNumber } = data;
 
@@ -190,6 +196,7 @@ export const AdminService = {
         return user;
     },
 
+    /** List agent (PRO) commission rows, optionally filtered to one agent. */
     async getAgentCommissions(agentId?: string) {
         const where: any = {};
         if (agentId) where.agentId = String(agentId);
@@ -201,6 +208,7 @@ export const AdminService = {
         return commissions;
     },
 
+    /** Look up a user by phone or email (admin search helper). */
     async getUserDetails(phone?: string, email?: string) {
         if (!phone && !email) {
             throw new AppError(MESSAGES.ERROR.INVALID_REQUEST, 400);
@@ -227,6 +235,7 @@ export const AdminService = {
      * Get all staff users (excluding students)
      * Supports filtering by role and search term
      */
+    /** List staff users (non-student roles) with optional role filter + name/email/phone search. */
     async getStaffUsers(filters?: { role?: RoleType; search?: string }) {
         const where: any = {
             role: {
@@ -293,6 +302,7 @@ export const AdminService = {
      * Update staff user details
      * Can update name, email, and role (excluding STUDENT role)
      */
+    /** Patch a staff user's name/email/role or soft-delete flag. */
     async updateStaffUser(userId: string, data: { name?: string; email?: string; role?: RoleType, isDeleted?: boolean }, currentUserId?: string) {
         if (!userId) {
             throw new AppError('User ID is required', 400);
@@ -385,6 +395,7 @@ export const AdminService = {
     /**
      * Delete (soft delete) staff user
      */
+    /** Soft-delete a staff user. Blocks self-deletion. */
     async deleteStaffUser(userId: string, currentUserId?: string) {
         if (!userId) {
             throw new AppError('User ID is required', 400);
@@ -418,10 +429,12 @@ export const AdminService = {
     },
 
     // System Settings
+    /** Return all key-value system settings rows. */
     async getSystemSettings() {
         return prisma.systemSetting.findMany();
     },
 
+    /** Upsert a single system setting key (e.g. APPLICATION_FEE_AMOUNT). */
     async updateSystemSetting(key: string, value: string, userId: string) {
         return prisma.systemSetting.upsert({
             where: { key },
@@ -431,6 +444,7 @@ export const AdminService = {
     },
 
     // Agent Commission
+    /** Move an agent commission row through its status (PENDING → PAID etc.). */
     async updateAgentCommissionStatus(commissionId: string, status: AgentCommissionStatus, userId: string) {
         return prisma.agentCommission.update({
             where: { id: commissionId },
@@ -439,6 +453,7 @@ export const AdminService = {
     },
     
     // Assign Role and Groups
+    /** Set a user's role and replace their group memberships in one operation. */
     async assignUserRoleAndGroups(data: { userId: string, role?: string, groupIds?: string[] }, executedBy?: string) {
         const { userId, role, groupIds } = data;
         
@@ -499,6 +514,7 @@ export const AdminService = {
     },
 
     // New API: Update Full Staff Details (Name, Email, Phone, Role, Groups) - REPLACEMENT STRATEGY for Groups
+    /** One-shot staff edit: personal fields + role + group memberships + active flag. Used by the staff-edit modal. */
     async updateFullStaffDetails(data: { userId: string, name?: string, email?: string, phone?: string, role?: string, groupIds?: string[], isDeleted?: boolean }, executedBy?: string) {
         const { userId, name, email, phone, role, groupIds, isDeleted } = data;
 
