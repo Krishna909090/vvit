@@ -58,6 +58,11 @@ export const MarksService = {
     // Subject (curriculum) CRUD
     // ────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Create a Subject (curriculum unit). Schema has @@unique on (courseId,
+     * semester, code) — we pre-check to surface a clean 409 instead of P2002.
+     * Defaults: 30/70/100 internal/external/total marks, THEORY exam type.
+     */
     createSubject: async (
         data: {
             code:             string;
@@ -110,6 +115,7 @@ export const MarksService = {
         });
     },
 
+    /** List non-deleted subjects with optional filters (course / semester / examType / isElective). */
     listSubjects: async (filters: {
         courseId?:         string;
         semester?:         number;
@@ -131,6 +137,7 @@ export const MarksService = {
         });
     },
 
+    /** Patch a subject's code/name/credits/exam-type/marks-caps/elective flag. */
     updateSubject: async (
         id: string,
         data: Partial<{
@@ -154,6 +161,7 @@ export const MarksService = {
         });
     },
 
+    /** Soft-delete a subject (isDeleted=true). SemesterMark rows referencing it stay intact for history. */
     deleteSubject: async (id: string, userId: string) => {
         const existing = await prisma.subject.findUnique({ where: { id } });
         if (!existing || existing.isDeleted) throw new AppError('Subject not found', 404);
@@ -180,6 +188,11 @@ export const MarksService = {
     // SemesterMark CRUD
     // ────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Record a SemesterMark for one student × subject × year × attempt.
+     * Validates internal/external/total marks against subject ceilings.
+     * Computes grade + status (PASS/FAIL/AB) per institution scale.
+     */
     recordMark: async (
         data: {
             studentId:        string;
@@ -259,6 +272,11 @@ export const MarksService = {
     // Bulk recording for one student across many subjects (typical: admin enters
     // a full semester's transcript in one go). Per-row failures don't kill the
     // whole batch — the response lists outcomes per subject.
+    /**
+     * Bulk-record marks: one (subject, year, semester) → many students.
+     * Each row goes through `recordMark`; per-row failures are collected
+     * but don't abort the batch.
+     */
     recordMarksBulk: async (
         studentId: string,
         academicYearId: string,
@@ -309,6 +327,7 @@ export const MarksService = {
         return { summary, results };
     },
 
+    /** Patch a SemesterMark row. Re-validates ceilings + recomputes grade/status on changes. */
     updateMark: async (
         id: string,
         data: Partial<{
@@ -346,6 +365,7 @@ export const MarksService = {
         });
     },
 
+    /** Soft-delete a mark row. Used to invalidate an erroneous entry; create a new attempt for the corrected value. */
     deleteMark: async (id: string, userId: string) => {
         const existing = await prisma.semesterMark.findUnique({ where: { id } });
         if (!existing || existing.isDeleted) throw new AppError('SemesterMark not found', 404);
@@ -362,6 +382,10 @@ export const MarksService = {
 
     // Full transcript for a student — grouped by (academicYear, semester).
     // For supplementary attempts: returns ALL attempts; UI decides which to display.
+    /**
+     * All marks for one student, optionally narrowed by year or semester.
+     * Includes subject metadata (code/name/credits) for the transcript view.
+     */
     getStudentMarks: async (studentId: string, filters?: { academicYearId?: string; semester?: number }) => {
         const where: any = { studentId, isDeleted: false };
         if (filters?.academicYearId) where.academicYearId = filters.academicYearId;
@@ -450,6 +474,11 @@ export const MarksService = {
 
     // Admin: marks roll for one (academicYear, semester) — all students.
     // Heavy query; use pagination at the UI level.
+    /**
+     * Class-level view: every student's mark in a specific (year, semester,
+     * subject). Used by faculty to compare/distribute, and by admin to
+     * compile result sheets.
+     */
     getSemesterMarks: async (
         academicYearId: string,
         semester: number,

@@ -25,10 +25,12 @@ setInterval(() => {
     }
 }, 30 * 60 * 1000);
 
+/** Add a JWT to the in-memory blacklist until `expiresAt`. Used on logout / forced session kill. */
 export const blacklistToken = (token: string, expiresAt: number) => {
     tokenBlacklist.set(token, expiresAt);
 };
 
+/** Check whether a JWT is in the blacklist. Called by auth middleware on every protected request. */
 export const isTokenBlacklisted = (token: string): boolean => {
     return tokenBlacklist.has(token);
 };
@@ -68,6 +70,12 @@ const ENROLLED_STUDENT_OTP_BLOCK_MSG =
 
 // Service: Verifies user identity, auto-registers student users by phone,
 // generates a hashed OTP, stores it in UserOtp, and triggers notification(s).
+/**
+ * Issue an OTP to a user's phone / email. Detects whether the identifier
+ * belongs to a student (longer expiry, max 5 attempts) or staff (shorter
+ * expiry), generates a 6-digit code, bcrypt-hashes it, and dispatches via
+ * SMS / email.
+ */
 export const sendOtp = async (identifier: { phone?: string; email?: string }) => {
   const phone = identifier.phone?.trim();
   const email = identifier.email?.trim().toLowerCase();
@@ -207,6 +215,11 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
 
 // Service: Validates OTP using hashed comparison, enforces channel rules,
 // attempts + lockout, expiry, and generates access token on success.
+/**
+ * Verify an OTP against the latest unused row for an identifier. On match:
+ * marks the OTP used, increments login session, returns a signed JWT.
+ * Tracks failed attempts; locks the account after OTP_MAX_ATTEMPTS.
+ */
 export const verifyOtp = async (
   identifier: { phone?: string; email?: string },
   otp: string
@@ -356,6 +369,10 @@ export const verifyOtp = async (
 };
 
 // Service: Password Login for Staff/Admins
+/**
+ * Username/password login (staff path). Bcrypt-compares against User.password,
+ * returns a signed JWT on success. Tracks failed attempts in user record.
+ */
 export const login = async (identifier: { phone?: string; email?: string }, password: string) => {
   let user = null;
   if (identifier.phone) {
@@ -402,6 +419,7 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
   return { token, role: user.role, id: user.id, permissions: groupedPermissions, modules };
 };
 
+/** Kick off the third-party Aadhaar e-KYC flow: server returns a requestId the client uses to submit the OTP. */
 export const generateAadhaarOtp = async (idNumber: string) => {
   const apiKey = process.env.QUICK_KYC_API_KEY;
   if (!apiKey) {
@@ -437,6 +455,7 @@ export const generateAadhaarOtp = async (idNumber: string) => {
   }
 };
 
+/** Submit the OTP for an in-flight Aadhaar e-KYC requestId; returns decrypted demographic data on success. */
 export const submitAadhaarOtp = async (requestId: string | number, otp: string) => {
   const apiKey = process.env.QUICK_KYC_API_KEY;
   if (!apiKey) {

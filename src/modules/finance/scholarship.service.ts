@@ -5,6 +5,7 @@ import { ScholarshipStatus } from '@prisma/client';
 import { getActiveAcademicYear } from '../../utils/studentContext';
 
 export const ScholarshipService = {
+    /** Create a new ScholarshipRule, tagged to the active academic year. Defines a (minPercentile, discountPercentage, totalSlots, degreeType) tier. */
     async createRule(data: any, _createdBy: string) {
         const { name, minPercentile, discountPercentage, totalSlots } = data;
         const ruleYear = await getActiveAcademicYear();
@@ -23,6 +24,7 @@ export const ScholarshipService = {
         });
     },
 
+    /** List active rules sorted by minPercentile DESC (highest threshold first). */
     async getAllRules() {
         return await prisma.scholarshipRule.findMany({
             where: { isActive: true },
@@ -30,6 +32,7 @@ export const ScholarshipService = {
         });
     },
 
+    /** Patch a rule (name / thresholds / slots / degree / active flag). */
     async updateRule(id: string, data: any) {
         return await prisma.scholarshipRule.update({
             where: { id },
@@ -44,6 +47,7 @@ export const ScholarshipService = {
         });
     },
 
+    /** Soft-delete a rule by flipping `isActive=false`. Preserves history of past allocations. */
     async deleteRule(id: string) {
         return await prisma.scholarshipRule.update({
             where: { id },
@@ -51,6 +55,13 @@ export const ScholarshipService = {
         });
     },
 
+    /**
+     * READ-ONLY eligibility check. Walks the student's approved documents +
+     * academic qualifications, extracts entrance/board scores backed by an
+     * approved cert, matches against active rules for the student's degree,
+     * and returns the BEST rule (highest discount, slots available). Returns
+     * `{ eligible: false, reason }` when no rule matches.
+     */
     async checkEligibility(studentId: string): Promise<any> {
         logger.info(`Checking scholarship eligibility for student ${studentId} (READ-ONLY)`);
 
@@ -191,11 +202,17 @@ export const ScholarshipService = {
         };
     },
 
+    /** Stub for verification-officer sign-off on a student's eligibility (no-op currently). */
     async verifyEligibility(studentId: string, remarks: string, verifierId: string, ruleId?: string) {
         logger.info(`Verification Officer ${verifierId} verifying scholarship eligibility for student ${studentId} (remarks=${remarks}, ruleId=${ruleId ?? 'none'})`);
         return { success: true, message: "Scholarship eligibility verified and recorded successfully" };
     },
 
+    /**
+     * Lock a student to a rule + decrement available slots, atomically.
+     * Tagged with the active academic year. Use when admin manually approves
+     * — does NOT validate eligibility (call `checkEligibility` first if needed).
+     */
     async allocateScholarship(studentId: string, ruleId: string, _adminId: string) {
         // 1. Validate
         // Verify 'verification officer remarks' if applicable (omitted for speed unless table exists)
@@ -228,6 +245,7 @@ export const ScholarshipService = {
         });
     },
 
+    /** Fetch a student's current scholarship allocation row with its parent rule. */
     async getStudentAllocation(studentId: string) {
         return await prisma.scholarshipAllocation.findUnique({
             where: { studentId },
@@ -235,6 +253,11 @@ export const ScholarshipService = {
         });
     },
 
+    /**
+     * Promote a RESERVED allocation to LOCKED with a 20-day expiry. No-op
+     * if the row is already LOCKED or in a terminal state. Called when the
+     * student confirms admission.
+     */
     async lockAllocation(studentId: string) {
         const allocation = await prisma.scholarshipAllocation.findUnique({ where: { studentId } });
         if (!allocation) return null;
@@ -255,6 +278,11 @@ export const ScholarshipService = {
         });
     },
 
+    /**
+     * Admin override: assign a student a specific rule even if eligibility
+     * doesn't match. Releases the slot from any prior allocation, then
+     * RESERVED-allocates the new rule. Tagged to the active academic year.
+     */
     async allocateManualRule(studentId: string, ruleId: string) {
         logger.info(`Manually allocating scholarship rule ${ruleId} to student ${studentId}`);
 
@@ -291,6 +319,14 @@ export const ScholarshipService = {
         });
     },
 
+    /**
+     * Change a student's scholarship percentage end-to-end:
+     *   1. Upsert StudentScholarship (year-tagged)
+     *   2. Recalibrate every PENDING/PARTIAL TUITION demand's
+     *      scholarshipAmount + netAmount + status
+     *   3. Record matching DEBIT/CREDIT ledger entries for the delta
+     * Pass `feeHeadId` to limit recalibration to one fee head; otherwise applies to all "tuition"-named heads.
+     */
     async updateStudentScholarship(studentId: string, newPercentage: number, adminId: string, feeHeadId?: string, academicYearId?: string | null) {
         logger.info(`Updating scholarship for student ${studentId} to ${newPercentage}% (FeeHead: ${feeHeadId || 'AUTO-DETECT'})`);
 
