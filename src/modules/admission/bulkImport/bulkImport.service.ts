@@ -34,8 +34,11 @@ interface StudentImportRow {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
-// Resolve an academic year identifier that may be either a UUID or a code
-// (e.g. "2025-26"). Admins typically know the code, not the UUID.
+/**
+ * Resolve an academic year identifier that may be either a UUID or a code
+ * (e.g. "2025-26"). Admins typically supply the code in import sheets, not
+ * the UUID. Returns null if neither resolves.
+ */
 const resolveAcademicYearId = async (codeOrId: string): Promise<string | null> => {
     if (!codeOrId) return null;
     // UUID v4 detection
@@ -48,6 +51,7 @@ const resolveAcademicYearId = async (codeOrId: string): Promise<string | null> =
     return ay?.id ?? null;
 };
 
+/** Parse an offline-registration Excel and create REGISTERED students row-by-row. Returns per-row results. */
 export const processOfflineRegistration = async (fileBuffer: any, adminId: string) => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(fileBuffer);
@@ -120,6 +124,7 @@ export const processOfflineRegistration = async (fileBuffer: any, adminId: strin
 };
 
 
+/** Parse a seat-booking Excel and create students at ENTRANCE_FEE_PAID with a token payment. Returns per-row results. */
 export const processSeatBookingRegistration = async (fileBuffer: any, adminId: string) => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(fileBuffer);
@@ -177,6 +182,7 @@ export const processSeatBookingRegistration = async (fileBuffer: any, adminId: s
 };
 
 // Helper to Create User and Student
+/** Internal: create User + Student + StudentAdmission (REGISTERED) for one offline-import row, in a tx. */
 const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMode, adminId: string) => {
     // 1. Check Duplicates
     const existing = await prisma.student.findFirst({
@@ -264,6 +270,7 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
     });
 };
 
+/** Internal: create one seat-booking student (ENTRANCE_FEE_PAID + token Payment + Ledger), in a tx. */
 const registerSeatBookingStudent = async (data: StudentImportRow, adminId: string) => {
      // 1. Check Duplicates (Same as above)
      const existing = await prisma.student.findFirst({
@@ -377,10 +384,12 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
     });
 };
 
+/** Internal: true if `d` is a parseable, valid Date. */
 const isValidDate = (d: any) => {
     return d instanceof Date && !isNaN(d.getTime());
 };
 
+/** Record + verify an offline (cash) entrance/token payment for a student: creates Payment + Ledger, advances admission status. */
 export const verifyOfflinePayment = async (studentId: string, amount: number, type: 'ENTRANCE' | 'TOKEN', adminId: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
@@ -470,6 +479,7 @@ interface OfflineApplicationInput {
     isKycVerified?: string;
 }
 
+/** Dry-run validation of an offline-application batch: returns per-row errors without writing anything. */
 export const validateOfflineApplications = async (applications: OfflineApplicationInput[]) => {
     const results = {
         valid: 0,
@@ -580,6 +590,7 @@ export const validateOfflineApplications = async (applications: OfflineApplicati
     return results;
 };
 
+/** Commit an offline-application batch: creates each student + application-fee payment. Fails fast if no active year. */
 export const processOfflineApplications = async (applications: OfflineApplicationInput[], adminId: string) => {
     // Re-validate on backend even though UI already validated (can't trust client)
     const validation = await validateOfflineApplications(applications);
@@ -741,6 +752,7 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
 // back-dated admissions). Mirrors validateOfflineApplications: accepts a JSON
 // array (frontend parses CSV/Excel client-side and posts JSON), returns
 // detailed per-row errors and does NOT touch the DB beyond reads.
+/** Dry-run validation of a manual-entry batch (lateral/transfer admissions): per-row errors, no writes. */
 export const validateBulkManualEntry = async (rows: any[]) => {
     const results = {
         total: rows.length,
@@ -855,6 +867,7 @@ export const validateBulkManualEntry = async (rows: any[]) => {
 // the backend (can't trust the client), then invokes
 // AdminStudentService.manualEntryAdmission per valid row sequentially. Lazy
 // import is used to dodge any circular-dep risk between admin services.
+/** Commit a manual-entry batch by delegating each row to AdminStudentService.manualEntryAdmission. Returns per-row results. */
 export const processBulkManualEntry = async (rows: any[], adminId: string) => {
     // Re-validate on backend
     const validation = await validateBulkManualEntry(rows);
@@ -911,6 +924,7 @@ export const processBulkManualEntry = async (rows: any[], adminId: string) => {
  * before POSTing to /admin/bulk-import/manual-entry. The header names match the
  * dot-paths of the validator schema fields.
  */
+/** Return a CSV template (headers + one example row) for the manual-entry bulk import. */
 export const generateManualEntryTemplate = (): string => {
     const headers = [
         // Student profile

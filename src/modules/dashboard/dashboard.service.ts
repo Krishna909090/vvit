@@ -1,6 +1,7 @@
 import prisma from '../../config/prisma';
 import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, ApplicationMode, QuotaType, AccommodationType, Prisma } from '@prisma/client';
 
+/** Build a Prisma `createdAt` date filter from a named range ("today"/"7d"/…) or an explicit start/end pair. Shared by every dashboard stat method. */
 const getDateCondition = (range?: string, startDate?: string, endDate?: string) => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -64,6 +65,7 @@ export const DashboardService = {
     /**
      * 1. Application Statistics
      */
+    /** Application funnel counts (total / by status / fee-paid) over a date range. */
     async getApplicationStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
         const whereDate = dateFilter ? { createdAt: dateFilter } : {};
@@ -115,6 +117,7 @@ export const DashboardService = {
     /**
      * 2. Financial Statistics
      */
+    /** Revenue rollup (collected / pending / by component) over a date range. */
     async getFinancialStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
         const whereDate = dateFilter ? { createdAt: dateFilter } : {};
@@ -156,6 +159,7 @@ export const DashboardService = {
     /**
      * 3. Admission & Infrastructure Statistics
      */
+    /** Admission funnel counts (registered → exam → allotted → confirmed → enrolled) over a date range. */
     async getAdmissionStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
         const whereDate = dateFilter ? { createdAt: dateFilter } : {};
@@ -276,6 +280,7 @@ export const DashboardService = {
     /**
      * Scholarship Statistics — with optional degreeType filter
      */
+    /** Scholarship dashboard: eligible/allocated counts + discount totals over a date range. */
     async getScholarshipStats(
         range?: string,
         startDate?: string,
@@ -353,6 +358,7 @@ export const DashboardService = {
     /**
      * 4. Exam Statistics
      */
+    /** Exam stats: scheduled / attended / qualified counts over a date range. */
     async getExamStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
         const whereDate = dateFilter ? { createdAt: dateFilter } : {};
@@ -372,6 +378,7 @@ export const DashboardService = {
      * Get Verification Statistics
      * Counts unique students with at least one approved qualification/document.
      */
+    /** Document-verification stats: pending / approved / rejected counts over a date range. */
     async getVerificationStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
         const whereDate = dateFilter ? { createdAt: dateFilter } : {};
@@ -414,6 +421,7 @@ export const DashboardService = {
      * Per-year scoped: sums CourseCapacity for the active academic year.
      * Falls back to Course.totalSeats if no CourseCapacity rows exist yet.
      */
+    /** Seat-allocation breakdown by degree programme over a date range. */
     async getDegreeSeatAllocatedStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
         const whereDate = dateFilter ? { createdAt: dateFilter } : {};
@@ -479,6 +487,7 @@ export const DashboardService = {
     /**
      * Get Allocated Seats Count by Gender
      */
+    /** Seat-allocation breakdown by gender over a date range. */
     async getGenderSeatAllocatedStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
         const whereDate = dateFilter ? { createdAt: dateFilter } : {};
@@ -510,6 +519,7 @@ export const DashboardService = {
      * Get Student Trends for specific time ranges
      * @param rangeType '7d' | '10d' | '1m' | '3m'
      */
+    /** Daily registration counts for a trend chart (buckets students by YYYY-MM-DD). */
     async getRegistrationTrends(rangeType: string) {
         let dateLimit = new Date();
         
@@ -565,6 +575,7 @@ export const DashboardService = {
      * Get Students Registered in a specific time range
      * @param rangeType '7d' | '10d' | '1m' | '3m'
      */
+    /** Most-recently registered students within a range — dashboard "recent activity" widget. */
     async getRecentStudents(rangeType: string) {
         let dateLimit = new Date();
         
@@ -611,6 +622,7 @@ export const DashboardService = {
         });
     },
 
+    /** Paginated, searchable seat-allocation roster broken down by `type` (degree/course/etc.). */
     async getSeatAllocationStats(type: string, page: number = 1, limit: number = 10, search?: string) {
         const skip = (page - 1) * limit;
 
@@ -777,6 +789,7 @@ export const DashboardService = {
     /**
      * Get All Course Codes
      */
+    /** List course id/name/code tuples for dashboard filter dropdowns. */
     async getCourseCodes() {
         return await prisma.course.findMany({
             select: {
@@ -791,6 +804,7 @@ export const DashboardService = {
     /**
      * Get summary counts for Seat Allocation Stats
      */
+    /** Aggregate allotted-vs-total seat counts, optionally narrowed by `filter`. */
     async getSeatAllocationCounts(filter?: string) {
         const result: any = {};
         // 1. Not Allocated (exclude CANCELLED + ENROLLED admissions, require APPROVED qualification)
@@ -856,6 +870,7 @@ export const DashboardService = {
      * Get Course Statistics (Seats Filled vs Total) for the active academic year.
      * Falls back to Course.totalSeats if no CourseCapacity row exists for that course/year.
      */
+    /** Per-course seat fill rate (filled/total) across the active year for the capacity overview. */
     async getCourseSeatStats() {
         const activeYear = await prisma.academicYear.findFirst({
             where: { isActive: true, isDeleted: false },

@@ -70,6 +70,12 @@ export interface AdjustmentResult {
 // ─────────────────────────────────────────────────────────────
 // Pure calculation — no DB access
 // ─────────────────────────────────────────────────────────────
+/**
+ * Pure (no DB) calculation of a cancellation's financial outcome: deduction,
+ * refund, transfer, balance due, and per-component breakdown. Branches on
+ * `conditionType` (quota-change vs full cancel) — this is the single source of
+ * truth for "how much money moves" when a seat is cancelled.
+ */
 export const calculateFeeAdjustment = (input: AdjustmentInput): AdjustmentResult => {
     const { conditionType, totalPaid, componentPaid, newQuotaFee = 0, cancellationFee } = input;
     const deductionFee = cancellationFee ?? DEFAULT_DEDUCTION;
@@ -202,6 +208,7 @@ export const calculateFeeAdjustment = (input: AdjustmentInput): AdjustmentResult
 };
 
 // Proportional refund spread helper
+/** Internal: distribute a refund pool across fee components proportionally to what was paid in each. */
 const _spreadRefundProportionally = (
     breakdown: AdjustmentResult['componentBreakdown'],
     comp: ComponentPaid,
@@ -217,6 +224,7 @@ const _spreadRefundProportionally = (
 // ─────────────────────────────────────────────────────────────
 // Fetch real paid amounts per component from Payment table
 // ─────────────────────────────────────────────────────────────
+/** Internal: aggregate a student's successful payments into per-component totals (tuition/admission/hostel/etc.) used by the adjustment calc. */
 const fetchComponentPaid = async (studentId: string): Promise<{ componentPaid: ComponentPaid; totalPaid: number }> => {
     const payments = await prisma.payment.findMany({
         where: { studentId, status: PaymentStatus.SUCCESS },
@@ -265,6 +273,7 @@ const fetchComponentPaid = async (studentId: string): Promise<{ componentPaid: C
 // ─────────────────────────────────────────────────────────────
 // Generate cancellation receipt PDF, upload to S3, send email
 // ─────────────────────────────────────────────────────────────
+/** Internal: render + upload the cancellation receipt PDF; returns the S3 URL (or null on failure, best-effort). */
 const _generateCancellationReceipt = async (request: any, now: Date): Promise<string | null> => {
     const student = request.student;
     if (!student) return null;
@@ -352,6 +361,11 @@ const _generateCancellationReceipt = async (request: any, now: Date): Promise<st
 // ─────────────────────────────────────────────────────────────
 export const CancellationService = {
 
+    /**
+     * Create a cancellation request. Fetches per-component paid totals, runs
+     * `calculateFeeAdjustment` to compute deduction/refund/transfer/balance,
+     * and persists the request (year-tagged) in REQUESTED status for approval.
+     */
     async createCancellationRequest(data: {
         studentId:               string;
         reason:                  string;
@@ -418,6 +432,12 @@ export const CancellationService = {
     },
 
 
+    /**
+     * Approve/reject a cancellation. On approve (atomic): marks admission
+     * CANCELLED, vacates hostel + transport allocations, soft-deletes pending
+     * demands, decrements course capacity, records refund ledger entries, and
+     * generates the receipt PDF. On reject: just flips status with remarks.
+     */
     async approveCancellation(requestId: string, approved: boolean, adminId: string, remarks?: string, cancellationFee?: number) {
         const request = await prisma.cancellationRequest.findUnique({
             where: { id: requestId },
@@ -713,6 +733,7 @@ export const CancellationService = {
         return { status: newStatus, approvedAt: approved ? now : null, invoiceUrl: presignedUrl };
     },
 
+    /** List cancellation requests with filters (status / dateRange / search). Powers the approval queue. */
     async listCancellationRequests(filters: {
         status?: CancellationStatus;
         conditionType?: string;
@@ -777,6 +798,7 @@ export const CancellationService = {
         return { data: mappedData, total, page, limit, totalPages: Math.ceil(total / limit) };
     },
 
+    /** Fetch one cancellation request with full financial breakdown + student context. */
     async getCancellationById(id: string) {
         const request = await prisma.cancellationRequest.findUnique({
             where: { id },
@@ -813,6 +835,7 @@ export const CancellationService = {
         };
     },
 
+    /** Return a presigned URL for a cancellation's receipt PDF (regenerates if missing). */
     async getInvoiceUrl(id: string): Promise<string> {
         const request = await (prisma.cancellationRequest as any).findUnique({
             where:  { id },
