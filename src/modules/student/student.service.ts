@@ -21,6 +21,12 @@ const resolveActiveYearId = async (): Promise<string> => {
     return (await getActiveAcademicYear()).id;
 };
 
+/**
+ * Public student registration entrypoint. Generates an applicationId, creates
+ * User + Student + StudentAdmission (REGISTERED, year-tagged) + exam record in
+ * a transaction. Handles entry-type (REGULAR/LATERAL/TRANSFER) cohort tagging
+ * and PRO referral linking. Fails fast if no active academic year is set.
+ */
 export const registerStudent = async (data: any, userId: string | null, _currentUserId: string | null) => {
     // Check for duplicate registration
     const dobDate = data.dob ? new Date(data.dob) : undefined;
@@ -289,6 +295,7 @@ export const registerStudent = async (data: any, userId: string | null, _current
 
 
 
+/** Fetch (or lazily generate) a student's hall ticket with a presigned URL + QR payload. */
 export const getHallTicket = async (studentId: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
@@ -349,12 +356,14 @@ export const getHallTicket = async (studentId: string) => {
     };
 };
 
+/** Same as getHallTicket but resolves the student by applicationId first. */
 export const getHallTicketByApplicationId = async (applicationId: string) => {
     const student = await prisma.student.findUnique({ where: { applicationId } });
     if (!student) throw new AppError('Student not found for this application ID', 404);
     return getHallTicket(student.id);
 };
 
+/** Student-side upload of documents + course preferences. Upserts docs (PENDING), saves pref1/2/3, advances admission to DOCUMENTS_SUBMITTED. */
 export const uploadDocumentsAndPreferences = async (studentId: string, data: any, _currentUserId: string | null) => {
     const { id, applicationId, email, phone, pref1, pref2, pref3, ...documentData } = data;
 
@@ -468,6 +477,7 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
     return { studentId, status: admissionStatus };
 };
 
+/** Re-upload a single rejected document — resets its status to PENDING for re-verification. */
 export const reUploadDocument = async (studentId: string, documentKey: string, url: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
@@ -500,6 +510,7 @@ export const reUploadDocument = async (studentId: string, documentKey: string, u
     return doc;
 };
 
+/** Student-side soft-delete of one of their documents + remove the S3 object. */
 export const removeDocument = async (studentId: string, documentKey: string) => {
     const doc = await prisma.studentDocument.findUnique({
         where: {
@@ -533,6 +544,7 @@ export const removeDocument = async (studentId: string, documentKey: string) => 
     return { message: 'Document deleted successfully' };
 };
 
+/** Set a document's verification status (APPROVED/REJECTED/PENDING) with remarks. */
 export const verifyDocument = async (studentId: string, documentKey: string, status: StudentDocumentStatus, remarks?: string) => {
     const existingDoc = await prisma.studentDocument.findUnique({
         where: {
@@ -568,6 +580,7 @@ export const verifyDocument = async (studentId: string, documentKey: string, sta
 
 
 
+/** Add/replace a student's academic qualification rows (10th/12th/entrance marks). */
 export const addAcademicDetails = async (studentId: string, details: any[], _currentUserId: string | null) => {
     // 1. Validate student exists
     const student = await prisma.student.findUnique({
@@ -624,6 +637,7 @@ export const addAcademicDetails = async (studentId: string, details: any[], _cur
     return result;
 };
 
+/** Resolve the full student profile from the logged-in User id. Backs the student-portal "my profile" view. */
 export const getStudentByUserId = async (userId: string) => {
     const student = await prisma.student.findUnique({
         where: { userId },
@@ -790,6 +804,7 @@ export const getStudentByUserId = async (userId: string) => {
     };
 };
 
+/** Paginated student search across name / phone / applicationId. */
 export const searchStudents = async (query: string, page: number = 1, limit: number = 10) => {
     const skip = (page - 1) * limit;
 
@@ -837,6 +852,7 @@ export const searchStudents = async (query: string, page: number = 1, limit: num
 };
 
 
+/** Student-side edit of their own personal details (contacts, address, etc.). */
 export const updatePersonalDetails = async (studentId: string, data: any, currentUserId: string | null) => {
     // 1. Verify Ownership
     const student = await prisma.student.findUnique({
@@ -916,6 +932,7 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
     return { message: 'Personal details updated successfully' };
 };
 
+/** Replace the student's profile photo, deleting the old S3 object. */
 export const updateProfilePhoto = async (studentId: string, newPhotoUrl: string, currentUserId: string | null) => {
     // 1. Verify Student
     const student = await prisma.student.findUnique({
@@ -959,6 +976,7 @@ export const updateProfilePhoto = async (studentId: string, newPhotoUrl: string,
     return { message: 'Profile photo updated successfully', url: presignedUrl };
 };
 
+/** Student request to change accommodation/transport preference; records a ServiceChangeRequest (year-tagged) in REQUESTED. */
 export const changeServicePreferences = async (studentId: string, data: any, currentUserId: string | null) => {
     const { type, value, reason } = data;
 

@@ -108,6 +108,7 @@ const transformSlot = (slot: any) => ({
 /**
  * Create a new exam center with optional capacity and basic duplicates check.
  */
+/** Create an exam center (physical venue). Rejects duplicate name. */
 export const createExamCenter = async (data: any, userId?: string) => {
     const name = data.name?.trim();
     const city = data.city?.trim();
@@ -164,6 +165,7 @@ export const createExamCenter = async (data: any, userId?: string) => {
  * Scan student QR code and return student details for admin/invigilator validation.
  * Does NOT mark attendance - that happens in verifyStudentAttendance.
  */
+/** Mark exam attendance by scanning a hall-ticket QR (decodes qrHash → student, records AttendanceRecord). */
 export const markAttendanceByScan = async (qrHash: string, userId: string) => {
     if (!qrHash || !qrHash.trim()) {
         throw new AppError(MESSAGES.ERROR.QR_HASH_REQUIRED, 400);
@@ -336,6 +338,7 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
  * Verify and mark student attendance after admin/invigilator validation.
  * Includes strict validations to prevent human error.
  */
+/** Invigilator confirmation of a scanned attendance record (second-factor verify before it counts). */
 export const verifyStudentAttendance = async (attendanceRecordId: string, userId: string) => {
     if (!attendanceRecordId || !attendanceRecordId.trim()) {
         throw new AppError('Attendance record ID is required', 400);
@@ -506,6 +509,7 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
 /**
  * Mark student attendance manually by admin using Student ID.
  */
+/** Admin override to set a student's exam attendance without a scan (fallback for QR failures). */
 export const markAttendanceManually = async (studentId: string, attended: boolean, adminId: string | undefined) => {
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     if (typeof attended !== 'boolean') throw new AppError(MESSAGES.ERROR.ATTENDED_BOOLEAN, 400);
@@ -537,6 +541,7 @@ export const markAttendanceManually = async (studentId: string, attended: boolea
 /**
  * Update exam score for a single student.
  */
+/** Set a student's entrance score + qualified flag (score >= cutoff). Triggers scholarship re-eval downstream. */
 export const updateStudentExamScore = async (studentId: string, score: number, cutoff: number, adminId: string | undefined) => {
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     if (score === undefined || cutoff === undefined) {
@@ -596,6 +601,7 @@ export const updateStudentExamScore = async (studentId: string, score: number, c
 /**
  * Create a new exam slot in a given center, respecting center capacity.
  */
+/** Create an exam slot (date/time × center with a seat capacity). */
 export const createExamSlot = async (data: any, userId?: string) => {
     const { examCenterId } = data;
 
@@ -704,6 +710,7 @@ export const createExamSlot = async (data: any, userId?: string) => {
 /**
  * Get all future and booking-enabled slots that are not full.
  */
+/** List bookable slots (booking enabled + seats remaining) for the student slot-picker. */
 export const getAvailableSlots = async () => {
     // 1. Fetch available slots (future date, booking enabled, not deleted)
     const slots = await prisma.examSlot.findMany({
@@ -764,6 +771,11 @@ export const getAvailableSlots = async () => {
 
 /**
  * Book an exam slot for a student, generate hall ticket, and update status.
+ */
+/**
+ * Book an exam slot for a student (atomic seat claim). Sets exam details,
+ * advances admission to EXAM_SCHEDULED, generates the hall ticket + QR
+ * (year-tagged). Rejects if slot full or student already booked.
  */
 export const bookExamSlot = async (studentId: string, slotId: string, userId?: string) => {
     if (!studentId || !slotId) {
@@ -1027,6 +1039,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
 /**
  * Enable or disable booking for a slot.
  */
+/** Open/close booking on a slot (admin gate to stop new bookings without deleting the slot). */
 export const toggleSlotBooking = async (
     slotId: string,
     isBookingEnabled: boolean,
@@ -1052,6 +1065,7 @@ export const toggleSlotBooking = async (
 /**
  * Fetch all exam centers with their slots formatted for UI.
  */
+/** List all exam centers. */
 export const getExamCenters = async () => {
     logger.info('[getExamCenters] Fetching all exam centers');
     const centers = await prisma.examCenter.findMany({
@@ -1070,6 +1084,7 @@ export const getExamCenters = async () => {
 /**
  * Update an existing exam center with audit.
  */
+/** Patch an exam center's fields. */
 export const updateExamCenter = async (id: string, data: any, userId?: string) => {
     logger.info(`[updateExamCenter] Updating center id=${id}`);
     const center = await prisma.examCenter.findUnique({ where: { id } });
@@ -1089,6 +1104,7 @@ export const updateExamCenter = async (id: string, data: any, userId?: string) =
 /**
  * Delete an exam center (assuming no FK constraints prevent it).
  */
+/** Delete an exam center (guards against orphaning slots). */
 export const deleteExamCenter = async (id: string) => {
     logger.info(`[deleteExamCenter] Deleting center id=${id}`);
     const center = await prisma.examCenter.findUnique({ where: { id } });
@@ -1108,6 +1124,7 @@ export const deleteExamCenter = async (id: string) => {
 /**
  * Fetch all exam slots for admin with their center info.
  */
+/** List all exam slots with center + booking counts. */
 export const getExamSlots = async () => {
     logger.info('[getExamSlots] Fetching all exam slots');
     const slots = await prisma.examSlot.findMany({
@@ -1127,6 +1144,7 @@ export const getExamSlots = async () => {
 /**
  * Fetch all slots for a particular exam center.
  */
+/** List slots for one center. */
 export const getExamSlotsByCenter = async (centerId: string) => {
     logger.info(`[getExamSlotsByCenter] Fetching slots for center=${centerId}`);
     const center = await prisma.examCenter.findUnique({
@@ -1153,6 +1171,7 @@ export const getExamSlotsByCenter = async (centerId: string) => {
 /**
  * Fetch a single exam slot with its center info.
  */
+/** Fetch one slot by id. */
 export const getExamSlot = async (id: string) => {
     const slot = await prisma.examSlot.findUnique({
         where: { id },
@@ -1168,6 +1187,7 @@ export const getExamSlot = async (id: string) => {
 /**
  * Update an exam slot, ensuring capacity constraints and audits.
  */
+/** Patch a slot (time/capacity/center). */
 export const updateExamSlot = async (id: string, data: any, userId?: string) => {
     const slot = await prisma.examSlot.findUnique({ where: { id } });
     if (!slot) throw new AppError(MESSAGES.ERROR.SLOT_NOT_FOUND, 404);
@@ -1216,6 +1236,7 @@ export const updateExamSlot = async (id: string, data: any, userId?: string) => 
 /**
  * Delete an exam slot only if no students are booked.
  */
+/** Delete a slot (blocks if students are booked). */
 export const deleteExamSlot = async (id: string) => {
     logger.info(`[deleteExamSlot] Deleting slot id=${id}`);
     const slot = await prisma.examSlot.findUnique({ where: { id } });
@@ -1242,6 +1263,7 @@ export const deleteExamSlot = async (id: string) => {
 /**
  * Process bulk exam results from CSV content.
  */
+/** Ingest a CSV of entrance results (applicationId, score), apply cutoff → qualified flag per row. */
 export const processBulkResults = async (fileContent: string, cutoff: number) => {
     const { data, errors } = Papa.parse(fileContent, { header: true, skipEmptyLines: true });
 
@@ -1307,6 +1329,7 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
  * Accepts: [{ applicationId, score }]
  * Uses upsert so it works even if studentExam doesn't exist yet (e.g. offline students).
  */
+/** Same as processBulkResults but takes a parsed JSON array instead of CSV text. */
 export const processBulkResultsJSON = async (records: { applicationId: string; score: number; status: string }[]) => {
     const results: any[] = [];
 
@@ -1425,6 +1448,7 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
  * If status is TEST_FEE_PAID, returns students with TEST_FEE_PAID and REGISTERED.
  * If status is REGISTERED, returns only REGISTERED students.
  */
+/** List students currently at a given admission status (e.g. all EXAM_SCHEDULED). */
 export const getStudentsByAdmissionStatus = async (status: AdmissionStatus) => {
     logger.info(`[getStudentsByAdmissionStatus] Fetching students for status=${status}`);
     
@@ -1548,6 +1572,7 @@ export const getStudentsByAdmissionStatus = async (status: AdmissionStatus) => {
 /**
  * Get hall ticket details with generated QR code for a student.
  */
+/** Assemble the full hall-ticket payload (student + slot + center + QR) for rendering/printing. */
 export const getHallTicketDetails = async (studentId: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
@@ -1629,6 +1654,7 @@ export const getHallTicketDetails = async (studentId: string) => {
  * Manually scan student by Application ID and return details for validation.
  * Similar to markAttendanceByScan but uses manual input.
  */
+/** Mark exam attendance by typing the applicationId (manual fallback when QR scan isn't possible). */
 export const markAttendanceByApplicationId = async (applicationId: string, userId: string) => {
     if (!applicationId || !applicationId.trim()) {
         throw new AppError('Application ID is required', 400);
