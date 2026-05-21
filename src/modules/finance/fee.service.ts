@@ -10,6 +10,7 @@ import { assertHostelHasCapacity } from '../accommodation/hostel/hostel.service'
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';
 
+/** Read the configured application-fee amount from SystemSetting (defaults to 500). */
 export const getApplicationFeeAmount = async (): Promise<number> => {
     const setting = await prisma.systemSetting.findUnique({
         where: { key: APP_FEE_KEY }
@@ -17,6 +18,7 @@ export const getApplicationFeeAmount = async (): Promise<number> => {
     return parseInt(setting?.value || DEFAULT_APP_FEE, 10);
 };
 
+/** Upsert the application-fee amount SystemSetting. */
 export const setApplicationFeeAmount = async (amount: number, userId: string): Promise<SystemSetting> => {
     return prisma.systemSetting.upsert({
         where: { key: APP_FEE_KEY },
@@ -34,16 +36,19 @@ export const setApplicationFeeAmount = async (amount: number, userId: string): P
 
 export const FeeService = {
     // Fee Head
+    /** Create a fee head (a billable line item like TUITION / HOSTEL), optionally tagged to a payment component. */
     createFeeHead: async (name: string, description: string, userId: string, component?: PaymentComponent) => {
         return prisma.feeHead.create({
             data: { name, description, component: component ?? null, createdBy: userId, updatedBy: userId }
         });
     },
 
+    /** List all fee heads. */
     getFeeHeads: async () => {
         return prisma.feeHead.findMany({ where: { isDeleted: false } });
     },
 
+    /** List fee heads applicable to a course (with their structure amounts) for a given year. */
     getCourseFeeHeads: async (courseId: string, academicYearId?: string) => {
         const where: any = { isDeleted: false, courseId };
         if (academicYearId) where.academicYearId = academicYearId;
@@ -86,6 +91,7 @@ export const FeeService = {
         };
     },
 
+    /** Patch a fee head's name/description/component. */
     updateFeeHead: async (id: string, name: string, description: string, userId: string, component?: PaymentComponent | null) => {
         const updateData: any = { updatedBy: userId };
         if (name !== undefined) updateData.name = name;
@@ -97,6 +103,7 @@ export const FeeService = {
         });
     },
 
+    /** Delete a fee head (guards against orphaning fee structures). */
     deleteFeeHead: async (id: string) => {
         return prisma.feeHead.update({
             where: { id },
@@ -105,6 +112,7 @@ export const FeeService = {
     },
 
     // Fee Structure
+    /** Create a FeeStructure row: the amount for (course, feeHead, year, quota, yearOfStudy). The recipe demands are generated from. */
     createFeeStructure: async (
         courseId: string,
         feeHeadId: string,
@@ -152,6 +160,7 @@ export const FeeService = {
         });
     },
 
+    /** Bulk-create the same fee structure for every course in a degree (e.g. set tuition for all B.Tech branches at once). */
     createFeeStructureForDegree: async (degree: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, yearOfStudy?: number) => {
         // 1. Find all courses for this degree
         const courses = await prisma.course.findMany({
@@ -216,6 +225,7 @@ export const FeeService = {
      * (feeHeadId, amount) varies per row.
      * Idempotent: rows that already exist for the same combination are skipped.
      */
+    /** Cartesian bulk-create of fee structures across a combination of courses × fee heads × quotas × years. */
     createFeeStructuresForCombination: async (params: {
         courseId:            string;
         academicYearId:      string;
@@ -325,6 +335,7 @@ export const FeeService = {
         };
     },
 
+    /** List fee structures with rich filters (course/year/feeHead/quota/yearOfStudy/amount-range/search) + pagination. */
     getFeeStructures: async (filters?: {
         courseId?:            string;
         academicYearId?:      string;
@@ -410,6 +421,7 @@ export const FeeService = {
         };
     },
 
+    /** Patch a fee structure row. Does not retroactively change already-generated demands. */
     updateFeeStructure: async (id: string, courseId: string, feeHeadId: string, amount: number, academicYearId: string, userId: string, quotaType?: QuotaType, yearOfStudy?: number) => {
         return prisma.feeStructure.update({
             where: { id },
@@ -425,6 +437,7 @@ export const FeeService = {
         });
     },
 
+    /** Delete a fee structure. Existing demands generated from it are unaffected. */
     deleteFeeStructure: async (id: string) => {
         return prisma.feeStructure.update({
             where: { id },
@@ -448,6 +461,7 @@ export const FeeService = {
      * (e.g., 1.05 = 5% increase, 0.95 = 5% reduction). Default 1.0.
      * Optional `courseIds` restricts the clone to specific courses.
      */
+    /** Copy a year's fee structures into the next year (optionally × multiplier). The year-promotion prep step so new-year demands can be seeded. */
     cloneFeeStructuresForAcademicYear: async (
         sourceAcademicYearId: string,
         targetAcademicYearId: string,
@@ -577,6 +591,7 @@ export const FeeService = {
     },
 
     // Statistics
+    /** Aggregate fee stats for the finance dashboard (collected / pending / by component / by method). */
     getFeeStatistics: async () => {
         const totalCollected = await prisma.payment.aggregate({
             where: { status: 'SUCCESS' },
@@ -593,6 +608,7 @@ export const FeeService = {
         };
     },
 
+    /** Create a discount request (per-component amounts) for approval. Blocks duplicate pending requests unless forceCreate. */
     createDiscountRequest: async (studentId: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string, forceCreate: boolean = false) => {
         // Ensure we treat any truthy value (including undefined, null, or string "true") as a boolean
         const effectiveForceCreate = Boolean(forceCreate);
@@ -643,6 +659,7 @@ export const FeeService = {
         });
     },
 
+    /** List discount requests with filters (status/student/application/degree/course). Powers the approval queue. */
     getAllDiscountRequests: async (filters?: { status?: DiscountStatus, studentId?: string, applicationId?: string, degree?: string, allottedCourseId?: string }) => {
         const where: any = {};
         if (filters?.status) where.status = filters.status;
@@ -732,6 +749,7 @@ export const FeeService = {
         return enrichedRequests;
     },
 
+    /** Edit a pending discount request's reason/items/amount. */
     updateDiscountRequest: async (id: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string, adminId?: string) => {
          const request = await prisma.discountRequest.findUnique({ where: { id } });
          
@@ -756,6 +774,7 @@ export const FeeService = {
          });
     },
 
+    /** Delete a pending discount request. */
     deleteDiscountRequest: async (id: string) => {
          const request = await prisma.discountRequest.findUnique({ where: { id } });
          
@@ -772,6 +791,11 @@ export const FeeService = {
          });
     },
 
+    /**
+     * Approve/reject a discount request. On approve: applies the discount to
+     * matching demands (reduces netAmount), writes ledger CREDIT entries, and
+     * marks the request APPROVED. Role-gated.
+     */
     approveDiscount: async (requestId: string, approved: boolean, role: RoleType, adminId: string, approvedItems?: { component: string, approvedAmount: number }[]) => {
          if (role !== Role.SUPER_ADMIN) {
              throw new AppError("Only Super Admin can approve discounts", 403);
@@ -893,6 +917,7 @@ export const FeeService = {
     },
 
     // Manual Payment Collection
+    /** Record an offline (cash/cheque/DD) payment against a student's demand: creates Payment + Ledger, updates demand status. */
     recordOfflinePayment: async (
         studentId: string,
         amount: number,
@@ -936,6 +961,14 @@ export const FeeService = {
     //
     // Returns a structured report (NOT a bare array) so callers can distinguish
     // generated vs skipped vs filtered-out structures.
+    /**
+     * The core fee-seeding engine. For a (student, course, year), resolves
+     * applicable FeeStructure rows via the cohort tags (entryYear/entryType/
+     * instituteCode/quota/yearOfStudy), applies scholarship discount to
+     * TUITION, writes one StudentFeeDemand + ledger DEBIT per fee head, and
+     * skips heads that already have a demand (idempotent). Optional legacy
+     * fallback to NULL-tagged structures.
+     */
     generateFeeDemands: async (
         studentId: string,
         courseId: string,
@@ -1295,6 +1328,7 @@ export const FeeService = {
     // year's enrollments. Each student is processed in its own transaction (per-student
     // failures don't roll back the whole run); the report aggregates outcomes so admins
     // can see exactly which students were skipped/why.
+    /** Run generateFeeDemands for every active enrollment in a year matching a cohort filter — the end-of-year promotion seeding job. */
     generateFeeDemandsBulk: async (
         academicYearId: string,
         userId: string,
@@ -1433,6 +1467,7 @@ export const FeeService = {
     // Get Full Ledger/Statement
     // Pass `academicYearId` to scope the whole fee picture (demands, payments,
     // ledgers) to a single year. Omit it for the all-years view (legacy behavior).
+    /** Full fee picture for a student (demands + payments + scholarship + balance), optionally scoped to one year. */
     getStudentFeeDetails: async (studentId: string, academicYearId?: string) => {
         logger.info(`[getStudentFeeDetails] Request for student=${studentId}${academicYearId ? ` year=${academicYearId}` : ' (all years)'}`);
         // When a year is given, filter strictly to it — legacy rows with a NULL
@@ -1588,6 +1623,7 @@ export const FeeService = {
         };
     },
 
+    /** Chronological list of a student's successful payments with component + receipt links. */
     getStudentPaymentHistory: async (studentId: string) => {
         // 0. Fetch All Fee Heads for Lookup
         const allFeeHeads = await prisma.feeHead.findMany({ where: { isDeleted: false } });
@@ -1781,6 +1817,7 @@ export const FeeService = {
     },
 
     // Student Discount / Fine (Direct Column Update)
+    /** Apply an ad-hoc discount or fine directly to a student's demand (bypasses the request/approval flow). FINE without a prior demand creates a fresh one. */
     addStudentDiscount: async (studentId: string, feeHeadId: string | undefined, feeStructureId: string | undefined, type: 'DISCOUNT' | 'FINE', amount: number, reason: string, userId: string) => {
         
         // 0. Resolve Fee Head if Structure ID is provided
@@ -1905,6 +1942,11 @@ export const FeeService = {
      *   4. Update StudentAdmission record
      *   5. Create ledger entries for fee adjustments
      *   6. Log as ServiceChangeRequest
+     */
+    /**
+     * Switch a student's accommodation (HOSTEL ↔ TRANSPORT ↔ NONE): vacates the
+     * old service, transfers/refunds paid amounts via ledger entries, sets up
+     * the new service's demands, and logs a ServiceChangeRequest.
      */
     async changeAccommodationType(data: {
         studentId: string;
