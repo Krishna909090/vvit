@@ -3,6 +3,7 @@ import { catchAsync } from '../../utils/catchAsync';
 import { AppError } from '../../utils/AppError';
 import { ScholarshipService } from './scholarship.service';
 import { sendResponse } from '../../utils/response';
+import { assertStudentOwns } from '../../utils/ownership';
 
 export const createScholarshipRule = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, minPercentile, discountPercentage, totalSlots } = req.body;
@@ -73,7 +74,9 @@ export const checkEligibility = catchAsync(async (req: Request, res: Response, n
     if (!studentId) {
         throw new AppError("Student ID (param) required", 400);
     }
-    
+
+    await assertStudentOwns(req, studentId); // IDOR guard
+
     // Service now auto-fetches data from DB (Read-Only)
     const result = await ScholarshipService.checkEligibility(studentId);
     

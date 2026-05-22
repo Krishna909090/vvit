@@ -4,10 +4,12 @@ import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
 import { MESSAGES } from '../../constants/messages';
 import { sendResponse } from '../../utils/response';
+import { recomputeStudentTotals } from '../../utils/studentContext';
 import { AdminStudentService } from './adminStudent.service';
 import * as StudentService from '../student/student.service';
 import prisma from '../../config/prisma';
 import { Role } from '../../constants/roles';
+import { assertPricingOverrideAllowed } from '../../middleware/rbac.middleware';
 import fs from 'fs';
 import path from 'path';
 
@@ -298,18 +300,23 @@ export const bulkAllocateRoomBeds = catchAsync(async (req: Request, res: Respons
 // Re-assign a student to a different hostel/bed AFTER initial bed allocation
 export const reassignHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { hostelId, bedId, hostelPaymentMode, reason } = req.body;
-    logger.info(`[reassignHostel] studentId=${studentId} hostelId=${hostelId} bedId=${bedId} mode=${hostelPaymentMode} by=${req.user?.userId || 'anonymous'}`);
+    const { hostelId, bedId, hostelPaymentMode, reason, customPricing } = req.body;
+    logger.info(`[reassignHostel] studentId=${studentId} hostelId=${hostelId} bedId=${bedId} mode=${hostelPaymentMode} custom=${customPricing ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot reassign their own hostel', 403);
     }
+    assertPricingOverrideAllowed(req, !!customPricing);
 
     const result = await AdminStudentService.reassignHostel(
         studentId,
-        { hostelId, bedId, hostelPaymentMode, reason },
+        { hostelId, bedId, hostelPaymentMode, reason, customPricing },
         req.user?.userId
     );
+
+    // Re-assert totalFee = Σ active demands and paidFee = Σ SUCCESS payments from the
+    // source rows, so totals can never drift from the underlying demands/payments.
+    await recomputeStudentTotals(studentId).catch(err => logger.error(`[reassignHostel] totals recompute failed for ${studentId}: ${err}`));
 
     sendResponse({
         res,
@@ -435,18 +442,21 @@ export const getStudentsByHostel = catchAsync(async (req: Request, res: Response
 // leftover goes to FeeCorrection.
 export const switchHostelToTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { chargeRetained, reason, transportRouteId } = req.body;
-    logger.info(`[switchHostelToTransport] studentId=${studentId} routeId=${transportRouteId} chargeRetained=${chargeRetained} by=${req.user?.userId || 'anonymous'}`);
+    const { chargeRetained, reason, transportRouteId, customCost } = req.body;
+    logger.info(`[switchHostelToTransport] studentId=${studentId} routeId=${transportRouteId} chargeRetained=${chargeRetained} custom=${customCost != null ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot switch their own accommodation', 403);
     }
+    assertPricingOverrideAllowed(req, customCost != null);
 
     const result = await AdminStudentService.switchHostelToTransport(
         studentId,
-        { chargeRetained, reason, transportRouteId },
+        { chargeRetained, reason, transportRouteId, customCost },
         req.user?.userId
     );
+
+    await recomputeStudentTotals(studentId).catch(err => logger.error(`[switchHostelToTransport] totals recompute failed for ${studentId}: ${err}`));
 
     sendResponse({
         res,
@@ -463,18 +473,21 @@ export const switchHostelToTransport = catchAsync(async (req: Request, res: Resp
 // leftover goes to FeeCorrection.
 export const switchTransportToHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { chargeRetained, reason, hostelId, hostelType, hostelPaymentMode } = req.body;
-    logger.info(`[switchTransportToHostel] studentId=${studentId} hostelId=${hostelId} type=${hostelType} mode=${hostelPaymentMode} chargeRetained=${chargeRetained} by=${req.user?.userId || 'anonymous'}`);
+    const { chargeRetained, reason, hostelId, hostelType, hostelPaymentMode, customPricing } = req.body;
+    logger.info(`[switchTransportToHostel] studentId=${studentId} hostelId=${hostelId} type=${hostelType} mode=${hostelPaymentMode} chargeRetained=${chargeRetained} custom=${customPricing ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot switch their own accommodation', 403);
     }
+    assertPricingOverrideAllowed(req, !!customPricing);
 
     const result = await AdminStudentService.switchTransportToHostel(
         studentId,
-        { chargeRetained, reason, hostelId, hostelType, hostelPaymentMode },
+        { chargeRetained, reason, hostelId, hostelType, hostelPaymentMode, customPricing },
         req.user?.userId
     );
+
+    await recomputeStudentTotals(studentId).catch(err => logger.error(`[switchTransportToHostel] totals recompute failed for ${studentId}: ${err}`));
 
     sendResponse({
         res,
@@ -483,6 +496,83 @@ export const switchTransportToHostel = catchAsync(async (req: Request, res: Resp
         message: 'Switched from transport to hostel',
         data: result
     });
+});
+
+// ───────────────────────── Preview (dry-run) ─────────────────────────
+// Compute the financial impact of an accommodation change WITHOUT applying it.
+// Same validation/auth as the write counterpart; no demands/refunds/audit written.
+
+export const previewReassignHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { hostelId, bedId, hostelPaymentMode, customPricing } = req.body;
+    logger.info(`[previewReassignHostel] studentId=${studentId} hostelId=${hostelId} bedId=${bedId} mode=${hostelPaymentMode} custom=${customPricing ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot reassign their own hostel', 403);
+    }
+    assertPricingOverrideAllowed(req, !!customPricing);
+
+    const result = await AdminStudentService.previewReassignHostel(studentId, { hostelId, bedId, hostelPaymentMode, customPricing });
+
+    sendResponse({ res, statusCode: 200, success: true, message: 'Hostel re-assignment preview', data: result });
+});
+
+export const previewCancelHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { cancellationFee } = req.body;
+    logger.info(`[previewCancelHostel] studentId=${studentId} cancellationFee=${cancellationFee} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot cancel their own hostel', 403);
+    }
+
+    const result = await AdminStudentService.previewCancelHostel(studentId, { cancellationFee });
+
+    sendResponse({ res, statusCode: 200, success: true, message: 'Hostel cancellation preview', data: result });
+});
+
+export const previewCancelTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { cancellationFee } = req.body;
+    logger.info(`[previewCancelTransport] studentId=${studentId} cancellationFee=${cancellationFee} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot cancel their own transport', 403);
+    }
+
+    const result = await AdminStudentService.previewCancelTransport(studentId, { cancellationFee });
+
+    sendResponse({ res, statusCode: 200, success: true, message: 'Transport cancellation preview', data: result });
+});
+
+export const previewSwitchHostelToTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { chargeRetained, transportRouteId, customCost } = req.body;
+    logger.info(`[previewSwitchHostelToTransport] studentId=${studentId} routeId=${transportRouteId} chargeRetained=${chargeRetained} custom=${customCost != null ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot switch their own accommodation', 403);
+    }
+    assertPricingOverrideAllowed(req, customCost != null);
+
+    const result = await AdminStudentService.previewSwitchHostelToTransport(studentId, { chargeRetained, transportRouteId, customCost });
+
+    sendResponse({ res, statusCode: 200, success: true, message: 'Hostel→Transport switch preview', data: result });
+});
+
+export const previewSwitchTransportToHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { chargeRetained, hostelId, hostelType, hostelPaymentMode, customPricing } = req.body;
+    logger.info(`[previewSwitchTransportToHostel] studentId=${studentId} hostelId=${hostelId} type=${hostelType} mode=${hostelPaymentMode} chargeRetained=${chargeRetained} custom=${customPricing ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'}`);
+
+    if (req.user?.role === Role.STUDENT) {
+        throw new AppError('Students cannot switch their own accommodation', 403);
+    }
+    assertPricingOverrideAllowed(req, !!customPricing);
+
+    const result = await AdminStudentService.previewSwitchTransportToHostel(studentId, { chargeRetained, hostelId, hostelType, hostelPaymentMode, customPricing });
+
+    sendResponse({ res, statusCode: 200, success: true, message: 'Transport→Hostel switch preview', data: result });
 });
 
 // Cancel a student's HOSTEL — flips accommodationType to NONE, vacates bed,
@@ -501,6 +591,8 @@ export const cancelHostel = catchAsync(async (req: Request, res: Response, next:
         { cancellationFee, reason },
         req.user?.userId
     );
+
+    await recomputeStudentTotals(studentId).catch(err => logger.error(`[cancelHostel] totals recompute failed for ${studentId}: ${err}`));
 
     sendResponse({
         res,
@@ -528,6 +620,8 @@ export const cancelTransport = catchAsync(async (req: Request, res: Response, ne
         req.user?.userId
     );
 
+    await recomputeStudentTotals(studentId).catch(err => logger.error(`[cancelTransport] totals recompute failed for ${studentId}: ${err}`));
+
     sendResponse({
         res,
         statusCode: 200,
@@ -540,18 +634,21 @@ export const cancelTransport = catchAsync(async (req: Request, res: Response, ne
 // Re-assign a TRANSPORT student to a different route. Adjusts demand + totalFee.
 export const reassignTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { transportRouteId, reason } = req.body;
-    logger.info(`[reassignTransport] studentId=${studentId} newRouteId=${transportRouteId} by=${req.user?.userId || 'anonymous'}`);
+    const { transportRouteId, reason, customCost } = req.body;
+    logger.info(`[reassignTransport] studentId=${studentId} newRouteId=${transportRouteId} custom=${customCost != null ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot reassign transport', 403);
     }
+    assertPricingOverrideAllowed(req, customCost != null);
 
     const result = await AdminStudentService.reassignTransport(
         studentId,
-        { transportRouteId, reason },
+        { transportRouteId, reason, customCost },
         req.user?.userId
     );
+
+    await recomputeStudentTotals(studentId).catch(err => logger.error(`[reassignTransport] totals recompute failed for ${studentId}: ${err}`));
 
     sendResponse({
         res,
@@ -566,14 +663,17 @@ export const reassignTransport = catchAsync(async (req: Request, res: Response, 
 // creates TRANSPORT StudentFeeDemand, increments totalFee.
 export const assignTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { transportRouteId } = req.body;
-    logger.info(`[assignTransport] studentId=${studentId} routeId=${transportRouteId} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
+    const { transportRouteId, customCost } = req.body;
+    logger.info(`[assignTransport] studentId=${studentId} routeId=${transportRouteId} custom=${customCost != null ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot assign their own transport', 403);
     }
+    assertPricingOverrideAllowed(req, customCost != null);
 
-    const result = await AdminStudentService.assignTransport(studentId, transportRouteId, req.user?.userId);
+    const result = await AdminStudentService.assignTransport(studentId, transportRouteId, req.user?.userId, customCost);
+
+    await recomputeStudentTotals(studentId).catch(err => logger.error(`[assignTransport] totals recompute failed for ${studentId}: ${err}`));
 
     sendResponse({
         res,
@@ -606,21 +706,25 @@ export const getAvailableBeds = catchAsync(async (req: Request, res: Response, n
 // Assign hostel — flips accommodationType from NONE to HOSTEL
 export const assignHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { hostelId, hostelPaymentMode, hostelType } = req.body;
-    logger.info(`[assignHostel] studentId=${studentId} hostelId=${hostelId} mode=${hostelPaymentMode} type=${hostelType ?? 'unset'} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
+    const { hostelId, hostelPaymentMode, hostelType, customPricing } = req.body;
+    logger.info(`[assignHostel] studentId=${studentId} hostelId=${hostelId} mode=${hostelPaymentMode} type=${hostelType ?? 'unset'} custom=${customPricing ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
 
     // Students cannot self-assign hostel
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot assign their own hostel', 403);
     }
+    assertPricingOverrideAllowed(req, !!customPricing);
 
     const updated = await AdminStudentService.assignHostel(
         studentId,
         hostelId,
         hostelPaymentMode,
         hostelType,
-        req.user?.userId
+        req.user?.userId,
+        customPricing
     );
+
+    await recomputeStudentTotals(studentId).catch(err => logger.error(`[assignHostel] totals recompute failed for ${studentId}: ${err}`));
 
     sendResponse({
         res,

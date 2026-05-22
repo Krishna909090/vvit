@@ -239,10 +239,33 @@ export const rejectDiscount = catchAsync(async (req: Request, res: Response, nex
     });
 });
 
+/**
+ * IDOR guard — a STUDENT may only access their OWN financial data. Any non-STUDENT
+ * role (admin/staff that already passed authorizePermission) is allowed through.
+ * Without this, a student holding `finance.read.own` could pass another student's
+ * id/paymentId/txnId and read their financials.
+ */
+const assertStudentOwns = async (req: Request, studentId: string) => {
+    if (req.user?.role === 'STUDENT') {
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user.userId);
+        if (!s || s.id !== studentId) {
+            logger.warn(`[Security] Student ${req.user?.userId} attempted to access financial data of ${studentId}`);
+            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
+    }
+};
+
 export const getInvoice = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getInvoice] params=${JSON.stringify(req.params)}`);
     const { paymentId } = req.params;
     if (!paymentId) throw new AppError("Payment ID is required", 400);
+
+    // IDOR guard: resolve the payment's owner and ensure a student only sees their own.
+    const { default: prisma } = await import('../../config/prisma');
+    const pay = await prisma.payment.findUnique({ where: { id: paymentId }, select: { studentId: true } });
+    if (!pay) throw new AppError("Payment not found", 404);
+    await assertStudentOwns(req, pay.studentId);
 
     const url = await getInvoiceUrl(paymentId);
     
@@ -259,6 +282,15 @@ export const checkPaymentStatus = catchAsync(async (req: Request, res: Response,
     logger.info(`[checkPaymentStatus] params=${JSON.stringify(req.params)}`);
     const { txnId } = req.params;
     if (!txnId) throw new AppError("Transaction ID is required", 400);
+
+    // IDOR guard: this endpoint also auto-reconciles (can mark SUCCESS/FAILED), so a
+    // student must not be able to poll/trigger it for another student's transaction.
+    const { default: prisma } = await import('../../config/prisma');
+    const pay = await prisma.payment.findFirst({
+        where: { OR: [{ providerTxId: txnId }, { merchantOrderId: txnId }] },
+        select: { studentId: true },
+    });
+    if (pay) await assertStudentOwns(req, pay.studentId);
 
     const status = await checkPaymentStatusService(txnId);
     
@@ -322,6 +354,8 @@ export const getFinancialSummary = catchAsync(async (req: Request, res: Response
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+    await assertStudentOwns(req, studentId); // IDOR guard
 
     const { getStudentFinancialSummary } = await import('./payment.service');
     const summary = await getStudentFinancialSummary(studentId);
@@ -446,6 +480,8 @@ export const getFinancialFlow = catchAsync(async (req: Request, res: Response, n
     }
 
     if (!studentId) throw new AppError('Student ID is required', 400);
+
+    await assertStudentOwns(req, studentId); // IDOR guard
 
     const flow = await getStudentFinancialFlow(studentId);
 

@@ -455,6 +455,27 @@ export const CancellationService = {
             throw new AppError(`This cancellation request is already ${label}. No changes made.`, 400);
         }
 
+        // Fail-closed guard: transfer / quota-change condition types are NOT cancellations.
+        // The approve block below un-admits the student (status=CANCELLED, totalFee/paidFee=0,
+        // demands deleted, payments flagged REFUNDED). That is correct for a real cancellation
+        // but catastrophic for a branch transfer (INTERNAL_BRANCH_TRANSFER) or a quota change
+        // (QUOTA_*), where the student MUST stay admitted and the money should transfer/adjust.
+        // Those flows compute transferAmount/balanceDue but never apply them here, so the money
+        // is silently lost. Block approval until a dedicated transfer handler exists — admins
+        // should use the course/branch-change flow instead.
+        if (
+            approved &&
+            ['INTERNAL_BRANCH_TRANSFER', 'QUOTA_MGMT_TO_CONVENOR', 'QUOTA_CONVENOR_TO_MGMT'].includes(request.conditionType)
+        ) {
+            throw new AppError(
+                `Condition type "${request.conditionType}" is a branch/quota change, not a cancellation. ` +
+                `Approving it here would un-admit the student and refund every payment, losing the ` +
+                `transfer/balance amount. Use the course/branch-change flow to move the student and ` +
+                `their fees instead.`,
+                400
+            );
+        }
+
         // Recalculate if admin changed the cancellation fee at approval time
         if (approved && cancellationFee !== undefined && cancellationFee !== request.cancellationFee) {
             const adjustment = calculateFeeAdjustment({
@@ -542,11 +563,31 @@ export const CancellationService = {
                     });
                 }
 
-                // Reset scholarship allocation
+                // Reset scholarship allocation AND return the slot to the rule pool.
+                // Previously only the allocation was expired; rule.filledSlots was never
+                // decremented, so cancelled students permanently consumed a scholarship slot
+                // and eligible students hit "Slots full".
+                const allocsToExpire = await (tx.scholarshipAllocation as any).findMany({
+                    where: { studentId: request.studentId, status: { not: 'EXPIRED' } },
+                    select: { ruleId: true },
+                });
                 await (tx.scholarshipAllocation as any).updateMany({
                     where: { studentId: request.studentId },
                     data:  { status: 'EXPIRED' },
                 });
+                const ruleCounts = new Map<string, number>();
+                for (const a of allocsToExpire) {
+                    if (a.ruleId) ruleCounts.set(a.ruleId, (ruleCounts.get(a.ruleId) ?? 0) + 1);
+                }
+                for (const [ruleId, n] of ruleCounts) {
+                    const rule = await (tx.scholarshipRule as any).findUnique({ where: { id: ruleId }, select: { filledSlots: true } });
+                    if (rule) {
+                        await (tx.scholarshipRule as any).update({
+                            where: { id: ruleId },
+                            data:  { filledSlots: Math.max(0, (rule.filledSlots ?? 0) - n) },
+                        });
+                    }
+                }
 
                 // Reset student scholarship eligibility
                 await (tx.studentScholarship as any).updateMany({

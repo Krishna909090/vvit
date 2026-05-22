@@ -6,7 +6,7 @@ import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
 import feeRoutes from './fee.routes';
 import { paymentRateLimiter } from '../../middleware/rateLimitMiddleware';
-import { payFeeComponentSchema } from '../../validators/paymentValidators';
+import { payFeeComponentSchema, offlineApplicationFeeSchema, adminInitiatePaymentSchema, multiComponentPaymentSchema, approveDiscountSchema, rejectDiscountSchema } from '../../validators/paymentValidators';
 import { validateRequest } from '../../middleware/validationMiddleware';
 
 const router = express.Router();
@@ -54,7 +54,7 @@ router.post('/initiate-entrance-fee', authenticate, paymentRateLimiter, authoriz
  *
  * Records an offline application fee payment. Body: { studentId, amount, method, referenceNumber?, remarks? }
  */
-router.post('/offline-entrance-fee', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all', 'finance.create.own']), payOfflineApplicationFee);
+router.post('/offline-entrance-fee', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all', 'finance.create.own']), validateRequest(offlineApplicationFeeSchema), payOfflineApplicationFee);
 
 /**
  * POST /finance/initiate-college-fee
@@ -76,7 +76,7 @@ router.post('/initiate-college-fee', authenticate, paymentRateLimiter, authorize
  *
  * Body: { studentId, amount, component, feeHeadId?, remarks? }
  */
-router.post('/admin-initiate', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all']), initiateAdminPayment);
+router.post('/admin-initiate', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all']), validateRequest(adminInitiatePaymentSchema), initiateAdminPayment);
 
 // ═══════════════════════════════════════════════════════════
 // CANONICAL PAYMENT API
@@ -142,7 +142,7 @@ router.get('/transactions/export', authenticate, authorizePermission(['finance.r
  * Body: { studentId, components: [{ component, amount, feeHeadId? }], method, referenceNumber?, remarks? }
  * Response: { status, data: { redirectUrl? | invoiceUrl?, paymentIds, transactionId } }
  */
-router.post('/multi-component', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all', 'finance.create.own']), payMultiComponentFee);
+router.post('/multi-component', authenticate, paymentRateLimiter, authorizePermission(['finance.create.all', 'finance.create.own']), validateRequest(multiComponentPaymentSchema), payMultiComponentFee);
 
 // ═══════════════════════════════════════════════════════════
 // DISCOUNTS
@@ -166,7 +166,7 @@ router.post('/request-discount', authenticate, authorizePermission(['finance.cre
  * Body: { approvedAmount?, remarks? }
  * Response: { status, message }
  */
-router.post('/discount/approve/:requestId', authenticate, authorizePermission('finance.update.all'), approveDiscount);
+router.post('/discount/approve/:requestId', authenticate, authorizePermission('finance.update.all'), validateRequest(approveDiscountSchema), approveDiscount);
 
 /**
  * POST /finance/discount/reject/:requestId
@@ -176,7 +176,7 @@ router.post('/discount/approve/:requestId', authenticate, authorizePermission('f
  * Body: { remarks? }
  * Response: { status, message }
  */
-router.post('/discount/reject/:requestId', authenticate, authorizePermission('finance.update.all'), rejectDiscount);
+router.post('/discount/reject/:requestId', authenticate, authorizePermission('finance.update.all'), validateRequest(rejectDiscountSchema), rejectDiscount);
 
 // ═══════════════════════════════════════════════════════════
 // PAYMENT STATUS & HISTORY

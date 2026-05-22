@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { uploadSingleFile, uploadMultipleFiles, getPresignedUrl } from './upload.controller';
-import { authenticate } from '../../middleware/authMiddleware';
+import { authenticate } from '../../middleware/rbac.middleware';
 import upload from '../../config/multer';
 import { validateRequest } from '../../middleware/validationMiddleware';
 import { uploadQuerySchema, getPresignedUrlSchema } from '../../validators/uploadValidators';

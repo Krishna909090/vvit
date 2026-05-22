@@ -1,7 +1,8 @@
 import express from "express";
 import multer from "multer";
 import { importAdmissionData, createImportMapping } from './dataImport.controller';
-import { authenticate, authorize } from '../../../middleware/authMiddleware';
+import { authenticate } from '../../../middleware/rbac.middleware';
+import { authorize } from '../../../middleware/authMiddleware';
 import { Role } from '../../../constants/roles';
 
 const router = express.Router();

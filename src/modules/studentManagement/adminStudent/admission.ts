@@ -43,6 +43,7 @@ import {
     resolveFeeDemandContext,
     assertAcademicYearWritable,
     getActiveAcademicYear,
+    recomputeStudentTotals,
 } from '../../../utils/studentContext';
 import { sendPaymentReceipt, sendScholarshipUpdateEmail } from '../../../utils/emailService';
 // @ts-ignore
@@ -747,7 +748,42 @@ export const AdmissionService = {
                             data: { isDeleted: true, deletedAt: new Date(), deletedBy: adminId }
                         });
 
-                        logger.info(`[approveCourseChange] Orphaned demand removed: ${headName} (paid: ${paidOnDemand}) for student ${request.studentId}`);
+                        // Carry forward any money already paid against this dropped fee head —
+                        // otherwise it is silently lost (the carry-forward loop below only sees
+                        // non-deleted demands). Mirror the BRANCH_CHANGE_REFUND correction used
+                        // for over-paid surviving demands.
+                        if (paidOnDemand > 0 && academicYearId) {
+                            await tx.feeCorrection.create({
+                                data: {
+                                    studentId: request.studentId,
+                                    academicYearId,
+                                    amount: paidOnDemand,
+                                    reason: `Branch change refund: ${headName} (fee head removed from new course). Paid: ${paidOnDemand}`,
+                                    type: 'BRANCH_CHANGE_REFUND',
+                                    referenceId: requestId,
+                                    referenceType: 'COURSE_CHANGE_REQUEST',
+                                    remarks: `Removed head "${headName}" had ${paidOnDemand} paid; carried forward.`,
+                                    carryForward: true,
+                                    isSettled: false,
+                                    createdBy: adminId
+                                }
+                            });
+                            await tx.studentLedger.create({
+                                data: {
+                                    studentId: request.studentId,
+                                    type: LedgerTransactionType.CREDIT,
+                                    amount: paidOnDemand,
+                                    description: `Branch change refund: ${headName} removed from new course. Paid ${paidOnDemand} carried forward.`,
+                                    referenceType: 'FEE_CORRECTION',
+                                    referenceId: requestId,
+                                    feeHeadId: demand.feeHeadId,
+                                    academicYearId,
+                                    createdBy: adminId
+                                }
+                            });
+                        }
+
+                        logger.info(`[approveCourseChange] Orphaned demand removed: ${headName} (paid: ${paidOnDemand}${paidOnDemand > 0 ? ' → carried forward as FeeCorrection' : ''}) for student ${request.studentId}`);
                     }
                 }
 
@@ -872,6 +908,11 @@ export const AdmissionService = {
                 }
 
                 logger.info(`[approveCourseChange] Full reconciliation for Student ${student.id} to Course ${request.toCourse}. TotalPaid: ${totalPaidAcrossAll}`);
+
+                // totalFee must follow the NEW course's demands; paidFee follows the payments.
+                // Recompute from source so the admission row reflects the post-change demands
+                // (the function rewrites/creates/deletes demands but never updated the totals).
+                await recomputeStudentTotals(request.studentId, tx);
             }
         });
 
@@ -1847,12 +1888,13 @@ export const AdmissionService = {
     propagateScholarshipUpdate: async (studentId: string, newPct: number, adminId: string | undefined, tx: any) => {
         logger.info(`[propagateScholarshipUpdate] Updating demands to ${newPct}% for student ${studentId}`);
 
-        // Fetch demands with their linked Fee Heads (Direct or via Structure)
+        // Fetch demands with their linked Fee Heads (Direct or via Structure) + paid amounts
         const demands = await tx.studentFeeDemand.findMany({
             where: { studentId },
-            include: { 
-                feeHead: true, 
-                feeStructure: { include: { feeHead: true } } 
+            include: {
+                feeHead: true,
+                feeStructure: { include: { feeHead: true } },
+                payments: { where: { status: 'SUCCESS', isDeleted: false } }
             }
         });
 
@@ -1863,24 +1905,33 @@ export const AdmissionService = {
         });
 
         for (const demand of tuitionDemands) {
-            const baseAmount = demand.amount; 
-            const newDiscount = (baseAmount * newPct) / 100;
-            const newNet = baseAmount - newDiscount;
+            const baseAmount = demand.amount;
+            // Preserve any MANUAL (non-scholarship) discount: discountAmount holds
+            // manual + scholarship; the manual portion is whatever exceeds the recorded
+            // scholarshipAmount. (Mirrors approveCourseChange so conventions match and a
+            // manual discount is never clobbered by a scholarship % change.)
+            const manualDiscount = Math.max(0, (demand.discountAmount || 0) - (demand.scholarshipAmount || 0));
+            const newScholarship = (baseAmount * newPct) / 100;
+            const newDiscountTotal = manualDiscount + newScholarship;
+            const newNet = Math.max(0, baseAmount - newDiscountTotal);
+            const paid = (demand.payments || []).reduce((s: number, p: any) => s + (p.amount ?? 0), 0);
+            const newStatus = paid >= newNet ? FeeStatus.FULL : (paid > 0 ? FeeStatus.PARTIAL : FeeStatus.PENDING);
 
-            logger.info(`[propagateScholarshipUpdate] Updating Demand ${demand.id}: Base=${baseAmount}, NewDiscount=${newDiscount}`);
+            logger.info(`[propagateScholarshipUpdate] Demand ${demand.id}: base=${baseAmount}, manual=${manualDiscount}, scholarship=${newScholarship}, net=${newNet}, paid=${paid}, status=${newStatus}`);
 
-            // A. Update Demand
+            // A. Update Demand — recompute payable + status; keep the manual discount intact.
             await tx.studentFeeDemand.update({
                 where: { id: demand.id },
                 data: {
-                    scholarshipAmount: newDiscount,
-                    discountAmount: newDiscount,
+                    scholarshipAmount: newScholarship,
+                    discountAmount: newDiscountTotal,
                     netAmount: newNet,
+                    status: newStatus,
                     remarks: `Scholarship applied: ${newPct}%`
                 }
             });
 
-            // B. Update/Create Ledger
+            // B. Update/Create the scholarship CREDIT ledger entry (= scholarship portion only)
             const ledger = await tx.studentLedger.findFirst({
                 where: {
                     referenceId: demand.id,
@@ -1891,11 +1942,11 @@ export const AdmissionService = {
             });
 
             if (ledger) {
-                if (newDiscount > 0) {
+                if (newScholarship > 0) {
                     await tx.studentLedger.update({
                         where: { id: ledger.id },
                         data: {
-                            amount: newDiscount,
+                            amount: newScholarship,
                             description: `Scholarship (${newPct}%)`,
                             createdBy: adminId
                         }
@@ -1903,12 +1954,12 @@ export const AdmissionService = {
                 } else {
                     await tx.studentLedger.delete({ where: { id: ledger.id } });
                 }
-            } else if (newDiscount > 0) {
+            } else if (newScholarship > 0) {
                 await tx.studentLedger.create({
                     data: {
                         studentId,
                         type: 'CREDIT', // Cast if needed
-                        amount: newDiscount,
+                        amount: newScholarship,
                         description: `Scholarship (${newPct}%)`,
                         referenceId: demand.id,
                         referenceType: 'SCHOLARSHIP',
@@ -1954,13 +2005,7 @@ export const AdmissionService = {
             }
         });
 
-        // 2. Increment Paid Fee
-        await tx.studentAdmission.update({
-             where: { studentId: payment.studentId },
-             data: { paidFee: { increment: payment.amount } }
-        });
-
-        // 3. Settle Fee Demand (if linked)
+        // 2. Settle Fee Demand (if linked) — set status from cumulative pay vs net payable
         if (payment.feeDemandId) {
              const demand = await tx.studentFeeDemand.findUnique({ where: { id: payment.feeDemandId } });
              if (demand) {
@@ -1974,6 +2019,12 @@ export const AdmissionService = {
                  });
              }
         }
+
+        // 3. Recompute paidFee/totalFee from the source rows (idempotent) instead of a
+        //    blind `paidFee += amount` — this is the same definition the webhook engine
+        //    uses (recomputeStudentTotals), so the two completion paths can never disagree
+        //    or double-count a payment.
+        await recomputeStudentTotals(payment.studentId, tx);
 
         // 4. Execute Admission Updates (Allocation/Scholarship) if metadata dictates
         const meta = payment.metadata as any;
@@ -2072,8 +2123,10 @@ export const AdmissionService = {
                 }
             }
 
-            // Assign New Accommodation (hostel "filled" is computed on-demand from StudentAdmission.hostelId)
-            if (allocation.type === AccommodationType.TRANSPORT) {
+            // Assign New Accommodation (hostel "filled" is computed on-demand from StudentAdmission.hostelId).
+            // Guard the seat increment on a genuine change so a re-run (webhook + verify both
+            // completing the same finalize) can't double-count transportRoute.filled.
+            if (allocation.type === AccommodationType.TRANSPORT && oldAdmission?.transportRouteId !== allocation.transportRouteId) {
                 logger.debug(`[executeAdmissionUpdates] Assigning new transport seat: ${allocation.transportRouteId}`);
                 await tx.transportRoute.update({ where: { id: allocation.transportRouteId }, data: { filled: { increment: 1 } } });
             }
@@ -2132,7 +2185,10 @@ export const AdmissionService = {
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
                     hostelPaymentMode: allocation.type === AccommodationType.HOSTEL ? allocation.hostelPaymentMode : null,
                     transportRouteId: allocation.type === AccommodationType.TRANSPORT ? allocation.transportRouteId : null,
-                    totalFee: { increment: (accCostDelta + baseTuition) },
+                    // totalFee is NOT incremented here — accommodation fees are already billed
+                    // as StudentFeeDemand rows by assignHostel/assignTransport, and totalFee is
+                    // recomputed from those demands below. Incrementing accCostDelta here
+                    // double-counted the accommodation charge.
                     seatAllottedAt: new Date()
                 },
                 create: {
@@ -2144,7 +2200,7 @@ export const AdmissionService = {
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
                     hostelPaymentMode: allocation.type === AccommodationType.HOSTEL ? allocation.hostelPaymentMode : null,
                     transportRouteId: allocation.type === AccommodationType.TRANSPORT ? allocation.transportRouteId : null,
-                    totalFee: (accCostDelta + baseTuition) > 0 ? (accCostDelta + baseTuition) : 0,
+                    totalFee: 0,
                     seatAllottedAt: new Date()
                 }
             });
@@ -2164,6 +2220,10 @@ export const AdmissionService = {
             if (scholarshipPct > 0) {
                 await this.propagateScholarshipUpdate(studentId, scholarshipPct, adminId, tx);
             }
+
+            // Recompute totalFee (Σ active demand gross) and paidFee (Σ SUCCESS non-application
+            // payments) from the source rows — authoritative, idempotent, and double-count-proof.
+            await recomputeStudentTotals(studentId, tx);
 
             logger.info(`[executeAdmissionUpdates] Successfully completed all updates for student=${studentId}`);
         } catch (error) {

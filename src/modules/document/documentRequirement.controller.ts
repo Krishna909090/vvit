@@ -6,6 +6,7 @@ import * as documentRequirementService from './documentRequirement.service';
 import logger from '../../utils/logger';
 import { catchAsync } from '../../utils/catchAsync';
 import { sendResponse } from '../../utils/response';
+import { assertStudentOwns } from '../../utils/ownership';
 
 /**
  * Controller: Get all document requirements (with optional degreeType filter)
@@ -130,9 +131,11 @@ export const deleteDocumentRequirement = catchAsync(
 export const getStudentDocumentRequirements = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         const { studentId } = req.params;
-        
+
+        await assertStudentOwns(req, studentId); // IDOR guard
+
         logger.info(`[getStudentDocumentRequirements] studentId=${studentId} by=${req.user?.userId}`);
-        
+
         const result = await documentRequirementService.getStudentDocumentRequirements(studentId);
         
         sendResponse({

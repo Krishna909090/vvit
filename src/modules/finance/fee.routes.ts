@@ -21,6 +21,9 @@ import {
     createDiscountRequestSchema, updateDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema,
     generateFeeDemandsBulkSchema
 } from '../../validators/adminValidators';
+import {
+    setApplicationFeeSchema, collectFeeSchema, addStudentDiscountSchema, changeAccommodationSchema
+} from '../../validators/paymentValidators';
 
 const router = Router();
 
@@ -258,7 +261,7 @@ router.get('/application-fee', authenticate, authorizePermission('finance.read.a
  * Body: { amount: number }
  * Response: { status, message }
  */
-router.post('/application-fee', authenticate, authorizePermission('finance.update.all'), updateApplicationFee);
+router.post('/application-fee', authenticate, authorizePermission('finance.update.all'), validateRequest(setApplicationFeeSchema), updateApplicationFee);
 
 // ═══════════════════════════════════════════════════════════
 // DIRECT FEE COLLECTION (Admin offline entry)
@@ -271,7 +274,7 @@ router.post('/application-fee', authenticate, authorizePermission('finance.updat
  * Body: { studentId, amount, component, method, referenceNumber?, remarks?, feeHeadId? }
  * Response: { status, data: { paymentId, invoiceUrl } }
  */
-router.post('/collect-fee', authenticate, authorizePermission('finance.create.all'), collectFee);
+router.post('/collect-fee', authenticate, authorizePermission('finance.create.all'), validateRequest(collectFeeSchema), collectFee);
 
 // ═══════════════════════════════════════════════════════════
 // STUDENT FINANCIAL DATA
@@ -312,7 +315,7 @@ router.get('/allotment-order/:studentId', authenticate, authorizePermission(['fi
  * Body: { studentId, feeDemandId, type: 'DISCOUNT' | 'FINE', amount, reason }
  * Response: { status, message }
  */
-router.post('/student-discount', authenticate, authorizePermission('finance.create.all'), addStudentDiscount);
+router.post('/student-discount', authenticate, authorizePermission('finance.create.all'), validateRequest(addStudentDiscountSchema), addStudentDiscount);
 
 /**
  * GET /finance/fees/payment-history/:studentId
@@ -330,6 +333,6 @@ router.get('/payment-history/:studentId', authenticate, authorizePermission(['fi
  * Body: { studentId, newType: 'HOSTEL'|'TRANSPORT'|'NONE', hostelId?, hostelType?, transportRouteId?, reason? }
  * Response: { status, data: { oldType, newType, oldCost, newCost, feeAdjustment } }
  */
-router.post('/change-accommodation', authenticate, authorizePermission('finance.update.all'), changeAccommodationType);
+router.post('/change-accommodation', authenticate, authorizePermission('finance.update.all'), validateRequest(changeAccommodationSchema), changeAccommodationType);
 
 export default router;

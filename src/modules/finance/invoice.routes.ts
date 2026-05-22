@@ -1,6 +1,6 @@
 import express from 'express';
 import { InvoiceController } from './invoice.controller';
-import { authenticate } from '../../middleware/rbac.middleware';
+import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 
 const router = express.Router();
 
@@ -16,7 +16,7 @@ const router = express.Router();
  * @sideEffect Creates a PDF document and stores it in the configured S3 bucket.
  * @returns {{ success: boolean, data: { invoiceId: string, url: string } }} The generated invoice ID and download URL.
  */
-router.post('/generate-invoice', authenticate, InvoiceController.generateInvoice);
+router.post('/generate-invoice', authenticate, authorizePermission(['finance.create.all', 'finance.update.all']), InvoiceController.generateInvoice);
 
 /**
  * @route   POST /regenerate-invoice
@@ -26,6 +26,6 @@ router.post('/generate-invoice', authenticate, InvoiceController.generateInvoice
  * @body    { paymentId: string }
  * @returns {{ success: boolean, data: { invoiceUrl, invoiceNumber, receiptNumber } }}
  */
-router.post('/regenerate-invoice', authenticate, InvoiceController.regenerateInvoice);
+router.post('/regenerate-invoice', authenticate, authorizePermission('finance.update.all'), InvoiceController.regenerateInvoice);
 
 export default router;

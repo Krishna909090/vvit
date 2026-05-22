@@ -1,5 +1,20 @@
 import { z } from 'zod';
 
+/**
+ * Optional admin pricing overrides shared across accommodation/transport flows.
+ * When present they fully replace the config tier / route cost (the system value
+ * is not consulted), so every charged amount must be supplied. Use 0 to skip a
+ * component. Supplying an override additionally requires `student.pricing.override`.
+ */
+const hostelCustomPricingField = z.object({
+    accommodation: z.number().min(0, "accommodation must be >= 0"),
+    mess: z.number().min(0, "mess must be >= 0"),
+    laundry: z.number().min(0, "laundry must be >= 0"),
+    registration: z.number().min(0, "registration must be >= 0"),
+}).optional();
+
+const transportCustomCostField = z.number().min(0, "customCost must be >= 0").optional();
+
 export const selectExamSchema = z.object({
     params: z.object({
         studentId: z.string().uuid("Invalid Student ID"),
@@ -31,6 +46,7 @@ export const assignHostelSchema = z.object({
         hostelType: z.string()
             .transform(v => v.toUpperCase())
             .pipe(z.enum(['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10'])),
+        customPricing: hostelCustomPricingField,
     }),
 });
 
@@ -69,6 +85,7 @@ export const reassignHostelSchema = z.object({
             .transform(v => v.toUpperCase())
             .pipe(z.enum(['YEARWISE', 'SEMWISE'])),
         reason: z.string().trim().min(1, "Reason is required").max(500),
+        customPricing: hostelCustomPricingField,
     }),
 });
 
@@ -117,6 +134,7 @@ export const assignTransportSchema = z.object({
     }),
     body: z.object({
         transportRouteId: z.string().uuid("Invalid Transport Route ID"),
+        customCost: transportCustomCostField,
     }),
 });
 
@@ -127,6 +145,7 @@ export const reassignTransportSchema = z.object({
     body: z.object({
         transportRouteId: z.string().uuid("Invalid Transport Route ID"),
         reason: z.string().trim().min(1, "Reason is required").max(500),
+        customCost: transportCustomCostField,
     }),
 });
 
@@ -161,6 +180,7 @@ export const switchHostelToTransportSchema = z.object({
         chargeRetained: z.number().min(0).optional().default(0),
         reason: z.string().trim().min(1, "Reason is required").max(500),
         transportRouteId: z.string().uuid("Invalid Transport Route ID"),
+        customCost: transportCustomCostField,
     }),
 });
 
@@ -178,6 +198,71 @@ export const switchTransportToHostelSchema = z.object({
         hostelType: z.string()
             .transform(v => v.toUpperCase())
             .pipe(z.enum(['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10'])),
+        customPricing: hostelCustomPricingField,
+    }),
+});
+
+/* ───── Preview (dry-run) schemas ─────
+ * Same body as the write counterpart but `reason` is omitted — a preview
+ * doesn't record anything, so no reason is needed.
+ */
+export const reassignHostelPreviewSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        hostelId: z.string().uuid("Invalid Hostel ID"),
+        bedId: z.string().uuid("Invalid Bed ID"),
+        hostelPaymentMode: z.string()
+            .transform(v => v.toUpperCase())
+            .pipe(z.enum(['YEARWISE', 'SEMWISE'])),
+        customPricing: hostelCustomPricingField,
+    }),
+});
+
+export const cancelHostelPreviewSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        cancellationFee: z.number().min(0).optional().default(0),
+    }),
+});
+
+export const cancelTransportPreviewSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        cancellationFee: z.number().min(0).optional().default(0),
+    }),
+});
+
+export const switchHostelToTransportPreviewSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        chargeRetained: z.number().min(0).optional().default(0),
+        transportRouteId: z.string().uuid("Invalid Transport Route ID"),
+        customCost: transportCustomCostField,
+    }),
+});
+
+export const switchTransportToHostelPreviewSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        chargeRetained: z.number().min(0).optional().default(0),
+        hostelId: z.string().uuid("Invalid Hostel ID"),
+        hostelPaymentMode: z.string()
+            .transform(v => v.toUpperCase())
+            .pipe(z.enum(['YEARWISE', 'SEMWISE'])),
+        hostelType: z.string()
+            .transform(v => v.toUpperCase())
+            .pipe(z.enum(['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10'])),
+        customPricing: hostelCustomPricingField,
     }),
 });
 

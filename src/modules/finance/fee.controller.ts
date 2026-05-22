@@ -7,6 +7,7 @@ import { getAllotmentOrderUrl } from './payment.service';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { Role, RoleType } from '../../constants/roles';
+import { assertStudentOwns } from '../../utils/ownership';
 
 // Fee Head
 export const createFeeHead = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -435,11 +436,7 @@ export const getStudentLedger = catchAsync(async (req: Request, res: Response, n
     const { studentId } = req.params;
     const academicYearId = req.query.academicYearId as string | undefined;
 
-    // Security: Students can only see their own
-    if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
-        // Simple unauthorized check, can be expanded
-        // throw new AppError("Unauthorized", 403);
-    }
+    await assertStudentOwns(req, studentId); // IDOR guard — a student may only see their own
 
     const ledger = await FeeService.getStudentFeeDetails(studentId, academicYearId);
 
@@ -455,7 +452,9 @@ export const getStudentLedger = catchAsync(async (req: Request, res: Response, n
 export const downloadAllotmentOrder = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { courseChange } = req.query;
-    
+
+    await assertStudentOwns(req, studentId); // IDOR guard
+
     // Regenerate if courseChange is explicitly 'true'
     const regenerate = courseChange === 'true';
 
@@ -474,10 +473,7 @@ export const getStudentFeeDemands = catchAsync(async (req: Request, res: Respons
     const { studentId } = req.params;
     const academicYearId = req.query.academicYearId as string | undefined;
 
-    // Security check: Only allow access if user is admin/staff or the student themselves
-    if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
-         // throw new AppError("Unauthorized", 403); // Uncomment if strict security needed, for now implicit trust in token vs id check usually handled by middleware or simpler checks
-    }
+    await assertStudentOwns(req, studentId); // IDOR guard
 
     const feeDetails = await FeeService.getStudentFeeDetails(studentId, academicYearId);
 
@@ -505,11 +501,8 @@ export const getStudentFeeDemands = catchAsync(async (req: Request, res: Respons
 
 export const getPaymentHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    
-    // Security: Students can only see their own
-    if (req.user!.role === Role.STUDENT && req.user!.userId !== studentId) {
-        // throw new AppError("Unauthorized", 403);
-    }
+
+    await assertStudentOwns(req, studentId); // IDOR guard
 
     const history = await FeeService.getStudentPaymentHistory(studentId);
 

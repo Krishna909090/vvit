@@ -8,7 +8,7 @@ const ledgerLog = createModuleLogger('LEDGER');
 import { format } from 'date-fns';
 import { AdmissionStatus, PaymentStatus, PaymentComponent, DiscountStatus, FeeStatus, PaymentMethod, PaymentMode, HostelPaymentMode, AccommodationType } from '@prisma/client';
 import { getApplicationFeeAmount } from './fee.service';
-import { getOrCreateAccommodationPricing, resolveFeeDemandContext, getActiveAcademicYear } from '../../utils/studentContext';
+import { getOrCreateAccommodationPricing, resolveFeeDemandContext, getActiveAcademicYear, recomputeStudentTotals } from '../../utils/studentContext';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { ScholarshipService } from './scholarship.service';
 import { generateAllotmentOrderPDF, generateHostelAllotmentOrderPDF } from '../../utils/allotmentGenerator';
@@ -641,25 +641,56 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     payLog.info('PROCESSING', `Processing ${payments.length} payment(s)`, { txnId, studentId, applicationId, count: payments.length });
     logger.info(`[processMultiPaymentSuccess] Processing ${payments.length} payments. Ref=${txnId}`);
 
-    // Idempotency guard — skip payments already marked SUCCESS to prevent
-    // double ledger entries and double fee settlement on duplicate callbacks
-    const pendingPayments = payments.filter(p => p.status !== PaymentStatus.SUCCESS);
+    // Idempotency guard — only process payments that are still PENDING. Anything
+    // already SUCCESS (duplicate callback) or FAILED must NOT be settled/ledgered again.
+    const pendingPayments = payments.filter(p => p.status === PaymentStatus.PENDING);
     if (pendingPayments.length === 0) {
-        logger.info(`[processMultiPaymentSuccess] All payments already SUCCESS — skipping duplicate processing. Ref=${payments[0].providerTxId}`);
+        logger.info(`[processMultiPaymentSuccess] No PENDING payments to process (already handled) — skipping. Ref=${payments[0].providerTxId}`);
         return;
     }
     if (pendingPayments.length < payments.length) {
-        logger.warn(`[processMultiPaymentSuccess] ${payments.length - pendingPayments.length} payment(s) already SUCCESS, processing remaining ${pendingPayments.length}. Ref=${payments[0].providerTxId}`);
+        logger.warn(`[processMultiPaymentSuccess] ${payments.length - pendingPayments.length} payment(s) not PENDING, processing remaining ${pendingPayments.length}. Ref=${payments[0].providerTxId}`);
     }
 
-    // 1. Update Status FIRST (So InvoiceService sees them as SUCCESS)
-    await prisma.payment.updateMany({
-        where: { id: { in: pendingPayments.map((p: any) => p.id) } },
-        data: { status: PaymentStatus.SUCCESS, metadata }
-    });
-    payLog.info('SUCCESS', `${pendingPayments.length} payment(s) marked SUCCESS`, { txnId, studentId, applicationId, amount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
+    // 1. ATOMIC money pipeline — status flip + per-payment settle + ledger in ONE
+    //    transaction. The status flip is gated on status:PENDING (idempotency vs
+    //    duplicate/concurrent callbacks). If ANY step throws, the whole bundle rolls
+    //    back (payments stay PENDING) so the webhook retry re-processes cleanly — no
+    //    payment is ever left SUCCESS with settlement/ledger half-done.
+    let flippedCount = 0;
+    await prisma.$transaction(async (tx) => {
+        const statusFlip = await tx.payment.updateMany({
+            where: { id: { in: pendingPayments.map((p: any) => p.id) }, status: PaymentStatus.PENDING },
+            data: { status: PaymentStatus.SUCCESS, metadata }
+        });
+        flippedCount = statusFlip.count;
+        if (flippedCount === 0) return; // a concurrent callback already transitioned them
 
-    // 2. Pre-generate Allotment Order for admission payments (must happen before invoice so email can attach it)
+        for (const payment of pendingPayments) {
+            if (payment.component !== PaymentComponent.APPLICATION_FEE) {
+                await _settleFeeDemands(payment, tx);
+            }
+            await _createPaymentLedger(payment, tx);
+        }
+    }, { timeout: 20000, maxWait: 10000 });
+
+    if (flippedCount === 0) {
+        logger.info(`[processMultiPaymentSuccess] No PENDING payments transitioned (concurrent callback already processed them) — skipping. Ref=${txnId}`);
+        return;
+    }
+    payLog.info('SUCCESS', `${pendingPayments.length} payment(s) marked SUCCESS + settled + ledgered (atomic)`, { txnId, studentId, applicationId, amount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
+
+    // 2. Post-commit side effects (best-effort — must NOT roll back committed money).
+    //    Component side effects (status advancement, scholarship lock, provisional ledger).
+    for (const payment of pendingPayments) {
+        try {
+            await _processComponentLogic(payment);
+        } catch (e) {
+            payLog.error('COMPONENT_LOGIC_FAILED', `Post-success component logic failed: ${e}`, { studentId, component: payment.component });
+        }
+    }
+
+    // 3. Pre-generate Allotment Order for admission payments (before invoice so email can attach it)
     const admissionComponents = [PaymentComponent.SCHOLARSHIP_TOKEN, PaymentComponent.TUITION];
     const hasAdmissionPayment = payments.some((p: any) => admissionComponents.includes(p.component));
     if (hasAdmissionPayment) {
@@ -676,7 +707,7 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         }
     }
 
-    // 3. Generate Invoice (Unified) via InvoiceService
+    // 4. Generate Invoice (Unified) via InvoiceService — slow S3/PDF, kept OUT of the tx.
     let invoiceUrl = null;
     try {
         const invoiceResult = await InvoiceService.generateInvoiceForPayment(payments[0].id);
@@ -686,18 +717,7 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         payLog.error('INVOICE_FAILED', `Invoice generation failed: ${e}`, { studentId, applicationId, txnId });
     }
 
-    // 3. Process Logic (Iterate)
-    for (const payment of payments) {
-        await _processComponentLogic(payment);
-        if (payment.component !== PaymentComponent.APPLICATION_FEE) {
-            await _settleFeeDemands(payment);
-            payLog.info('FEE_SETTLED', `Fee demand settled`, { studentId, component: payment.component, amount: payment.amount });
-        }
-        await _createPaymentLedger(payment);
-        ledgerLog.info('CREATED', `Ledger entry created`, { studentId, type: 'CREDIT', amount: payment.amount, component: payment.component });
-    }
-
-    // 4. Triggers
+    // 5. Triggers (FINALIZE_ADMISSION runs its own transaction)
     await _handleTriggers(payments);
 
     payLog.info('COMPLETED', `Payment processing completed`, { txnId, studentId, applicationId, totalAmount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
@@ -749,124 +769,144 @@ const _processComponentLogic = async (payment: any) => {
                  logger.info(`[_processComponentLogic] Skipping FEE_GENERATION for student=${studentId} — ${existingDemands} fee demands already exist`);
              }
         }
-        await prisma.studentAdmission.update({
-            where: { studentId },
-            data: { feeStatus: FeeStatus.PARTIAL }
-        });
-    }
-};
-
-
-/** Internal: apply a successful payment against matching StudentFeeDemand rows, updating paid amount + status (PARTIAL/FULL). */
-const _settleFeeDemands = async (payment: any) => {
-    await prisma.studentAdmission.update({
-         where: { studentId: payment.studentId },
-         data: { paidFee: { increment: payment.amount } }
-    });
-
-    try {
-        let targetDemandId = payment.feeDemandId;
-
-        // Resolve via FeeHead if missing
-        if (!targetDemandId && payment.feeHeadId) {
-             const matchingDemand = await prisma.studentFeeDemand.findFirst({
-                 where: {
-                     studentId: payment.studentId,
-                     status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] },
-                     OR: [
-                          { feeHeadId: payment.feeHeadId },
-                          { feeStructure: { feeHeadId: payment.feeHeadId } }
-                     ]
-                 },
-                 orderBy: { dueDate: 'asc' }
-             });
-             if (matchingDemand) targetDemandId = matchingDemand.id;
-        }
-
-        // Strict Settlement
-        if (targetDemandId) {
-            const demand = await prisma.studentFeeDemand.findUnique({ where: { id: targetDemandId } });
-            if (demand) {
-                const newStatus = payment.amount >= demand.amount ? 'FULL' : 'PARTIAL';
-                await prisma.studentFeeDemand.update({
-                    where: { id: demand.id },
-                    data: { status: newStatus as any }
-                });
-                // Copy academicYearId + yearOfStudy onto the Payment row so reports filter by year cheaply
-                await prisma.payment.update({
-                    where: { id: payment.id },
-                    data: {
-                        feeDemandId: targetDemandId,
-                        academicYearId: demand.academicYearId ?? undefined,
-                        yearOfStudy: demand.yearOfStudy ?? undefined,
-                    }
-                });
-                // Mutate in-memory so the subsequent _createPaymentLedger() picks up the year context
-                payment.feeDemandId = targetDemandId;
-                payment.academicYearId = demand.academicYearId ?? null;
-                payment.yearOfStudy = demand.yearOfStudy ?? null;
-            }
-        }
-        // Waterfall Settlement
-        else {
-            const pendingDemands = await prisma.studentFeeDemand.findMany({
-                where: { studentId: payment.studentId, status: FeeStatus.PENDING },
-                orderBy: { dueDate: 'asc' }
+        // Guard: a payment for a student with no admission row (manual/bulk import, or a
+        // deleted admission) would otherwise throw P2025 here and abort the (non-atomic)
+        // success loop, leaving the payment SUCCESS but unsettled. Log-and-continue instead.
+        try {
+            await prisma.studentAdmission.update({
+                where: { studentId },
+                data: { feeStatus: FeeStatus.PARTIAL }
             });
-
-            // Use the first (oldest) demand's year as the payment's year. Best proxy when
-            // a generic payment splits across multiple demands.
-            if (pendingDemands.length > 0) {
-                const first = pendingDemands[0];
-                await prisma.payment.update({
-                    where: { id: payment.id },
-                    data: {
-                        academicYearId: first.academicYearId ?? undefined,
-                        yearOfStudy: first.yearOfStudy ?? undefined,
-                    }
-                });
-                payment.academicYearId = first.academicYearId ?? null;
-                payment.yearOfStudy = first.yearOfStudy ?? null;
-            }
-
-            let remaining = payment.amount;
-            for (const demand of pendingDemands) {
-                if (remaining <= 0) break;
-                if (remaining >= demand.amount) {
-                    await prisma.studentFeeDemand.update({ where: { id: demand.id }, data: { status: FeeStatus.FULL } });
-                    remaining -= demand.amount;
-                } else {
-                    await prisma.studentFeeDemand.update({ where: { id: demand.id }, data: { status: FeeStatus.PARTIAL } });
-                    break;
-                }
-            }
+        } catch (err) {
+            logger.warn(`[_processComponentLogic] Could not set feeStatus=PARTIAL for student=${studentId} (no admission row?): ${err}`);
         }
-    } catch (err) {
-        logger.error(`Fee Settlement Error: ${err}`);
     }
 };
 
-/** Internal: write the CREDIT ledger entry for a successful payment (year-tagged). */
-const _createPaymentLedger = async (payment: any) => {
-    try {
-        await prisma.studentLedger.create({
-            data: {
-                studentId: payment.studentId,
-                type: 'CREDIT',
-                amount: payment.amount,
-                description: `Payment Received via ${payment.method || 'ONLINE'} (${payment.component})`,
-                referenceId: payment.id,
-                referenceType: 'PAYMENT',
-                feeHeadId: payment.feeHeadId || undefined,
-                academicYearId: payment.academicYearId || undefined,
-                yearOfStudy: payment.yearOfStudy || undefined,
-                createdBy: payment.createdBy || payment.collectedBy || 'SYSTEM',
-                date: new Date()
-            } as any
-        });
-    } catch (err) {
-        logger.error(`Ledger Creation Failed for ${payment.id}: ${err}`);
+
+/**
+ * Internal: apply a successful payment against matching StudentFeeDemand rows.
+ * Accepts a Prisma client/tx (`db`) so it can run inside the atomic success transaction.
+ * Errors PROPAGATE (no swallow) so a failure rolls the whole bundle back rather than
+ * leaving a payment SUCCESS with settlement half-done.
+ */
+const _settleFeeDemands = async (payment: any, db: any = prisma) => {
+    let targetDemandId = payment.feeDemandId;
+
+    // Resolve via FeeHead if missing
+    if (!targetDemandId && payment.feeHeadId) {
+         const matchingDemand = await db.studentFeeDemand.findFirst({
+             where: {
+                 studentId: payment.studentId,
+                 status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] },
+                 OR: [
+                      { feeHeadId: payment.feeHeadId },
+                      { feeStructure: { feeHeadId: payment.feeHeadId } }
+                 ]
+             },
+             orderBy: { dueDate: 'asc' }
+         });
+         if (matchingDemand) targetDemandId = matchingDemand.id;
     }
+
+    // Strict Settlement
+    if (targetDemandId) {
+        const demand = await db.studentFeeDemand.findUnique({ where: { id: targetDemandId } });
+        if (demand) {
+            // Compare against the NET payable (amount − discount − scholarship + fine),
+            // not the gross amount. Mirrors admission.ts settlement.
+            const targetAmount = demand.netAmount ?? demand.amount;
+            const newStatus = payment.amount >= targetAmount ? 'FULL' : 'PARTIAL';
+            await db.studentFeeDemand.update({
+                where: { id: demand.id },
+                data: { status: newStatus as any }
+            });
+            // Copy academicYearId + yearOfStudy onto the Payment row so reports filter by year cheaply
+            await db.payment.update({
+                where: { id: payment.id },
+                data: {
+                    feeDemandId: targetDemandId,
+                    academicYearId: demand.academicYearId ?? undefined,
+                    yearOfStudy: demand.yearOfStudy ?? undefined,
+                }
+            });
+            // Mutate in-memory so the subsequent _createPaymentLedger() picks up the year context
+            payment.feeDemandId = targetDemandId;
+            payment.academicYearId = demand.academicYearId ?? null;
+            payment.yearOfStudy = demand.yearOfStudy ?? null;
+        }
+    }
+    // Waterfall Settlement
+    else {
+        const pendingDemands = await db.studentFeeDemand.findMany({
+            where: { studentId: payment.studentId, status: FeeStatus.PENDING },
+            orderBy: { dueDate: 'asc' }
+        });
+
+        // Use the first (oldest) demand's year as the payment's year. Best proxy when
+        // a generic payment splits across multiple demands.
+        if (pendingDemands.length > 0) {
+            const first = pendingDemands[0];
+            await db.payment.update({
+                where: { id: payment.id },
+                data: {
+                    academicYearId: first.academicYearId ?? undefined,
+                    yearOfStudy: first.yearOfStudy ?? undefined,
+                }
+            });
+            payment.academicYearId = first.academicYearId ?? null;
+            payment.yearOfStudy = first.yearOfStudy ?? null;
+        }
+
+        let remaining = payment.amount;
+        for (const demand of pendingDemands) {
+            if (remaining <= 0) break;
+            // Settle against NET payable (amount − discount − scholarship), not gross.
+            const target = demand.netAmount ?? demand.amount;
+            if (remaining >= target) {
+                await db.studentFeeDemand.update({ where: { id: demand.id }, data: { status: FeeStatus.FULL } });
+                remaining -= target;
+            } else {
+                await db.studentFeeDemand.update({ where: { id: demand.id }, data: { status: FeeStatus.PARTIAL } });
+                break;
+            }
+        }
+    }
+
+    // Recompute paidFee/totalFee from the source-of-truth (within the same tx).
+    await recomputeStudentTotals(payment.studentId, db);
+};
+
+/**
+ * Internal: write the CREDIT ledger entry for a successful payment (year-tagged).
+ * Accepts `db` so it participates in the atomic transaction; errors propagate.
+ */
+const _createPaymentLedger = async (payment: any, db: any = prisma) => {
+    // Idempotency guard — one CREDIT per payment. Prevents a duplicate ledger
+    // entry if the success pipeline ever re-runs for the same payment. Mirrors
+    // admission.ts:processPaymentSuccess.
+    const existingLedger = await db.studentLedger.findFirst({
+        where: { referenceId: payment.id, referenceType: 'PAYMENT', studentId: payment.studentId }
+    });
+    if (existingLedger) {
+        logger.warn(`[_createPaymentLedger] CREDIT ledger already exists for payment ${payment.id} — skipping duplicate.`);
+        return;
+    }
+    await db.studentLedger.create({
+        data: {
+            studentId: payment.studentId,
+            type: 'CREDIT',
+            amount: payment.amount,
+            description: `Payment Received via ${payment.method || 'ONLINE'} (${payment.component})`,
+            referenceId: payment.id,
+            referenceType: 'PAYMENT',
+            feeHeadId: payment.feeHeadId || undefined,
+            academicYearId: payment.academicYearId || undefined,
+            yearOfStudy: payment.yearOfStudy || undefined,
+            createdBy: payment.createdBy || payment.collectedBy || 'SYSTEM',
+            date: new Date()
+        } as any
+    });
 };
 
 /** Internal: fire post-payment triggers flagged in metadata (e.g. FINALIZE_ADMISSION runs executeAdmissionUpdates). */
@@ -980,6 +1020,13 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
     }
 
     // 3. Verify Checksum
+    // Fail closed if the salt is not configured — otherwise the checksum is computable
+    // by anyone and a forged PAYMENT_SUCCESS callback would be accepted.
+    if (!saltKey) {
+        webhookLog.error('CHECKSUM_MISCONFIG', `Salt key not configured — rejecting callback`, { txnId: merchantTransactionId, merchantId });
+        throw new AppError('Payment verification not configured', 500);
+    }
+
     const stringToSign = base64Payload + saltKey;
     const sha256 = crypto.createHash('sha256').update(stringToSign).digest('hex');
     const expectedChecksum = sha256 + "###" + saltIndex;

@@ -345,6 +345,87 @@ export const getAvailableHostelCredit = async (studentId: string, tx?: any): Pro
 };
 
 /**
+ * Transport analogue of getAvailableHostelCredit. Available transport credit =
+ * gross TRANSPORT payments − transport refunds already issued (FeeCorrection rows
+ * from a prior transport cancellation or transport→hostel switch). Without this
+ * netting, a cancel/switch cycle re-refunds the same transport rupees (double refund).
+ *
+ * Scoped precisely to transport refund referenceTypes so it never double-subtracts
+ * hostel refunds. Pass `tx` when inside a Prisma transaction.
+ */
+export const getAvailableTransportCredit = async (studentId: string, tx?: any): Promise<{
+    grossPaid: number;
+    priorRefunds: number;
+    availableCredit: number;
+}> => {
+    const client = tx || prisma;
+
+    const [paidAgg, refundAgg] = await Promise.all([
+        client.payment.aggregate({
+            where: { studentId, status: 'SUCCESS', isDeleted: false, component: 'TRANSPORT' },
+            _sum: { amount: true },
+        }),
+        client.feeCorrection.aggregate({
+            where: {
+                studentId,
+                type: 'ACCOMMODATION_CHANGE_REFUND',
+                referenceType: { in: ['TRANSPORT_CANCELLATION', 'TRANSPORT_TO_HOSTEL_SWITCH'] },
+            },
+            _sum: { amount: true },
+        }),
+    ]);
+
+    const grossPaid     = paidAgg._sum.amount ?? 0;
+    const priorRefunds  = refundAgg._sum.amount ?? 0;
+    const availableCredit = Math.max(0, grossPaid - priorRefunds);
+
+    return { grossPaid, priorRefunds, availableCredit };
+};
+
+/**
+ * Recompute and persist a student's `totalFee` and `paidFee` from the source-of-truth
+ * rows instead of relying on running increment/decrement deltas (which drift over time
+ * — see the year-long audit: re-assign/switch/cancel flows left paid demands behind and
+ * over/under-counted totals).
+ *
+ *   totalFee = Σ `amount` of active (non-deleted) StudentFeeDemand rows.
+ *              Gross, matching the historical "sum of base amounts" semantic; callers
+ *              that need net-of-scholarship aggregate from `netAmount` directly.
+ *   paidFee  = Σ `amount` of SUCCESS, non-deleted Payment rows EXCLUDING APPLICATION_FEE
+ *              (the application fee is tracked separately and was never part of paidFee).
+ *
+ * Idempotent and self-healing — safe to call at the end of ANY money-mutating flow, and
+ * safe to re-run. Pass `tx` to participate in an open transaction.
+ */
+export const recomputeStudentTotals = async (
+    studentId: string,
+    tx?: any
+): Promise<{ totalFee: number; paidFee: number }> => {
+    const client = tx || prisma;
+
+    const [demandAgg, paidAgg] = await Promise.all([
+        client.studentFeeDemand.aggregate({
+            where: { studentId, isDeleted: false },
+            _sum: { amount: true },
+        }),
+        client.payment.aggregate({
+            where: { studentId, status: 'SUCCESS', isDeleted: false, component: { not: 'APPLICATION_FEE' } },
+            _sum: { amount: true },
+        }),
+    ]);
+
+    const totalFee = demandAgg._sum.amount ?? 0;
+    const paidFee  = paidAgg._sum.amount ?? 0;
+
+    await client.studentAdmission.update({
+        where: { studentId },
+        data: { totalFee, paidFee },
+    });
+
+    return { totalFee, paidFee };
+};
+
+/**
  * Resolve the active HostelPriceCategory for a (sharing, roomType, academicYearId)
  * tuple. academicYearId is required since the year-tag migration — every price row
  * is now bound to a specific academic year.

@@ -6,6 +6,7 @@ import logger from '../../utils/logger';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { getHostelCostTx } from '../../utils/hostelPricing';
 import { assertHostelHasCapacity } from '../accommodation/hostel/hostel.service';
+import { recomputeStudentTotals } from '../../utils/studentContext';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';
@@ -1289,16 +1290,44 @@ export const FeeService = {
                 newDemandsTotal += fee.amount;
             }
 
-            // totalFee retains the historical "sum of base/gross amounts" semantic to
-            // avoid disturbing existing rows. Reports that need net-of-scholarship should
-            // aggregate from StudentFeeDemand.netAmount directly.
-            if (newDemandsTotal > 0) {
-                await tx.studentAdmission.upsert({
-                    where: { studentId },
-                    create: { studentId, academicYearId, totalFee: newDemandsTotal },
-                    update: { totalFee: { increment: newDemandsTotal } }
+            // R7 — supersede the provisional "stopgap" ledger written by the payment-time
+            // path (_processComponentLogic, existingDemands===0) once the authoritative
+            // demand-based entries exist, so scholarship/tuition aren't counted twice in
+            // ledger-based fee summaries (getStudentFeeDetails sums SCHOLARSHIP credits).
+            //  - FEE_GENERATION DEBITs are superseded by the per-demand FEE_DEMAND DEBITs
+            //    we just created (only created by that stopgap), so remove them when we
+            //    actually created demands.
+            //  - The provisional SCHOLARSHIP CREDIT is the only one keyed by the student's
+            //    scholarshipAllocation id (real ones are keyed by demand id); remove it only
+            //    when we created a replacement demand-based scholarship credit.
+            if (created.length > 0) {
+                await tx.studentLedger.deleteMany({
+                    where: { studentId, referenceType: 'FEE_GENERATION' }
                 });
             }
+            if (scholarshipApplied > 0) {
+                const alloc = await tx.scholarshipAllocation.findUnique({
+                    where: { studentId }, select: { id: true }
+                });
+                if (alloc) {
+                    await tx.studentLedger.deleteMany({
+                        where: { studentId, referenceType: 'SCHOLARSHIP', referenceId: alloc.id }
+                    });
+                }
+            }
+
+            // Ensure an admission row exists, then recompute totalFee (Σ active demand
+            // gross) and paidFee (Σ SUCCESS non-application payments) from the source rows
+            // rather than incrementing — increments drift when demands are regenerated,
+            // a course/structure changes, or a flow deletes demands out-of-band. The
+            // recompute is idempotent and self-healing. (`newDemandsTotal` retained for the
+            // returned summary/logs only.)
+            await tx.studentAdmission.upsert({
+                where: { studentId },
+                create: { studentId, academicYearId, totalFee: 0 },
+                update: {}
+            });
+            await recomputeStudentTotals(studentId, tx);
 
             return { created, skippedCount, scholarshipApplied };
         });
@@ -1487,31 +1516,34 @@ export const FeeService = {
 
         logger.debug(`[getStudentFeeDetails] Found ${demands.length} demands and ${payments.length} successful payments.`);
 
-        // Fetch Discounts/Scholarships from Ledger (Net of Credits and Debits)
-        const scholarshipLedgers = await prisma.studentLedger.findMany({
-            where: {
-                studentId,
-                referenceType: { in: ['SCHOLARSHIP', 'DISCOUNT'] },
-                ...yearFilter
-            }
-        });
+        // Discount is read from the DEMAND rows (the authoritative per-line deduction),
+        // NOT by summing SCHOLARSHIP/DISCOUNT *ledger* entries. The ledger is a journal that
+        // can contain duplicates (e.g. an approval processed twice) or drift from the demand;
+        // summing it would inflate the discount and under-state the pending balance.
+        //   demand.discountAmount   = total deduction (manual + scholarship)
+        //   demand.scholarshipAmount = the scholarship portion
+        //   demand.netAmount         = amount − discountAmount (the payable)
+        const baseScholarship = demands.reduce((sum, d) => sum + (d.scholarshipAmount || 0), 0);
+        const manualDiscountAmount = demands.reduce(
+            (sum, d) => sum + Math.max(0, (d.discountAmount || 0) - (d.scholarshipAmount || 0)), 0
+        );
 
-        let scholarshipAmount = scholarshipLedgers
-            .filter(l => l.referenceType === 'SCHOLARSHIP')
-            .reduce((sum, l) => sum + (l.type === 'CREDIT' ? l.amount : -l.amount), 0);
+        let scholarshipAmount = baseScholarship;
+        let fallbackScholarship = 0; // pre-payment estimate, not yet reflected on any demand
 
-        // Check for Locked Allocation (Pre-Payment View)
-        if (scholarshipAmount === 0) {
+        // Pre-payment view: if no scholarship is applied on the demands yet but a
+        // LOCKED/RESERVED allocation exists, estimate it from the rule % (display only).
+        if (baseScholarship === 0) {
             const allocation = await prisma.scholarshipAllocation.findUnique({
                 where: { studentId },
                 include: { rule: true }
             });
 
             logger.info(`[getStudentFeeDetails] [Scholarship Allocation] Student=${studentId} Found=${!!allocation} Status=${allocation?.status}`);
-            
+
             if (allocation && (allocation.status === 'LOCKED' || allocation.status === 'RESERVED')) {
                  const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
-                 
+
                  // Find the tuition demand by FeeHead.component === 'TUITION' (no name keyword fallback)
                  let tuitionDemand = demands.find(d => {
                     const comp = d.feeStructure?.feeHead?.component ?? d.feeHead?.component ?? null;
@@ -1524,25 +1556,20 @@ export const FeeService = {
                      logger.debug(`[Scholarship] No TUITION-tagged FeeHead found. Used highest demand as proxy: ${tuitionDemand.amount}`);
                  }
 
-                 // Strategy 3: Admission Record
                  const tuitionFee = tuitionDemand ? tuitionDemand.amount : (admission?.totalFee || 0);
-
-                 logger.debug(`[Scholarship] Calculation: Rule=${allocation.rule.discountPercentage}%, BaseTuition=${tuitionFee}`);
-
-                 scholarshipAmount = (tuitionFee * allocation.rule.discountPercentage) / 100;
+                 fallbackScholarship = (tuitionFee * allocation.rule.discountPercentage) / 100;
+                 scholarshipAmount = fallbackScholarship;
             }
         }
 
-        const manualDiscountAmount = scholarshipLedgers
-            .filter(l => l.referenceType === 'DISCOUNT')
-            .reduce((sum, l) => sum + (l.type === 'CREDIT' ? l.amount : -l.amount), 0);
-
-        const totalDemand = demands.reduce((sum, d) => sum + d.amount, 0);
+        const totalDemand = demands.reduce((sum, d) => sum + d.amount, 0);                       // gross
+        const totalNet    = demands.reduce((sum, d) => sum + ((d.netAmount ?? d.amount)), 0);     // net of demand discounts
         const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
         const totalDiscount = scholarshipAmount + manualDiscountAmount;
-        
-        // Net Pending = Demand - (Paid + Discounts)
-        const pendingAmount = Math.max(0, totalDemand - totalPaid - totalDiscount);
+
+        // Net Pending = net payable − paid − any pre-payment scholarship estimate not yet on demands.
+        // (Immune to duplicate discount ledger rows because it uses the demand's netAmount.)
+        const pendingAmount = Math.max(0, totalNet - totalPaid - fallbackScholarship);
         
         logger.info(`[getStudentFeeDetails] Summary: Demand=${totalDemand}, Paid=${totalPaid}, Discount=${totalDiscount}, Pending=${pendingAmount}`);
 
@@ -1871,9 +1898,17 @@ export const FeeService = {
             // 3. Update Demand or Create Ad-Hoc
             if (targetDemand) {
                 const updateData: any = {};
-                if (type === 'FINE') updateData.fineAmount = { increment: amount };
-                else updateData.discountAmount = { increment: amount }; // Increment the discount deduction
-                
+                // Keep netAmount in lock-step with the deduction/charge so every reader of
+                // netAmount (settlement, balances, summaries) sees the correct payable.
+                // netAmount = amount − discountAmount − scholarshipAmount + fineAmount.
+                if (type === 'FINE') {
+                    updateData.fineAmount = { increment: amount };
+                    updateData.netAmount = { increment: amount };
+                } else {
+                    updateData.discountAmount = { increment: amount }; // Increment the discount deduction
+                    updateData.netAmount = { decrement: amount };
+                }
+
                 updateData.remarks = reason; // Overwrite or Append? Overwrite usually.
                 
                 await tx.studentFeeDemand.update({
@@ -1891,9 +1926,13 @@ export const FeeService = {
                     const newDemand = await tx.studentFeeDemand.create({
                         data: {
                             studentId,
-                            feeHeadId,
+                            // Use the RESOLVED head (feeStructureId-only callers leave the raw
+                            // feeHeadId undefined) and set netAmount so the fine is never lost
+                            // by readers that fall back to `netAmount ?? amount`.
+                            feeHeadId: targetFeeHeadId,
                             amount: 0,
                             fineAmount: amount,
+                            netAmount: amount,
                             status: 'PENDING',
                             dueDate: new Date(),
                             remarks: `Ad-Hoc Fine: ${reason}`,
@@ -1921,7 +1960,7 @@ export const FeeService = {
                     description: `${type}: ${reason}`,
                     referenceId: demandId,
                     referenceType: type === 'FINE' ? 'FINE' : 'DISCOUNT',
-                    feeHeadId,
+                    feeHeadId: targetFeeHeadId,
                     createdBy: userId,
                     date: new Date()
                 }

@@ -191,13 +191,17 @@ export const promoteStudents = async (
                                 isDeleted: false,
                                 status: { in: ['PENDING', 'PARTIAL'] }
                             },
+                            include: { payments: { where: { status: 'SUCCESS', isDeleted: false } } },
                             orderBy: { amount: 'desc' }
                         });
 
                         let remaining = totalCredit;
                         for (const d of targets) {
                             if (remaining <= 0) break;
-                            const open = Math.max(0, (d.netAmount ?? d.amount) - 0);
+                            // Only the UNPAID portion is open to credit — applying credit against
+                            // money already paid would silently destroy the carried-forward credit.
+                            const paidOnDemand = (d as any).payments.reduce((s: number, p: any) => s + (p.amount ?? 0), 0);
+                            const open = Math.max(0, (d.netAmount ?? d.amount) - paidOnDemand);
                             if (open <= 0) continue;
                             const apply = Math.min(remaining, open);
                             const newDiscount = (d.discountAmount ?? 0) + apply;
@@ -220,7 +224,15 @@ export const promoteStudents = async (
                         // demand to absorb full credit), the leftover stays in the response so
                         // admin knows to issue a cash refund manually.
                         carriedAmount = totalCredit - remaining;
+                        // Settle ONLY corrections whose full amount was actually applied. If
+                        // `remaining > 0`, the corrections that couldn't be absorbed stay
+                        // isSettled=false so the credit remains claimable later — never
+                        // force-settle a credit that wasn't delivered.
+                        let settleBudget = carriedAmount;
+                        let settledCount = 0;
                         for (const c of unsettled) {
+                            const amt = c.amount ?? 0;
+                            if (settleBudget + 1e-6 < amt) break; // not enough applied to fully cover this one
                             await (prisma as any).feeCorrection.update({
                                 where: { id: c.id },
                                 data: {
@@ -233,8 +245,10 @@ export const promoteStudents = async (
                                     updatedBy: adminId,
                                 }
                             });
+                            settleBudget -= amt;
+                            settledCount++;
                         }
-                        result.creditsCarriedForward += unsettled.length;
+                        result.creditsCarriedForward += settledCount;
                         result.creditAmountCarriedForward += carriedAmount;
 
                         if (remaining > 0) {

@@ -112,3 +112,26 @@ export const authorizePermission = (requiredPermission: string | string[]) => {
         next();
     };
 };
+
+/**
+ * Permission required to override system-computed accommodation/transport pricing
+ * with a custom admin-entered amount (customPricing / customCost on the
+ * assign / reassign / switch flows).
+ */
+export const PRICING_OVERRIDE_PERMISSION = 'student.pricing.override';
+
+/**
+ * Conditional guard for custom-pricing overrides. Call from a controller AFTER the
+ * normal `authorizePermission` route guard has run. Only enforces the extra
+ * permission when the admin actually supplied an override — plain config-priced
+ * calls are unaffected. Throws 403 if the override is present but the user lacks
+ * `student.pricing.override`.
+ */
+export const assertPricingOverrideAllowed = (req: Request, hasOverride: boolean): void => {
+    if (!hasOverride) return;
+    const userPermissions = req.user?.permissions || [];
+    if (!userPermissions.includes(PRICING_OVERRIDE_PERMISSION)) {
+        logger.warn(`[RBAC] Pricing override DENIED for user=${req.user?.userId} required=${PRICING_OVERRIDE_PERMISSION}`);
+        throw new AppError(`Permission denied. Custom pricing requires: ${PRICING_OVERRIDE_PERMISSION}`, 403);
+    }
+};

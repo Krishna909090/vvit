@@ -10,6 +10,7 @@ import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 import { sendResponse } from '../../utils/response';
 import { getActiveAcademicYear } from '../../utils/studentContext';
+import { assertStudentOwns } from '../../utils/ownership';
 
 // Phase 1: Registration
 export const registerStudent = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -81,6 +82,8 @@ export const getHallTicket = catchAsync(async (req: Request, res: Response, next
 
     const { studentId } = req.params;
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+    await assertStudentOwns(req, studentId); // IDOR guard
 
     const hallTicketUrl = await getHallTicketService(studentId);
 

@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import * as scholarshipController from './scholarship.controller';
+import { validateRequest } from '../../middleware/validationMiddleware';
+import { allocateScholarshipSchema, updateStudentScholarshipSchema } from '../../validators/paymentValidators';
 
 const router = Router();
 
@@ -84,7 +86,7 @@ router.post('/verify-eligibility', authenticate, authorizePermission('scholarshi
  * @body    {object} { studentId, ruleId, amount?, ... } - allocation details.
  * @returns {object} 201 - Scholarship allocation confirmation with allocated amount.
  */
-router.post('/allocate', authenticate, authorizePermission('scholarship.create.all'), scholarshipController.allocateScholarship);
+router.post('/allocate', authenticate, authorizePermission('scholarship.create.all'), validateRequest(allocateScholarshipSchema), scholarshipController.allocateScholarship);
 
 /**
  * @route   POST /update-student-scholarship
@@ -94,6 +96,6 @@ router.post('/allocate', authenticate, authorizePermission('scholarship.create.a
  * @body    {object} { studentId, scholarshipId, amount?, status?, remarks? } - fields to reconcile.
  * @returns {object} 200 - Updated scholarship allocation record.
  */
-router.post('/update-student-scholarship', authenticate, authorizePermission('scholarship.update.all'), scholarshipController.updateStudentScholarship);
+router.post('/update-student-scholarship', authenticate, authorizePermission('scholarship.update.all'), validateRequest(updateStudentScholarshipSchema), scholarshipController.updateStudentScholarship);
 
 export default router;
