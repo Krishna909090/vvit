@@ -1964,6 +1964,7 @@ export const AdmissionService = {
                         referenceId: demand.id,
                         referenceType: 'SCHOLARSHIP',
                         feeHeadId: demand.feeHeadId,
+                        academicYearId: demand.academicYearId,
                         createdBy: adminId
                     } as any
                 });
@@ -1991,7 +1992,9 @@ export const AdmissionService = {
             return;
         }
 
-        // 1. Create Ledger Entry
+        // 1. Create Ledger Entry — academicYearId is REQUIRED on StudentLedger;
+        // carry it from the payment (fall back to active year) or the create fails.
+        const ledgerYearId = payment.academicYearId ?? (await getActiveAcademicYear()).id;
         await tx.studentLedger.create({
             data: {
                 studentId: payment.studentId,
@@ -2001,6 +2004,8 @@ export const AdmissionService = {
                 referenceId: payment.id,
                 referenceType: 'PAYMENT',
                 feeHeadId: payment.feeHeadId,
+                academicYearId: ledgerYearId,
+                yearOfStudy: payment.yearOfStudy ?? undefined,
                 createdBy: resolvedAdminId
             }
         });
