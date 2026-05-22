@@ -1330,6 +1330,13 @@ export const FeeService = {
             await recomputeStudentTotals(studentId, tx);
 
             return { created, skippedCount, scholarshipApplied };
+        }, {
+            // This transaction does a lot (demands + per-demand ledgers + scholarship
+            // cleanup + admission upsert + totals recompute). The default 5s interactive
+            // timeout was being exceeded under DB latency, aborting the whole thing and
+            // leaving 0 demands. Give it room.
+            timeout: 30000,
+            maxWait: 10000,
         });
 
         logger.info(

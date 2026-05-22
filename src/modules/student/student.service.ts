@@ -225,6 +225,22 @@ export const registerStudent = async (data: any, userId: string | null, _current
         const entryAcademicYearId = activeAcademicYear.id;
         const feeCohortAcademicYearId = entryAcademicYearId;
 
+        // Batch year = the academic year the student's batch started 1st year. For a
+        // REGULAR first-year it's the current year; a LATERAL/TRANSFER joins an EARLIER
+        // batch, so step back (entryYearOfStudy - 1) academic years (e.g. lateral 2nd-year
+        // joining in 2026-27 → 2025-26). This is the seat pool they'll be counted against.
+        let batchAcademicYearId = activeAcademicYear.id;
+        if (entryYearOfStudy > 1) {
+            const years = await tx.academicYear.findMany({
+                where: { isDeleted: false },
+                orderBy: { startDate: 'asc' },
+                select: { id: true },
+            });
+            const idx = years.findIndex((y: { id: string }) => y.id === activeAcademicYear.id);
+            const batchIdx = idx - (entryYearOfStudy - 1);
+            if (idx >= 0 && batchIdx >= 0) batchAcademicYearId = years[batchIdx].id;
+        }
+
         // Default to VVIG. Admin sets VVITU/VVITPU explicitly only for 2025-26 batch students.
         const instituteCode = data.instituteCode ?? 'VVIG';
 
@@ -237,6 +253,7 @@ export const registerStudent = async (data: any, userId: string | null, _current
                 entryYearOfStudy,
                 entryAcademicYearId,
                 feeCohortAcademicYearId,
+                batchAcademicYearId,
                 instituteCode,
             }
         });

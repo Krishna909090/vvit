@@ -801,6 +801,10 @@ export const finalizeAdmissionSchema = z.object({
         course: z.object({
             allottedCourseId: z.string().uuid(),
         }),
+        // Optional: the academic year of the BATCH the student joins (the seat pool
+        // to claim from). For a lateral via finalize, send the batch's year (e.g. the
+        // previous year). Omit for regular first-year students → defaults to current year.
+        batchAcademicYearId: z.string().uuid().optional(),
     }),
 });
 

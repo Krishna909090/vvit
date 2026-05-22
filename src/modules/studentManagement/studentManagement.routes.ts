@@ -789,15 +789,18 @@ router.patch('/seat-alloted-by', authenticate, authorizePermission(['student.upd
 
 /**
  * POST /admin/student/waiting-list
- * Add a student to waiting list for one or more courses.
- * Body: { studentId, courseIds: [uuid, ...], remarks? }
+ * Add a student to the waiting list for a single course (first-year REGULAR
+ * admissions only; one course per student per year). Assigns a fixed waitingNumber
+ * and seeds fee demands for the course.
+ * Body: { studentId, courseId, category: MANAGEMENT|POLICE|GENERAL, remarks? }
  */
 router.post('/waiting-list', authenticate, authorizePermission(['student.update.all']), addToWaitingList);
 
 /**
  * GET /admin/student/waiting-list
- * Get waiting list entries. Filter by courseId, status.
- * Query: { courseId?, status?, page?, limit? }
+ * Get waiting list entries. Filter by courseId, status, category.
+ * Ordering: MANAGEMENT → by total amount paid (desc); POLICE/GENERAL → by waitingNumber (rank).
+ * Query: { courseId?, status?, category?, page?, limit? }
  */
 router.get('/waiting-list', authenticate, authorizePermission(['student.read.all']), getWaitingList);
 
@@ -809,8 +812,14 @@ router.get('/waiting-list/:studentId', authenticate, authorizePermission(['stude
 
 /**
  * POST /admin/student/waiting-list/allot
- * Allot a seat from the waiting list. Moves WAITING → ALLOTTED, cancels other entries.
- * Body: { waitingListId }
+ * Allot a seat from the waiting list. Moves WAITING → ALLOTTED, sets SEAT_ALLOTTED,
+ * and applies the chosen accommodation.
+ * Body: {
+ *   waitingListId,
+ *   allocation: { type: 'HOSTEL'|'TRANSPORT'|'NONE',
+ *                 hostelType, hostelPaymentMode, hostelId?,     // HOSTEL (hostelId optional — assigned later)
+ *                 transportRouteId? }                            // TRANSPORT
+ * }
  */
 router.post('/waiting-list/allot', authenticate, authorizePermission(['student.update.all']), allotFromWaitingList);
 

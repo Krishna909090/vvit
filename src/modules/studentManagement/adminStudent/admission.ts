@@ -2110,16 +2110,36 @@ export const AdmissionService = {
                 throw new AppError('Student admission / academic year not found', 404);
             }
 
+            // Batch year = the academic year the student's batch started 1st year, which
+            // is the seat pool the course seat is claimed from. Regular students share the
+            // current year; a lateral joins an earlier batch (its previous-year pool).
+            // Resolution: explicit payload.batchAcademicYearId wins (used for lateral via
+            // finalize); else step back (entryYearOfStudy - 1) academic years; else current.
+            let batchAcademicYearId: string = ayId;
+            if (payload.batchAcademicYearId) {
+                const okYear = await tx.academicYear.findUnique({ where: { id: payload.batchAcademicYearId }, select: { id: true } });
+                if (!okYear) throw new AppError('Invalid batchAcademicYearId', 400);
+                batchAcademicYearId = payload.batchAcademicYearId;
+            } else {
+                const yos = oldAdmission?.entryYearOfStudy ?? 1;
+                if (yos > 1) {
+                    const years = await tx.academicYear.findMany({ where: { isDeleted: false }, orderBy: { startDate: 'asc' }, select: { id: true } });
+                    const idx = years.findIndex((y: { id: string }) => y.id === ayId);
+                    const batchIdx = idx - (yos - 1);
+                    if (idx >= 0 && batchIdx >= 0) batchAcademicYearId = years[batchIdx].id;
+                }
+            }
+
             // Release old seats if any
             if (oldAdmission) {
                 if (oldAdmission.transportRouteId && (oldAdmission.transportRouteId !== allocation.transportRouteId || allocation.type !== AccommodationType.TRANSPORT)) {
                      logger.debug(`[executeAdmissionUpdates] Releasing old transport seat: ${oldAdmission.transportRouteId}`);
                      await tx.transportRoute.update({ where: { id: oldAdmission.transportRouteId }, data: { filled: { decrement: 1 } } });
                 }
-                // Course Seat (Decrement old if different)
+                // Course Seat (Decrement old if different) — released from the batch pool it was claimed from.
                 if (oldAdmission.allottedCourseId && oldAdmission.allottedCourseId !== course.allottedCourseId) {
                      logger.debug(`[executeAdmissionUpdates] Releasing old course seat: ${oldAdmission.allottedCourseId}`);
-                     await decrementCourseCapacity(tx, oldAdmission.allottedCourseId, ayId);
+                     await decrementCourseCapacity(tx, oldAdmission.allottedCourseId, batchAcademicYearId);
                 }
             }
 
@@ -2131,14 +2151,14 @@ export const AdmissionService = {
                 await tx.transportRoute.update({ where: { id: allocation.transportRouteId }, data: { filled: { increment: 1 } } });
             }
 
-            // --- 2. Course Allocation ---
+            // --- 2. Course Allocation --- claim from the BATCH year's pool (= current year for regular).
             if (!oldAdmission?.allottedCourseId || oldAdmission.allottedCourseId !== course.allottedCourseId) {
-                logger.debug(`[executeAdmissionUpdates] Assigning new course seat: ${course.allottedCourseId}`);
+                logger.debug(`[executeAdmissionUpdates] Assigning new course seat: ${course.allottedCourseId} (batchYear=${batchAcademicYearId})`);
                 // Atomic check-and-increment via helper (prevents TOCTOU overbooking).
-                const claimed = await tryAtomicIncrementCourseCapacity(tx, course.allottedCourseId, ayId);
+                const claimed = await tryAtomicIncrementCourseCapacity(tx, course.allottedCourseId, batchAcademicYearId);
                 if (!claimed) {
-                    const cap = await getCourseCapacity(tx, course.allottedCourseId, ayId);
-                    logger.warn(`[executeAdmissionUpdates] Course ${course.allottedCourseId} is fully booked (${cap.filledSeats}/${cap.totalSeats}) for AY ${ayId}`);
+                    const cap = await getCourseCapacity(tx, course.allottedCourseId, batchAcademicYearId);
+                    logger.warn(`[executeAdmissionUpdates] Course ${course.allottedCourseId} is fully booked (${cap.filledSeats}/${cap.totalSeats}) for batch year ${batchAcademicYearId}`);
                     throw new AppError("Course is fully booked. No seats available.", 400);
                 }
             }
@@ -2180,6 +2200,7 @@ export const AdmissionService = {
                 update: {
                     status: AdmissionStatus.ADMISSION_CONFIRMED,
                     allottedCourseId: course.allottedCourseId,
+                    batchAcademicYearId,
                     accommodationType: allocation.type,
                     hostelId: allocation.type === AccommodationType.HOSTEL ? allocation.hostelId : null,
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
@@ -2195,6 +2216,7 @@ export const AdmissionService = {
                     studentId,
                     status: AdmissionStatus.ADMISSION_CONFIRMED,
                     allottedCourseId: course.allottedCourseId,
+                    batchAcademicYearId,
                     accommodationType: allocation.type,
                     hostelId: allocation.type === AccommodationType.HOSTEL ? allocation.hostelId : null,
                     hostelType: allocation.type === AccommodationType.HOSTEL ? allocation.hostelType : null,
@@ -2251,7 +2273,7 @@ export const AdmissionService = {
             payload.allocation = { type: AccommodationType.NONE };
         }
         
-        const { studentId, payment, scholarship, allocation, course } = payload;
+        const { studentId, payment, scholarship, allocation, course, batchAcademicYearId } = payload;
         
         // 1. Validation Checks (Parallelized for Performance)
         const [student, validCourse, validFeeHead, validFeeStructure] = await Promise.all([
@@ -2452,6 +2474,8 @@ export const AdmissionService = {
                                  feeComponent: targetComponent,
                                  amount: payment.amount,
                                  feeStructureId: payment.feeStructureId,
+                                 batchAcademicYearId,
+
                                  targetAction: 'FINALIZE_ADMISSION'
                              }
                          }
@@ -2489,6 +2513,8 @@ export const AdmissionService = {
                              feeComponent: targetComponent,
                              amount: payment.amount,
                              feeStructureId: payment.feeStructureId,
+                             batchAcademicYearId,
+
                              targetAction: 'FINALIZE_ADMISSION'
                          }
                      }
@@ -2609,6 +2635,8 @@ export const AdmissionService = {
                             amount: payment.amount,
                             feeStructureId: payment.feeStructureId,
                             notes: 'Offline Immediate Finalization',
+                            batchAcademicYearId,
+
                             targetAction: 'FINALIZE_ADMISSION'
                         }
                     }
@@ -3429,6 +3457,44 @@ export const AdmissionService = {
             // differentiating REGULAR vs LATERAL fees within that year.
             const feeCohortAcademicYearId = entry.academicYearId;
 
+            // Batch year = the academic year the student's BATCH started 1st year.
+            // For REGULAR (yearOfStudy 1) it's the current year; a lateral/2nd-year+
+            // student joins the batch that started (yearOfStudy - 1) academic years ago.
+            // Computed always (stored on the admission for reporting), then used to claim
+            // the shared course-seat pool.
+            let batchAcademicYearId = entry.academicYearId;
+            if (entry.yearOfStudy > 1) {
+                const years = await tx.academicYear.findMany({
+                    where: { isDeleted: false },
+                    orderBy: { startDate: 'asc' },
+                    select: { id: true },
+                });
+                const idx = years.findIndex(y => y.id === entry.academicYearId);
+                if (idx < 0) throw new AppError('Current academic year not found while resolving the lateral batch year', 400);
+                const batchIdx = idx - (entry.yearOfStudy - 1);
+                if (batchIdx < 0) {
+                    throw new AppError(`No academic year exists ${entry.yearOfStudy - 1} year(s) before the current year — cannot resolve the lateral batch's seat pool`, 400);
+                }
+                batchAcademicYearId = years[batchIdx].id;
+            }
+
+            // Seat capacity: regular and lateral share ONE pool per course/batch (e.g.
+            // 120 seats; 110 regular → 10 left for laterals). The seat comes from the
+            // BATCH year's CourseCapacity, not the current admission year. Skipped for
+            // back-dated historical entries (their old-year capacity may be unconfigured
+            // and shouldn't block data backfill).
+            if (!entry.isBackdated) {
+                const seatClaimed = await tryAtomicIncrementCourseCapacity(tx, course.allottedCourseId, batchAcademicYearId);
+                if (!seatClaimed) {
+                    const cap = await getCourseCapacity(tx, course.allottedCourseId, batchAcademicYearId);
+                    throw new AppError(
+                        `No seats available in this course for the batch (filled ${cap.filledSeats}/${cap.totalSeats}). Cannot admit.`,
+                        400,
+                    );
+                }
+                logger.info(`[manualEntryAdmission] Claimed seat for student in course=${course.allottedCourseId} batchYear=${batchAcademicYearId} (entryType=${entry.type}, yearOfStudy=${entry.yearOfStudy})`);
+            }
+
             const newAdmission = await tx.studentAdmission.create({
                 data: {
                     studentId: newStudent.id,
@@ -3439,6 +3505,7 @@ export const AdmissionService = {
                     entryYearOfStudy: entry.yearOfStudy,
                     entryAcademicYearId: entry.academicYearId,
                     feeCohortAcademicYearId,
+                    batchAcademicYearId,
                     instituteCode: entry.instituteCode ?? 'VVIG',
                     entryReason: entry.reason,
                     isBackdated: entry.isBackdated,

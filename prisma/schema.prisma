@@ -170,6 +170,7 @@ model AcademicYear {
   studentAdmissions       StudentAdmission[]   @relation("AdmissionCurrentYear")
   studentAdmissionsEntry  StudentAdmission[]   @relation("AdmissionEntryYear")
   studentAdmissionsCohort StudentAdmission[]   @relation("AdmissionFeeCohortYear")
+  studentAdmissionsBatch  StudentAdmission[]   @relation("AdmissionBatchYear")
   enrollments       StudentEnrollment[]
   studentFeeDemands StudentFeeDemand[]
   payments          Payment[]
@@ -374,6 +375,7 @@ model StudentAdmission {
   entryYearOfStudy         Int?                @default(1) // year-of-study at admission moment
   entryAcademicYearId      String?                          // academicYear at admission moment
   feeCohortAcademicYearId  String?                          // which cohort's fee schedule applies (for FRESH = entryAcademicYearId; for LATERAL = the batch they slot into)
+  batchAcademicYearId      String?                          // the academic year the student's BATCH started 1st year. For REGULAR = academicYearId; for LATERAL = (yearOfStudy-1) years earlier. Drives the shared course-seat pool.
   instituteCode            String?                          // 'VVIG' (default for most batches) / 'VVITU' / 'VVITPU' (2025-26 batch only) — picks which institute's fee schedule applies
   entryReason              String?                          // free-text: e.g. "Diploma → BTech 2nd year"
   isBackdated              Boolean?            @default(false) // admin-flagged for back-entry
@@ -381,6 +383,7 @@ model StudentAdmission {
   academicYear             AcademicYear       @relation("AdmissionCurrentYear", fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   entryAcademicYear        AcademicYear?      @relation("AdmissionEntryYear",   fields: [entryAcademicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeCohortAcademicYear    AcademicYear?      @relation("AdmissionFeeCohortYear", fields: [feeCohortAcademicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  batchAcademicYear        AcademicYear?      @relation("AdmissionBatchYear", fields: [batchAcademicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   allottedCourse    Course?            @relation("AllottedCourse", fields: [allottedCourseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   hostel            Hostel?            @relation(fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student           Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1381,6 +1384,15 @@ model WaitingList {
   courseId       String
   academicYearId String
   priority       Int               @default(0)
+  // Fixed waiting-list token assigned at join time as MAX(waitingNumber)+1
+  // within the (courseId, academicYearId) queue. Stable for life — it does NOT
+  // shift when entries ahead are allotted/cancelled (live rank is computed
+  // separately in getWaitingList). Gaps are expected after allot/cancel.
+  waitingNumber  Int               @default(0)
+  // Quota the student is queued under. Drives list ordering: MANAGEMENT is
+  // ranked by total amount paid (desc), POLICE/GENERAL by waitingNumber (rank).
+  // Required at the API layer; default GENERAL only backfills pre-existing rows.
+  category       WaitingListCategory @default(GENERAL)
   status         WaitingListStatus @default(WAITING)
   remarks        String?
   allottedAt     DateTime?
@@ -1393,9 +1405,15 @@ model WaitingList {
   course         Course            @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   academicYear   AcademicYear      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([studentId, courseId, academicYearId])
+  // NOTE: no unique on (studentId, courseId, academicYearId) — that would count
+  // CANCELLED rows and block a student from re-joining a course they withdrew
+  // from. "One active course per student per year" is enforced in
+  // addToWaitingList (checks for an existing WAITING entry).
+  // One number per course-queue per year (safety net for the atomic MAX+1).
+  @@unique([courseId, academicYearId, waitingNumber])
   @@index([studentId])
   @@index([courseId, status])
+  @@index([courseId, status, category])
   @@index([academicYearId])
 }
 
@@ -1526,6 +1544,12 @@ enum WaitingListStatus {
   ALLOTTED
   CANCELLED
   EXPIRED
+}
+
+enum WaitingListCategory {
+  MANAGEMENT
+  POLICE
+  GENERAL
 }
 
 enum StudentDocumentStatus {

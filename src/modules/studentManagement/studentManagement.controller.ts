@@ -1288,7 +1288,7 @@ export const getStudentWaitingList = catchAsync(async (req: Request, res: Respon
 });
 
 export const allotFromWaitingList = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const result = await AdminStudentService.allotFromWaitingList(req.body.waitingListId, req.user!.userId);
+    const result = await AdminStudentService.allotFromWaitingList(req.body.waitingListId, req.body.allocation, req.user!.userId);
     sendResponse({ res, statusCode: 200, success: true, message: `Seat allotted to ${result.studentName} in ${result.courseName}`, data: result });
 });
 
