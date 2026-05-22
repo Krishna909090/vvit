@@ -1282,6 +1282,19 @@ export const getWaitingList = catchAsync(async (req: Request, res: Response, nex
     sendResponse({ res, statusCode: 200, success: true, message: 'Waiting list fetched', data: result });
 });
 
+export const exportWaitingListExcel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[exportWaitingListExcel] by=${req.user?.userId || 'anonymous'} query=${JSON.stringify(req.query)}`);
+    const buffer = await AdminStudentService.exportWaitingListExcel(req.query as any);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=waiting-list.xlsx');
+    res.send(buffer);
+});
+
+export const getWaitingListEntry = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const result = await AdminStudentService.getWaitingListEntry(req.params.waitingListId);
+    sendResponse({ res, statusCode: 200, success: true, message: 'Waiting list entry fetched', data: result });
+});
+
 export const getStudentWaitingList = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const result = await AdminStudentService.getStudentWaitingList(req.params.studentId);
     sendResponse({ res, statusCode: 200, success: true, message: 'Student waiting list fetched', data: result });

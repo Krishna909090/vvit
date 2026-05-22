@@ -6,6 +6,7 @@ import { AdmissionStatus, AdmissionEntryType, WaitingListStatus, WaitingListCate
 import { AccommodationService } from './accommodation';
 import { generateAndSaveAllotmentOrder } from '../../finance/payment.service';
 import { convertToPresignedUrl } from '../../../utils/s3Utils';
+import ExcelJS from 'exceljs';
 import logger from '../../../utils/logger';
 import { AppError } from '../../../utils/AppError';
 import {
@@ -177,19 +178,19 @@ export const WaitingListService = {
     },
 
     /**
-     * Get the waiting list, filterable by course, status and category.
+     * Get the waiting list, filterable by course, status and category, with an
+     * explicit amount-paid sort toggle.
      *
-     * Ordering depends on category:
-     *  - MANAGEMENT  → by total amount paid (Σ SUCCESS payments this year), highest
-     *                  first; ties broken by waitingNumber. Because this sort key is
-     *                  computed from payments, the page is ranked + sliced in memory.
-     *  - POLICE / GENERAL / no category → by waitingNumber (waiting rank), ascending;
-     *                  paginated in the DB.
-     * availableSeats is scoped to the active academic year. Every entry returns
-     * amountPaid so the management ranking is transparent.
+     * amountSort:
+     *  - 'high' → by total amount paid (Σ SUCCESS payments this year) DESC (biggest payer first)
+     *  - 'low'  → by total amount paid ASC (smallest payer first)
+     *  - 'all'  → no amount sort; ordered by createdAt (FIFO by registration time)
+     * Default: MANAGEMENT → 'high'; POLICE/GENERAL/none → 'all' (i.e. createdAt order).
+     * The paid sorts are computed from payments, so those pages are ranked + sliced
+     * in memory; 'all' paginates in the DB. Every entry returns amountPaid.
      */
-    async getWaitingList(query: { courseId?: string; status?: string; category?: string; page?: number; limit?: number }) {
-        const { courseId, status, category, page = 1, limit = 50 } = query;
+    async getWaitingList(query: { courseId?: string; status?: string; category?: string; amountSort?: string; page?: number; limit?: number }) {
+        const { courseId, status, category, amountSort, page = 1, limit = 50 } = query;
         const skip = (Number(page) - 1) * Number(limit);
         const take = Number(limit);
 
@@ -202,6 +203,17 @@ export const WaitingListService = {
                 throw new AppError(`Invalid category. Allowed: ${Object.values(WaitingListCategory).join(', ')}`, 400);
             }
             where.category = category;
+        }
+
+        // Resolve the amount-paid sort. Explicit param wins; otherwise MANAGEMENT
+        // defaults to 'high' (biggest payer first), everyone else to 'all' (rank).
+        const ALLOWED_SORTS = ['low', 'high', 'all'];
+        let resolvedSort = amountSort ? String(amountSort).toLowerCase() : undefined;
+        if (resolvedSort && !ALLOWED_SORTS.includes(resolvedSort)) {
+            throw new AppError(`Invalid amountSort. Allowed: ${ALLOWED_SORTS.join(', ')}`, 400);
+        }
+        if (!resolvedSort) {
+            resolvedSort = category === WaitingListCategory.MANAGEMENT ? 'high' : 'all';
         }
 
         const activeYear = await prisma.academicYear.findFirst({
@@ -229,31 +241,34 @@ export const WaitingListService = {
             return new Map(sums.map(s => [s.studentId, s._sum.amount ?? 0]));
         };
 
-        const sortByPaid = category === WaitingListCategory.MANAGEMENT;
+        const sortByPaid = resolvedSort === 'low' || resolvedSort === 'high';
         let pageEntries: any[];
         let total: number;
         let paidMap: Map<string, number>;
 
         if (sortByPaid) {
-            // Computed sort key → fetch all matching, rank by paid desc, slice in memory.
+            // Computed sort key → fetch all matching, rank by paid (asc for 'low',
+            // desc for 'high'), slice in memory. Ties broken by waitingNumber.
             const all = await prisma.waitingList.findMany({
                 where,
                 orderBy: { waitingNumber: 'asc' },
                 include,
             });
             paidMap = await paidByStudent(Array.from(new Set(all.map(e => e.studentId))));
+            const dir = resolvedSort === 'low' ? 1 : -1;
             all.sort((a, b) => {
                 const pa = paidMap.get(a.studentId) ?? 0;
                 const pb = paidMap.get(b.studentId) ?? 0;
-                if (pb !== pa) return pb - pa;            // highest paid first
+                if (pa !== pb) return (pa - pb) * dir;     // 'low' → asc, 'high' → desc
                 return a.waitingNumber - b.waitingNumber;  // tie-break by rank
             });
             total = all.length;
             pageEntries = all.slice(skip, skip + take);
         } else {
-            // Rank order — paginate in the DB.
+            // No amount sort (POLICE / GENERAL / amountSort=all) → FIFO by createdAt
+            // (registration time), paginated in the DB.
             const [entries, count] = await Promise.all([
-                prisma.waitingList.findMany({ where, skip, take, orderBy: { waitingNumber: 'asc' }, include }),
+                prisma.waitingList.findMany({ where, skip, take, orderBy: { createdAt: 'asc' }, include }),
                 prisma.waitingList.count({ where }),
             ]);
             pageEntries = entries;
@@ -298,7 +313,8 @@ export const WaitingListService = {
                     createdAt: e.createdAt,
                 };
             }),
-            sortedBy: sortByPaid ? 'amountPaid' : 'waitingNumber',
+            sortedBy: sortByPaid ? `amountPaid:${resolvedSort === 'low' ? 'asc' : 'desc'}` : 'createdAt',
+            amountSort: resolvedSort,
             pagination: { total, page: Number(page), limit: Number(limit), totalPages: Math.ceil(total / take) }
         };
     },
@@ -359,6 +375,61 @@ export const WaitingListService = {
                 createdAt: e.createdAt,
             };
         });
+    },
+
+    /**
+     * Get a single waiting-list entry by its id, with full details: student,
+     * course (+ live seats for the entry's year), category, waitingNumber, status,
+     * amountPaid (Σ SUCCESS payments that year), and academic year.
+     */
+    async getWaitingListEntry(waitingListId: string) {
+        if (!waitingListId) throw new AppError('Waiting list entry ID is required', 400);
+
+        const entry = await prisma.waitingList.findUnique({
+            where: { id: waitingListId },
+            include: {
+                student: { select: { id: true, name: true, applicationId: true, phone: true, email: true, degreeType: true } },
+                course:  { select: { id: true, name: true, degree: true } },
+                academicYear: { select: { id: true, code: true } },
+            },
+        });
+        if (!entry) throw new AppError('Waiting list entry not found', 404);
+
+        // Live seats for the entry's academic year (the pool it's queued against).
+        const cap = await prisma.courseCapacity.findUnique({
+            where: { courseId_academicYearId: { courseId: entry.courseId, academicYearId: entry.academicYearId } },
+            select: { totalSeats: true, filledSeats: true },
+        });
+        const totalSeats  = cap?.totalSeats  ?? 0;
+        const filledSeats = cap?.filledSeats ?? 0;
+
+        // Total amount the student has paid (SUCCESS) for that year.
+        const paid = await prisma.payment.aggregate({
+            where: { studentId: entry.studentId, status: PaymentStatus.SUCCESS, academicYearId: entry.academicYearId },
+            _sum: { amount: true },
+        });
+
+        return {
+            id: entry.id,
+            waitingNumber: entry.waitingNumber,
+            category: entry.category,
+            status: entry.status,
+            remarks: entry.remarks,
+            amountPaid: paid._sum.amount ?? 0,
+            createdAt: entry.createdAt,
+            allottedAt: entry.allottedAt,
+            allottedBy: entry.allottedBy,
+            academicYear: entry.academicYear,
+            student: entry.student,
+            course: {
+                id: entry.course.id,
+                name: entry.course.name,
+                degree: entry.course.degree,
+                totalSeats,
+                filledSeats,
+                availableSeats: Math.max(0, totalSeats - filledSeats),
+            },
+        };
     },
 
     /**
@@ -628,5 +699,61 @@ export const WaitingListService = {
         }
 
         throw new AppError('Either waitingListId or studentId is required', 400);
+    },
+
+    /**
+     * Export the waiting list to Excel (.xlsx), honouring the SAME filters and
+     * ordering as getWaitingList (courseId, status, category, amountSort) — but
+     * all rows, not paginated. Returns the workbook buffer.
+     */
+    async exportWaitingListExcel(query: { courseId?: string; status?: string; category?: string; amountSort?: string }) {
+        // Reuse getWaitingList so the export matches the on-screen list exactly
+        // (same category filter + amountSort/createdAt ordering + amountPaid).
+        const { entries, sortedBy } = await this.getWaitingList({ ...query, page: 1, limit: 1_000_000 });
+
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'VVIT ERP';
+        workbook.created = new Date();
+        const sheet = workbook.addWorksheet('Waiting List');
+
+        sheet.columns = [
+            { header: 'S.No',            key: 'sno',            width: 6 },
+            { header: 'Waiting #',       key: 'waitingNumber',  width: 10 },
+            { header: 'Application ID',  key: 'applicationId',  width: 18 },
+            { header: 'Student Name',    key: 'studentName',    width: 26 },
+            { header: 'Phone',           key: 'phone',          width: 15 },
+            { header: 'Email',           key: 'email',          width: 26 },
+            { header: 'Course',          key: 'course',         width: 32 },
+            { header: 'Degree',          key: 'degree',         width: 12 },
+            { header: 'Category',        key: 'category',       width: 14 },
+            { header: 'Amount Paid',     key: 'amountPaid',     width: 14 },
+            { header: 'Status',          key: 'status',         width: 12 },
+            { header: 'Available Seats', key: 'availableSeats', width: 14 },
+            { header: 'Registered At',   key: 'createdAt',      width: 22 },
+        ];
+
+        entries.forEach((e: any, i: number) => {
+            sheet.addRow({
+                sno: i + 1,
+                waitingNumber: e.waitingNumber,
+                applicationId: e.student?.applicationId ?? '',
+                studentName: e.student?.name ?? '',
+                phone: e.student?.phone ?? '',
+                email: e.student?.email ?? '',
+                course: e.course?.name ?? '',
+                degree: e.course?.degree ?? '',
+                category: e.category,
+                amountPaid: e.amountPaid ?? 0,
+                status: e.status,
+                availableSeats: e.course?.availableSeats ?? 0,
+                createdAt: e.createdAt ? new Date(e.createdAt).toISOString() : '',
+            });
+        });
+
+        sheet.getRow(1).font = { bold: true };
+        sheet.getColumn('amountPaid').numFmt = '#,##0';
+
+        logger.info(`[exportWaitingListExcel] Exported ${entries.length} row(s) (sortedBy=${sortedBy}, category=${query.category ?? 'ALL'})`);
+        return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
     },
 };

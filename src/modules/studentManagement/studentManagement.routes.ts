@@ -33,6 +33,8 @@ import {
     exportApplicationsCsv,
     addToWaitingList,
     getWaitingList,
+    exportWaitingListExcel,
+    getWaitingListEntry,
     getStudentWaitingList,
     allotFromWaitingList,
     removeFromWaitingList,
@@ -799,10 +801,25 @@ router.post('/waiting-list', authenticate, authorizePermission(['student.update.
 /**
  * GET /admin/student/waiting-list
  * Get waiting list entries. Filter by courseId, status, category.
- * Ordering: MANAGEMENT → by total amount paid (desc); POLICE/GENERAL → by waitingNumber (rank).
- * Query: { courseId?, status?, category?, page?, limit? }
+ * amountSort: 'high' (paid desc) | 'low' (paid asc) | 'all' (FIFO by createdAt).
+ * Default: MANAGEMENT → 'high'; POLICE/GENERAL → 'all' (createdAt order).
+ * Query: { courseId?, status?, category?, amountSort?, page?, limit? }
  */
 router.get('/waiting-list', authenticate, authorizePermission(['student.read.all']), getWaitingList);
+
+/**
+ * GET /admin/student/waiting-list/export
+ * Export the waiting list to Excel (.xlsx) using the SAME filters/ordering as the list:
+ * courseId, status, category, amountSort. MUST be declared before /waiting-list/:studentId.
+ */
+router.get('/waiting-list/export', authenticate, authorizePermission(['student.read.all']), exportWaitingListExcel);
+
+/**
+ * GET /admin/student/waiting-list/entry/:waitingListId
+ * Get a single waiting-list entry's full details by its id.
+ * (Two-segment path — won't collide with /waiting-list/:studentId.)
+ */
+router.get('/waiting-list/entry/:waitingListId', authenticate, authorizePermission(['student.read.all']), getWaitingListEntry);
 
 /**
  * GET /admin/student/waiting-list/:studentId
