@@ -2589,7 +2589,8 @@ export const getStudentFinancialHistory = async (
         }
     }
 
-    // 6. LEDGER ADJUSTMENTS (Discounts, Scholarships)
+    // 6. LEDGER ADJUSTMENTS (course-change processing fee only)
+    // Discounts/scholarships come from the demand rows (section 4), NOT the ledger.
     // Reassign/cancellation/switch CREDITs are mirrored as FeeCorrection refund rows;
     // counting them here would double-account against `correctionSummary`.
     const REFUND_LIKE_REFERENCE_TYPES = new Set([
@@ -2619,17 +2620,13 @@ export const getStudentFinancialHistory = async (
 
         const target = breakdown[key];
 
-        // Fines (Skipped as per existing logic logic if in Deamnd)
-
-        // Credits (Discounts/Scholarships) — FEE_CORRECTION is carry-forward adjustment, not a discount
-        if (entry.type === 'CREDIT' && entry.referenceType !== 'PAYMENT' && entry.referenceType !== 'COURSE_CHANGE' && entry.referenceType !== 'FEE_CORRECTION') {
-            target.discount += entry.amount;
-        }
-
-        // Scholarship reversal DEBIT — reduces discount
-        if (entry.type === 'DEBIT' && entry.referenceType === 'SCHOLARSHIP') {
-            target.discount -= entry.amount;
-        }
+        // Discounts & scholarships are NOT read from the ledger. They are authoritatively
+        // carried on the StudentFeeDemand row (discountAmount / scholarshipAmount) and
+        // already applied in section 4. Summing them from the ledger double-counted any
+        // scholarship CREDIT that was orphaned when a demand was soft-deleted/replaced
+        // (the ledger row isn't always cascade-deleted), which inflated `discount` and
+        // silently zeroed out real pending dues. The ledger is consulted here only for the
+        // course-change processing fee — a ledger-only concept with no demand/payment row.
 
         // Course change processing fee — DEBIT reduces paid on the source category (tuition)
         if (entry.referenceType === 'COURSE_CHANGE' && entry.type === 'DEBIT') {
@@ -2676,19 +2673,14 @@ export const getStudentFinancialHistory = async (
     const totalPaid = payments
         .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
         .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
-    const scholarshipCredits = ledgers
-        .filter(l =>
-            l.type === 'CREDIT'
-            && l.referenceType !== 'PAYMENT'
-            && l.referenceType !== 'COURSE_CHANGE'
-            && l.referenceType !== 'FEE_CORRECTION'
-            && !REFUND_LIKE_REFERENCE_TYPES.has(l.referenceType as string)
-        )
-        .reduce((sum, l) => sum + l.amount, 0);
-    const scholarshipReversals = ledgers
-        .filter(l => l.type === 'DEBIT' && l.referenceType === 'SCHOLARSHIP')
-        .reduce((sum, l) => sum + l.amount, 0);
-    const totalDiscount = Math.max(0, scholarshipCredits - scholarshipReversals);
+    // Total deduction = manual discount + scholarship, summed from the demand-sourced
+    // breakdown (NOT the ledger). breakdown[].discount holds the manual portion and
+    // breakdown[].scholarshipAmount the scholarship portion (section 4), so they are
+    // non-overlapping and additive: net = demanded − discount − scholarshipAmount.
+    // Sourcing this from StudentFeeDemand keeps it consistent with totalDemanded (also
+    // demand-sourced) and immune to orphaned scholarship CREDIT ledger rows.
+    const totalDiscount = Object.values(breakdown)
+        .reduce((sum, cat) => sum + cat.discount + cat.scholarshipAmount, 0);
 
     const summary = {
         totalDemanded,

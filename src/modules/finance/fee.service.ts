@@ -1180,6 +1180,13 @@ export const FeeService = {
                         await tx.studentLedger.deleteMany({
                             where: { type: 'DEBIT', referenceType: 'FEE_DEMAND', referenceId: { in: oldDemandIds } }
                         });
+                        // Cascade to the matching SCHOLARSHIP CREDIT ledger rows (keyed by
+                        // referenceId = demand id). Without this, replacing a tuition demand
+                        // orphans its scholarship credit, which then double-counts in any
+                        // ledger-based discount sum and corrupts the financial timeline.
+                        await tx.studentLedger.deleteMany({
+                            where: { referenceType: 'SCHOLARSHIP', referenceId: { in: oldDemandIds } }
+                        });
                         await tx.studentFeeDemand.deleteMany({ where: { id: { in: oldDemandIds } } });
                         const amountRemoved = oldDemands.reduce((sum, d) => sum + d.amount, 0);
                         if (amountRemoved > 0) {

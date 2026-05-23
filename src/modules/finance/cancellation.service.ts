@@ -446,6 +446,13 @@ export const CancellationService = {
 
         if (!request) throw new AppError('Cancellation request not found', 404);
 
+        // academicYearId is REQUIRED on StudentLedger — derive from the student's
+        // admission (fall back to the active year) so the ledger creates below don't
+        // fail Prisma validation ("Argument `academicYear` is missing").
+        const ledgerYearId: string | undefined =
+            request.student?.admissionDetails?.academicYearId
+            ?? (await prisma.academicYear.findFirst({ where: { isActive: true, isDeleted: false }, select: { id: true } }))?.id;
+
         const currentStatus = request.status;
         const newStatus = approved ? CancellationStatus.APPROVED : CancellationStatus.REJECTED;
 
@@ -612,6 +619,7 @@ export const CancellationService = {
                             description:   `Scholarship Reversed - Seat Cancellation (${request.conditionType})`,
                             referenceId:   request.id,
                             referenceType: 'SCHOLARSHIP',
+                            academicYearId: ledgerYearId,
                             createdBy:     adminId,
                             date:          now,
                         } as any,
@@ -676,6 +684,7 @@ export const CancellationService = {
                                 description:   `Cancellation Deduction - ${label} (${request.conditionType})`,
                                 referenceId:   request.id,
                                 referenceType: 'CANCELLATION',
+                                academicYearId: ledgerYearId,
                                 createdBy:     adminId,
                                 date:          now,
                             } as any,
@@ -692,6 +701,7 @@ export const CancellationService = {
                                 description:   `Refund - ${label} (${request.conditionType})`,
                                 referenceId:   request.id,
                                 referenceType: 'CANCELLATION',
+                                academicYearId: ledgerYearId,
                                 createdBy:     adminId,
                                 date:          now,
                             } as any,

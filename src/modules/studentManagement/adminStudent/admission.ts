@@ -326,6 +326,7 @@ export const AdmissionService = {
         return await prisma.courseChangeRequest.create({
             data: {
                 studentId,
+                academicYearId: student.admissionDetails!.academicYearId,
                 fromCourse: oldCourse!.id,
                 toCourse: newCourseId,
                 fromDegree: oldCourse?.degree,
@@ -408,6 +409,7 @@ export const AdmissionService = {
         return await prisma.courseChangeRequest.create({
             data: {
                 studentId,
+                academicYearId: student.admissionDetails!.academicYearId,
                 fromCourse: oldCourse!.id,
                 toCourse: newCourseId,
                 fromDegree: oldCourse?.degree,
@@ -453,6 +455,7 @@ export const AdmissionService = {
         return await prisma.courseChangeRequest.create({
             data: {
                 studentId,
+                academicYearId: student.admissionDetails!.academicYearId,
                 fromCourse: oldCourse!.id,
                 toCourse: newCourseId,
                 fromDegree: oldCourse?.degree,
@@ -743,6 +746,19 @@ export const AdmissionService = {
                                 feeHeadId: demand.feeHeadId,
                                 referenceType: 'FEE_DEMAND',
                                 type: 'DEBIT',
+                                isDeleted: false
+                            },
+                            data: { isDeleted: true, deletedAt: new Date(), deletedBy: adminId }
+                        });
+
+                        // Cascade to the demand's SCHOLARSHIP CREDIT (keyed by referenceId =
+                        // demand id). Leaving it alive orphans the credit once the demand is
+                        // gone, inflating ledger-based discount sums and the fee timeline.
+                        await tx.studentLedger.updateMany({
+                            where: {
+                                referenceId: demand.id,
+                                referenceType: 'SCHOLARSHIP',
+                                type: 'CREDIT',
                                 isDeleted: false
                             },
                             data: { isDeleted: true, deletedAt: new Date(), deletedBy: adminId }
