@@ -2696,7 +2696,9 @@ export const AccommodationService = {
         args: {
             chargeRetained?: number;
             reason: string;
-            hostelId: string;
+            // Optional — the switch + demands + refund are committed by sharing tier;
+            // the specific hostel/bed can be assigned later (assign-hostel/allocate-bed).
+            hostelId?: string;
             hostelType: HostelType;
             hostelPaymentMode: 'YEARWISE' | 'SEMWISE';
             // Admin override for the new hostel charge (replaces config tier).
@@ -2735,11 +2737,14 @@ export const AccommodationService = {
         const laundryHead = hostelHeadMap.get(PaymentComponent.HOSTEL_LAUNDRY);
         const regHead = hostelHeadMap.get(PaymentComponent.HOSTEL_REGISTRATION);
 
-        // Validate new hostel
-        const hostel = await prisma.hostel.findUnique({ where: { id: hostelId } });
-        if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
-        if (hostel.isDeleted) throw new AppError('Cannot assign to a deleted hostel', 400);
-        await assertHostelHasCapacity(hostelId);
+        // Validate new hostel only if one was chosen. hostelId is optional here —
+        // the switch commits by sharing tier; the specific hostel/bed is assigned later.
+        if (hostelId) {
+            const hostel = await prisma.hostel.findUnique({ where: { id: hostelId } });
+            if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+            if (hostel.isDeleted) throw new AppError('Cannot assign to a deleted hostel', 400);
+            await assertHostelHasCapacity(hostelId);
+        }
 
         const sharing = parseInt(hostelType.split('_')[1], 10);
         const roomType = 'AC';
@@ -2834,7 +2839,7 @@ export const AccommodationService = {
                 data: {
                     accommodationType: AccommodationType.HOSTEL,
                     transportRouteId: null,
-                    hostelId,
+                    hostelId: hostelId ?? null,
                     hostelType,
                     hostelPaymentMode: hostelPaymentMode as HostelPaymentMode,
                     // totalFee: subtract pending transport, add full new hostel gross
@@ -2855,7 +2860,7 @@ export const AccommodationService = {
                     sharing,
                     roomType,
                     paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
-                    hostelId,
+                    hostelId: hostelId ?? null,
                     accommodationPrice,
                     messPrice,
                     laundryPrice,
@@ -2961,7 +2966,7 @@ export const AccommodationService = {
                     pendingTransportRemoved: pendingTransportTotal,
                 },
                 newAssignment: {
-                    hostelId,
+                    hostelId: hostelId ?? null,
                     hostelType,
                     paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
                     pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal },
@@ -3363,7 +3368,7 @@ export const AccommodationService = {
      */
     async previewSwitchTransportToHostel(
         studentId: string,
-        args: { chargeRetained?: number; hostelId: string; hostelType: HostelType; hostelPaymentMode: 'YEARWISE' | 'SEMWISE'; customPricing?: { accommodation: number; mess: number; laundry: number; registration: number } }
+        args: { chargeRetained?: number; hostelId?: string; hostelType: HostelType; hostelPaymentMode: 'YEARWISE' | 'SEMWISE'; customPricing?: { accommodation: number; mess: number; laundry: number; registration: number } }
     ) {
         const chargeRetained = Math.max(0, args.chargeRetained ?? 0);
         const { hostelId, hostelType, hostelPaymentMode } = args;
@@ -3381,10 +3386,16 @@ export const AccommodationService = {
         const transportHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
         const transportHead = transportHeadMap.get(PaymentComponent.TRANSPORT);
 
-        const hostel = await prisma.hostel.findUnique({ where: { id: hostelId } });
-        if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
-        if (hostel.isDeleted) throw new AppError('Cannot assign to a deleted hostel', 400);
-        await assertHostelHasCapacity(hostelId);
+        // hostelId is OPTIONAL for the preview — pricing is keyed by sharing, not the
+        // specific hostel. Validate the hostel only if one was chosen; otherwise the
+        // preview just shows the credit/refund math for the sharing tier (the specific
+        // hostel/bed is picked later at assign-hostel/allocate-bed).
+        if (hostelId) {
+            const hostel = await prisma.hostel.findUnique({ where: { id: hostelId } });
+            if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+            if (hostel.isDeleted) throw new AppError('Cannot assign to a deleted hostel', 400);
+            await assertHostelHasCapacity(hostelId);
+        }
 
         const sharing = parseInt(hostelType.split('_')[1], 10);
         const roomType = 'AC';
@@ -3452,7 +3463,7 @@ export const AccommodationService = {
                 pendingTransportToRemove: pendingTransportTotal,
             },
             newAssignment: {
-                hostelId,
+                hostelId: hostelId ?? null,
                 hostelType,
                 paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
                 pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal },

@@ -2048,7 +2048,8 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
 
              // Extract Fee and Scholarship Details
              const tuitionFee = breakdown['TUITION']?.demanded || 0;
-             let scholarshipDiscount = breakdown['TUITION']?.discount || 0; // Discount applied to Tuition
+             // Read the scholarship portion (breakdown.discount is now manual-only).
+             let scholarshipDiscount = breakdown['TUITION']?.scholarshipAmount || 0;
              
              let scholarshipPercentage = student.scholarshipAllocation?.rule?.discountPercentage || 0;
              if (student.studentScholarship?.scholarshipPercentage) {
@@ -2495,9 +2496,13 @@ export const getStudentFinancialHistory = async (
         const target = breakdown[targetKey];
         
         target.demanded += demand.amount;
-        // Credit applied at demand creation (e.g. previously-paid amount carried into a reassign/switch demand).
-        // Without this, "pending" miscounts demands that are already fully covered by prior payments.
-        target.discount += demand.discountAmount ?? 0;
+        // `discount` here is the MANUAL (non-scholarship) deduction ONLY, so that
+        // `discount` and `scholarshipAmount` are non-overlapping and additive
+        // (net = demanded − discount − scholarshipAmount). demand.discountAmount stores
+        // the TOTAL deduction (manual + scholarship), so subtract the scholarship part —
+        // otherwise a UI showing both lines double-counts the scholarship.
+        // Mirrors getStudentFeeDetails' `manual = discountAmount − scholarshipAmount`.
+        target.discount += Math.max(0, (demand.discountAmount ?? 0) - (demand.scholarshipAmount ?? 0));
         if (demand.scholarshipAmount) target.scholarshipAmount += demand.scholarshipAmount;
         if (demand.fineAmount) target.fine += demand.fineAmount;
         if (headId && !target.feeHeadId) target.feeHeadId = headId;
@@ -2707,8 +2712,9 @@ export const getStudentFinancialHistory = async (
         Demanded: breakdown[key].demanded,
         Paid: breakdown[key].paid,
         Discount: breakdown[key].discount,
-        Fine: breakdown[key].fine, 
-        Pending: Math.max(0, breakdown[key].demanded - breakdown[key].paid - breakdown[key].discount)
+        Scholarship: breakdown[key].scholarshipAmount,
+        Fine: breakdown[key].fine,
+        Pending: Math.max(0, breakdown[key].demanded - breakdown[key].paid - breakdown[key].discount - breakdown[key].scholarshipAmount)
     }));
     
     console.log(`\n=== Financial History Table [Student: ${studentId}] ===`);

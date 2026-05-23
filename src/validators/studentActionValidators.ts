@@ -191,7 +191,9 @@ export const switchTransportToHostelSchema = z.object({
     body: z.object({
         chargeRetained: z.number().min(0).optional().default(0),
         reason: z.string().trim().min(1, "Reason is required").max(500),
-        hostelId: z.string().uuid("Invalid Hostel ID"),
+        // Optional — the switch commits by sharing tier; the specific hostel/bed is
+        // assigned later (assign-hostel/allocate-bed).
+        hostelId: z.string().uuid("Invalid Hostel ID").optional(),
         hostelPaymentMode: z.string()
             .transform(v => v.toUpperCase())
             .pipe(z.enum(['YEARWISE', 'SEMWISE'])),
@@ -255,7 +257,9 @@ export const switchTransportToHostelPreviewSchema = z.object({
     }),
     body: z.object({
         chargeRetained: z.number().min(0).optional().default(0),
-        hostelId: z.string().uuid("Invalid Hostel ID"),
+        // Optional for the preview — pricing is keyed by sharing, not the specific
+        // hostel; the hostel/bed is chosen later at assign-hostel/allocate-bed.
+        hostelId: z.string().uuid("Invalid Hostel ID").optional(),
         hostelPaymentMode: z.string()
             .transform(v => v.toUpperCase())
             .pipe(z.enum(['YEARWISE', 'SEMWISE'])),
