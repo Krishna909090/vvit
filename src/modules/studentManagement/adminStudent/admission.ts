@@ -549,6 +549,7 @@ export const AdmissionService = {
                 await tx.courseChangeLog.create({
                     data: {
                         studentId: request.studentId,
+                        academicYearId: ayId,   // required FK — schema marks academicYear relation non-null
                         oldCourse: request.fromCourse,
                         newCourse: request.toCourse,
                         oldDegree: (request as any).fromDegree,
