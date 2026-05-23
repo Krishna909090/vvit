@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import prisma from '../../../config/prisma';
 import {
     AdmissionStatus,
+    AdmissionEntryType,
     ApplicationMode,
     PaymentStatus,
     PaymentComponent,
@@ -257,10 +258,18 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
             data: {
                 studentId: student.id,
                 academicYearId: activeYear.id,
-                status: AdmissionStatus.REGISTERED
+                status: AdmissionStatus.REGISTERED,
+                // Cohort tags — required for fee-demand resolution (matches register/manual-entry).
+                // Without these, generateFeeDemands resolves 0 structures for cohort-tagged fees.
+                entryType: AdmissionEntryType.REGULAR,
+                entryYearOfStudy: 1,
+                entryAcademicYearId: activeYear.id,
+                feeCohortAcademicYearId: activeYear.id,
+                batchAcademicYearId: activeYear.id,
+                instituteCode: 'VVIG',
             }
         });
-        
+
         // 5. Exam Details
         await tx.studentExam.create({
             data: { studentId: student.id }
@@ -343,6 +352,12 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 feeStatus: FeeStatus.PARTIAL,
                 paidFee: tokenAmount,
                 totalFee: 0, // Will be updated later
+                entryType: AdmissionEntryType.REGULAR,
+                entryYearOfStudy: 1,
+                entryAcademicYearId: activeYear.id,
+                feeCohortAcademicYearId: activeYear.id,
+                batchAcademicYearId: activeYear.id,
+                instituteCode: 'VVIG',
             }
         });
 
@@ -698,7 +713,13 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                         status: AdmissionStatus.ENTRANCE_FEE_PAID,
                         feeStatus: FeeStatus.PARTIAL,
                         paidFee: 500,
-                        academicYearId: activeAcademicYear.id
+                        academicYearId: activeAcademicYear.id,
+                        entryType: AdmissionEntryType.REGULAR,
+                        entryYearOfStudy: 1,
+                        entryAcademicYearId: activeAcademicYear.id,
+                        feeCohortAcademicYearId: activeAcademicYear.id,
+                        batchAcademicYearId: activeAcademicYear.id,
+                        instituteCode: 'VVIG',
                     }
                 });
 

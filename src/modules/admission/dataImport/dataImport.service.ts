@@ -2,7 +2,7 @@ import ExcelJS from "exceljs";
 import prisma from '../../../config/prisma';
 import { AppError } from '../../../utils/AppError';
 import logger from '../../../utils/logger';
-import { ImportType, QuotaType, ApplicationMode, AdmissionStatus } from "@prisma/client";
+import { ImportType, QuotaType, ApplicationMode, AdmissionStatus, AdmissionEntryType } from "@prisma/client";
 import { Role } from '../../../constants/roles';
 
 interface ExcelRow {
@@ -195,7 +195,16 @@ export const processExcelImport = async (
             admissionDetails: {
                // Ensure admission details exist
                upsert: {
-                  create: { status: AdmissionStatus.REGISTERED, academicYear: { connect: { id: activeYear.id } } },
+                  create: {
+                     status: AdmissionStatus.REGISTERED,
+                     academicYear: { connect: { id: activeYear.id } },
+                     entryType: AdmissionEntryType.REGULAR,
+                     entryYearOfStudy: 1,
+                     entryAcademicYear: { connect: { id: activeYear.id } },
+                     feeCohortAcademicYear: { connect: { id: activeYear.id } },
+                     batchAcademicYear: { connect: { id: activeYear.id } },
+                     instituteCode: 'VVIG',
+                  },
                   update: {}
                }
             }
@@ -212,7 +221,14 @@ export const processExcelImport = async (
                     data: {
                         studentId: student.id,
                         academicYearId: activeYear.id,
-                        status: AdmissionStatus.REGISTERED
+                        status: AdmissionStatus.REGISTERED,
+                        // Cohort tags — required for fee-demand resolution.
+                        entryType: AdmissionEntryType.REGULAR,
+                        entryYearOfStudy: 1,
+                        entryAcademicYearId: activeYear.id,
+                        feeCohortAcademicYearId: activeYear.id,
+                        batchAcademicYearId: activeYear.id,
+                        instituteCode: 'VVIG',
                     }
                 })
              }
@@ -243,7 +259,13 @@ export const processExcelImport = async (
                 create: {
                     studentId: student.id,
                     academicYearId: activeYear.id,
-                    status: AdmissionStatus.SEAT_ALLOTTED
+                    status: AdmissionStatus.SEAT_ALLOTTED,
+                    entryType: AdmissionEntryType.REGULAR,
+                    entryYearOfStudy: 1,
+                    entryAcademicYearId: activeYear.id,
+                    feeCohortAcademicYearId: activeYear.id,
+                    batchAcademicYearId: activeYear.id,
+                    instituteCode: 'VVIG',
                 },
                 update: {
                     status: AdmissionStatus.SEAT_ALLOTTED
