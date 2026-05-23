@@ -1589,10 +1589,10 @@ export const FeeService = {
 
         // Component Level Breakdown
         const breakdown: any = {
-            TUITION: { demand: 0, paid: 0, balance: 0 },
-            HOSTEL: { demand: 0, paid: 0, balance: 0 },
-            TRANSPORT: { demand: 0, paid: 0, balance: 0 },
-            OTHER: { demand: 0, paid: 0, balance: 0 } 
+            TUITION: { demand: 0, discount: 0, paid: 0, balance: 0 },
+            HOSTEL: { demand: 0, discount: 0, paid: 0, balance: 0 },
+            TRANSPORT: { demand: 0, discount: 0, paid: 0, balance: 0 },
+            OTHER: { demand: 0, discount: 0, paid: 0, balance: 0 }
         };
 
         // Bucket FeeHead.component → top-level breakdown key
@@ -1613,6 +1613,10 @@ export const FeeService = {
             const comp = d.feeStructure?.feeHead?.component ?? d.feeHead?.component ?? null;
             const key = componentToKey(comp);
             breakdown[key].demand += d.amount;
+            // Option B: per-component `discount` = full deduction (manual + scholarship),
+            // i.e. demand.discountAmount — consistent with getStudentFinancialHistory.
+            // `balance` is computed net of it below so it agrees with pendingAmount.
+            breakdown[key].discount += (d.discountAmount || 0);
         });
 
         // Map Payments via Component Enum
@@ -1644,7 +1648,7 @@ export const FeeService = {
 
         // Calc Balance
         Object.keys(breakdown).forEach(key => {
-            breakdown[key].balance = breakdown[key].demand - breakdown[key].paid;
+            breakdown[key].balance = breakdown[key].demand - breakdown[key].discount - breakdown[key].paid;
         });
 
         return {

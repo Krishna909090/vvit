@@ -2496,13 +2496,13 @@ export const getStudentFinancialHistory = async (
         const target = breakdown[targetKey];
         
         target.demanded += demand.amount;
-        // `discount` here is the MANUAL (non-scholarship) deduction ONLY, so that
-        // `discount` and `scholarshipAmount` are non-overlapping and additive
-        // (net = demanded − discount − scholarshipAmount). demand.discountAmount stores
-        // the TOTAL deduction (manual + scholarship), so subtract the scholarship part —
-        // otherwise a UI showing both lines double-counts the scholarship.
-        // Mirrors getStudentFeeDetails' `manual = discountAmount − scholarshipAmount`.
-        target.discount += Math.max(0, (demand.discountAmount ?? 0) - (demand.scholarshipAmount ?? 0));
+        // `discount` is the TOTAL deduction (manual discount-request approvals +
+        // scholarship). demand.discountAmount already accumulates both: finalize writes
+        // the scholarship into it, and discount-approval increments the manual part on
+        // top. The scholarship is ALSO surfaced separately in `scholarshipAmount` for
+        // display, but it is a SUBSET of `discount`, NOT additive — so net is
+        // demanded − discount (do not also subtract scholarshipAmount).
+        target.discount += demand.discountAmount ?? 0;
         if (demand.scholarshipAmount) target.scholarshipAmount += demand.scholarshipAmount;
         if (demand.fineAmount) target.fine += demand.fineAmount;
         if (headId && !target.feeHeadId) target.feeHeadId = headId;
@@ -2673,14 +2673,13 @@ export const getStudentFinancialHistory = async (
     const totalPaid = payments
         .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
         .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
-    // Total deduction = manual discount + scholarship, summed from the demand-sourced
-    // breakdown (NOT the ledger). breakdown[].discount holds the manual portion and
-    // breakdown[].scholarshipAmount the scholarship portion (section 4), so they are
-    // non-overlapping and additive: net = demanded − discount − scholarshipAmount.
-    // Sourcing this from StudentFeeDemand keeps it consistent with totalDemanded (also
-    // demand-sourced) and immune to orphaned scholarship CREDIT ledger rows.
+    // Total deduction = Σ breakdown[].discount, which already holds the FULL per-head
+    // deduction (manual + scholarship). scholarshipAmount is a SUBSET of discount, not
+    // additive, so it is NOT added again here. Sourced from StudentFeeDemand (not the
+    // ledger) so it stays consistent with totalDemanded and immune to orphaned
+    // scholarship CREDIT ledger rows.
     const totalDiscount = Object.values(breakdown)
-        .reduce((sum, cat) => sum + cat.discount + cat.scholarshipAmount, 0);
+        .reduce((sum, cat) => sum + cat.discount, 0);
 
     const summary = {
         totalDemanded,
@@ -2706,7 +2705,7 @@ export const getStudentFinancialHistory = async (
         Discount: breakdown[key].discount,
         Scholarship: breakdown[key].scholarshipAmount,
         Fine: breakdown[key].fine,
-        Pending: Math.max(0, breakdown[key].demanded - breakdown[key].paid - breakdown[key].discount - breakdown[key].scholarshipAmount)
+        Pending: Math.max(0, breakdown[key].demanded - breakdown[key].paid - breakdown[key].discount)
     }));
     
     console.log(`\n=== Financial History Table [Student: ${studentId}] ===`);
