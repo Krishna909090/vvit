@@ -408,11 +408,17 @@ export const HostelService = {
 
         // When includeBeds=true, fetch student details for each occupant.
         // When false, fetch only enough to count (id + allocation status).
+        // HostelBed.allocations is a LIST (HostelAllocation[]); there is no singular
+        // `allocation` field. Mirror getHostelRoomById: pull only the current ACTIVE
+        // allocation (take:1, newest first) so occupancy reflects the live tenant.
         const bedInclude = includeBeds
             ? {
                 orderBy: { number: 'asc' as const },
                 include: {
-                    allocation: {
+                    allocations: {
+                        where: { status: 'ACTIVE' as const },
+                        take: 1,
+                        orderBy: { startDate: 'desc' as const },
                         select: {
                             id: true, status: true, startDate: true,
                             student: {
@@ -423,7 +429,14 @@ export const HostelService = {
                 }
               }
             : {
-                select: { id: true, allocation: { select: { status: true } } }
+                select: {
+                    id: true,
+                    allocations: {
+                        where: { status: 'ACTIVE' as const },
+                        take: 1,
+                        select: { status: true }
+                    }
+                }
               };
 
         const rooms = await prisma.hostelRoom.findMany({
@@ -434,7 +447,7 @@ export const HostelService = {
 
         return rooms.map(room => {
             const totalBeds = room.beds.length;
-            const filledBeds = room.beds.filter((b: any) => b.allocation && b.allocation.status === 'ACTIVE').length;
+            const filledBeds = room.beds.filter((b: any) => (b.allocations?.length ?? 0) > 0).length;
 
             const base = {
                 id: room.id,
@@ -455,7 +468,7 @@ export const HostelService = {
 
             // Reshape beds to match the detail-view contract
             const beds = (room.beds as any[]).map(bed => {
-                const alloc = bed.allocation;
+                const alloc = bed.allocations?.[0];
                 const isActive = alloc && alloc.status === 'ACTIVE';
                 return {
                     id: bed.id,
