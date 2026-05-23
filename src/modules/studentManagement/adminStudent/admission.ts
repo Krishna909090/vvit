@@ -2219,6 +2219,10 @@ export const AdmissionService = {
                 },
                 create: {
                     studentId,
+                    // academicYearId is REQUIRED on StudentAdmission — without it the
+                    // upsert's create branch fails Prisma validation ("Argument
+                    // `academicYear` is missing") even when the update branch would run.
+                    academicYearId: ayId,
                     status: AdmissionStatus.ADMISSION_CONFIRMED,
                     allottedCourseId: course.allottedCourseId,
                     batchAcademicYearId,
