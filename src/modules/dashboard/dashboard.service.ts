@@ -144,7 +144,7 @@ export const DashboardService = {
                 _sum: { amount: true }
             }),
             prisma.studentFeeDemand.aggregate({
-                where: whereDate,
+                where: { ...whereDate, isDeleted: false },
                 _sum: { scholarshipAmount: true }
             })
         ]);
@@ -214,17 +214,18 @@ export const DashboardService = {
                 }
             } 
         }),
-            prisma.student.count({ 
-                where: { 
-                    ...whereDate, 
+            prisma.student.count({
+                where: {
+                    ...whereDate,
                     studentScholarship: { isEligible: 'YES' },
-                    admissionDetails: { allottedCourseId: { not: null } }
-                } 
+                    admissionDetails: { allottedCourseId: { not: null }, status: { not: 'CANCELLED' } }
+                }
             }),
             prisma.student.count({
                 where: {
                     ...whereDate,
-                    studentScholarship: { isEligible: 'NO' }
+                    studentScholarship: { isEligible: 'NO' },
+                    admissionDetails: { allottedCourseId: { not: null }, status: { not: 'CANCELLED' } }
                 }
             }),
             prisma.discountRequest.aggregate({
@@ -439,6 +440,7 @@ export const DashboardService = {
                     ...whereDate,
                     admissionDetails: {
                         allottedCourseId: { not: null },
+                        status: { not: 'CANCELLED' },
                         ...(activeYear ? { academicYearId: activeYear.id } : {}),
                     }
                 },
@@ -492,12 +494,19 @@ export const DashboardService = {
         const dateFilter = getDateCondition(range, startDate, endDate);
         const whereDate = dateFilter ? { createdAt: dateFilter } : {};
 
+        const activeYear = await prisma.academicYear.findFirst({
+            where: { isActive: true, isDeleted: false },
+            select: { id: true },
+        });
+
         const result = await prisma.student.groupBy({
             by: ['gender'],
             where: {
                 ...whereDate,
                 admissionDetails: {
-                    allottedCourseId: { not: null }
+                    allottedCourseId: { not: null },
+                    status: { not: 'CANCELLED' },
+                    ...(activeYear ? { academicYearId: activeYear.id } : {}),
                 }
             },
             _count: {
@@ -547,18 +556,24 @@ export const DashboardService = {
             select: { createdAt: true }
         });
 
+        // Bucket by IST calendar date (UTC+5:30). Using toISOString() directly
+        // buckets by UTC date, which shifts any registration after 18:30 IST onto
+        // the previous day. Shift into IST first, then take the date portion.
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+        const istDateStr = (d: Date) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().split('T')[0];
+
         const trendMap: Record<string, number> = {};
-        
+
         rawStudents.forEach(s => {
-            const dateStr = (s.createdAt ?? new Date()).toISOString().split('T')[0];
+            const dateStr = istDateStr(s.createdAt ?? new Date());
             trendMap[dateStr] = (trendMap[dateStr] || 0) + 1;
         });
 
-        // Fill missing dates with 0
+        // Fill missing dates with 0 (axis also in IST so labels match the buckets)
         const result = [];
         const today = new Date();
         for (let d = new Date(dateLimit); d <= today; d.setDate(d.getDate() + 1)) {
-            const dateStr = d.toISOString().split('T')[0];
+            const dateStr = istDateStr(d);
             result.push({
                 date: dateStr,
                 count: trendMap[dateStr] || 0

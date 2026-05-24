@@ -14,6 +14,7 @@ import {
     checkPaymentStatus as checkPaymentStatusService,
     getStudentFinancialHistory,
     getStudentFinancialFlow,
+    getStudentCompleteHistory,
     initiateTokenPayment,
     recordOfflineApplicationFeePayment,
     initiateMultiComponentPayment,
@@ -491,5 +492,32 @@ export const getFinancialFlow = catchAsync(async (req: Request, res: Response, n
         success: true,
         message: 'Financial flow retrieved successfully',
         data: flow
+    });
+});
+
+/** Complete, audit-grade student history — every record (incl. deleted/reversed/superseded),
+ *  grouped into sections + a merged chronological timeline + one reconciled summary. */
+export const getCompleteHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    let { studentId } = req.params;
+
+    if (!studentId && req.user?.role === 'STUDENT') {
+        const { getStudentByUserId } = await import('../student/student.service');
+        const student = await getStudentByUserId(req.user.userId);
+        if (!student) throw new AppError('Student not found', 404);
+        studentId = student.id;
+    }
+
+    if (!studentId) throw new AppError('Student ID is required', 400);
+
+    await assertStudentOwns(req, studentId); // IDOR guard
+
+    const history = await getStudentCompleteHistory(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Complete student history retrieved successfully',
+        data: history
     });
 });

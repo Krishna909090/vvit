@@ -1571,7 +1571,7 @@ export const AccommodationService = {
      */
     async assignHostel(
         studentId: string,
-        hostelId: string,
+        hostelId: string | null | undefined,
         hostelPaymentMode: 'YEARWISE' | 'SEMWISE',
         hostelType: HostelType,
         adminId?: string,
@@ -1602,14 +1602,22 @@ export const AccommodationService = {
             throw new AppError('Bed already allocated. Use the reassign-hostel flow to change hostel/sharing/mode.', 409);
         }
 
-        const hostel = await prisma.hostel.findUnique({ where: { id: hostelId } });
-        if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
-        if (hostel.isDeleted) throw new AppError('Cannot assign to a deleted hostel', 400);
+        // hostelId is optional at this stage: assign-hostel sets the pricing tier +
+        // payment mode + fee demands; the specific hostel (and bed) can be bound later
+        // via allocate-bed. When provided, validate it and check capacity.
+        let hostel: { id: string; name: string; isDeleted: boolean } | null = null;
+        if (hostelId) {
+            hostel = await prisma.hostel.findUnique({ where: { id: hostelId } }) as any;
+            if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+            if (hostel.isDeleted) throw new AppError('Cannot assign to a deleted hostel', 400);
 
-        // Skip capacity check when just changing payment mode on the same hostel
-        if (hostelId !== admission.hostelId) {
-            await assertHostelHasCapacity(hostelId);
+            // Skip capacity check when just changing payment mode on the same hostel
+            if (hostelId !== admission.hostelId) {
+                await assertHostelHasCapacity(hostelId);
+            }
         }
+        // Preserve any existing hostel binding when none is supplied this call.
+        const resolvedHostelId = hostelId ?? admission.hostelId ?? null;
 
         // Derive sharing tier from hostelType. Hardcoded roomType=AC (campus has AC only today).
         const sharing = parseInt(hostelType.split('_')[1], 10);
@@ -1672,7 +1680,7 @@ export const AccommodationService = {
                 where: { studentId },
                 data: {
                     accommodationType: AccommodationType.HOSTEL,
-                    hostelId,
+                    hostelId: resolvedHostelId,
                     hostelType,
                     hostelPaymentMode: hostelPaymentMode as HostelPaymentMode,
                     totalFee: { increment: totalFeeDelta }
@@ -1707,7 +1715,7 @@ export const AccommodationService = {
                     sharing,
                     roomType,
                     paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
-                    hostelId,
+                    hostelId: resolvedHostelId,
                     accommodationPrice,
                     messPrice,
                     laundryPrice,
@@ -1756,12 +1764,12 @@ export const AccommodationService = {
                         previousAccommodationType: admission.accommodationType,
                         previousHostelType: admission.hostelType,
                         previousEffectiveTotal,
-                        newHostelId: hostelId,
+                        newHostelId: resolvedHostelId,
                         newHostelType: hostelType,
                         newPaymentMode: hostelPaymentMode,
                         newEffectiveTotal: effectiveTotal,
                         totalFeeDelta,
-                        hostelName: hostel.name,
+                        hostelName: hostel?.name ?? null,
                         sharing,
                         roomType,
                         pricingSource,
@@ -1772,7 +1780,7 @@ export const AccommodationService = {
             });
 
             return {
-                hostelId,
+                hostelId: resolvedHostelId,
                 hostelType,
                 paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
                 pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal },

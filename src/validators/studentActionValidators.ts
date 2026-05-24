@@ -39,7 +39,9 @@ export const assignHostelSchema = z.object({
         studentId: z.string().uuid("Invalid Student ID"),
     }),
     body: z.object({
-        hostelId: z.string().uuid("Invalid Hostel ID"),
+        // Optional: assign-hostel sets the pricing tier + payment mode + fee demands.
+        // The specific hostel (and bed) can be bound later via allocate-bed.
+        hostelId: z.string().uuid("Invalid Hostel ID").optional(),
         hostelPaymentMode: z.string()
             .transform(v => v.toUpperCase())
             .pipe(z.enum(['YEARWISE', 'SEMWISE'])),

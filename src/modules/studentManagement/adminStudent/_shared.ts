@@ -102,13 +102,11 @@ export const buildApplicationFilters = async (query: any): Promise<any> => {
     }
 
     if (query.hasDocuments === 'true') {
-        where.documents = {
-            some: {}
-        };
+        if (!where.AND) where.AND = [];
+        where.AND.push({ documents: { some: {} } });
     } else if (query.hasDocuments === 'false') {
-         where.documents = {
-            none: {}
-        };
+        if (!where.AND) where.AND = [];
+        where.AND.push({ documents: { none: {} } });
     }
 
     if (createdBy) {
@@ -269,12 +267,13 @@ export const buildApplicationFilters = async (query: any): Promise<any> => {
 
     if (certificatesApproved) {
         const val = String(certificatesApproved).toUpperCase();
+        if (!where.AND) where.AND = [];
         if (val === 'YES') {
-            where.documents = { some: { status: 'APPROVED' } };
+            where.AND.push({ documents: { some: { status: 'APPROVED' } } });
         } else if (val === 'NO') {
-            where.documents = { none: { status: 'APPROVED' } };
+            where.AND.push({ documents: { none: { status: 'APPROVED' } } });
         } else if (val === 'PENDING') {
-            where.documents = { some: { status: 'PENDING' } };
+            where.AND.push({ documents: { some: { status: 'PENDING' } } });
         }
     }
 
@@ -359,10 +358,11 @@ export const buildApplicationFilters = async (query: any): Promise<any> => {
 
     if (allotmentOrder) {
         const val = String(allotmentOrder).toUpperCase();
+        if (!where.AND) where.AND = [];
         if (val === 'YES') {
-            where.documents = { some: { documentKey: 'ALLOTMENT_ORDER' } };
+            where.AND.push({ documents: { some: { documentKey: 'ALLOTMENT_ORDER' } } });
         } else if (val === 'NO') {
-            where.documents = { none: { documentKey: 'ALLOTMENT_ORDER' } };
+            where.AND.push({ documents: { none: { documentKey: 'ALLOTMENT_ORDER' } } });
         }
     }
 

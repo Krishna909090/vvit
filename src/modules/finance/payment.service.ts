@@ -2312,24 +2312,43 @@ export const processUnifiedPayment = async (data: any) => {
     logger.info(`[processUnifiedPayment] Creating payment record with status=PENDING`);
 
     const unifiedYear = await getActiveAcademicYear();
-    const payment = await prisma.payment.create({
-        data: {
-            studentId,
-            amount,
-            mode,
-            method: method || (mode === PaymentMode.ONLINE ? PaymentMethod.UPI : PaymentMethod.CASH),
-            status: PaymentStatus.PENDING,
-            component,
-            referenceNumber,
-            feeHeadId,
-            providerTxId,
-            idempotencyKey: `${providerTxId}_${component}`,
-            collectedBy: initiatedBy,
-            createdBy: initiatedBy, // Strict data
-            metadata: { remarks, source: 'UNIFIED_API' },
-            academicYearId: unifiedYear.id
+    // idempotencyKey is globally @unique. For ONLINE the providerTxId is already
+    // unique per attempt. For OFFLINE, providerTxId derives from the human-entered
+    // referenceNumber (e.g. a cash receipt no.), which is freely reused across
+    // students and re-attempts — so `${ref}_${component}` collides and Prisma throws
+    // P2002 (HTTP 500). Offline manual entries aren't auto-retried, so scope the key
+    // to the student + a per-attempt timestamp to guarantee uniqueness.
+    const idempotencyKey = mode === PaymentMode.OFFLINE
+        ? `OFF_${studentId}_${component}_${Date.now()}`
+        : `${providerTxId}_${component}`;
+
+    let payment;
+    try {
+        payment = await prisma.payment.create({
+            data: {
+                studentId,
+                amount,
+                mode,
+                method: method || (mode === PaymentMode.ONLINE ? PaymentMethod.UPI : PaymentMethod.CASH),
+                status: PaymentStatus.PENDING,
+                component,
+                referenceNumber,
+                feeHeadId,
+                providerTxId,
+                idempotencyKey,
+                collectedBy: initiatedBy,
+                createdBy: initiatedBy, // Strict data
+                metadata: { remarks, source: 'UNIFIED_API' },
+                academicYearId: unifiedYear.id
+            }
+        });
+    } catch (e: any) {
+        // Safety net: surface a duplicate key as a clean 409 instead of a raw 500.
+        if (e?.code === 'P2002') {
+            throw new AppError('A payment with this reference is already in progress for this student. Please refresh and try again.', 409);
         }
-    });
+        throw e;
+    }
 
     logger.info(`[processUnifiedPayment] Payment record created: ID=${payment.id}, Status=${payment.status}`);
 
@@ -2730,6 +2749,228 @@ export const getStudentFinancialHistory = async (
         payments: paymentsWithUrls,
         feeCorrections,
         correctionSummary,
+    };
+};
+
+/**
+ * COMPLETE, audit-grade student history — the single source of truth.
+ *
+ * Aggregates EVERY record across every source the student touched, WITHOUT an
+ * isDeleted/status filter, so deleted / reversed / superseded rows are included and
+ * flagged (this is the whole point: see what was actually done, not just what survives).
+ *
+ * Returns:
+ *   - sections: complete per-source arrays (payments, demands, ledger, scholarships,
+ *               corrections, accommodation, courseChanges, cancellations, auditLog)
+ *   - timeline: every event interleaved in chronological order, normalized + flagged
+ *   - summary:  one reconciled summary (demand-sourced, option-B discount), plus the
+ *               refund liability and counts of deleted/reversed rows.
+ *
+ * Read-only. Never mutates.
+ */
+export const getStudentCompleteHistory = async (studentId: string) => {
+    const student = await prisma.student.findUnique({
+        where: { id: studentId },
+        include: {
+            admissionDetails: {
+                include: {
+                    allottedCourse: { select: { name: true, degree: true } },
+                    hostel: { select: { name: true } },
+                    transportRoute: { select: { name: true, cost: true } },
+                },
+            },
+        },
+    }) as any;
+    if (!student) throw new AppError('Student not found', 404);
+
+    // Soft-fail each source independently so a single missing table/relation never
+    // blanks the whole history.
+    const safe = <T>(p: Promise<T>, fallback: T): Promise<T> => p.catch(() => fallback);
+
+    const [
+        feeHeads, payments, demands, ledger, corrections,
+        scholarship, scholarshipAlloc, courseChanges, cancellations,
+        hostelAllocs, transportAllocs, accommodationSnapshots, auditLogs,
+    ] = await Promise.all([
+        safe(prisma.feeHead.findMany({ select: { id: true, name: true, component: true } }), [] as any[]),
+        safe(prisma.payment.findMany({ where: { studentId }, orderBy: { createdAt: 'asc' } }), [] as any[]),                       // ALL statuses
+        safe(prisma.studentFeeDemand.findMany({ where: { studentId }, include: { feeHead: true, feeStructure: { include: { feeHead: true } } }, orderBy: { createdAt: 'asc' } }), [] as any[]), // incl deleted
+        safe(prisma.studentLedger.findMany({ where: { studentId }, orderBy: { date: 'asc' } }), [] as any[]),                      // incl deleted
+        safe((prisma as any).feeCorrection.findMany({ where: { studentId }, orderBy: { createdAt: 'asc' } }), [] as any[]),
+        safe(prisma.studentScholarship.findUnique({ where: { studentId } }), null as any),
+        safe((prisma as any).scholarshipAllocation.findUnique({ where: { studentId }, include: { rule: true } }), null as any),
+        safe(prisma.courseChangeLog.findMany({ where: { studentId }, orderBy: { date: 'asc' } }), [] as any[]),
+        safe((prisma as any).cancellationRequest.findMany({ where: { studentId }, orderBy: { createdAt: 'asc' } }), [] as any[]),
+        safe((prisma as any).hostelAllocation.findMany({ where: { studentId }, orderBy: { startDate: 'asc' } }), [] as any[]),
+        safe((prisma as any).transportAllocation.findMany({ where: { studentId }, orderBy: { createdAt: 'asc' } }), [] as any[]),
+        safe((prisma as any).studentAccommodationPricing.findMany({ where: { studentId }, orderBy: { createdAt: 'asc' } }), [] as any[]),
+        safe(prisma.auditLog.findMany({ where: { entityId: studentId }, orderBy: { timestamp: 'asc' } }), [] as any[]),
+    ]);
+
+    const headName = new Map<string, string>();
+    (feeHeads as any[]).forEach(h => headName.set(h.id, h.name));
+    const activeDemandIds = new Set((demands as any[]).filter(d => !d.isDeleted).map(d => d.id));
+
+    // ---- SECTIONS (raw rows + audit flags) ----
+    const paymentsSection = (payments as any[]).map(p => ({
+        ...p,
+        isApplicationFee: p.component === PaymentComponent.APPLICATION_FEE,
+        countsToPaid: p.status === PaymentStatus.SUCCESS && p.component !== PaymentComponent.APPLICATION_FEE,
+    }));
+
+    const demandsSection = (demands as any[]).map(d => ({
+        ...d,
+        active: !d.isDeleted,
+        // when deleted, the remark usually records why (course change / cancellation / reassign)
+        removedReason: d.isDeleted ? (d.remarks ?? null) : null,
+    }));
+
+    const ledgerSection = (ledger as any[]).map(l => {
+        const demandKeyed = l.referenceType === 'FEE_DEMAND' || l.referenceType === 'SCHOLARSHIP';
+        const orphaned = demandKeyed && !!l.referenceId && !activeDemandIds.has(l.referenceId);
+        return { ...l, active: !l.isDeleted, orphaned };
+    });
+
+    // ---- RECONCILED SUMMARY (demand-sourced; option-B discount) ----
+    const active = (demands as any[]).filter(d => !d.isDeleted);
+    const grossDemanded   = active.reduce((s, d) => s + (d.amount ?? 0), 0);
+    const totalDiscount   = active.reduce((s, d) => s + (d.discountAmount ?? 0), 0);      // manual + scholarship
+    const scholarshipTotal = active.reduce((s, d) => s + (d.scholarshipAmount ?? 0), 0);
+    const netPayable      = active.reduce((s, d) => s + (d.netAmount ?? d.amount ?? 0), 0);
+    const paid = (payments as any[])
+        .filter(p => p.status === PaymentStatus.SUCCESS && p.component !== PaymentComponent.APPLICATION_FEE)
+        .reduce((s, p) => s + (p.amount ?? 0), 0);
+    const applicationFeePaid = (payments as any[])
+        .filter(p => p.status === PaymentStatus.SUCCESS && p.component === PaymentComponent.APPLICATION_FEE)
+        .reduce((s, p) => s + (p.amount ?? 0), 0);
+    const refundedPaymentsTotal = (payments as any[])
+        .filter(p => p.status === PaymentStatus.REFUNDED)
+        .reduce((s, p) => s + (p.amount ?? 0), 0);
+    // Money owed back to the student: unsettled fee corrections + cancellation refund credits.
+    const pendingCorrectionRefunds = (corrections as any[])
+        .filter(c => !c.isSettled).reduce((s, c) => s + (c.amount ?? 0), 0);
+    const cancellationRefunds = (ledger as any[])
+        .filter(l => l.referenceType === 'CANCELLATION' && l.type === 'CREDIT' && !l.isDeleted)
+        .reduce((s, l) => s + (l.amount ?? 0), 0);
+
+    const summary = {
+        grossDemanded,
+        totalDiscount,
+        scholarshipTotal,
+        netPayable,
+        paid,
+        applicationFeePaid,
+        pending: Math.max(0, netPayable - paid),
+        refundDue: pendingCorrectionRefunds + cancellationRefunds,
+        // audit counts — what was changed/removed over the lifetime
+        counts: {
+            demandsTotal: (demands as any[]).length,
+            demandsActive: active.length,
+            demandsDeleted: (demands as any[]).length - active.length,
+            ledgerTotal: (ledger as any[]).length,
+            ledgerOrphaned: ledgerSection.filter(l => l.orphaned).length,
+            paymentsTotal: (payments as any[]).length,
+            paymentsRefunded: (payments as any[]).filter(p => p.status === PaymentStatus.REFUNDED).length,
+            corrections: (corrections as any[]).length,
+            courseChanges: (courseChanges as any[]).length,
+            cancellations: (cancellations as any[]).length,
+        },
+        refundedPaymentsTotal,
+    };
+
+    // ---- MERGED CHRONOLOGICAL TIMELINE ----
+    const timeline: Array<any> = [];
+    const at = (...c: any[]) => { for (const d of c) if (d) return new Date(d).toISOString(); return new Date(0).toISOString(); };
+    const push = (e: any) => timeline.push(e);
+
+    (payments as any[]).forEach(p => push({
+        date: at(p.createdAt), source: 'PAYMENT', type: p.component,
+        amount: p.amount, sign: '+', status: p.status,
+        flags: { refunded: p.status === PaymentStatus.REFUNDED, applicationFee: p.component === PaymentComponent.APPLICATION_FEE },
+        description: `Payment ${p.amount} (${p.component} / ${p.method ?? p.mode}) — ${p.status}`, ref: p.id,
+    }));
+    demandsSection.forEach(d => push({
+        date: at(d.createdAt), source: 'FEE_DEMAND', type: headName.get(d.feeHeadId) ?? d.feeStructure?.feeHead?.name ?? 'Fee',
+        amount: d.amount, sign: '-', status: d.status,
+        flags: { deleted: d.isDeleted, scholarship: d.scholarshipAmount ?? 0, discount: d.discountAmount ?? 0 },
+        description: `Demand ${d.amount} (net ${d.netAmount}) ${d.isDeleted ? '[DELETED: ' + (d.removedReason ?? '') + ']' : ''}`.trim(), ref: d.id,
+    }));
+    ledgerSection.forEach(l => push({
+        date: at(l.date, l.createdAt), source: `LEDGER:${l.referenceType}`, type: l.type,
+        amount: l.amount, sign: l.type === 'CREDIT' ? '+' : '-', status: l.isDeleted ? 'DELETED' : 'ACTIVE',
+        flags: { deleted: l.isDeleted, orphaned: l.orphaned },
+        description: l.description ?? '', ref: l.id,
+    }));
+    (corrections as any[]).forEach(c => push({
+        date: at(c.createdAt), source: 'FEE_CORRECTION', type: c.type,
+        amount: c.amount, sign: '+', status: c.isSettled ? 'SETTLED' : 'PENDING',
+        flags: { settled: c.isSettled, carryForward: c.carryForward },
+        description: `${c.reason ?? c.type} — ${c.isSettled ? 'settled' : 'pending refund'}`, ref: c.id,
+    }));
+    (courseChanges as any[]).forEach(c => push({
+        date: at(c.date, c.createdAt), source: 'COURSE_CHANGE', type: 'COURSE_CHANGE',
+        amount: null, sign: null, status: 'DONE', flags: {},
+        description: `Course change ${c.oldCourse} → ${c.newCourse}${c.oldDegree ? ` (${c.oldDegree}→${c.newDegree})` : ''}`, ref: c.id,
+    }));
+    (cancellations as any[]).forEach(c => push({
+        date: at(c.approvedAt, c.updatedAt, c.createdAt), source: 'CANCELLATION', type: c.conditionType ?? 'CANCELLATION',
+        amount: c.refundAmount ?? null, sign: c.refundAmount ? '+' : null, status: c.status,
+        flags: { deduction: c.deductionAmount, cancellationFee: c.cancellationFee },
+        description: `Seat cancellation (${c.status}) — refund ${c.refundAmount ?? 0}, deduction ${c.deductionAmount ?? 0}`, ref: c.id,
+    }));
+    (accommodationSnapshots as any[]).forEach(s => push({
+        date: at(s.createdAt), source: 'ACCOMMODATION_PRICING', type: `${s.sharing ? 'SHARING_' + s.sharing : ''} ${s.roomType ?? ''}`.trim(),
+        amount: s.effectiveTotal ?? null, sign: '-', status: s.isActive ? 'ACTIVE' : 'SUPERSEDED',
+        flags: { active: s.isActive, paymentMode: s.paymentMode, pricingSource: s.pricingSource },
+        description: `Hostel pricing snapshot ${s.effectiveTotal} (${s.paymentMode}) ${s.isActive ? '' : '[superseded]'}`.trim(), ref: s.id,
+    }));
+    (hostelAllocs as any[]).forEach(h => push({
+        date: at(h.startDate, h.createdAt), source: 'HOSTEL_ALLOCATION', type: 'BED',
+        amount: null, sign: null, status: h.status, flags: { bedId: h.bedId },
+        description: `Hostel bed allocation — ${h.status}`, ref: h.id,
+    }));
+    (transportAllocs as any[]).forEach(tr => push({
+        date: at(tr.createdAt, tr.startDate), source: 'TRANSPORT_ALLOCATION', type: 'ROUTE',
+        amount: null, sign: null, status: tr.status, flags: {},
+        description: `Transport allocation — ${tr.status}`, ref: tr.id,
+    }));
+    (auditLogs as any[]).forEach(a => push({
+        date: at(a.timestamp), source: `AUDIT:${a.entity}`, type: a.action,
+        amount: null, sign: null, status: 'INFO', flags: {},
+        description: typeof a.details === 'object' ? JSON.stringify(a.details).slice(0, 160) : String(a.details ?? ''), ref: a.id,
+    }));
+
+    timeline.sort((a, b) => a.date.localeCompare(b.date));
+
+    // Presigned invoice URLs for payments (best-effort).
+    const paymentsWithUrls = await Promise.all(paymentsSection.map(async p => ({
+        ...p, invoiceUrl: p.invoiceUrl ? await convertToPresignedUrl(p.invoiceUrl).catch(() => p.invoiceUrl) : null,
+    })));
+
+    return {
+        student: {
+            id: student.id,
+            name: student.name,
+            applicationId: student.applicationId,
+            admissionStatus: student.admissionDetails?.status ?? null,
+            course: student.admissionDetails?.allottedCourse?.name ?? null,
+            accommodationType: student.admissionDetails?.accommodationType ?? null,
+        },
+        summary,
+        scholarship: scholarship
+            ? { percentage: scholarship.scholarshipPercentage, isEligible: scholarship.isEligible, type: scholarship.type, remarks: scholarship.remarks, allocation: scholarshipAlloc }
+            : null,
+        sections: {
+            payments: paymentsWithUrls,
+            demands: demandsSection,
+            ledger: ledgerSection,
+            corrections,
+            accommodation: { snapshots: accommodationSnapshots, hostelAllocations: hostelAllocs, transportAllocations: transportAllocs },
+            courseChanges,
+            cancellations,
+            auditLog: auditLogs,
+        },
+        timeline,
     };
 };
 

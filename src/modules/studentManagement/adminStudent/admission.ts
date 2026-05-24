@@ -616,7 +616,13 @@ export const AdmissionService = {
                         if (isTuition) {
                             const oldScholarship = existingDemand.scholarshipAmount || 0;
                             const manualDiscount = Math.max(0, (existingDemand.discountAmount || 0) - oldScholarship);
-                            newScholarshipAmt = scholarshipPct > 0 ? (newFee * scholarshipPct / 100) : oldScholarship;
+                            // Always recompute scholarship from the student's current % on the
+                            // NEW fee. When the % is 0 the scholarship is 0 — do NOT fall back to
+                            // the old amount (that wrongly preserved a scholarship the student is
+                            // no longer entitled to). The manual-discount portion is kept via
+                            // `manualDiscount`; the downstream ledger sync deletes the scholarship
+                            // CREDIT when newScholarshipAmt is 0.
+                            newScholarshipAmt = (newFee * scholarshipPct) / 100;
                             newDiscountTotal = manualDiscount + newScholarshipAmt;
                         }
 
@@ -2628,7 +2634,12 @@ export const AdmissionService = {
                  // ------------------------------------------------------------------
                  // 1. Create Successful Payment
                  const yearCtx = await resolveFeeDemandContext(resolvedFeeDemandId, tx);
-                 const _refForKey = payment.referenceNumber || `OFF_${Date.now()}`;
+                 // idempotencyKey is globally @unique. The human-entered referenceNumber
+                 // (e.g. a cash receipt no.) is reused across students and re-attempts, so
+                 // `${ref}_${component}` collides → P2002/500. The SUCCESS guard above already
+                 // enforces business-level dedupe (one SUCCESS per student+component), so scope
+                 // the key to the student + a per-attempt timestamp to keep it collision-free.
+                 const _refForKey = `${studentId}_${Date.now()}`;
                  const newPayment = await tx.payment.create({
                     data: {
                         studentId,

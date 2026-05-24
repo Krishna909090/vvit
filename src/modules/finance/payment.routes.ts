@@ -1,6 +1,6 @@
 import express from 'express';
 import { handlePaymentCallback, handleNewWebhook } from './payment.service';
-import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, getFinancialFlow, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment, payFeeComponent, payMultiComponentFee, getAllSuccessPaymentsController, getPaymentCreatorsController, getPaymentComponentsController, exportSuccessPaymentsCsvController } from './payment.controller';
+import { getInvoice, payTestFee, payCollegeFee, requestDiscount, checkPaymentStatus, getPaymentHistory, getFinancialSummary, getFinancialFlow, getCompleteHistory, approveDiscount, rejectDiscount, payOfflineApplicationFee, initiateAdminPayment, payFeeComponent, payMultiComponentFee, getAllSuccessPaymentsController, getPaymentCreatorsController, getPaymentComponentsController, exportSuccessPaymentsCsvController } from './payment.controller';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
@@ -226,6 +226,17 @@ router.get('/summary/:studentId', authenticate, authorizePermission(['finance.re
  */
 router.get('/flow', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getFinancialFlow);
 router.get('/flow/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getFinancialFlow);
+
+/**
+ * GET /finance/student-timeline
+ * GET /finance/student-timeline/:studentId
+ * COMPLETE audit-grade history: every record across every source the student touched,
+ * INCLUDING deleted / reversed / superseded rows (flagged), grouped into per-source
+ * `sections`, a merged chronological `timeline`, and one reconciled `summary`.
+ * Without studentId: history for the logged-in student. With studentId: admin view.
+ */
+router.get('/student-timeline', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getCompleteHistory);
+router.get('/student-timeline/:studentId', authenticate, authorizePermission(['finance.read.all', 'finance.read.own']), getCompleteHistory);
 
 // ═══════════════════════════════════════════════════════════
 // PAYMENT WEBHOOK / CALLBACK (PhonePe → Backend)

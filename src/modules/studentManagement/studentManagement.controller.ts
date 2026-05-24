@@ -707,7 +707,7 @@ export const getAvailableBeds = catchAsync(async (req: Request, res: Response, n
 export const assignHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { hostelId, hostelPaymentMode, hostelType, customPricing } = req.body;
-    logger.info(`[assignHostel] studentId=${studentId} hostelId=${hostelId} mode=${hostelPaymentMode} type=${hostelType ?? 'unset'} custom=${customPricing ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
+    logger.info(`[assignHostel] studentId=${studentId} hostelId=${hostelId ?? 'unset'} mode=${hostelPaymentMode} type=${hostelType ?? 'unset'} custom=${customPricing ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
 
     // Students cannot self-assign hostel
     if (req.user?.role === Role.STUDENT) {
