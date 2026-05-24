@@ -2653,9 +2653,29 @@ export const getStudentFinancialHistory = async (
         }
     });
 
+    // Payments for an accommodation the student is NO LONGER on (e.g. a TRANSPORT
+    // payment after a TRANSPORT→HOSTEL switch) must not be counted as `paid`. The
+    // original payment row survives as SUCCESS, but its value was already reallocated
+    // — applied as a DISCOUNT on the new accommodation's demands and/or parked as a
+    // FeeCorrection refund. Counting it here double-represents it (shows up under the
+    // stale category AND understates totalPending, since it's also a discount).
+    const suppressedAccComponents = new Set<PaymentComponent>();
+    const accType = student?.admissionDetails?.accommodationType;
+    if (accType !== AccommodationType.HOSTEL) {
+        suppressedAccComponents.add(PaymentComponent.HOSTEL);
+        suppressedAccComponents.add(PaymentComponent.HOSTEL_ACCOMMODATION);
+        suppressedAccComponents.add(PaymentComponent.HOSTEL_MESS);
+        suppressedAccComponents.add(PaymentComponent.HOSTEL_LAUNDRY);
+        suppressedAccComponents.add(PaymentComponent.HOSTEL_REGISTRATION);
+    }
+    if (accType !== AccommodationType.TRANSPORT) {
+        suppressedAccComponents.add(PaymentComponent.TRANSPORT);
+    }
+
     // 7. PAID CALCULATION
     payments.forEach(p => {
          if (p.component === PaymentComponent.APPLICATION_FEE) return; // Skip Application Fee
+         if (suppressedAccComponents.has(p.component)) return; // reallocated by an accommodation switch
 
          let key = 'OTHER';
          if (p.feeDemand?.feeStructure?.feeHead) {
@@ -2690,7 +2710,7 @@ export const getStudentFinancialHistory = async (
         .filter(l => l.referenceType === 'COURSE_CHANGE' && l.type === 'DEBIT')
         .reduce((sum, l) => sum + l.amount, 0);
     const totalPaid = payments
-        .filter(p => p.component !== PaymentComponent.APPLICATION_FEE)
+        .filter(p => p.component !== PaymentComponent.APPLICATION_FEE && !suppressedAccComponents.has(p.component))
         .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
     // Total deduction = Σ breakdown[].discount, which already holds the FULL per-head
     // deduction (manual + scholarship). scholarshipAmount is a SUBSET of discount, not
@@ -2700,12 +2720,37 @@ export const getStudentFinancialHistory = async (
     const totalDiscount = Object.values(breakdown)
         .reduce((sum, cat) => sum + cat.discount, 0);
 
+    // Cash the student paid on accommodation(s) they have since left (these payments are
+    // suppressed from totalPaid + the per-category breakdown above, since they no longer
+    // map to a current obligation). That money is accounted for in one of three ways:
+    //   (a) refunded via a FeeCorrection (ACCOMMODATION_CHANGE_REFUND), or
+    //   (b) reallocated as a discount onto the CURRENT accommodation's demands (a switch
+    //       applies the old payment as a discount, already reducing `totalDemanded`), or
+    //   (c) neither — a refund that was never issued (e.g. transport→NONE with no refund).
+    // Case (c) must NOT silently disappear: surface it as `unrefundedAccommodationCredit`
+    // (a refund still owed to the student) so the books reconcile to actual cash received.
+    const suppressedAccPaid = payments
+        .filter(p => p.component !== PaymentComponent.APPLICATION_FEE && suppressedAccComponents.has(p.component))
+        .reduce((sum, p) => sum + p.amount, 0);
+    const issuedAccRefunds = (feeCorrections as any[])
+        .filter(fc => fc.type === 'ACCOMMODATION_CHANGE_REFUND')
+        .reduce((s: number, fc: any) => s + (fc.amount ?? 0), 0);
+    const currentAccComponents: string[] =
+        accType === AccommodationType.HOSTEL
+            ? ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION']
+            : accType === AccommodationType.TRANSPORT ? ['TRANSPORT'] : [];
+    const currentAccDiscount = currentAccComponents.reduce((s, c) => s + (breakdown[c]?.discount ?? 0), 0);
+    const unrefundedAccommodationCredit = Math.max(0, suppressedAccPaid - issuedAccRefunds - currentAccDiscount);
+
     const summary = {
         totalDemanded,
         totalPaid,
         totalDiscount,
         courseChangeFee: courseChangeDeduction,
-        totalPending: Math.max(0, totalDemanded - totalPaid - totalDiscount)
+        totalPending: Math.max(0, totalDemanded - totalPaid - totalDiscount),
+        // Cash paid on a now-removed accommodation that was never refunded/reallocated —
+        // a refund owed to the student (0 for clean students).
+        unrefundedAccommodationCredit,
     };
     
     // Generate presigned URLs for payments

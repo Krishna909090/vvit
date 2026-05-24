@@ -331,7 +331,14 @@ export const getAvailableHostelCredit = async (studentId: string, tx?: any): Pro
         client.feeCorrection.aggregate({
             where: {
                 studentId,
-                type: { in: ['ACCOMMODATION_CHANGE_REFUND', 'BRANCH_CHANGE_REFUND'] },
+                type: 'ACCOMMODATION_CHANGE_REFUND',
+                // Scope to HOSTEL-originated refunds only. Previously this summed ALL
+                // ACCOMMODATION_CHANGE_REFUND + BRANCH_CHANGE_REFUND, so a transport→hostel
+                // switch refund (or a branch-change refund) was wrongly subtracted from
+                // hostel credit — e.g. hostel paid 3000 with a prior 2500 transport-switch
+                // refund yielded a 500 hostel-cancel refund instead of 3000. Mirrors the
+                // precise scoping in getAvailableTransportCredit.
+                referenceType: { in: ['HOSTEL_CANCELLATION', 'HOSTEL_REASSIGNMENT', 'HOSTEL_TO_TRANSPORT_SWITCH'] },
             },
             _sum: { amount: true },
         }),

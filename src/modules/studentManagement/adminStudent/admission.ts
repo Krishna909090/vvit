@@ -30,8 +30,7 @@ import { AppError } from '../../../utils/AppError';
 import { MESSAGES } from '../../../constants/messages';
 import { FeeService, getApplicationFeeAmount } from '../../finance/fee.service';
 import { convertToPresignedUrl } from '../../../utils/s3Utils';
-import { getHostelCostTx, getSemwiseSurchargeTx } from '../../../utils/hostelPricing';
-import { assertHostelHasCapacity } from '../../accommodation/hostel/hostel.service';
+import { getHostelCostTx } from '../../../utils/hostelPricing';
 import {
     incrementCourseCapacity,
     decrementCourseCapacity,
@@ -952,15 +951,27 @@ export const AdmissionService = {
     ...AccommodationService,
 
     /**
-     * Broad admin-driven update of a student's accommodation + admission
-     * details (hostel id/type/payment-mode, transport route, paid amount).
-     * Recalculates fee deltas, supersedes pricing snapshot, and adjusts
-     * totalFee accordingly.
+     * Admin-driven accommodation change (the `/admin/student/update-admission` endpoint).
+     *
+     * Delegates to the dedicated, demand-based accommodation flows
+     * (assign / switch / cancel / reassign) based on the current→target transition,
+     * then reconciles totals via `recomputeStudentTotals`. This keeps EVERY
+     * accommodation change on the single correct path (demands + frozen snapshots +
+     * refund netting), replacing the old ad-hoc `totalFee`/`paidFee` arithmetic that
+     * drifted from the demand rows and dropped laundry/registration refunds.
+     *
+     * Money is NOT recorded here — payments go through the finance APIs (which create a
+     * Payment row and recompute). The legacy `paidAmount` field is intentionally ignored;
+     * it used to inflate `paidFee` with no backing Payment, creating phantom balances.
      */
     async updateAdmissionDetails(data: any, adminId: string | undefined) {
-        const { studentId, accommodationType, hostelType, hostelId, transportRouteId, paidAmount, hostelPaymentMode } = data;
+        const { studentId, accommodationType: target, hostelType, hostelId, transportRouteId, hostelPaymentMode } = data;
 
-        if (!studentId || !accommodationType) throw new AppError(MESSAGES.ERROR.STUDENT_ACCOMMODATION_REQUIRED, 400);
+        if (!studentId || !target) throw new AppError(MESSAGES.ERROR.STUDENT_ACCOMMODATION_REQUIRED, 400);
+
+        if (data.paidAmount != null && Number(data.paidAmount) > 0) {
+            logger.warn(`[updateAdmissionDetails] Ignoring paidAmount=${data.paidAmount} for student ${studentId} — record payments via the finance APIs, not this endpoint.`);
+        }
 
         const student = await prisma.student.findUnique({
             where: { id: studentId },
@@ -970,204 +981,43 @@ export const AdmissionService = {
             throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         }
 
-        const admission = student.admissionDetails;
-        const oldAccType = admission.accommodationType;
-        // Initialize adjustment delta
-        let feeAdjustment = 0;
-        let oldCost = 0;
-        let newCost = 0;
-        let oldDescription = '';
-        let newDescription = '';
+        const current = student.admissionDetails.accommodationType ?? AccommodationType.NONE;
+        const reason = 'Accommodation change (update-admission)';
+        const payMode: 'YEARWISE' | 'SEMWISE' = hostelPaymentMode === HostelPaymentMode.SEMWISE ? 'SEMWISE' : 'YEARWISE';
 
-        await prisma.$transaction(async (tx) => {
-            // Release previous allocation and calculate subtraction from Total Fee
-            if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelId) {
-                if (accommodationType !== AccommodationType.HOSTEL || hostelId !== admission.hostelId) {
-                    const oldHostel = await tx.hostel.findUnique({ where: { id: admission.hostelId } });
-                    if (oldHostel) {
-                        const oldPricing = await getHostelCostTx(admission.hostelType, tx);
-                        oldCost = oldPricing.totalPrice;
-                        oldDescription = `Hostel: ${oldHostel.name || admission.hostelId}`;
-                        feeAdjustment -= oldCost;
-                    }
-                }
-            } else if (admission.accommodationType === AccommodationType.TRANSPORT && admission.transportRouteId) {
-                if (accommodationType !== AccommodationType.TRANSPORT || transportRouteId !== admission.transportRouteId) {
-                    const oldRoute = await tx.transportRoute.findUnique({ where: { id: admission.transportRouteId } });
-                    if (oldRoute) {
-                        if ((oldRoute.filled ?? 0) > 0) {
-                            await tx.transportRoute.update({
-                                where: { id: admission.transportRouteId },
-                                data: { filled: { decrement: 1 }, updatedBy: adminId }
-                            });
-                        }
-                        oldCost = oldRoute.cost || 0;
-                        oldDescription = `Transport: ${oldRoute.name || admission.transportRouteId}`;
-                        feeAdjustment -= oldCost;
-                    }
-                }
-            }
+        // No-op when nothing actually changes (same type + same hostel/route).
+        const sameHostel = target === AccommodationType.HOSTEL && hostelId === student.admissionDetails.hostelId;
+        const sameRoute = target === AccommodationType.TRANSPORT && transportRouteId === student.admissionDetails.transportRouteId;
+        if (current === target && (target === AccommodationType.NONE || sameHostel || sameRoute)) {
+            logger.info(`[updateAdmissionDetails] No accommodation change for ${studentId} (already ${current}).`);
+            return;
+        }
 
-            // Assign new allocation and calculate addition to Total Fee
-            if (accommodationType === AccommodationType.HOSTEL) {
-                if (!hostelId) throw new AppError(MESSAGES.ERROR.HOSTEL_ID_REQUIRED, 400);
+        // Route every transition through the dedicated, demand-based flow.
+        if (current === AccommodationType.NONE && target === AccommodationType.HOSTEL) {
+            await AccommodationService.assignHostel(studentId, hostelId, payMode, hostelType, adminId);
+        } else if (current === AccommodationType.NONE && target === AccommodationType.TRANSPORT) {
+            await AccommodationService.assignTransport(studentId, transportRouteId, adminId);
+        } else if (current === AccommodationType.HOSTEL && target === AccommodationType.NONE) {
+            await AccommodationService.cancelHostel(studentId, { reason }, adminId);
+        } else if (current === AccommodationType.HOSTEL && target === AccommodationType.TRANSPORT) {
+            await AccommodationService.switchHostelToTransport(studentId, { reason, transportRouteId }, adminId);
+        } else if (current === AccommodationType.TRANSPORT && target === AccommodationType.NONE) {
+            await AccommodationService.cancelTransport(studentId, { reason }, adminId);
+        } else if (current === AccommodationType.TRANSPORT && target === AccommodationType.HOSTEL) {
+            await AccommodationService.switchTransportToHostel(studentId, { reason, hostelId: hostelId ?? undefined, hostelType, hostelPaymentMode: payMode }, adminId);
+        } else if (current === AccommodationType.TRANSPORT && target === AccommodationType.TRANSPORT) {
+            await AccommodationService.reassignTransport(studentId, { transportRouteId, reason }, adminId);
+        } else if (current === AccommodationType.HOSTEL && target === AccommodationType.HOSTEL) {
+            // Hostel→hostel needs explicit bed selection (bedId), which this endpoint
+            // doesn't carry. Direct the caller to the dedicated reassign-hostel flow.
+            throw new AppError('Hostel-to-hostel change must use the reassign-hostel endpoint (bed selection required).', 400);
+        }
 
-                if (hostelId !== admission.hostelId) {
-                    const hostel = await tx.hostel.findUnique({ where: { id: hostelId } });
-                    if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+        // Totals are reconciled from source-of-truth (demands + payments), never hand-set.
+        await recomputeStudentTotals(studentId);
 
-                    await assertHostelHasCapacity(hostelId, tx);
-
-                    const newPricing = await getHostelCostTx(hostelType, tx);
-                    newCost = newPricing.totalPrice;
-                    newDescription = `Hostel: ${hostel.name || hostelId}`;
-                    feeAdjustment += newCost;
-                }
-            }
-            else if (accommodationType === AccommodationType.TRANSPORT) {
-                if (!transportRouteId) throw new AppError(MESSAGES.ERROR.TRANSPORT_ROUTE_ID_REQUIRED, 400);
-
-                if (transportRouteId !== admission.transportRouteId) {
-                    const route = await tx.transportRoute.findUnique({ where: { id: transportRouteId } });
-                    if (!route) throw new AppError(MESSAGES.ERROR.TRANSPORT_ROUTE_NOT_FOUND, 404);
-
-                    if ((route.filled ?? 0) >= (route.capacity ?? 0)) throw new AppError(MESSAGES.ERROR.TRANSPORT_ROUTE_FULL, 400);
-
-                    await tx.transportRoute.update({
-                        where: { id: transportRouteId },
-                        data: { filled: { increment: 1 }, updatedBy: adminId }
-                    });
-
-                    newCost = route.cost || 0;
-                    newDescription = `Transport: ${route.name || transportRouteId}`;
-                    feeAdjustment += newCost;
-                }
-            }
-
-            // Handle Hostel Payment Mode Adjustment
-            if (admission.accommodationType === AccommodationType.HOSTEL && admission.hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                const oldSemFee = await getSemwiseSurchargeTx(admission.hostelType, tx);
-                oldCost += oldSemFee;
-                feeAdjustment -= oldSemFee;
-            }
-            if (accommodationType === AccommodationType.HOSTEL && hostelPaymentMode === HostelPaymentMode.SEMWISE) {
-                const newSemFee = await getSemwiseSurchargeTx(hostelType, tx);
-                newCost += newSemFee;
-                feeAdjustment += newSemFee;
-            }
-
-            const currentPaid = (admission.paidFee ?? 0) + Number(paidAmount || 0);
-            const newTotalFee = (admission.totalFee ?? 0) + feeAdjustment;
-
-            let feeStatus: FeeStatus = FeeStatus.PENDING;
-            if (currentPaid >= newTotalFee && newTotalFee > 0) feeStatus = FeeStatus.FULL;
-            else if (currentPaid > 0) feeStatus = FeeStatus.PARTIAL;
-
-            await tx.studentAdmission.update({
-                where: { studentId },
-                data: {
-                    accommodationType,
-                    hostelType: accommodationType === AccommodationType.HOSTEL ? hostelType : null,
-                    hostelId: accommodationType === AccommodationType.HOSTEL ? hostelId : null,
-                    transportRouteId: accommodationType === AccommodationType.TRANSPORT ? transportRouteId : null,
-                    totalFee: { increment: feeAdjustment },
-                    paidFee: currentPaid,
-                    feeStatus,
-                    hostelPaymentMode: accommodationType === AccommodationType.HOSTEL ? hostelPaymentMode : null,
-                }
-            });
-
-            // --- LEDGER & FEE CORRECTION ---
-            const academicYearId = admission.academicYearId;
-            const changeDescription = oldDescription && newDescription
-                ? `Accommodation change: ${oldDescription} → ${newDescription}`
-                : oldDescription
-                    ? `Accommodation removed: ${oldDescription}`
-                    : newDescription
-                        ? `Accommodation added: ${newDescription}`
-                        : 'Accommodation updated';
-
-            // Calculate how much student paid on the old accommodation type
-            const isRealChange = oldAccType && oldAccType !== AccommodationType.NONE && (oldCost > 0 || feeAdjustment !== 0);
-            if (isRealChange && academicYearId) {
-                const oldComponents = oldAccType === AccommodationType.HOSTEL
-                    ? [PaymentComponent.HOSTEL, PaymentComponent.HOSTEL_ACCOMMODATION, PaymentComponent.HOSTEL_MESS]
-                    : [PaymentComponent.TRANSPORT];
-
-                const paidOnOld = await tx.payment.aggregate({
-                    where: {
-                        studentId,
-                        status: PaymentStatus.SUCCESS,
-                        component: { in: oldComponents }
-                    },
-                    _sum: { amount: true }
-                });
-                const totalPaidOnOld = (paidOnOld._sum as any)?.amount || 0;
-
-                // Effective new cost: if same type change (hostel→hostel), use newCost; if type changed or NONE, it's 0
-                const effectiveNewCost = (accommodationType === oldAccType) ? newCost : 0;
-                const excessPaid = totalPaidOnOld - effectiveNewCost;
-
-                if (excessPaid > 0) {
-                    // Settle any previous accommodation corrections first
-                    const prevCorrections = await tx.feeCorrection.findMany({
-                        where: { studentId, isSettled: false, type: 'ACCOMMODATION_CHANGE_REFUND' }
-                    });
-                    if (prevCorrections.length > 0) {
-                        const prevTotal = prevCorrections.reduce((sum: number, c: any) => sum + c.amount, 0);
-                        await tx.feeCorrection.updateMany({
-                            where: { id: { in: prevCorrections.map((c: any) => c.id) } },
-                            data: { isSettled: true, settledAt: new Date(), settledBy: adminId, remarks: `Settled: reversed by new accommodation change` }
-                        });
-                        await tx.studentLedger.create({
-                            data: {
-                                studentId,
-                                type: LedgerTransactionType.DEBIT,
-                                amount: prevTotal,
-                                description: `Previous accommodation corrections reversed (${prevCorrections.length} entries, total: ${prevTotal})`,
-                                referenceType: 'FEE_CORRECTION_REVERSAL',
-                                academicYearId,
-                                createdBy: adminId
-                            }
-                        });
-                        logger.info(`[updateAdmissionDetails] Settled ${prevCorrections.length} previous accommodation corrections for student ${studentId}. Reversed: ${prevTotal}`);
-                    }
-
-                    // Create new correction
-                    const oldLabel = oldAccType === AccommodationType.HOSTEL ? 'Hostel' : 'Transport';
-                    await tx.feeCorrection.create({
-                        data: {
-                            studentId,
-                            academicYearId,
-                            amount: excessPaid,
-                            reason: `Accommodation change refund: ${oldLabel}. Paid: ${totalPaidOnOld}, New cost: ${effectiveNewCost}, Excess: ${excessPaid}`,
-                            type: 'ACCOMMODATION_CHANGE_REFUND',
-                            referenceType: 'ACCOMMODATION_CHANGE',
-                            remarks: `${changeDescription}. Paid: ${totalPaidOnOld}, Refund: ${excessPaid}`,
-                            carryForward: true,
-                            isSettled: false,
-                            createdBy: adminId
-                        }
-                    });
-
-                    await tx.studentLedger.create({
-                        data: {
-                            studentId,
-                            type: LedgerTransactionType.CREDIT,
-                            amount: excessPaid,
-                            description: `Accommodation change refund: ${oldLabel}. Paid ${totalPaidOnOld} against new cost ${effectiveNewCost}. Carry forward.`,
-                            referenceType: 'FEE_CORRECTION',
-                            academicYearId,
-                            createdBy: adminId
-                        }
-                    });
-
-                    logger.info(`[updateAdmissionDetails] FeeCorrection created for student ${studentId}. Refund: ${excessPaid}, carryForward: true`);
-                }
-            }
-
-            logger.info(`[updateAdmissionDetails] Accommodation updated for student ${studentId}. ${oldAccType} → ${accommodationType}. Fee adjustment: ${feeAdjustment}`);
-        });
+        logger.info(`[updateAdmissionDetails] ${current} → ${target} delegated to dedicated accommodation flow for student ${studentId}.`);
     },
 
 
