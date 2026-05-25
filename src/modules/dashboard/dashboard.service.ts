@@ -1,5 +1,5 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, ApplicationMode, QuotaType, AccommodationType, Prisma } from '@prisma/client';
+import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, ApplicationMode, QuotaType, AccommodationType, Prisma, WaitingListStatus } from '@prisma/client';
 
 /** Build a Prisma `createdAt` date filter from a named range ("today"/"7d"/…) or an explicit start/end pair. Shared by every dashboard stat method. */
 const getDateCondition = (range?: string, startDate?: string, endDate?: string) => {
@@ -786,17 +786,35 @@ export const DashboardService = {
                         }
                     },
                     proId: true,
-                    pro: { select: { proNumber: true } }
+                    pro: { select: { proNumber: true } },
+                    // Active waiting-list entry (status=WAITING), if any — drives the flag below.
+                    waitingListEntries: {
+                        where: { status: WaitingListStatus.WAITING },
+                        take: 1,
+                        orderBy: { createdAt: 'desc' },
+                        select: { id: true, category: true, waitingNumber: true, status: true, courseId: true, academicYearId: true },
+                    }
                 },
                 orderBy: { createdAt: 'desc' }
             })
         ]);
 
+        const data = students.map((s: any) => {
+            const { waitingListEntries, ...rest } = s;
+            const waitingEntry = waitingListEntries?.[0] ?? null;
+            return {
+                ...rest,
+                isInWaitingList: !!waitingEntry,
+                waitingListCategory: waitingEntry?.category ?? null,
+                waitingList: waitingEntry,
+            };
+        });
+
         return {
             total,
             page,
             totalPages: Math.ceil(total / limit),
-            data: students
+            data
         };
     },
 

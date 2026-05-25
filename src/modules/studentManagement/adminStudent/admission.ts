@@ -22,6 +22,7 @@ import {
     AdmissionEntryType,
     ApplicationMode,
     QuotaType,
+    WaitingListStatus,
 } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { Role } from '../../../constants/roles';
@@ -1238,6 +1239,14 @@ export const AdmissionService = {
                 transportAllocations: { where: { status: 'ACTIVE' }, take: 1, orderBy: { startDate: 'desc' }, include: { route: true, stop: true, academicYear: { select: { id: true, code: true, isActive: true } } } },
                 convenorDetails: true,
                 pro: true,
+                // Active waiting-list entry (status=WAITING), if any — drives the
+                // isInWaitingList flag and waitingListCategory on the response.
+                waitingListEntries: {
+                    where: { status: WaitingListStatus.WAITING },
+                    take: 1,
+                    orderBy: { createdAt: 'desc' },
+                    select: { id: true, category: true, waitingNumber: true, status: true, courseId: true, academicYearId: true },
+                },
                 user: { select: { id: true, email: true, phone: true, role: true, isDeleted: true } }
             }
         });
@@ -1258,9 +1267,13 @@ export const AdmissionService = {
             hallTicketUrl = await convertToPresignedUrl(student.examDetails.hallTicketUrl);
         }
 
-        const { hostelAllocations: _hostelAllocations, transportAllocations: _transportAllocations, ...studentRest } = student as any;
+        const { hostelAllocations: _hostelAllocations, transportAllocations: _transportAllocations, waitingListEntries: _waitingListEntries, ...studentRest } = student as any;
+        const _waitingEntry = _waitingListEntries?.[0] ?? null;
         return {
             ...studentRest,
+            isInWaitingList: !!_waitingEntry,
+            waitingListCategory: _waitingEntry?.category ?? null,
+            waitingList: _waitingEntry,
             hostelAllocation: _hostelAllocations?.[0] ?? null,
             transportAllocation: _transportAllocations?.[0] ?? null,
             pref1Course: attachCourseCapacity((student as any).pref1Course),
@@ -1333,6 +1346,14 @@ export const AdmissionService = {
                 transportAllocations: { where: { status: 'ACTIVE' }, take: 1, orderBy: { startDate: 'desc' }, include: { route: true, stop: true, academicYear: { select: { id: true, code: true, isActive: true } } } },
                 convenorDetails: true,
                 pro: true,
+                // Active waiting-list entry (status=WAITING), if any — drives the
+                // isInWaitingList flag and waitingListCategory on the response.
+                waitingListEntries: {
+                    where: { status: WaitingListStatus.WAITING },
+                    take: 1,
+                    orderBy: { createdAt: 'desc' },
+                    select: { id: true, category: true, waitingNumber: true, status: true, courseId: true, academicYearId: true },
+                },
                 user: { select: { id: true, email: true, phone: true, role: true, isDeleted: true } }
             }
         });
@@ -1353,9 +1374,13 @@ export const AdmissionService = {
             hallTicketUrl = await convertToPresignedUrl(student.examDetails.hallTicketUrl);
         }
 
-        const { hostelAllocations: _hostelAllocations, transportAllocations: _transportAllocations, ...studentRest } = student as any;
+        const { hostelAllocations: _hostelAllocations, transportAllocations: _transportAllocations, waitingListEntries: _waitingListEntries, ...studentRest } = student as any;
+        const _waitingEntry = _waitingListEntries?.[0] ?? null;
         return {
             ...studentRest,
+            isInWaitingList: !!_waitingEntry,
+            waitingListCategory: _waitingEntry?.category ?? null,
+            waitingList: _waitingEntry,
             hostelAllocation: _hostelAllocations?.[0] ?? null,
             transportAllocation: _transportAllocations?.[0] ?? null,
             pref1Course: attachCourseCapacity((student as any).pref1Course),

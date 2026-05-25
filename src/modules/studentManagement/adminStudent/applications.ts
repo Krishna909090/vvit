@@ -2,7 +2,7 @@
 // split out of adminStudent.service.ts.
 
 import prisma from '../../../config/prisma';
-import { AccommodationType, PaymentStatus, PaymentComponent, LedgerTransactionType } from '@prisma/client';
+import { AccommodationType, PaymentStatus, PaymentComponent, LedgerTransactionType, WaitingListStatus } from '@prisma/client';
 import { registerStudent } from '../../student/student.service';
 import logger from '../../../utils/logger';
 import { AppError } from '../../../utils/AppError';
@@ -91,6 +91,19 @@ export const ApplicationsService = {
             prisma.student.count({ where })
         ]);
 
+        // Active waiting-list entries (status=WAITING) for this page, keyed by studentId —
+        // one batched query rather than a per-row lookup.
+        const pageStudentIds = students.map((s: any) => s.id);
+        const waitingRows = pageStudentIds.length
+            ? await prisma.waitingList.findMany({
+                where: { studentId: { in: pageStudentIds }, status: WaitingListStatus.WAITING },
+                orderBy: { createdAt: 'desc' },
+                select: { id: true, studentId: true, category: true, waitingNumber: true, status: true, courseId: true, academicYearId: true },
+            })
+            : [];
+        const waitingByStudent = new Map<string, any>();
+        for (const w of waitingRows) if (!waitingByStudent.has(w.studentId)) waitingByStudent.set(w.studentId, w);
+
         const enhancedStudents = await Promise.all(students.map(async (student: any) => {
             // Convert document URLs to presigned URLs
             const documentsWithPresignedUrls = await Promise.all(student.documents.map(async (doc: any) => ({
@@ -102,8 +115,12 @@ export const ApplicationsService = {
             const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
             const { transportAllocations: _ta, ...studentRest } = student;
+            const waitingEntry = waitingByStudent.get(student.id) ?? null;
             return {
                 ...studentRest,
+                isInWaitingList: !!waitingEntry,
+                waitingListCategory: waitingEntry?.category ?? null,
+                waitingList: waitingEntry,
                 aadharNumber: maskAadhaar(student.aadharNumber),
                 profilePhotoUrl,
                 documents: documentsWithPresignedUrls,
