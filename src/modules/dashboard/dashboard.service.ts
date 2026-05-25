@@ -765,6 +765,7 @@ export const DashboardService = {
                             status: true,
                             totalFee: true,
                             paidFee: true,
+                            allottedCourseId: true,
                             allottedCourse: { select: { name: true, code: true } }
                         }
                     },
@@ -801,7 +802,9 @@ export const DashboardService = {
 
         const data = students.map((s: any) => {
             const { waitingListEntries, ...rest } = s;
-            const waitingEntry = waitingListEntries?.[0] ?? null;
+            // Exclude from the waiting-list flag once a seat is allocated.
+            const seatAllocated = !!s.admissionDetails?.allottedCourseId;
+            const waitingEntry = !seatAllocated ? (waitingListEntries?.[0] ?? null) : null;
             return {
                 ...rest,
                 isInWaitingList: !!waitingEntry,

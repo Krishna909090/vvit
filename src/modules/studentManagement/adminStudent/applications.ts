@@ -115,7 +115,9 @@ export const ApplicationsService = {
             const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
             const { transportAllocations: _ta, ...studentRest } = student;
-            const waitingEntry = waitingByStudent.get(student.id) ?? null;
+            // Exclude from the waiting-list flag once a seat is allocated.
+            const seatAllocated = !!student.admissionDetails?.allottedCourseId;
+            const waitingEntry = !seatAllocated ? (waitingByStudent.get(student.id) ?? null) : null;
             return {
                 ...studentRest,
                 isInWaitingList: !!waitingEntry,

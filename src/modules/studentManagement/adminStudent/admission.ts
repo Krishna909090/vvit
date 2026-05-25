@@ -1268,7 +1268,10 @@ export const AdmissionService = {
         }
 
         const { hostelAllocations: _hostelAllocations, transportAllocations: _transportAllocations, waitingListEntries: _waitingListEntries, ...studentRest } = student as any;
-        const _waitingEntry = _waitingListEntries?.[0] ?? null;
+        // Exclude from the waiting-list flag once a seat is allocated — an allotted student
+        // has left the queue even if a stale WAITING row lingers.
+        const _seatAllocated = !!(student as any).admissionDetails?.allottedCourseId;
+        const _waitingEntry = !_seatAllocated ? (_waitingListEntries?.[0] ?? null) : null;
         return {
             ...studentRest,
             isInWaitingList: !!_waitingEntry,
@@ -1375,7 +1378,10 @@ export const AdmissionService = {
         }
 
         const { hostelAllocations: _hostelAllocations, transportAllocations: _transportAllocations, waitingListEntries: _waitingListEntries, ...studentRest } = student as any;
-        const _waitingEntry = _waitingListEntries?.[0] ?? null;
+        // Exclude from the waiting-list flag once a seat is allocated — an allotted student
+        // has left the queue even if a stale WAITING row lingers.
+        const _seatAllocated = !!(student as any).admissionDetails?.allottedCourseId;
+        const _waitingEntry = !_seatAllocated ? (_waitingListEntries?.[0] ?? null) : null;
         return {
             ...studentRest,
             isInWaitingList: !!_waitingEntry,
