@@ -1,5 +1,5 @@
 import prisma from '../../config/prisma';
-import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, ApplicationMode, QuotaType, AccommodationType, Prisma, WaitingListStatus } from '@prisma/client';
+import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, ApplicationMode, QuotaType, AccommodationType, Prisma } from '@prisma/client';
 
 /** Build a Prisma `createdAt` date filter from a named range ("today"/"7d"/…) or an explicit start/end pair. Shared by every dashboard stat method. */
 const getDateCondition = (range?: string, startDate?: string, endDate?: string) => {
@@ -788,9 +788,10 @@ export const DashboardService = {
                     },
                     proId: true,
                     pro: { select: { proNumber: true } },
-                    // Active waiting-list entry (status=WAITING), if any — drives the flag below.
+                    // Latest waiting-list entry of ANY status — a student who came via the
+                    // waiting list stays flagged here even after a seat is allotted (status
+                    // is exposed in waitingList so the UI can tell WAITING vs ALLOTTED).
                     waitingListEntries: {
-                        where: { status: WaitingListStatus.WAITING },
                         take: 1,
                         orderBy: { createdAt: 'desc' },
                         select: { id: true, category: true, waitingNumber: true, status: true, courseId: true, academicYearId: true },
@@ -802,9 +803,9 @@ export const DashboardService = {
 
         const data = students.map((s: any) => {
             const { waitingListEntries, ...rest } = s;
-            // Exclude from the waiting-list flag once a seat is allocated.
-            const seatAllocated = !!s.admissionDetails?.allottedCourseId;
-            const waitingEntry = !seatAllocated ? (waitingListEntries?.[0] ?? null) : null;
+            // "Came from the waiting list" — flag if any waiting-list entry exists, regardless
+            // of whether a seat has since been allotted. waitingList.status conveys WAITING vs ALLOTTED.
+            const waitingEntry = waitingListEntries?.[0] ?? null;
             return {
                 ...rest,
                 isInWaitingList: !!waitingEntry,

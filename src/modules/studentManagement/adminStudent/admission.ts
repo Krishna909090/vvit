@@ -22,7 +22,6 @@ import {
     AdmissionEntryType,
     ApplicationMode,
     QuotaType,
-    WaitingListStatus,
 } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { Role } from '../../../constants/roles';
@@ -1239,10 +1238,10 @@ export const AdmissionService = {
                 transportAllocations: { where: { status: 'ACTIVE' }, take: 1, orderBy: { startDate: 'desc' }, include: { route: true, stop: true, academicYear: { select: { id: true, code: true, isActive: true } } } },
                 convenorDetails: true,
                 pro: true,
-                // Active waiting-list entry (status=WAITING), if any — drives the
-                // isInWaitingList flag and waitingListCategory on the response.
+                // Latest waiting-list entry of ANY status — drives the isInWaitingList flag.
+                // A student who came via the waiting list stays flagged regardless of seat
+                // allotment (waitingList.status conveys WAITING vs ALLOTTED).
                 waitingListEntries: {
-                    where: { status: WaitingListStatus.WAITING },
                     take: 1,
                     orderBy: { createdAt: 'desc' },
                     select: { id: true, category: true, waitingNumber: true, status: true, courseId: true, academicYearId: true },
@@ -1268,10 +1267,9 @@ export const AdmissionService = {
         }
 
         const { hostelAllocations: _hostelAllocations, transportAllocations: _transportAllocations, waitingListEntries: _waitingListEntries, ...studentRest } = student as any;
-        // Exclude from the waiting-list flag once a seat is allocated — an allotted student
-        // has left the queue even if a stale WAITING row lingers.
-        const _seatAllocated = !!(student as any).admissionDetails?.allottedCourseId;
-        const _waitingEntry = !_seatAllocated ? (_waitingListEntries?.[0] ?? null) : null;
+        // Flag if the student ever came via the waiting list — true regardless of whether a
+        // seat has since been allotted (waitingList.status shows WAITING vs ALLOTTED).
+        const _waitingEntry = _waitingListEntries?.[0] ?? null;
         return {
             ...studentRest,
             isInWaitingList: !!_waitingEntry,
@@ -1349,10 +1347,10 @@ export const AdmissionService = {
                 transportAllocations: { where: { status: 'ACTIVE' }, take: 1, orderBy: { startDate: 'desc' }, include: { route: true, stop: true, academicYear: { select: { id: true, code: true, isActive: true } } } },
                 convenorDetails: true,
                 pro: true,
-                // Active waiting-list entry (status=WAITING), if any — drives the
-                // isInWaitingList flag and waitingListCategory on the response.
+                // Latest waiting-list entry of ANY status — drives the isInWaitingList flag.
+                // A student who came via the waiting list stays flagged regardless of seat
+                // allotment (waitingList.status conveys WAITING vs ALLOTTED).
                 waitingListEntries: {
-                    where: { status: WaitingListStatus.WAITING },
                     take: 1,
                     orderBy: { createdAt: 'desc' },
                     select: { id: true, category: true, waitingNumber: true, status: true, courseId: true, academicYearId: true },
@@ -1378,10 +1376,9 @@ export const AdmissionService = {
         }
 
         const { hostelAllocations: _hostelAllocations, transportAllocations: _transportAllocations, waitingListEntries: _waitingListEntries, ...studentRest } = student as any;
-        // Exclude from the waiting-list flag once a seat is allocated — an allotted student
-        // has left the queue even if a stale WAITING row lingers.
-        const _seatAllocated = !!(student as any).admissionDetails?.allottedCourseId;
-        const _waitingEntry = !_seatAllocated ? (_waitingListEntries?.[0] ?? null) : null;
+        // Flag if the student ever came via the waiting list — true regardless of whether a
+        // seat has since been allotted (waitingList.status shows WAITING vs ALLOTTED).
+        const _waitingEntry = _waitingListEntries?.[0] ?? null;
         return {
             ...studentRest,
             isInWaitingList: !!_waitingEntry,

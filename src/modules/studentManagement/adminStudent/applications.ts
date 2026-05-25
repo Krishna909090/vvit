@@ -2,7 +2,7 @@
 // split out of adminStudent.service.ts.
 
 import prisma from '../../../config/prisma';
-import { AccommodationType, PaymentStatus, PaymentComponent, LedgerTransactionType, WaitingListStatus } from '@prisma/client';
+import { AccommodationType, PaymentStatus, PaymentComponent, LedgerTransactionType } from '@prisma/client';
 import { registerStudent } from '../../student/student.service';
 import logger from '../../../utils/logger';
 import { AppError } from '../../../utils/AppError';
@@ -91,12 +91,13 @@ export const ApplicationsService = {
             prisma.student.count({ where })
         ]);
 
-        // Active waiting-list entries (status=WAITING) for this page, keyed by studentId —
-        // one batched query rather than a per-row lookup.
+        // Latest waiting-list entry (ANY status) per student on this page, keyed by studentId —
+        // one batched query rather than a per-row lookup. A student who came via the waiting
+        // list stays flagged regardless of seat allotment.
         const pageStudentIds = students.map((s: any) => s.id);
         const waitingRows = pageStudentIds.length
             ? await prisma.waitingList.findMany({
-                where: { studentId: { in: pageStudentIds }, status: WaitingListStatus.WAITING },
+                where: { studentId: { in: pageStudentIds } },
                 orderBy: { createdAt: 'desc' },
                 select: { id: true, studentId: true, category: true, waitingNumber: true, status: true, courseId: true, academicYearId: true },
             })
@@ -115,9 +116,8 @@ export const ApplicationsService = {
             const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
             const { transportAllocations: _ta, ...studentRest } = student;
-            // Exclude from the waiting-list flag once a seat is allocated.
-            const seatAllocated = !!student.admissionDetails?.allottedCourseId;
-            const waitingEntry = !seatAllocated ? (waitingByStudent.get(student.id) ?? null) : null;
+            // Flag if the student ever came via the waiting list, regardless of seat allotment.
+            const waitingEntry = waitingByStudent.get(student.id) ?? null;
             return {
                 ...studentRest,
                 isInWaitingList: !!waitingEntry,
