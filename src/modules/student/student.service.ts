@@ -732,7 +732,7 @@ export const getStudentByUserId = async (userId: string) => {
                     createdAt: true,
                     updatedAt: true
                 }
-            },
+            }, 
             documents: {
                 where: { isDeleted: false },
                 select: {

@@ -1,6 +1,6 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
-import { SystemSetting, DiscountStatus, PaymentMethod, PaymentComponent, PaymentMode, QuotaType, AccommodationType, LedgerTransactionType } from '@prisma/client';
+import { SystemSetting, DiscountStatus, PaymentMethod, PaymentComponent, PaymentMode, QuotaType, AccommodationType, LedgerTransactionType, AdmissionEntryType } from '@prisma/client';
 import { Role, RoleType } from '../../constants/roles';
 import logger from '../../utils/logger';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
@@ -1010,6 +1010,7 @@ export const FeeService = {
                         entryAcademicYearId:     true,
                         entryType:               true,
                         instituteCode:           true,
+                        entryYearOfStudy:        true,
                     }
                 },
             }
@@ -1020,7 +1021,11 @@ export const FeeService = {
             throw new AppError("Student not found", 404);
         }
 
-        if (requireEnrollment) {
+        // Laterals enter mid-program and their demands are typically seeded before any
+        // enrollment row exists, so they bypass the enrollment requirement entirely — the
+        // year is taken from admission.entryYearOfStudy instead (see currentYear below).
+        const isLateralEntry = student.admissionDetails?.entryType === AdmissionEntryType.LATERAL;
+        if (requireEnrollment && !isLateralEntry) {
             // Presence of an enrollment row (any status) proves the student was enrolled
             // in that year — supports back-fill flows where admins enter old students'
             // demands long after they've graduated (status='COMPLETED').
@@ -1096,10 +1101,16 @@ export const FeeService = {
         const fallbackCount = fallbackUsed ? feeStructures.length : 0;
 
         // Prefer the enrollment's explicit yearOfStudy; fall back to semester arithmetic.
+        // When the student has NO enrollment (common for laterals whose demands are seeded
+        // before enrollment exists), fall back to the admission's entryYearOfStudy — a lateral
+        // enters at year 2, so defaulting to 1 here wrongly filtered out their year-2 fee
+        // structures. Only defaults to 1 as a last resort.
         const latestEnrollment = student.enrollments?.[0];
         const currentYear =
             latestEnrollment?.yearOfStudy
-            ?? (latestEnrollment?.currentSemester ? Math.ceil(latestEnrollment.currentSemester / 2) : 1);
+            ?? (latestEnrollment?.currentSemester ? Math.ceil(latestEnrollment.currentSemester / 2) : undefined)
+            ?? student.admissionDetails?.entryYearOfStudy
+            ?? 1;
         logger.debug(
             `[generateFeeDemands] Student Context: Quota=${studentQuota}, DegreeType=${studentDegreeType}, ` +
             `YearOfStudy=${currentYear}`
@@ -1437,7 +1448,52 @@ export const FeeService = {
             return true;
         });
 
-        logger.info(`[generateFeeDemandsBulk] resolved ${targets.length} target students from ${enrollments.length} enrollments`);
+        // The enrollment-based discovery above misses laterals whose demands are seeded
+        // BEFORE any enrollment row exists. Supplement with LATERAL admissions whose cohort
+        // year is this run's academicYearId (their entry year) — they bypass the enrollment
+        // requirement. Exclude anyone already covered by an enrollment to avoid double work,
+        // and respect an explicit entryTypes filter that omits LATERAL.
+        const enrolledIds = new Set(enrollments.map(e => e.studentId));
+        const lateralExcludedByFilter = !!(filters.entryTypes && !filters.entryTypes.includes('LATERAL'));
+        const lateralAdmissions = lateralExcludedByFilter
+            ? []
+            : await prisma.studentAdmission.findMany({
+                where: {
+                    entryType: AdmissionEntryType.LATERAL,
+                    allottedCourseId: { not: null },
+                    // Only this cohort year (feeCohort takes precedence over raw entry year).
+                    OR: [
+                        { feeCohortAcademicYearId: academicYearId },
+                        { feeCohortAcademicYearId: null, entryAcademicYearId: academicYearId },
+                    ],
+                    ...(filters.studentIds && filters.studentIds.length > 0
+                        ? { studentId: { in: filters.studentIds } } : {}),
+                },
+                select: {
+                    studentId: true, allottedCourseId: true, instituteCode: true, entryAcademicYearId: true,
+                    student: { select: { quotaType: true } },
+                },
+            });
+
+        const lateralTargets = lateralAdmissions.filter(a => {
+            if (enrolledIds.has(a.studentId)) return false; // already handled via enrollment
+            if (filters.courseIds            && !filters.courseIds.includes(a.allottedCourseId!))   return false;
+            if (filters.instituteCodes       && (!a.instituteCode || !filters.instituteCodes.includes(a.instituteCode))) return false;
+            if (filters.entryAcademicYearIds && (!a.entryAcademicYearId || !filters.entryAcademicYearIds.includes(a.entryAcademicYearId))) return false;
+            if (filters.quotaTypes           && (!a.student.quotaType || !filters.quotaTypes.includes(a.student.quotaType))) return false;
+            return true;
+        });
+
+        // Normalize both discovery sources into { studentId, courseId }.
+        const resolvedTargets: Array<{ studentId: string; courseId: string }> = [
+            ...targets.map(t => ({ studentId: t.studentId, courseId: t.student.admissionDetails!.allottedCourseId! })),
+            ...lateralTargets.map(a => ({ studentId: a.studentId, courseId: a.allottedCourseId! })),
+        ];
+
+        logger.info(
+            `[generateFeeDemandsBulk] resolved ${resolvedTargets.length} target students ` +
+            `(${targets.length} enrolled + ${lateralTargets.length} lateral-no-enrollment) from ${enrollments.length} enrollments`
+        );
 
         const perStudent: Array<{
             studentId: string;
@@ -1451,8 +1507,8 @@ export const FeeService = {
             error?:    string;
         }> = [];
 
-        for (const t of targets) {
-            const courseId = t.student.admissionDetails!.allottedCourseId!;
+        for (const t of resolvedTargets) {
+            const courseId = t.courseId;
             try {
                 const result = await FeeService.generateFeeDemands(
                     t.studentId,
