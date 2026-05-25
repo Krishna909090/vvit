@@ -80,6 +80,108 @@ const voidReclaimedAccommodationRefunds = async (
     return total;
 };
 
+/** Per-component withholding input on hostel cancellation (amount the college keeps per service). */
+type HostelWithhold = {
+    accommodation?: number;
+    mess?: number;
+    laundry?: number;
+    registration?: number;
+};
+
+/** Validated per-component withholding breakdown (every field present, ≥ 0). */
+type HostelWithholdBreakdown = {
+    accommodation: number;
+    mess: number;
+    laundry: number;
+    registration: number;
+};
+
+/**
+ * Sum SUCCESS (non-deleted) hostel payments grouped by component, so per-component
+ * withholding on cancellation can be capped against what the student actually paid into
+ * each service. Legacy bare `HOSTEL` payments are folded into accommodation (the bare
+ * enum is being phased out and is treated as HOSTEL_ACCOMMODATION everywhere — see
+ * payment.service). Pass `tx` to read inside an open transaction.
+ */
+const getHostelPaidByComponent = async (
+    studentId: string,
+    tx?: any
+): Promise<HostelWithholdBreakdown & { total: number }> => {
+    const client = tx || prisma;
+    const rows = await client.payment.groupBy({
+        by: ['component'],
+        where: {
+            studentId,
+            status: PaymentStatus.SUCCESS,
+            isDeleted: false,
+            component: { in: [
+                PaymentComponent.HOSTEL,
+                PaymentComponent.HOSTEL_ACCOMMODATION,
+                PaymentComponent.HOSTEL_MESS,
+                PaymentComponent.HOSTEL_LAUNDRY,
+                PaymentComponent.HOSTEL_REGISTRATION,
+            ] },
+        },
+        _sum: { amount: true },
+    });
+
+    const paid = { accommodation: 0, mess: 0, laundry: 0, registration: 0, total: 0 };
+    for (const r of rows as Array<{ component: PaymentComponent; _sum: { amount: number | null } }>) {
+        const amt = r._sum.amount ?? 0;
+        switch (r.component) {
+            case PaymentComponent.HOSTEL:
+            case PaymentComponent.HOSTEL_ACCOMMODATION:
+                paid.accommodation += amt; break;
+            case PaymentComponent.HOSTEL_MESS:
+                paid.mess += amt; break;
+            case PaymentComponent.HOSTEL_LAUNDRY:
+                paid.laundry += amt; break;
+            case PaymentComponent.HOSTEL_REGISTRATION:
+                paid.registration += amt; break;
+        }
+    }
+    paid.total = paid.accommodation + paid.mess + paid.laundry + paid.registration;
+    return paid;
+};
+
+/**
+ * Resolve the amount the college keeps on a hostel cancellation. When the admin supplies a
+ * per-component `withhold`, each component is clamped to ≥ 0 and validated so it can't exceed
+ * what the student paid into that component (throws 400 otherwise); the returned `total` is
+ * their sum. When no `withhold` is given, falls back to the legacy single-lump `cancellationFee`
+ * (no per-component cap) and returns a `null` breakdown.
+ */
+const resolveHostelWithhold = (
+    args: { cancellationFee?: number; withhold?: HostelWithhold },
+    paidByComponent: HostelWithholdBreakdown
+): { breakdown: HostelWithholdBreakdown | null; total: number } => {
+    if (args.withhold) {
+        const w = args.withhold;
+        const breakdown: HostelWithholdBreakdown = {
+            accommodation: Math.max(0, w.accommodation ?? 0),
+            mess: Math.max(0, w.mess ?? 0),
+            laundry: Math.max(0, w.laundry ?? 0),
+            registration: Math.max(0, w.registration ?? 0),
+        };
+        const over: string[] = [];
+        if (breakdown.accommodation > paidByComponent.accommodation)
+            over.push(`accommodation (withhold ${breakdown.accommodation} > paid ${paidByComponent.accommodation})`);
+        if (breakdown.mess > paidByComponent.mess)
+            over.push(`mess (withhold ${breakdown.mess} > paid ${paidByComponent.mess})`);
+        if (breakdown.laundry > paidByComponent.laundry)
+            over.push(`laundry (withhold ${breakdown.laundry} > paid ${paidByComponent.laundry})`);
+        if (breakdown.registration > paidByComponent.registration)
+            over.push(`registration (withhold ${breakdown.registration} > paid ${paidByComponent.registration})`);
+        if (over.length > 0) {
+            throw new AppError(`Cannot withhold more than was paid for: ${over.join('; ')}.`, 400);
+        }
+        const total = breakdown.accommodation + breakdown.mess + breakdown.laundry + breakdown.registration;
+        return { breakdown, total };
+    }
+    // Legacy single-lump fallback (e.g. withdrawal flow passing only { reason }).
+    return { breakdown: null, total: Math.max(0, args.cancellationFee ?? 0) };
+};
+
 export const AccommodationService = {
     /**
      * List vacant beds in a hostel, optionally filtered by sharing/roomType/floor.
@@ -2200,10 +2302,9 @@ export const AccommodationService = {
      */
     async cancelHostel(
         studentId: string,
-        args: { cancellationFee?: number; reason: string },
+        args: { cancellationFee?: number; withhold?: HostelWithhold; reason: string },
         adminId?: string
     ) {
-        const cancellationFee = Math.max(0, args.cancellationFee ?? 0);
         const reason = args.reason;
 
         const ctx = await getStudentContext(studentId);
@@ -2261,7 +2362,14 @@ export const AccommodationService = {
             const credit = await getAvailableHostelCredit(studentId, tx);
             const paid = credit.grossPaid;
             const availableCredit = credit.availableCredit;
-            const refundAmount = Math.max(0, availableCredit - cancellationFee);
+
+            // Resolve how much the college keeps. With per-component `withhold`, each amount is
+            // capped against what was paid into that component (read in-tx for race-safety);
+            // otherwise fall back to the legacy single-lump cancellationFee. The refund is still
+            // bounded by availableCredit so prior unsettled refunds aren't refunded twice.
+            const paidByComponent = await getHostelPaidByComponent(studentId, tx);
+            const { breakdown: withholdBreakdown, total: totalWithheld } = resolveHostelWithhold(args, paidByComponent);
+            const refundAmount = Math.max(0, availableCredit - totalWithheld);
             // 1. Vacate active allocation if any
             if (allocation) {
                 await (tx.hostelAllocation as any).updateMany({
@@ -2320,7 +2428,7 @@ export const AccommodationService = {
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: previousHostelId,
                         referenceType: 'HOSTEL_CANCELLATION',
-                        remarks: `grossPaid: ${paid}, priorRefunds: ${credit.priorRefunds}, availableCredit: ${availableCredit}, cancellationFee: ${cancellationFee}, refund: ${refundAmount}`,
+                        remarks: `grossPaid: ${paid}, priorRefunds: ${credit.priorRefunds}, availableCredit: ${availableCredit}, withheld: ${totalWithheld}${withholdBreakdown ? ` (acc: ${withholdBreakdown.accommodation}, mess: ${withholdBreakdown.mess}, laundry: ${withholdBreakdown.laundry}, reg: ${withholdBreakdown.registration})` : ' (flat)'}, refund: ${refundAmount}`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -2339,7 +2447,9 @@ export const AccommodationService = {
                         previousHostelId,
                         previousHostelType,
                         paid,
-                        cancellationFee,
+                        totalWithheld,
+                        withholdBreakdown,
+                        paidByComponent,
                         refundAmount,
                         pendingDemandRemoved: pendingDemandTotal,
                         bedVacated: !!(allocation && allocation.status === 'ACTIVE'),
@@ -2350,7 +2460,9 @@ export const AccommodationService = {
 
             return {
                 paid,
-                cancellationFee,
+                totalWithheld,
+                withholdBreakdown,
+                paidByComponent,
                 refundAmount,
                 pendingDemandRemoved: pendingDemandTotal,
                 bedVacated: !!(allocation && allocation.status === 'ACTIVE'),
@@ -2409,6 +2521,16 @@ export const AccommodationService = {
         // across a switch→switch-back→cancel cycle (double refund). Mirrors hostel credit.
         const transportCredit = await getAvailableTransportCredit(studentId);
         const paid = transportCredit.grossPaid;
+
+        // Guard: the college can't withhold more than the student paid into transport. Without
+        // this, an over-large cancellationFee silently zeroes the refund instead of surfacing
+        // the mistake. Mirrors the per-component cap on hostel cancellation.
+        if (cancellationFee > paid) {
+            throw new AppError(
+                `Cannot withhold more than was paid for transport (cancellationFee ${cancellationFee} > paid ${paid}).`,
+                400
+            );
+        }
 
         // Sum pending demand
         let pendingDemandTotal = 0;
@@ -3243,9 +3365,7 @@ export const AccommodationService = {
      * Preview cancelHostel: compute the refundable amount and what would be
      * removed/vacated — without writing.
      */
-    async previewCancelHostel(studentId: string, args: { cancellationFee?: number }) {
-        const cancellationFee = Math.max(0, args.cancellationFee ?? 0);
-
+    async previewCancelHostel(studentId: string, args: { cancellationFee?: number; withhold?: HostelWithhold }) {
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'cancel hostel');
         const admission = ctx.admission!;
@@ -3281,14 +3401,19 @@ export const AccommodationService = {
         const credit = await getAvailableHostelCredit(studentId);
         const paid = credit.grossPaid;
         const availableCredit = credit.availableCredit;
-        const refundAmount = Math.max(0, availableCredit - cancellationFee);
+
+        const paidByComponent = await getHostelPaidByComponent(studentId);
+        const { breakdown: withholdBreakdown, total: totalWithheld } = resolveHostelWithhold(args, paidByComponent);
+        const refundAmount = Math.max(0, availableCredit - totalWithheld);
 
         return {
             preview: true,
             paid,
             priorRefunds: credit.priorRefunds,
             availableCredit,
-            cancellationFee,
+            paidByComponent,
+            withholdBreakdown,
+            totalWithheld,
             refundAmount,
             pendingDemandToRemove: pendingDemandTotal,
             bedToVacate: !!allocation,
@@ -3323,6 +3448,14 @@ export const AccommodationService = {
             _sum: { amount: true },
         });
         const paid = paidAgg._sum.amount ?? 0;
+
+        // Mirror the write-path guard so a preview rejects the same over-large fee.
+        if (cancellationFee > paid) {
+            throw new AppError(
+                `Cannot withhold more than was paid for transport (cancellationFee ${cancellationFee} > paid ${paid}).`,
+                400
+            );
+        }
 
         let pendingDemandTotal = 0;
         if (transportHead) {

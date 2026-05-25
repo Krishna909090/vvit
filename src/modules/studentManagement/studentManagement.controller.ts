@@ -519,14 +519,14 @@ export const previewReassignHostel = catchAsync(async (req: Request, res: Respon
 
 export const previewCancelHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { cancellationFee } = req.body;
-    logger.info(`[previewCancelHostel] studentId=${studentId} cancellationFee=${cancellationFee} by=${req.user?.userId || 'anonymous'}`);
+    const { cancellationFee, withhold } = req.body;
+    logger.info(`[previewCancelHostel] studentId=${studentId} cancellationFee=${cancellationFee} withhold=${withhold ? JSON.stringify(withhold) : 'none'} by=${req.user?.userId || 'anonymous'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot cancel their own hostel', 403);
     }
 
-    const result = await AdminStudentService.previewCancelHostel(studentId, { cancellationFee });
+    const result = await AdminStudentService.previewCancelHostel(studentId, { cancellationFee, withhold });
 
     sendResponse({ res, statusCode: 200, success: true, message: 'Hostel cancellation preview', data: result });
 });
@@ -579,8 +579,8 @@ export const previewSwitchTransportToHostel = catchAsync(async (req: Request, re
 // soft-deletes pending demands, drops snapshot, creates FeeCorrection refund.
 export const cancelHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { cancellationFee, reason } = req.body;
-    logger.info(`[cancelHostel] studentId=${studentId} cancellationFee=${cancellationFee} by=${req.user?.userId || 'anonymous'}`);
+    const { cancellationFee, withhold, reason } = req.body;
+    logger.info(`[cancelHostel] studentId=${studentId} cancellationFee=${cancellationFee} withhold=${withhold ? JSON.stringify(withhold) : 'none'} by=${req.user?.userId || 'anonymous'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot cancel their own hostel', 403);
@@ -588,7 +588,7 @@ export const cancelHostel = catchAsync(async (req: Request, res: Response, next:
 
     const result = await AdminStudentService.cancelHostel(
         studentId,
-        { cancellationFee, reason },
+        { cancellationFee, withhold, reason },
         req.user?.userId
     );
 

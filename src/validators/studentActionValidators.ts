@@ -151,12 +151,23 @@ export const reassignTransportSchema = z.object({
     }),
 });
 
+// Per-component amount the college keeps on hostel cancellation. When present, each value is
+// capped against what the student paid into that component (validated in the service). When
+// absent, the legacy single-lump `cancellationFee` is used instead.
+const hostelWithholdField = z.object({
+    accommodation: z.number().min(0).optional(),
+    mess: z.number().min(0).optional(),
+    laundry: z.number().min(0).optional(),
+    registration: z.number().min(0).optional(),
+}).strict().optional();
+
 export const cancelHostelSchema = z.object({
     params: z.object({
         studentId: z.string().uuid("Invalid Student ID"),
     }),
     body: z.object({
         cancellationFee: z.number().min(0).optional().default(0),
+        withhold: hostelWithholdField,
         reason: z.string().trim().min(1, "Reason is required").max(500),
     }),
 });
@@ -230,6 +241,7 @@ export const cancelHostelPreviewSchema = z.object({
     }),
     body: z.object({
         cancellationFee: z.number().min(0).optional().default(0),
+        withhold: hostelWithholdField,
     }),
 });
 
