@@ -710,6 +710,7 @@ export const getStudentByUserId = async (userId: string) => {
                     id: true,
                     studentId: true,
                     status: true,
+                    entryType: true,
                     allottedCourseId: true,
                     allottedCourse: {
                         select: { name: true }
