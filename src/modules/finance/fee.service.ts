@@ -647,9 +647,28 @@ export const FeeService = {
             }
         }
 
+        // academicYearId is required on DiscountRequest. Tag the request to the student's
+        // admission year; fall back to the active academic year if the admission has none.
+        const admission = await prisma.studentAdmission.findUnique({
+            where: { studentId },
+            select: { academicYearId: true },
+        });
+        let academicYearId = admission?.academicYearId ?? null;
+        if (!academicYearId) {
+            const activeYear = await prisma.academicYear.findFirst({
+                where: { isActive: true, isDeleted: false },
+                select: { id: true },
+            });
+            academicYearId = activeYear?.id ?? null;
+        }
+        if (!academicYearId) {
+            throw new AppError('Cannot create discount request: no academic year found for the student or active year configured.', 400);
+        }
+
         return prisma.discountRequest.create({
             data: {
                 studentId,
+                academicYearId,
                 reason,
                 documentUrl,
                 items: items as any,
