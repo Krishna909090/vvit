@@ -145,16 +145,23 @@ const getHostelPaidByComponent = async (
 };
 
 /**
- * Resolve the amount the college keeps on a hostel cancellation. When the admin supplies a
- * per-component `withhold`, each component is clamped to ≥ 0 and validated so it can't exceed
- * what the student paid into that component (throws 400 otherwise); the returned `total` is
- * their sum. When no `withhold` is given, falls back to the legacy single-lump `cancellationFee`
- * (no per-component cap) and returns a `null` breakdown.
+ * Resolve the amount the college keeps on a hostel cancellation. Two independent levers, ADDED
+ * together:
+ *   - per-component `withhold` — each clamped ≥ 0 and validated so it can't exceed what the
+ *     student paid into that component (throws 400 otherwise).
+ *   - a separate flat `cancellationFee` — an additional penalty kept on top, NOT tied to any
+ *     component (no per-component cap).
+ *
+ * total = Σ withhold + cancellationFee. `breakdown` is the per-component split (null when no
+ * `withhold` object was sent); `cancellationFee` is returned separately so it can be recorded
+ * and reported distinctly from the component withholds.
  */
 const resolveHostelWithhold = (
     args: { cancellationFee?: number; withhold?: HostelWithhold },
     paidByComponent: HostelWithholdBreakdown
-): { breakdown: HostelWithholdBreakdown | null; total: number } => {
+): { breakdown: HostelWithholdBreakdown | null; cancellationFee: number; total: number } => {
+    const cancellationFee = Math.max(0, args.cancellationFee ?? 0);
+
     if (args.withhold) {
         const w = args.withhold;
         const breakdown: HostelWithholdBreakdown = {
@@ -175,11 +182,11 @@ const resolveHostelWithhold = (
         if (over.length > 0) {
             throw new AppError(`Cannot withhold more than was paid for: ${over.join('; ')}.`, 400);
         }
-        const total = breakdown.accommodation + breakdown.mess + breakdown.laundry + breakdown.registration;
-        return { breakdown, total };
+        const componentsTotal = breakdown.accommodation + breakdown.mess + breakdown.laundry + breakdown.registration;
+        return { breakdown, cancellationFee, total: componentsTotal + cancellationFee };
     }
-    // Legacy single-lump fallback (e.g. withdrawal flow passing only { reason }).
-    return { breakdown: null, total: Math.max(0, args.cancellationFee ?? 0) };
+    // No per-component withhold — just the flat cancellationFee (legacy/withdrawal flow).
+    return { breakdown: null, cancellationFee, total: cancellationFee };
 };
 
 /**
@@ -2427,7 +2434,7 @@ export const AccommodationService = {
             // Whatever is NOT kept is what we owe the student back → refundAmount, which becomes
             // a carry-forward FeeCorrection below.
             const paidByComponent = await getHostelPaidByComponent(studentId, tx);
-            const { breakdown: withholdBreakdown, total: totalWithheld } = resolveHostelWithhold(args, paidByComponent);
+            const { breakdown: withholdBreakdown, cancellationFee: retainedCancellationFee, total: totalWithheld } = resolveHostelWithhold(args, paidByComponent);
             const refundAmount = Math.max(0, availableCredit - totalWithheld);
             // 1. Vacate active allocation if any
             if (allocation) {
@@ -2488,7 +2495,7 @@ export const AccommodationService = {
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: previousHostelId,
                         referenceType: 'HOSTEL_CANCELLATION',
-                        remarks: `grossPaid: ${paid}, availableCredit: ${availableCredit}, withheld: ${totalWithheld}${withholdBreakdown ? ` (acc: ${withholdBreakdown.accommodation}, mess: ${withholdBreakdown.mess}, laundry: ${withholdBreakdown.laundry}, reg: ${withholdBreakdown.registration})` : ' (flat)'}, refund: ${refundAmount}`,
+                        remarks: `grossPaid: ${paid}, availableCredit: ${availableCredit}, withheld: ${totalWithheld}${withholdBreakdown ? ` (acc: ${withholdBreakdown.accommodation}, mess: ${withholdBreakdown.mess}, laundry: ${withholdBreakdown.laundry}, reg: ${withholdBreakdown.registration})` : ''}, cancellationFee: ${retainedCancellationFee}, refund: ${refundAmount}`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -2509,6 +2516,7 @@ export const AccommodationService = {
                         paid,
                         totalWithheld,
                         withholdBreakdown,
+                        cancellationFee: retainedCancellationFee,
                         paidByComponent,
                         refundAmount,
                         pendingDemandRemoved: pendingDemandTotal,
@@ -2522,6 +2530,7 @@ export const AccommodationService = {
                 paid,
                 totalWithheld,
                 withholdBreakdown,
+                cancellationFee: retainedCancellationFee,
                 paidByComponent,
                 refundAmount,
                 pendingDemandRemoved: pendingDemandTotal,
@@ -2542,9 +2551,13 @@ export const AccommodationService = {
      */
     async cancelTransport(
         studentId: string,
-        args: { cancellationFee?: number; reason: string },
+        args: { withhold?: number; cancellationFee?: number; reason: string },
         adminId?: string
     ) {
+        // Two independent levers the college keeps, ADDED together:
+        //   withhold        — amount kept from what was paid into transport (capped ≤ paid).
+        //   cancellationFee — a separate flat penalty on top (not capped).
+        const withhold        = Math.max(0, args.withhold ?? 0);
         const cancellationFee = Math.max(0, args.cancellationFee ?? 0);
         const reason = args.reason;
 
@@ -2582,15 +2595,16 @@ export const AccommodationService = {
         const transportCredit = await getAvailableTransportCredit(studentId);
         const paid = transportCredit.grossPaid;
 
-        // Guard: the college can't withhold more than the student paid into transport. Without
-        // this, an over-large cancellationFee silently zeroes the refund instead of surfacing
-        // the mistake. Mirrors the per-component cap on hostel cancellation.
-        if (cancellationFee > paid) {
+        // Guard: the kept-from-paid `withhold` can't exceed what was paid into transport.
+        // (cancellationFee is an uncapped penalty — if total kept exceeds paid the refund just
+        // clamps to 0; mirrors the hostel cancellation rule.)
+        if (withhold > paid) {
             throw new AppError(
-                `Cannot withhold more than was paid for transport (cancellationFee ${cancellationFee} > paid ${paid}).`,
+                `Cannot withhold more than was paid for transport (withhold ${withhold} > paid ${paid}).`,
                 400
             );
         }
+        const totalRetained = withhold + cancellationFee;
 
         // Sum pending demand
         let pendingDemandTotal = 0;
@@ -2607,7 +2621,7 @@ export const AccommodationService = {
             pendingDemandTotal = pendingAgg._sum.netAmount ?? 0;
         }
 
-        const refundAmount = Math.max(0, transportCredit.availableCredit - cancellationFee);
+        const refundAmount = Math.max(0, transportCredit.availableCredit - totalRetained);
 
         const result = await prisma.$transaction(async (tx) => {
             // 1. Soft-delete ALL active transport demand(s) (not just PENDING) — the service
@@ -2641,12 +2655,12 @@ export const AccommodationService = {
                         studentId,
                         academicYearId,
                         amount: refundAmount,
-                        retainedAmount: cancellationFee,
+                        retainedAmount: totalRetained,
                         reason: `Transport cancellation: ${reason}`,
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: previousRouteId,
                         referenceType: 'TRANSPORT_CANCELLATION',
-                        remarks: `Paid: ${paid}, cancellationFee: ${cancellationFee}, refund: ${refundAmount}`,
+                        remarks: `Paid: ${paid}, withhold: ${withhold}, cancellationFee: ${cancellationFee}, totalRetained: ${totalRetained}, refund: ${refundAmount}`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -2664,7 +2678,9 @@ export const AccommodationService = {
                     details: {
                         previousRouteId,
                         paid,
+                        withhold,
                         cancellationFee,
+                        totalRetained,
                         refundAmount,
                         pendingDemandRemoved: pendingDemandTotal,
                         reason,
@@ -2674,7 +2690,9 @@ export const AccommodationService = {
 
             return {
                 paid,
+                withhold,
                 cancellationFee,
+                totalRetained,
                 refundAmount,
                 pendingDemandRemoved: pendingDemandTotal,
                 feeCorrectionId: feeCorrection?.id ?? null,

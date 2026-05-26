@@ -607,8 +607,8 @@ export const cancelHostel = catchAsync(async (req: Request, res: Response, next:
 // pending demand, creates FeeCorrection refund.
 export const cancelTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { cancellationFee, reason } = req.body;
-    logger.info(`[cancelTransport] studentId=${studentId} cancellationFee=${cancellationFee} by=${req.user?.userId || 'anonymous'}`);
+    const { withhold, cancellationFee, reason } = req.body;
+    logger.info(`[cancelTransport] studentId=${studentId} withhold=${withhold} cancellationFee=${cancellationFee} by=${req.user?.userId || 'anonymous'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot cancel their own transport', 403);
@@ -616,7 +616,7 @@ export const cancelTransport = catchAsync(async (req: Request, res: Response, ne
 
     const result = await AdminStudentService.cancelTransport(
         studentId,
-        { cancellationFee, reason },
+        { withhold, cancellationFee, reason },
         req.user?.userId
     );
 

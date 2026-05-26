@@ -177,7 +177,8 @@ export const cancelTransportSchema = z.object({
         studentId: z.string().uuid("Invalid Student ID"),
     }),
     body: z.object({
-        cancellationFee: z.number().min(0).optional().default(0),
+        withhold: z.number().min(0).optional(),         // amount kept from transport paid (≤ paid)
+        cancellationFee: z.number().min(0).optional().default(0),  // separate flat penalty on top
         reason: z.string().trim().min(1, "Reason is required").max(500),
     }),
 });
