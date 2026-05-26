@@ -50,9 +50,11 @@ export const FeeService = {
     },
 
     /** List fee heads applicable to a course (with their structure amounts) for a given year. */
-    getCourseFeeHeads: async (courseId: string, academicYearId?: string) => {
+    getCourseFeeHeads: async (courseId: string, academicYearId?: string, entryType?: AdmissionEntryType, instituteCode?: string) => {
         const where: any = { isDeleted: false, courseId };
         if (academicYearId) where.academicYearId = academicYearId;
+        if (entryType) where.entryType = entryType;
+        if (instituteCode) where.instituteCode = instituteCode;
 
         const feeStructures = await prisma.feeStructure.findMany({
             where,

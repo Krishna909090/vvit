@@ -442,8 +442,8 @@ export const getStudentsByHostel = catchAsync(async (req: Request, res: Response
 // leftover goes to FeeCorrection.
 export const switchHostelToTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { chargeRetained, reason, transportRouteId, customCost } = req.body;
-    logger.info(`[switchHostelToTransport] studentId=${studentId} routeId=${transportRouteId} chargeRetained=${chargeRetained} custom=${customCost != null ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'}`);
+    const { withhold, cancellationFee, chargeRetained, reason, transportRouteId, customCost } = req.body;
+    logger.info(`[switchHostelToTransport] studentId=${studentId} routeId=${transportRouteId} withhold=${withhold ? JSON.stringify(withhold) : 'none'} cancellationFee=${cancellationFee} chargeRetained=${chargeRetained} custom=${customCost != null ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'}`);
 
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot switch their own accommodation', 403);
@@ -452,7 +452,7 @@ export const switchHostelToTransport = catchAsync(async (req: Request, res: Resp
 
     const result = await AdminStudentService.switchHostelToTransport(
         studentId,
-        { chargeRetained, reason, transportRouteId, customCost },
+        { withhold, cancellationFee, chargeRetained, reason, transportRouteId, customCost },
         req.user?.userId
     );
 

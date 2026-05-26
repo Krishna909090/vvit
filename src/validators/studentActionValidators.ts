@@ -188,9 +188,13 @@ export const switchHostelToTransportSchema = z.object({
         studentId: z.string().uuid("Invalid Student ID"),
     }),
     body: z.object({
-        // What the college keeps as a non-refundable charge for the period the student
-        // actually used the hostel (e.g. prorated for 2 months).
-        // refundPool = max(0, hostelPaid − chargeRetained)
+        // What the college keeps from the HOSTEL side being left:
+        //   withhold        — per-component, each ≤ what was paid for that component
+        //   cancellationFee — separate flat penalty on top
+        //   chargeRetained  — legacy single flat amount (folded into the fee; kept for compat)
+        // refund = max(0, hostelPaid − (Σ withhold + cancellationFee + chargeRetained))
+        withhold: hostelWithholdField,
+        cancellationFee: z.number().min(0).optional().default(0),
         chargeRetained: z.number().min(0).optional().default(0),
         reason: z.string().trim().min(1, "Reason is required").max(500),
         transportRouteId: z.string().uuid("Invalid Transport Route ID"),

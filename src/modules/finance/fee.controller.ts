@@ -8,6 +8,7 @@ import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { Role, RoleType } from '../../constants/roles';
 import { assertStudentOwns } from '../../utils/ownership';
+import { AdmissionEntryType } from '@prisma/client';
 
 // Fee Head
 export const createFeeHead = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -23,7 +24,7 @@ export const createFeeHead = catchAsync(async (req: Request, res: Response, next
         message: MESSAGES.SUCCESS.FEE_HEAD_CREATED,
         data: feeHead
     });
-});
+}); 
 
 export const getFeeHeads = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const feeHeads = await FeeService.getFeeHeads();
@@ -32,9 +33,17 @@ export const getFeeHeads = catchAsync(async (req: Request, res: Response, next: 
 
 export const getCourseFeeHeads = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { courseId } = req.params;
-    const { academicYearId } = req.query;
+    const { academicYearId, entryType, instituteCode } = req.query;
     if (!courseId) throw new AppError('courseId is required', 400);
-    const data = await FeeService.getCourseFeeHeads(courseId, academicYearId as string | undefined);
+    if (entryType && !Object.values(AdmissionEntryType).includes(entryType as AdmissionEntryType)) {
+        throw new AppError(`entryType must be one of: ${Object.values(AdmissionEntryType).join(', ')}`, 400);
+    }
+    const data = await FeeService.getCourseFeeHeads(
+        courseId,
+        academicYearId as string | undefined,
+        entryType as AdmissionEntryType | undefined,
+        instituteCode as string | undefined
+    );
     sendResponse({ res, statusCode: 200, success: true, data });
 });
 

@@ -2716,11 +2716,26 @@ export const AccommodationService = {
      */
     async switchHostelToTransport(
         studentId: string,
-        args: { chargeRetained?: number; reason: string; transportRouteId: string; customCost?: number },
+        args: {
+            // What the college KEEPS from the hostel side: per-component `withhold` (each ≤ paid
+            // for that component) + a separate flat `cancellationFee`. Legacy `chargeRetained`
+            // (a single flat amount) is still accepted and folded into the flat fee.
+            withhold?: HostelWithhold;
+            cancellationFee?: number;
+            chargeRetained?: number;
+            reason: string;
+            transportRouteId: string;
+            customCost?: number;
+        },
         adminId?: string
     ) {
-        const chargeRetained = Math.max(0, args.chargeRetained ?? 0);
         const { reason, transportRouteId } = args;
+        // Normalize the "kept" inputs: withhold (per-component) + cancellationFee, with legacy
+        // chargeRetained treated as an additional flat fee.
+        const withholdArgs = {
+            withhold: args.withhold,
+            cancellationFee: Math.max(0, args.cancellationFee ?? 0) + Math.max(0, args.chargeRetained ?? 0),
+        };
 
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'switch hostel to transport');
@@ -2785,12 +2800,15 @@ export const AccommodationService = {
 
             // NO auto-adjustment: the old hostel payment is NOT applied as a discount on the
             // new transport demand (billed at FULL cost). Instead the refundable amount
-            // (availableCredit − chargeRetained) is returned as a carry-forward FeeCorrection
-            // the student/admin settles separately.
+            // (hostelPaid − total kept) is returned as a carry-forward FeeCorrection the
+            // student/admin settles separately. "Kept" = per-component withhold + cancellationFee.
             const credit          = await getAvailableHostelCredit(studentId, tx);
             const hostelPaid      = credit.grossPaid;
             const availableCredit = credit.availableCredit;
-            const refundPool      = Math.max(0, availableCredit - chargeRetained);
+            const paidByComponent = await getHostelPaidByComponent(studentId, tx);
+            const { breakdown: withholdBreakdown, cancellationFee: retainedCancellationFee, total: totalRetained } =
+                resolveHostelWithhold(withholdArgs, paidByComponent);
+            const refundPool      = Math.max(0, availableCredit - totalRetained);
             const appliedToNew    = 0;                 // never auto-applied to the new demand
             const leftover        = refundPool;        // whole pool is refunded
             const newDemandNet    = newCost;           // new demand billed at full cost
@@ -2876,12 +2894,12 @@ export const AccommodationService = {
                         studentId,
                         academicYearId,
                         amount: leftover,
-                        retainedAmount: chargeRetained,
+                        retainedAmount: totalRetained,
                         reason: `Hostel→Transport switch refund: ${reason}`,
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: previousHostelId,
                         referenceType: 'HOSTEL_TO_TRANSPORT_SWITCH',
-                        remarks: `grossPaid: ${hostelPaid}, availableCredit: ${availableCredit}, chargeRetained: ${chargeRetained}, refund: ${leftover} (no auto-adjustment to new transport demand)`,
+                        remarks: `grossPaid: ${hostelPaid}, availableCredit: ${availableCredit}, withheld: ${totalRetained}${withholdBreakdown ? ` (acc: ${withholdBreakdown.accommodation}, mess: ${withholdBreakdown.mess}, laundry: ${withholdBreakdown.laundry}, reg: ${withholdBreakdown.registration})` : ''}, cancellationFee: ${retainedCancellationFee}, refund: ${leftover} (no auto-adjustment to new transport demand)`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -2903,7 +2921,9 @@ export const AccommodationService = {
                         newRouteId: transportRouteId,
                         routeName: route.name,
                         hostelPaid,
-                        chargeRetained,
+                        withholdBreakdown,
+                        cancellationFee: retainedCancellationFee,
+                        totalRetained,
                         refundPool,
                         appliedToNew,
                         leftover,
@@ -2924,7 +2944,9 @@ export const AccommodationService = {
             return {
                 cancellation: {
                     hostelPaid,
-                    chargeRetained,
+                    withholdBreakdown,
+                    cancellationFee: retainedCancellationFee,
+                    totalRetained,
                     refundPool,
                     pendingHostelRemoved: pendingHostelTotal,
                     bedVacated: !!(allocation && allocation.status === 'ACTIVE'),
