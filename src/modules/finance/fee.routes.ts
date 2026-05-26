@@ -11,7 +11,9 @@ import {
     addStudentDiscount,
     getDiscountRequests,
     getCourseFeeHeads,
-    changeAccommodationType
+    changeAccommodationType,
+    getFeeCorrections,
+    applyFeeCorrection
 } from './fee.controller';
 
 import {
@@ -19,7 +21,7 @@ import {
     bulkHeadsFeeStructureSchema,
     cloneFeeStructuresSchema,
     createDiscountRequestSchema, updateDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema,
-    generateFeeDemandsBulkSchema
+    generateFeeDemandsBulkSchema, applyFeeCorrectionSchema
 } from '../../validators/adminValidators';
 import {
     setApplicationFeeSchema, collectFeeSchema, addStudentDiscountSchema, changeAccommodationSchema
@@ -133,6 +135,22 @@ router.post('/fee-structure/clone-academic-year',
  * Response: { status, data: [{ id, course, feeHead, amount, yearOfStudy, quotaType }] }
  */
 router.get('/fee-structure', authenticate, authorizePermission('finance.read.all'), getFeeStructures);
+
+/**
+ * GET /finance/fees/fee-corrections (also mounted at /admin/fee/fee-corrections)
+ * Lists fee corrections (credits/refunds) with filters + pagination. Each row includes
+ * `applied` and `remaining` so the UI knows how much credit is left to transfer.
+ * Query: { studentId?, academicYearId?, type?, isSettled?, carryForward?, referenceType?, applicationId?, page?, limit? }
+ */
+router.get('/fee-corrections', authenticate, authorizePermission('finance.read.all'), getFeeCorrections);
+
+/**
+ * POST /finance/fees/fee-corrections/:id/apply (also at /admin/fee/fee-corrections/:id/apply)
+ * Transfer (apply) part or all of a correction's remaining credit onto a specific fee demand.
+ * Body: { feeDemandId, amount, remarks? }. Records a tagged transfer Payment (excluded from
+ * paidFee), transitions the demand status, and marks the correction settled when fully consumed.
+ */
+router.post('/fee-corrections/:id/apply', authenticate, authorizePermission('finance.update.all'), validateRequest(applyFeeCorrectionSchema), applyFeeCorrection);
 
 /**
  * PUT /finance/fees/fee-structure/:id

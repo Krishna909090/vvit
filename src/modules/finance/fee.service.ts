@@ -1,12 +1,12 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
-import { SystemSetting, DiscountStatus, PaymentMethod, PaymentComponent, PaymentMode, QuotaType, AccommodationType, LedgerTransactionType, AdmissionEntryType } from '@prisma/client';
+import { SystemSetting, DiscountStatus, PaymentMethod, PaymentComponent, PaymentMode, QuotaType, AccommodationType, LedgerTransactionType, AdmissionEntryType, FeeCorrectionType, FeeStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { Role, RoleType } from '../../constants/roles';
 import logger from '../../utils/logger';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { getHostelCostTx } from '../../utils/hostelPricing';
 import { assertHostelHasCapacity } from '../accommodation/hostel/hostel.service';
-import { recomputeStudentTotals } from '../../utils/studentContext';
+import { recomputeStudentTotals, assertAcademicYearWritable } from '../../utils/studentContext';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';
@@ -85,8 +85,21 @@ export const FeeService = {
 
         const totalDemanded = Object.values(breakdown).reduce((sum, cat) => sum + cat.demanded, 0);
 
+        // Resolve the academic year for the response: the filter param if given, otherwise the
+        // structures' year when they all share one (null if they span multiple / none).
+        const yearsById = new Map<string, { id: string; code: string }>();
+        feeStructures.forEach((fs: any) => {
+            if (fs.academicYear) yearsById.set(fs.academicYear.id, { id: fs.academicYear.id, code: fs.academicYear.code });
+        });
+        const distinctYears = Array.from(yearsById.values());
+        const resolvedYear = academicYearId
+            ? (yearsById.get(academicYearId) ?? null)
+            : (distinctYears.length === 1 ? distinctYears[0] : null);
+
         return {
             courseName: course.name,
+            academicYearId: academicYearId ?? resolvedYear?.id ?? null,
+            academicYear: resolvedYear,
             summary: { totalDemanded },
             breakdown
         };
@@ -2270,6 +2283,217 @@ export const FeeService = {
         logger.info(`[changeAccommodationType] Student=${studentId} ${result.oldType} → ${result.newType}, Fee adjustment: ${result.feeAdjustment}`);
 
         return result;
+    },
+
+    /**
+     * List fee corrections (credits/refunds) with filters + pagination. Each row is enriched
+     * with `applied` (sum of amounts already transferred to fee demands) and `remaining`
+     * (amount − applied), so the UI knows how much credit is still available to transfer.
+     * `applied` is derived from FEE_CORRECTION_TRANSFER ledger rows (referenceId = correctionId).
+     */
+    getFeeCorrections: async (filters: {
+        studentId?:       string;
+        academicYearId?:  string;
+        type?:            FeeCorrectionType;
+        isSettled?:       boolean;
+        carryForward?:    boolean;
+        referenceType?:   string;
+        applicationId?:   string;
+        page?:            number;
+        limit?:           number;
+    } = {}) => {
+        const where: any = {};
+        if (filters.studentId)             where.studentId      = filters.studentId;
+        if (filters.academicYearId)        where.academicYearId = filters.academicYearId;
+        if (filters.type)                  where.type           = filters.type;
+        if (filters.isSettled !== undefined)    where.isSettled    = filters.isSettled;
+        if (filters.carryForward !== undefined) where.carryForward = filters.carryForward;
+        if (filters.referenceType)         where.referenceType  = filters.referenceType;
+        if (filters.applicationId) {
+            where.student = { applicationId: { contains: filters.applicationId, mode: 'insensitive' } };
+        }
+
+        const page  = Math.max(1, Number(filters.page  ?? 1));
+        const limit = Math.min(200, Math.max(1, Number(filters.limit ?? 50)));
+        const skip  = (page - 1) * limit;
+
+        const [rows, total] = await Promise.all([
+            prisma.feeCorrection.findMany({
+                where, skip, take: limit, orderBy: { createdAt: 'desc' },
+                include: {
+                    student:      { select: { id: true, name: true, applicationId: true } },
+                    academicYear: { select: { id: true, code: true } },
+                },
+            }),
+            prisma.feeCorrection.count({ where }),
+        ]);
+
+        // Sum already-transferred amounts per correction from the tagged transfer payments
+        // (metadata.kind = FEE_CORRECTION_TRANSFER, metadata.feeCorrectionId = correction id).
+        const ids = rows.map(r => r.id);
+        const appliedByCorrection = new Map<string, number>();
+        if (ids.length > 0) {
+            const studentIds = Array.from(new Set(rows.map((r: any) => r.studentId)));
+            const transfers = await prisma.payment.findMany({
+                where: {
+                    studentId: { in: studentIds },
+                    status: PaymentStatus.SUCCESS,
+                    isDeleted: false,
+                    metadata: { path: ['kind'], equals: 'FEE_CORRECTION_TRANSFER' },
+                },
+                select: { amount: true, metadata: true },
+            });
+            const idSet = new Set(ids);
+            for (const t of transfers) {
+                const cid = (t.metadata as any)?.feeCorrectionId;
+                if (cid && idSet.has(cid)) {
+                    appliedByCorrection.set(cid, (appliedByCorrection.get(cid) ?? 0) + (t.amount ?? 0));
+                }
+            }
+        }
+
+        const items = rows.map((r: any) => {
+            const applied   = appliedByCorrection.get(r.id) ?? 0;
+            const remaining = Math.max(0, r.amount - applied);
+            return { ...r, applied, remaining };
+        });
+
+        return {
+            items,
+            pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        };
+    },
+
+    /**
+     * Transfer (apply) part or all of a fee correction's REMAINING credit onto a specific fee
+     * demand. The credit is recorded as a SUCCESS Payment tagged metadata.kind=FEE_CORRECTION_TRANSFER
+     * and linked to the demand, which transitions the demand status (PARTIAL/FULL). The correction
+     * is marked isSettled once fully consumed.
+     *
+     * IMPORTANT: the transfer is EXCLUDED from paidFee (recomputeStudentTotals subtracts tagged
+     * transfers) because the money was already counted in paidFee when originally paid — applying
+     * existing credit to a demand must not inflate total cash received.
+     *
+     * Serializable so two concurrent transfers can't both spend the same remaining credit.
+     */
+    applyFeeCorrection: async (
+        feeCorrectionId: string,
+        args: { feeDemandId: string; amount: number; remarks?: string },
+        adminId?: string
+    ) => {
+        const amount = Number(args.amount);
+        if (!feeCorrectionId)   throw new AppError('feeCorrectionId is required', 400);
+        if (!args.feeDemandId)  throw new AppError('feeDemandId is required', 400);
+        if (!(amount > 0))      throw new AppError('amount must be greater than 0', 400);
+
+        return prisma.$transaction(async (tx) => {
+            const correction = await tx.feeCorrection.findUnique({ where: { id: feeCorrectionId } });
+            if (!correction) throw new AppError('Fee correction not found', 404);
+
+            // Remaining = correction.amount − already-transferred (tagged transfer payments).
+            const priorTransfers = await tx.payment.findMany({
+                where: {
+                    studentId: correction.studentId, status: PaymentStatus.SUCCESS, isDeleted: false,
+                    metadata: { path: ['feeCorrectionId'], equals: feeCorrectionId },
+                },
+                select: { amount: true },
+            });
+            const applied   = priorTransfers.reduce((s, p) => s + (p.amount ?? 0), 0);
+            const remaining = Math.max(0, correction.amount - applied);
+            if (remaining <= 0)      throw new AppError('This fee correction has no remaining credit to transfer.', 400);
+            if (amount > remaining)  throw new AppError(`Amount (${amount}) exceeds the correction's remaining credit (${remaining}).`, 400);
+
+            const demand = await tx.studentFeeDemand.findUnique({ where: { id: args.feeDemandId } });
+            if (!demand || demand.isDeleted)           throw new AppError('Fee demand not found', 404);
+            if (demand.studentId !== correction.studentId) throw new AppError('Fee demand belongs to a different student than the correction.', 400);
+            if (demand.status === FeeStatus.FULL)       throw new AppError('Fee demand is already fully paid.', 400);
+            if (demand.academicYearId) await assertAcademicYearWritable(demand.academicYearId);
+
+            // Outstanding = net payable − payments already made against the demand.
+            const paidAgg = await tx.payment.aggregate({
+                where: { feeDemandId: demand.id, status: PaymentStatus.SUCCESS, isDeleted: false },
+                _sum: { amount: true },
+            });
+            const target      = demand.netAmount ?? demand.amount;
+            const demandPaid  = paidAgg._sum.amount ?? 0;
+            const outstanding = Math.max(0, target - demandPaid);
+            if (outstanding <= 0)     throw new AppError("Fee demand has no outstanding balance.", 400);
+            if (amount > outstanding) throw new AppError(`Amount (${amount}) exceeds the demand's outstanding balance (${outstanding}).`, 400);
+
+            // Component for the payment row, resolved from the demand's fee head.
+            let component: PaymentComponent = PaymentComponent.OTHER;
+            if (demand.feeHeadId) {
+                const head = await tx.feeHead.findUnique({ where: { id: demand.feeHeadId }, select: { component: true } });
+                if (head?.component) component = head.component as PaymentComponent;
+            }
+
+            // 1. Record the credit transfer as a SUCCESS payment linked to the demand.
+            const payment = await (tx.payment as any).create({
+                data: {
+                    studentId: correction.studentId,
+                    amount,
+                    status: PaymentStatus.SUCCESS,
+                    mode: PaymentMode.OFFLINE,
+                    component,
+                    feeHeadId: demand.feeHeadId ?? undefined,
+                    feeDemandId: demand.id,
+                    academicYearId: demand.academicYearId,
+                    yearOfStudy: demand.yearOfStudy ?? undefined,
+                    collectedBy: adminId,
+                    createdBy: adminId,
+                    idempotencyKey: `fctxfer-${feeCorrectionId}-${demand.id}-${Date.now()}`,
+                    metadata: { kind: 'FEE_CORRECTION_TRANSFER', feeCorrectionId, remarks: args.remarks ?? null, appliedBy: adminId ?? null },
+                },
+            });
+
+            // 2. Transition the demand status from its payments (including this transfer).
+            const newDemandPaid = demandPaid + amount;
+            const newStatus = newDemandPaid >= target ? FeeStatus.FULL : FeeStatus.PARTIAL;
+            await tx.studentFeeDemand.update({ where: { id: demand.id }, data: { status: newStatus, updatedBy: adminId } });
+
+            // 3. Mark the correction settled once fully consumed.
+            const newApplied     = applied + amount;
+            const fullyConsumed  = newApplied >= correction.amount;
+            if (fullyConsumed && !correction.isSettled) {
+                await tx.feeCorrection.update({
+                    where: { id: feeCorrectionId },
+                    data: { isSettled: true, settledAt: new Date(), settledBy: adminId, updatedBy: adminId },
+                });
+            }
+
+            // 4. Audit.
+            await tx.auditLog.create({
+                data: {
+                    userId: adminId,
+                    action: 'FEE_CORRECTION_TRANSFERRED',
+                    entity: 'FeeCorrection',
+                    entityId: feeCorrectionId,
+                    details: {
+                        feeDemandId: demand.id, amount, component,
+                        correctionAmount: correction.amount, priorApplied: applied, newApplied,
+                        remainingAfter: Math.max(0, correction.amount - newApplied),
+                        demandTarget: target, demandPaidAfter: newDemandPaid, demandStatus: newStatus,
+                        paymentId: payment.id, remarks: args.remarks ?? null,
+                    },
+                },
+            });
+
+            // 5. Recompute totals (tagged transfers are excluded from paidFee inside).
+            await recomputeStudentTotals(correction.studentId, tx);
+
+            return {
+                feeCorrectionId,
+                transferred: amount,
+                correction: {
+                    amount: correction.amount,
+                    applied: newApplied,
+                    remaining: Math.max(0, correction.amount - newApplied),
+                    isSettled: fullyConsumed || !!correction.isSettled,
+                },
+                demand: { id: demand.id, target, paid: newDemandPaid, status: newStatus },
+                paymentId: payment.id,
+            };
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     },
 };
 

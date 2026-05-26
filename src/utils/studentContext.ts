@@ -285,108 +285,58 @@ export const getActiveAcademicYear = async (tx?: any): Promise<{
 /* ─────────────────── Hostel credit accounting (idempotent) ───────────────────── */
 
 /**
- * Available hostel credit = paid-in cash minus already-promised refunds.
+ * Available hostel credit = gross student-paid hostel money.
  *
- * Returns the amount of student-paid hostel money that is still "in" the college's
- * hostel ledger and available to be applied as a discount on a NEW hostel demand
- * during reassign / switch / cancel flows.
- *
- *   availableCredit = max(0, gross_hostel_payments
- *                          − sum(FeeCorrection.amount for accommodation/branch refunds))
- *
- * Why subtract FeeCorrection rows (settled AND unsettled): each row represents
- * cash that is either already disbursed back to the student (settled), or
- * earmarked for disbursement (unsettled). In both cases the cash is no longer
- * available to credit against new demands.
- *
- * Without this clamp, the same paid-in money gets reused as discount across
- * multiple reassign cycles (SHARING_4 → SHARING_8 → SHARING_4 → SHARING_8),
- * creating phantom refund rows and over-stating what the college owes back.
+ * Refund de-duplication (ensuring the same rupees aren't refunded twice across
+ * reassign/switch/cancel cycles) is handled by a separate refunds module, NOT here —
+ * so `availableCredit` is simply `grossPaid` and no prior-refund netting is applied.
  *
  * Pass `tx` when calling inside a Prisma transaction.
  */
 export const getAvailableHostelCredit = async (studentId: string, tx?: any): Promise<{
     grossPaid: number;
-    priorRefunds: number;
     availableCredit: number;
 }> => {
     const client = tx || prisma;
 
-    const [paidAgg, refundAgg] = await Promise.all([
-        client.payment.aggregate({
-            where: {
-                studentId,
-                status: 'SUCCESS',
-                isDeleted: false,
-                component: { in: [
-                    'HOSTEL',
-                    'HOSTEL_ACCOMMODATION',
-                    'HOSTEL_MESS',
-                    'HOSTEL_LAUNDRY',
-                    'HOSTEL_REGISTRATION',
-                ]},
-            },
-            _sum: { amount: true },
-        }),
-        client.feeCorrection.aggregate({
-            where: {
-                studentId,
-                type: 'ACCOMMODATION_CHANGE_REFUND',
-                // Scope to HOSTEL-originated refunds only. Previously this summed ALL
-                // ACCOMMODATION_CHANGE_REFUND + BRANCH_CHANGE_REFUND, so a transport→hostel
-                // switch refund (or a branch-change refund) was wrongly subtracted from
-                // hostel credit — e.g. hostel paid 3000 with a prior 2500 transport-switch
-                // refund yielded a 500 hostel-cancel refund instead of 3000. Mirrors the
-                // precise scoping in getAvailableTransportCredit.
-                referenceType: { in: ['HOSTEL_CANCELLATION', 'HOSTEL_REASSIGNMENT', 'HOSTEL_TO_TRANSPORT_SWITCH'] },
-            },
-            _sum: { amount: true },
-        }),
-    ]);
+    const paidAgg = await client.payment.aggregate({
+        where: {
+            studentId,
+            status: 'SUCCESS',
+            isDeleted: false,
+            component: { in: [
+                'HOSTEL',
+                'HOSTEL_ACCOMMODATION',
+                'HOSTEL_MESS',
+                'HOSTEL_LAUNDRY',
+                'HOSTEL_REGISTRATION',
+            ]},
+        },
+        _sum: { amount: true },
+    });
 
-    const grossPaid     = paidAgg._sum.amount ?? 0;
-    const priorRefunds  = refundAgg._sum.amount ?? 0;
-    const availableCredit = Math.max(0, grossPaid - priorRefunds);
-
-    return { grossPaid, priorRefunds, availableCredit };
+    const grossPaid = paidAgg._sum.amount ?? 0;
+    return { grossPaid, availableCredit: grossPaid };
 };
 
 /**
  * Transport analogue of getAvailableHostelCredit. Available transport credit =
- * gross TRANSPORT payments − transport refunds already issued (FeeCorrection rows
- * from a prior transport cancellation or transport→hostel switch). Without this
- * netting, a cancel/switch cycle re-refunds the same transport rupees (double refund).
- *
- * Scoped precisely to transport refund referenceTypes so it never double-subtracts
- * hostel refunds. Pass `tx` when inside a Prisma transaction.
+ * gross TRANSPORT payments. No prior-refund netting (handled by the separate refunds
+ * module). Pass `tx` when inside a Prisma transaction.
  */
 export const getAvailableTransportCredit = async (studentId: string, tx?: any): Promise<{
     grossPaid: number;
-    priorRefunds: number;
     availableCredit: number;
 }> => {
     const client = tx || prisma;
 
-    const [paidAgg, refundAgg] = await Promise.all([
-        client.payment.aggregate({
-            where: { studentId, status: 'SUCCESS', isDeleted: false, component: 'TRANSPORT' },
-            _sum: { amount: true },
-        }),
-        client.feeCorrection.aggregate({
-            where: {
-                studentId,
-                type: 'ACCOMMODATION_CHANGE_REFUND',
-                referenceType: { in: ['TRANSPORT_CANCELLATION', 'TRANSPORT_TO_HOSTEL_SWITCH'] },
-            },
-            _sum: { amount: true },
-        }),
-    ]);
+    const paidAgg = await client.payment.aggregate({
+        where: { studentId, status: 'SUCCESS', isDeleted: false, component: 'TRANSPORT' },
+        _sum: { amount: true },
+    });
 
-    const grossPaid     = paidAgg._sum.amount ?? 0;
-    const priorRefunds  = refundAgg._sum.amount ?? 0;
-    const availableCredit = Math.max(0, grossPaid - priorRefunds);
-
-    return { grossPaid, priorRefunds, availableCredit };
+    const grossPaid = paidAgg._sum.amount ?? 0;
+    return { grossPaid, availableCredit: grossPaid };
 };
 
 /**
@@ -410,7 +360,7 @@ export const recomputeStudentTotals = async (
 ): Promise<{ totalFee: number; paidFee: number }> => {
     const client = tx || prisma;
 
-    const [demandAgg, paidAgg] = await Promise.all([
+    const [demandAgg, paidAgg, transferAgg] = await Promise.all([
         client.studentFeeDemand.aggregate({
             where: { studentId, isDeleted: false },
             _sum: { amount: true },
@@ -419,10 +369,22 @@ export const recomputeStudentTotals = async (
             where: { studentId, status: 'SUCCESS', isDeleted: false, component: { not: 'APPLICATION_FEE' } },
             _sum: { amount: true },
         }),
+        // Fee-correction transfers are Payment rows that settle a demand using credit the
+        // student ALREADY paid (and that's already in paidFee from the original payment).
+        // Subtract them so the same rupees aren't counted twice. Positive `equals` filter —
+        // matches only tagged rows, so null-metadata payments are unaffected.
+        client.payment.aggregate({
+            where: {
+                studentId, status: 'SUCCESS', isDeleted: false,
+                metadata: { path: ['kind'], equals: 'FEE_CORRECTION_TRANSFER' },
+            },
+            _sum: { amount: true },
+        }),
     ]);
 
-    const totalFee = demandAgg._sum.amount ?? 0;
-    const paidFee  = paidAgg._sum.amount ?? 0;
+    const totalFee     = demandAgg._sum.amount ?? 0;
+    const transferPaid = transferAgg._sum.amount ?? 0;
+    const paidFee      = (paidAgg._sum.amount ?? 0) - transferPaid;
 
     await client.studentAdmission.update({
         where: { studentId },

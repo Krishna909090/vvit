@@ -69,3 +69,5 @@ deploy.zip
 
 *.svg
 *.png
+
+*.js

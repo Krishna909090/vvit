@@ -173,7 +173,7 @@ export const CourseCapacityService = {
             where.course = courseFilter;
         }
 
-        return prisma.courseCapacity.findMany({
+        const rows = await prisma.courseCapacity.findMany({
             where,
             include: {
                 course:       { select: { id: true, name: true, code: true, degree: true } },
@@ -184,6 +184,10 @@ export const CourseCapacityService = {
                 { course:       { code: 'asc' } },
             ],
         });
+
+        // Surface the course's degree as a top-level `degreeType` for convenience (still
+        // available nested under `course.degree`).
+        return rows.map((r: any) => ({ ...r, degreeType: r.course?.degree ?? null }));
     },
 
     /** Fetch a single capacity row by primary key, with course + year eager-loaded. */

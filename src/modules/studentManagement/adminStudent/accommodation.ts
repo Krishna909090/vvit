@@ -182,6 +182,67 @@ const resolveHostelWithhold = (
     return { breakdown: null, total: Math.max(0, args.cancellationFee ?? 0) };
 };
 
+/**
+ * List a student's active (non-deleted) demands for the given fee heads, each enriched with how
+ * much has been PAID against it (sum of SUCCESS payments linked via feeDemandId) and the
+ * outstanding balance. Shared by all the cancel/switch PREVIEWS so they uniformly show
+ * "the demands of the accommodation being left + paid so far per demand" — the admin uses this
+ * to decide what to keep before committing.
+ */
+const listDemandsWithPaid = async (studentId: string, feeHeadIds: string[]) => {
+    const demands = feeHeadIds.length > 0
+        ? await prisma.studentFeeDemand.findMany({
+            where: { studentId, feeHeadId: { in: feeHeadIds }, isDeleted: false },
+            include: { feeHead: { select: { id: true, name: true, component: true } } },
+            orderBy: { dueDate: 'asc' },
+        })
+        : [];
+
+    const demandIds = demands.map(d => d.id);
+    const paidByDemand = new Map<string, number>();
+    if (demandIds.length > 0) {
+        const grouped = await prisma.payment.groupBy({
+            by: ['feeDemandId'],
+            where: { feeDemandId: { in: demandIds }, status: PaymentStatus.SUCCESS, isDeleted: false },
+            _sum: { amount: true },
+        });
+        for (const g of grouped) if (g.feeDemandId) paidByDemand.set(g.feeDemandId, g._sum.amount ?? 0);
+    }
+
+    const list = demands.map((d: any) => {
+        const net  = d.netAmount ?? d.amount;
+        const paid = paidByDemand.get(d.id) ?? 0;
+        return {
+            demandId:          d.id,
+            feeHeadId:         d.feeHeadId,
+            feeHead:           d.feeHead?.name ?? null,
+            component:         d.feeHead?.component ?? null,
+            amount:            d.amount,
+            discountAmount:    d.discountAmount,
+            scholarshipAmount: d.scholarshipAmount,
+            netAmount:         net,
+            paid,
+            outstanding:       Math.max(0, net - paid),
+            status:            d.status,
+            dueDate:           d.dueDate,
+        };
+    });
+
+    const totals = list.reduce(
+        (t, d) => ({ demanded: t.demanded + d.netAmount, paid: t.paid + d.paid, outstanding: t.outstanding + d.outstanding }),
+        { demanded: 0, paid: 0, outstanding: 0 }
+    );
+
+    return { demands: list, totals };
+};
+
+const HOSTEL_FEE_COMPONENTS = [
+    PaymentComponent.HOSTEL_ACCOMMODATION,
+    PaymentComponent.HOSTEL_MESS,
+    PaymentComponent.HOSTEL_LAUNDRY,
+    PaymentComponent.HOSTEL_REGISTRATION,
+];
+
 export const AccommodationService = {
     /**
      * List vacant beds in a hostel, optionally filtered by sharing/roomType/floor.
@@ -1604,7 +1665,7 @@ export const AccommodationService = {
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: oldPricing.hostelId,
                         referenceType: 'HOSTEL_REASSIGNMENT',
-                        remarks: `grossPaid: ${hostelPaid}, priorRefunds: ${credit.priorRefunds}, availableCredit: ${availableCredit}, oldEffectiveTotal: ${oldEffectiveTotal}, newEffectiveTotal: ${newEffectiveTotal}, appliedToNew: ${appliedToNew}, leftover: ${leftoverRefund}`,
+                        remarks: `grossPaid: ${hostelPaid}, availableCredit: ${availableCredit}, oldEffectiveTotal: ${oldEffectiveTotal}, newEffectiveTotal: ${newEffectiveTotal}, appliedToNew: ${appliedToNew}, leftover: ${leftoverRefund}`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -2355,18 +2416,16 @@ export const AccommodationService = {
         const allocation = await prisma.hostelAllocation.findFirst({ where: { studentId, status: 'ACTIVE' } });
 
         const result = await prisma.$transaction(async (tx) => {
-            // Compute availableCredit INSIDE the tx (race-condition-safe).
-            // availableCredit = grossPaid − sum(prior FeeCorrection refunds).
-            // refundAmount uses availableCredit so prior unsettled FeeCorrection rows
-            // are not double-counted into this cancellation refund.
+            // availableCredit = gross hostel paid (no prior-refund netting; that's the separate
+            // refunds module's job). Read in-tx for race-safety.
             const credit = await getAvailableHostelCredit(studentId, tx);
             const paid = credit.grossPaid;
             const availableCredit = credit.availableCredit;
 
-            // Resolve how much the college keeps. With per-component `withhold`, each amount is
-            // capped against what was paid into that component (read in-tx for race-safety);
-            // otherwise fall back to the legacy single-lump cancellationFee. The refund is still
-            // bounded by availableCredit so prior unsettled refunds aren't refunded twice.
+            // The admin sends what the college KEEPS (per-component `withhold`, each capped at
+            // what was paid into that component; or the legacy single-lump cancellationFee).
+            // Whatever is NOT kept is what we owe the student back → refundAmount, which becomes
+            // a carry-forward FeeCorrection below.
             const paidByComponent = await getHostelPaidByComponent(studentId, tx);
             const { breakdown: withholdBreakdown, total: totalWithheld } = resolveHostelWithhold(args, paidByComponent);
             const refundAmount = Math.max(0, availableCredit - totalWithheld);
@@ -2428,7 +2487,7 @@ export const AccommodationService = {
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: previousHostelId,
                         referenceType: 'HOSTEL_CANCELLATION',
-                        remarks: `grossPaid: ${paid}, priorRefunds: ${credit.priorRefunds}, availableCredit: ${availableCredit}, withheld: ${totalWithheld}${withholdBreakdown ? ` (acc: ${withholdBreakdown.accommodation}, mess: ${withholdBreakdown.mess}, laundry: ${withholdBreakdown.laundry}, reg: ${withholdBreakdown.registration})` : ' (flat)'}, refund: ${refundAmount}`,
+                        remarks: `grossPaid: ${paid}, availableCredit: ${availableCredit}, withheld: ${totalWithheld}${withholdBreakdown ? ` (acc: ${withholdBreakdown.accommodation}, mess: ${withholdBreakdown.mess}, laundry: ${withholdBreakdown.laundry}, reg: ${withholdBreakdown.registration})` : ' (flat)'}, refund: ${refundAmount}`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -2704,18 +2763,17 @@ export const AccommodationService = {
             // Reclaim any unsettled leftover refund from a prior exit of TRANSPORT (re-entry).
             await voidReclaimedAccommodationRefunds(tx, studentId, AccommodationType.TRANSPORT, adminId);
 
-            // Compute availableCredit INSIDE the tx (race-condition-safe).
-            // refundPool uses availableCredit (paid − prior FeeCorrection refunds), NOT gross
-            // hostelPaid — otherwise prior refunds get re-counted into this one.
+            // NO auto-adjustment: the old hostel payment is NOT applied as a discount on the
+            // new transport demand (billed at FULL cost). Instead the refundable amount
+            // (availableCredit − chargeRetained) is returned as a carry-forward FeeCorrection
+            // the student/admin settles separately.
             const credit          = await getAvailableHostelCredit(studentId, tx);
             const hostelPaid      = credit.grossPaid;
             const availableCredit = credit.availableCredit;
             const refundPool      = Math.max(0, availableCredit - chargeRetained);
-            // Custom override → admin decides the transport charge; don't auto-apply the
-            // hostel refund pool as a discount. The pool is still refunded in full below.
-            const appliedToNew    = args.customCost != null ? 0 : Math.min(refundPool, newCost);
-            const leftover        = refundPool - appliedToNew;
-            const newDemandNet    = Math.max(0, newCost - appliedToNew);
+            const appliedToNew    = 0;                 // never auto-applied to the new demand
+            const leftover        = refundPool;        // whole pool is refunded
+            const newDemandNet    = newCost;           // new demand billed at full cost
 
             // ── 1. Cancel hostel ──
             if (allocation) {
@@ -2789,7 +2847,8 @@ export const AccommodationService = {
                 createdDemandId = demand.id;
             }
 
-            // ── 4. Refund leftover to FeeCorrection ──
+            // ── 4. Refund the pool to a carry-forward FeeCorrection ──
+            // The whole refundable pool is credited back (nothing auto-applied to the new demand).
             let feeCorrectionId: string | null = null;
             if (leftover > 0) {
                 const fc = await (tx.feeCorrection as any).create({
@@ -2797,11 +2856,11 @@ export const AccommodationService = {
                         studentId,
                         academicYearId,
                         amount: leftover,
-                        reason: `Hostel→Transport switch leftover refund: ${reason}`,
+                        reason: `Hostel→Transport switch refund: ${reason}`,
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: previousHostelId,
                         referenceType: 'HOSTEL_TO_TRANSPORT_SWITCH',
-                        remarks: `grossPaid: ${hostelPaid}, priorRefunds: ${credit.priorRefunds}, availableCredit: ${availableCredit}, chargeRetained: ${chargeRetained}, refundPool: ${refundPool}, appliedToNewTransport: ${appliedToNew}, leftover: ${leftover}`,
+                        remarks: `grossPaid: ${hostelPaid}, availableCredit: ${availableCredit}, chargeRetained: ${chargeRetained}, refund: ${leftover} (no auto-adjustment to new transport demand)`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -2987,20 +3046,16 @@ export const AccommodationService = {
             pendingTransportTotal = pAgg._sum.netAmount ?? 0;
         }
 
+        // NO auto-adjustment: transport credit is NOT applied as a discount on the new hostel
+        // demands (each billed at FULL cost). The refundable amount (availableCredit −
+        // chargeRetained) is returned as a carry-forward FeeCorrection, settled separately.
         const refundPool = Math.max(0, transportPaid - chargeRetained);
-        // Custom override → admin decides the hostel charge; don't auto-apply the
-        // transport refund pool as a discount. The pool is still refunded in full below.
-        const appliedToNew = args.customPricing ? 0 : Math.min(refundPool, effectiveTotal);
-        const leftover = refundPool - appliedToNew;
-
-        // Distribute appliedToNew proportionally across the 4 components.
-        // Last (registration) absorbs rounding so the discounts sum exactly to appliedToNew.
-        const distribute = (amount: number) =>
-            effectiveTotal > 0 ? Math.round((amount / effectiveTotal) * appliedToNew) : 0;
-        const accDiscount = distribute(accommodationPrice);
-        const messDiscount = distribute(messPrice);
-        const laundryDiscount = distribute(laundryPrice);
-        const regDiscount = appliedToNew - accDiscount - messDiscount - laundryDiscount;
+        const appliedToNew = 0;            // never auto-applied to the new demands
+        const leftover = refundPool;       // whole pool is refunded
+        const accDiscount = 0;
+        const messDiscount = 0;
+        const laundryDiscount = 0;
+        const regDiscount = 0;
 
         const admissionRow = await prisma.studentAdmission.findUnique({
             where: { studentId },
@@ -3101,7 +3156,8 @@ export const AccommodationService = {
             if (await buildDemand(laundryHead, laundryPrice, laundryDiscount, 'laundry')) feeDemandsCreated++;
             if (await buildDemand(regHead, registrationFee, regDiscount, 'registration')) feeDemandsCreated++;
 
-            // ── 5. Refund leftover ──
+            // ── 5. Refund the pool to a carry-forward FeeCorrection ──
+            // The whole refundable pool is credited back (nothing auto-applied to the new demands).
             let feeCorrectionId: string | null = null;
             if (leftover > 0) {
                 const fc = await (tx.feeCorrection as any).create({
@@ -3109,11 +3165,11 @@ export const AccommodationService = {
                         studentId,
                         academicYearId,
                         amount: leftover,
-                        reason: `Transport→Hostel switch leftover refund: ${reason}`,
+                        reason: `Transport→Hostel switch refund: ${reason}`,
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: previousRouteId,
                         referenceType: 'TRANSPORT_TO_HOSTEL_SWITCH',
-                        remarks: `transportPaid: ${transportPaid}, chargeRetained: ${chargeRetained}, refundPool: ${refundPool}, appliedToNewHostel: ${appliedToNew}, leftover: ${leftover}`,
+                        remarks: `transportPaid: ${transportPaid}, chargeRetained: ${chargeRetained}, refund: ${leftover} (no auto-adjustment to new hostel demands)`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -3346,7 +3402,6 @@ export const AccommodationService = {
             feeDelta: totalFeeDelta,
             financialAdjustment: {
                 hostelPaid,
-                priorRefunds: credit.priorRefunds,
                 availableCredit,
                 appliedToNew,
                 studentOwes: Math.max(0, newEffectiveTotal - appliedToNew),
@@ -3365,116 +3420,41 @@ export const AccommodationService = {
      * Preview cancelHostel: compute the refundable amount and what would be
      * removed/vacated — without writing.
      */
-    async previewCancelHostel(studentId: string, args: { cancellationFee?: number; withhold?: HostelWithhold }) {
+    async previewCancelHostel(studentId: string, _args?: { cancellationFee?: number; withhold?: HostelWithhold }) {
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'cancel hostel');
         const admission = ctx.admission!;
-        if (admission.academicYearId) {
-            await assertAcademicYearWritable(admission.academicYearId);
-        }
         if (admission.accommodationType !== AccommodationType.HOSTEL) {
             throw new AppError(`Student is not on HOSTEL (currently ${admission.accommodationType}). Nothing to cancel.`, 400);
         }
-        if (!admission.academicYearId) {
-            throw new AppError('Cannot cancel: student has no academicYearId on admission', 400);
-        }
 
-        const feeHeadMap = await resolveFeeHeadsByComponent([
-            PaymentComponent.HOSTEL_ACCOMMODATION,
-            PaymentComponent.HOSTEL_MESS,
-            PaymentComponent.HOSTEL_LAUNDRY,
-            PaymentComponent.HOSTEL_REGISTRATION,
-        ]);
+        // Show the hostel demands being left + how much was paid against each.
+        const feeHeadMap = await resolveFeeHeadsByComponent(HOSTEL_FEE_COMPONENTS);
         const hostelHeadIds = Array.from(feeHeadMap.values()).filter(Boolean).map((h: any) => h.id);
+        const { demands, totals } = await listDemandsWithPaid(studentId, hostelHeadIds);
 
-        let pendingDemandTotal = 0;
-        if (hostelHeadIds.length > 0) {
-            const pendingAgg = await prisma.studentFeeDemand.aggregate({
-                where: { studentId, feeHeadId: { in: hostelHeadIds }, status: FeeStatus.PENDING, isDeleted: false },
-                _sum: { netAmount: true },
-            });
-            pendingDemandTotal = pendingAgg._sum.netAmount ?? 0;
-        }
-
-        const allocation = await prisma.hostelAllocation.findFirst({ where: { studentId, status: 'ACTIVE' } });
-
-        const credit = await getAvailableHostelCredit(studentId);
-        const paid = credit.grossPaid;
-        const availableCredit = credit.availableCredit;
-
-        const paidByComponent = await getHostelPaidByComponent(studentId);
-        const { breakdown: withholdBreakdown, total: totalWithheld } = resolveHostelWithhold(args, paidByComponent);
-        const refundAmount = Math.max(0, availableCredit - totalWithheld);
-
-        return {
-            preview: true,
-            paid,
-            priorRefunds: credit.priorRefunds,
-            availableCredit,
-            paidByComponent,
-            withholdBreakdown,
-            totalWithheld,
-            refundAmount,
-            pendingDemandToRemove: pendingDemandTotal,
-            bedToVacate: !!allocation,
-        };
+        return { preview: true, leaving: 'HOSTEL', demands, totals };
     },
 
     /**
      * Preview cancelTransport: compute the refundable amount and pending demand
      * that would be removed — without writing.
      */
-    async previewCancelTransport(studentId: string, args: { cancellationFee?: number }) {
-        const cancellationFee = Math.max(0, args.cancellationFee ?? 0);
-
+    async previewCancelTransport(studentId: string, _args?: { cancellationFee?: number }) {
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'cancel transport');
         const admission = ctx.admission!;
-        if (admission.academicYearId) {
-            await assertAcademicYearWritable(admission.academicYearId);
-        }
         if (admission.accommodationType !== AccommodationType.TRANSPORT) {
             throw new AppError(`Student is not on TRANSPORT (currently ${admission.accommodationType}). Nothing to cancel.`, 400);
         }
-        if (!admission.academicYearId) {
-            throw new AppError('Cannot cancel: student has no academicYearId on admission', 400);
-        }
 
+        // Show the transport demand(s) being left + how much was paid against each.
         const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
         const transportHead = feeHeadMap.get(PaymentComponent.TRANSPORT);
+        const headIds = transportHead ? [transportHead.id] : [];
+        const { demands, totals } = await listDemandsWithPaid(studentId, headIds);
 
-        const paidAgg = await prisma.payment.aggregate({
-            where: { studentId, status: PaymentStatus.SUCCESS, isDeleted: false, component: PaymentComponent.TRANSPORT },
-            _sum: { amount: true },
-        });
-        const paid = paidAgg._sum.amount ?? 0;
-
-        // Mirror the write-path guard so a preview rejects the same over-large fee.
-        if (cancellationFee > paid) {
-            throw new AppError(
-                `Cannot withhold more than was paid for transport (cancellationFee ${cancellationFee} > paid ${paid}).`,
-                400
-            );
-        }
-
-        let pendingDemandTotal = 0;
-        if (transportHead) {
-            const pendingAgg = await prisma.studentFeeDemand.aggregate({
-                where: { studentId, feeHeadId: transportHead.id, status: FeeStatus.PENDING, isDeleted: false },
-                _sum: { netAmount: true },
-            });
-            pendingDemandTotal = pendingAgg._sum.netAmount ?? 0;
-        }
-
-        const refundAmount = Math.max(0, paid - cancellationFee);
-
-        return {
-            preview: true,
-            paid,
-            cancellationFee,
-            refundAmount,
-            pendingDemandToRemove: pendingDemandTotal,
-        };
+        return { preview: true, leaving: 'TRANSPORT', demands, totals };
     },
 
     /**
@@ -3485,7 +3465,6 @@ export const AccommodationService = {
         studentId: string,
         args: { chargeRetained?: number; transportRouteId: string; customCost?: number }
     ) {
-        const chargeRetained = Math.max(0, args.chargeRetained ?? 0);
         const { transportRouteId } = args;
 
         const ctx = await getStudentContext(studentId);
@@ -3498,24 +3477,8 @@ export const AccommodationService = {
         if (!academicYearId) throw new AppError('Cannot switch: student has no academicYearId on admission', 400);
         await assertAcademicYearWritable(academicYearId);
 
-        const hostelHeadMap = await resolveFeeHeadsByComponent([
-            PaymentComponent.HOSTEL_ACCOMMODATION,
-            PaymentComponent.HOSTEL_MESS,
-            PaymentComponent.HOSTEL_LAUNDRY,
-            PaymentComponent.HOSTEL_REGISTRATION,
-        ]);
-        const hostelHeadIds = Array.from(hostelHeadMap.values()).filter(Boolean).map((h: any) => h.id);
         const transportHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.TRANSPORT]);
         const transportHead = transportHeadMap.get(PaymentComponent.TRANSPORT);
-
-        let pendingHostelTotal = 0;
-        if (hostelHeadIds.length > 0) {
-            const pAgg = await prisma.studentFeeDemand.aggregate({
-                where: { studentId, feeHeadId: { in: hostelHeadIds }, status: FeeStatus.PENDING, isDeleted: false },
-                _sum: { netAmount: true },
-            });
-            pendingHostelTotal = pAgg._sum.netAmount ?? 0;
-        }
 
         const route = await prisma.transportRoute.findUnique({ where: { id: transportRouteId } });
         if (!route) throw new AppError('Transport route not found', 404);
@@ -3531,34 +3494,18 @@ export const AccommodationService = {
         const newCost = args.customCost ?? await resolveTransportRouteCost(transportRouteId, academicYearId);
         const pricingSource: 'CONFIG' | 'CUSTOM' = args.customCost != null ? 'CUSTOM' : 'CONFIG';
 
-        const credit = await getAvailableHostelCredit(studentId);
-        const hostelPaid = credit.grossPaid;
-        const availableCredit = credit.availableCredit;
-        const refundPool = Math.max(0, availableCredit - chargeRetained);
-        // Custom override → no auto-applied discount (mirrors the write path).
-        const appliedToNew = args.customCost != null ? 0 : Math.min(refundPool, newCost);
-        const leftover = refundPool - appliedToNew;
-        const newDemandNet = Math.max(0, newCost - appliedToNew);
+        // Show the HOSTEL demands being left + how much was paid against each (admin uses this
+        // to decide what to keep; the refund of the rest goes to a FeeCorrection on commit).
+        const hostelHeadMap = await resolveFeeHeadsByComponent(HOSTEL_FEE_COMPONENTS);
+        const hostelHeadIds = Array.from(hostelHeadMap.values()).filter(Boolean).map((h: any) => h.id);
+        const { demands, totals } = await listDemandsWithPaid(studentId, hostelHeadIds);
 
         return {
             preview: true,
-            cancellation: {
-                hostelPaid,
-                priorRefunds: credit.priorRefunds,
-                availableCredit,
-                chargeRetained,
-                refundPool,
-                pendingHostelToRemove: pendingHostelTotal,
-            },
-            newAssignment: {
-                transportRouteId,
-                routeName: route.name,
-                cost: newCost,
-                pricingSource,
-                creditApplied: appliedToNew,
-                studentOwes: newDemandNet,
-            },
-            refund: { leftover },
+            leaving: 'HOSTEL',
+            demands,
+            totals,
+            newRoute: { transportRouteId, routeName: route.name, cost: newCost, pricingSource },
             missingFeeHead: !transportHead
                 ? 'No FeeHead tagged with component=TRANSPORT — fee demand would NOT be created.'
                 : null,
@@ -3573,7 +3520,6 @@ export const AccommodationService = {
         studentId: string,
         args: { chargeRetained?: number; hostelId?: string; hostelType: HostelType; hostelPaymentMode: 'YEARWISE' | 'SEMWISE'; customPricing?: { accommodation: number; mess: number; laundry: number; registration: number } }
     ) {
-        const chargeRetained = Math.max(0, args.chargeRetained ?? 0);
         const { hostelId, hostelType, hostelPaymentMode } = args;
 
         const ctx = await getStudentContext(studentId);
@@ -3630,52 +3576,23 @@ export const AccommodationService = {
         }
         const effectiveTotal = accommodationPrice + messPrice + laundryPrice + registrationFee;
 
-        const paidAgg = await prisma.payment.aggregate({
-            where: { studentId, status: PaymentStatus.SUCCESS, isDeleted: false, component: PaymentComponent.TRANSPORT },
-            _sum: { amount: true },
-        });
-        const transportPaid = paidAgg._sum.amount ?? 0;
-
-        let pendingTransportTotal = 0;
-        if (transportHead) {
-            const pAgg = await prisma.studentFeeDemand.aggregate({
-                where: { studentId, feeHeadId: transportHead.id, status: FeeStatus.PENDING, isDeleted: false },
-                _sum: { netAmount: true },
-            });
-            pendingTransportTotal = pAgg._sum.netAmount ?? 0;
-        }
-
-        const refundPool = Math.max(0, transportPaid - chargeRetained);
-        // Custom override → no auto-applied discount (mirrors the write path).
-        const appliedToNew = args.customPricing ? 0 : Math.min(refundPool, effectiveTotal);
-        const leftover = refundPool - appliedToNew;
-
-        const distribute = (amount: number) =>
-            effectiveTotal > 0 ? Math.round((amount / effectiveTotal) * appliedToNew) : 0;
-        const accDiscount = distribute(accommodationPrice);
-        const messDiscount = distribute(messPrice);
-        const laundryDiscount = distribute(laundryPrice);
-        const regDiscount = appliedToNew - accDiscount - messDiscount - laundryDiscount;
+        // Show the TRANSPORT demand(s) being left + how much was paid against each (admin uses
+        // this to decide what to keep; the refund of the rest goes to a FeeCorrection on commit).
+        const headIds = transportHead ? [transportHead.id] : [];
+        const { demands, totals } = await listDemandsWithPaid(studentId, headIds);
 
         return {
             preview: true,
-            cancellation: {
-                transportPaid,
-                chargeRetained,
-                refundPool,
-                pendingTransportToRemove: pendingTransportTotal,
-            },
-            newAssignment: {
+            leaving: 'TRANSPORT',
+            demands,
+            totals,
+            newHostel: {
                 hostelId: hostelId ?? null,
                 hostelType,
                 paymentMode: isSemwise ? 'SEMWISE' : 'YEARWISE',
                 pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal },
                 pricingSource,
-                creditApplied: appliedToNew,
-                creditDistribution: { accDiscount, messDiscount, laundryDiscount, regDiscount },
-                studentOwes: Math.max(0, effectiveTotal - appliedToNew),
             },
-            refund: { leftover },
         };
     },
 };

@@ -563,6 +563,17 @@ export const setEligibleScholarshipSchema = z.object({
     }),
 });
 
+export const applyFeeCorrectionSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Invalid fee correction ID'),
+    }),
+    body: z.object({
+        feeDemandId: z.string().uuid('Invalid fee demand ID'),
+        amount:      z.number().positive('amount must be greater than 0'),
+        remarks:     z.string().trim().max(500).optional(),
+    }),
+});
+
 // ════════════════════════════════════════════════════════════════════════════
 // Semester marks (Subject + SemesterMark)
 // ════════════════════════════════════════════════════════════════════════════

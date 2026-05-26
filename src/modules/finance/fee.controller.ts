@@ -555,3 +555,44 @@ export const changeAccommodationType = catchAsync(async (req: Request, res: Resp
         data: result
     });
 });
+
+// ═══════════════════════════════════════════════════════════
+// FEE CORRECTIONS (credits / refunds)
+// ═══════════════════════════════════════════════════════════
+
+// GET /admin/fee/fee-corrections — list fee corrections with filters + remaining credit.
+export const getFeeCorrections = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const {
+        studentId, academicYearId, type, isSettled, carryForward, referenceType, applicationId, page, limit,
+    } = req.query;
+
+    const toBool = (v: any) => v === undefined || v === '' ? undefined : (v === 'true' || v === true);
+    const toNum  = (v: any) => v === undefined || v === '' ? undefined : Number(v);
+
+    const result = await FeeService.getFeeCorrections({
+        studentId:      studentId      ? String(studentId)      : undefined,
+        academicYearId: academicYearId ? String(academicYearId) : undefined,
+        type:           type           ? (String(type) as any)  : undefined,
+        isSettled:      toBool(isSettled),
+        carryForward:   toBool(carryForward),
+        referenceType:  referenceType  ? String(referenceType)  : undefined,
+        applicationId:  applicationId  ? String(applicationId)  : undefined,
+        page:           toNum(page),
+        limit:          toNum(limit),
+    });
+
+    sendResponse({ res, statusCode: 200, success: true, message: 'Fee corrections fetched', data: result });
+});
+
+// POST /admin/fee/fee-corrections/:id/apply — transfer (apply) correction credit onto a fee demand.
+export const applyFeeCorrection = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { id } = req.params;
+    const { feeDemandId, amount, remarks } = req.body;
+    const adminId = req.user!.userId;
+
+    logger.info(`[applyFeeCorrection] correction=${id} demand=${feeDemandId} amount=${amount} by=${adminId}`);
+
+    const result = await FeeService.applyFeeCorrection(id, { feeDemandId, amount, remarks }, adminId);
+
+    sendResponse({ res, statusCode: 200, success: true, message: 'Fee correction transferred to demand', data: result });
+});
