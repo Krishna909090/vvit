@@ -1044,6 +1044,10 @@ model FeeCorrection {
   studentId             String
   academicYearId        String
   amount                Float
+  // Amount the college KEEPS (non-refundable) on the cancel/switch that produced this row —
+  // i.e. cancellationFee / chargeRetained / Σ withhold. `amount` is the refund; this is the
+  // retained counterpart. Stored for future revenue/retention metrics.
+  retainedAmount        Float?         @default(0)
   reason                String
   type                  FeeCorrectionType
   referenceId           String?

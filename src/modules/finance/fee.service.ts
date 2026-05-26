@@ -2495,6 +2495,98 @@ export const FeeService = {
             };
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     },
+
+    /**
+     * Cancellation/switch revenue metrics: how much the college KEPT (retainedAmount) vs
+     * REFUNDED (amount) across FeeCorrection rows, broken down by referenceType
+     * (HOSTEL_CANCELLATION, TRANSPORT_CANCELLATION, HOSTEL_TO_TRANSPORT_SWITCH, …).
+     * Optionally scoped by academic year and a createdAt date range.
+     *
+     * NOTE: only refund-producing events have a FeeCorrection row, so "keep-everything"
+     * cancellations (refund = 0) are NOT included here.
+     */
+    getCancellationMetrics: async (filters: {
+        academicYearId?: string;
+        from?:           string;
+        to?:             string;
+        referenceType?:  string;
+    } = {}) => {
+        const where: any = {};
+        if (filters.academicYearId) where.academicYearId = filters.academicYearId;
+        if (filters.referenceType)  where.referenceType  = filters.referenceType;
+        if (filters.from || filters.to) {
+            where.createdAt = {};
+            if (filters.from) where.createdAt.gte = new Date(filters.from);
+            if (filters.to)   where.createdAt.lte = new Date(filters.to);
+        }
+
+        const [grouped, yearGrouped] = await Promise.all([
+            prisma.feeCorrection.groupBy({
+                by: ['referenceType'],
+                where,
+                _sum: { retainedAmount: true, amount: true },
+                _count: { _all: true },
+            }),
+            prisma.feeCorrection.groupBy({
+                by: ['academicYearId'],
+                where,
+                _sum: { retainedAmount: true, amount: true },
+                _count: { _all: true },
+            }),
+        ]);
+
+        // Resolve academic-year codes for the year breakdown.
+        const yearIds = yearGrouped.map(y => y.academicYearId).filter(Boolean) as string[];
+        const years = yearIds.length
+            ? await prisma.academicYear.findMany({ where: { id: { in: yearIds } }, select: { id: true, code: true } })
+            : [];
+        const codeById = new Map(years.map(y => [y.id, y.code]));
+        const byAcademicYear = yearGrouped
+            .map(y => ({
+                academicYearId: y.academicYearId,
+                academicYear:   codeById.get(y.academicYearId) ?? null,
+                retained:       y._sum.retainedAmount ?? 0,
+                refunded:       y._sum.amount ?? 0,
+                events:         y._count._all,
+            }))
+            .sort((a, b) => (b.academicYear ?? '').localeCompare(a.academicYear ?? ''));
+
+        // Map each referenceType to the accommodation whose money was retained:
+        //  hostel side    → cancelling/leaving HOSTEL    (HOSTEL_CANCELLATION, HOSTEL_TO_TRANSPORT_SWITCH, HOSTEL_REASSIGNMENT)
+        //  transport side → cancelling/leaving TRANSPORT (TRANSPORT_CANCELLATION, TRANSPORT_TO_HOSTEL_SWITCH)
+        const accommodationOf = (refType: string | null): 'hostel' | 'transport' | 'other' => {
+            if (!refType) return 'other';
+            if (refType.startsWith('HOSTEL')) return 'hostel';
+            if (refType.startsWith('TRANSPORT')) return 'transport';
+            return 'other';
+        };
+
+        const byType: Record<string, { retained: number; refunded: number; events: number }> = {};
+        const byAccommodation = {
+            hostel:    { retained: 0, refunded: 0, events: 0 },
+            transport: { retained: 0, refunded: 0, events: 0 },
+            other:     { retained: 0, refunded: 0, events: 0 },
+        };
+        let totalRetained = 0, totalRefunded = 0, totalEvents = 0;
+        for (const g of grouped) {
+            const key      = g.referenceType ?? 'UNKNOWN';
+            const retained = g._sum.retainedAmount ?? 0;
+            const refunded = g._sum.amount ?? 0;
+            const events   = g._count._all;
+            byType[key] = { retained, refunded, events };
+
+            const bucket = byAccommodation[accommodationOf(g.referenceType)];
+            bucket.retained += retained;
+            bucket.refunded += refunded;
+            bucket.events   += events;
+
+            totalRetained += retained;
+            totalRefunded += refunded;
+            totalEvents   += events;
+        }
+
+        return { totalRetained, totalRefunded, totalEvents, byAcademicYear, byAccommodation, byType };
+    },
 };
 
 

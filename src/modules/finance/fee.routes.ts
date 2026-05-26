@@ -13,7 +13,8 @@ import {
     getCourseFeeHeads,
     changeAccommodationType,
     getFeeCorrections,
-    applyFeeCorrection
+    applyFeeCorrection,
+    getCancellationMetrics
 } from './fee.controller';
 
 import {
@@ -143,6 +144,13 @@ router.get('/fee-structure', authenticate, authorizePermission('finance.read.all
  * Query: { studentId?, academicYearId?, type?, isSettled?, carryForward?, referenceType?, applicationId?, page?, limit? }
  */
 router.get('/fee-corrections', authenticate, authorizePermission('finance.read.all'), getFeeCorrections);
+
+/**
+ * GET /finance/fees/cancellation-metrics (also at /admin/fee/cancellation-metrics)
+ * Revenue retained (kept) vs refunded across cancellations/switches, split by accommodation
+ * (hostel/transport) and by referenceType. Query: { academicYearId?, from?, to?, referenceType? }
+ */
+router.get('/cancellation-metrics', authenticate, authorizePermission('finance.read.all'), getCancellationMetrics);
 
 /**
  * POST /finance/fees/fee-corrections/:id/apply (also at /admin/fee/fee-corrections/:id/apply)

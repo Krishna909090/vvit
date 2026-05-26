@@ -596,3 +596,15 @@ export const applyFeeCorrection = catchAsync(async (req: Request, res: Response,
 
     sendResponse({ res, statusCode: 200, success: true, message: 'Fee correction transferred to demand', data: result });
 });
+
+// GET /admin/fee/cancellation-metrics — how much retained vs refunded across cancels/switches.
+export const getCancellationMetrics = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { academicYearId, from, to, referenceType } = req.query;
+    const result = await FeeService.getCancellationMetrics({
+        academicYearId: academicYearId ? String(academicYearId) : undefined,
+        from:           from           ? String(from)           : undefined,
+        to:             to             ? String(to)             : undefined,
+        referenceType:  referenceType  ? String(referenceType)  : undefined,
+    });
+    sendResponse({ res, statusCode: 200, success: true, message: 'Cancellation metrics', data: result });
+});
