@@ -14,7 +14,6 @@ import {
     HostelPaymentMode,
 } from '@prisma/client';
 import { AppError } from '../../../utils/AppError';
-import logger from '../../../utils/logger';
 import { MESSAGES } from '../../../constants/messages';
 import { convertToPresignedUrl } from '../../../utils/s3Utils';
 import { assertHostelHasCapacity } from '../../accommodation/hostel/hostel.service';
@@ -32,53 +31,6 @@ import {
     getActiveAcademicYear,
 } from '../../../utils/studentContext';
 import { generateAndSaveHostelAllotmentOrder } from '../../finance/payment.service';
-
-/**
- * When a student (re-)enters an accommodation, void any UNSETTLED "leftover" refund that was
- * generated when they previously LEFT that same accommodation. That money is needed for the
- * accommodation again, so it must not remain a pending refund AND be re-counted as paid —
- * which caused cumulative over-credit on switch-back cycles (e.g. hostel→transport leftover
- * refund left standing after transport→hostel). Void = amount 0 + isSettled, so it drops out
- * of BOTH correctionSummary and the gross-paid credit netting; the original amount is kept in
- * `remarks` for audit. Must run inside the caller's transaction (`tx`).
- */
-const voidReclaimedAccommodationRefunds = async (
-    tx: any,
-    studentId: string,
-    entering: AccommodationType,
-    adminId?: string
-): Promise<number> => {
-    const refTypes = entering === AccommodationType.HOSTEL
-        ? ['HOSTEL_CANCELLATION', 'HOSTEL_TO_TRANSPORT_SWITCH', 'HOSTEL_REASSIGNMENT']
-        : ['TRANSPORT_CANCELLATION', 'TRANSPORT_TO_HOSTEL_SWITCH'];
-    const stale = await tx.feeCorrection.findMany({
-        where: {
-            studentId,
-            isSettled: false,
-            type: 'ACCOMMODATION_CHANGE_REFUND',
-            referenceType: { in: refTypes },
-            amount: { gt: 0 },
-        },
-    });
-    let total = 0;
-    for (const c of stale) {
-        total += c.amount ?? 0;
-        await tx.feeCorrection.update({
-            where: { id: c.id },
-            data: {
-                amount: 0,
-                isSettled: true,
-                settledAt: new Date(),
-                settledBy: adminId,
-                remarks: `Reclaimed (was ${c.amount}): student re-entered ${entering}; leftover refund reapplied to the new ${entering} charge.`,
-            },
-        });
-    }
-    if (total > 0) {
-        logger.info(`[accommodation] Reclaimed ${stale.length} leftover ${entering} refund(s) totalling ${total} for student ${studentId} on re-entry.`);
-    }
-    return total;
-};
 
 /** Per-component withholding input on hostel cancellation (amount the college keeps per service). */
 type HostelWithhold = {
@@ -1893,9 +1845,8 @@ export const AccommodationService = {
         const totalFeeDelta = effectiveTotal - previousEffectiveTotal;
 
         const result = await prisma.$transaction(async (tx) => {
-            // Reclaim any unsettled leftover refund from a prior exit of HOSTEL — that money
-            // is needed for the new hostel charge, so it must not remain a pending refund.
-            await voidReclaimedAccommodationRefunds(tx, studentId, AccommodationType.HOSTEL, adminId);
+            // NO fee-correction settlement on assign: prior leftover refunds are left untouched
+            // (no reclaim/void here) so this flow never settles any FeeCorrection amount.
 
             // 1. Update admission (mode + tier + totals)
             await tx.studentAdmission.update({
@@ -2109,9 +2060,8 @@ export const AccommodationService = {
         const totalFeeDelta = newCost - previousCost;
 
         const result = await prisma.$transaction(async (tx) => {
-            // Reclaim any unsettled leftover refund from a prior exit of TRANSPORT — that money
-            // is needed for the new transport charge, so it must not remain a pending refund.
-            await voidReclaimedAccommodationRefunds(tx, studentId, AccommodationType.TRANSPORT, adminId);
+            // NO fee-correction settlement on assign: prior leftover refunds are left untouched
+            // (no reclaim/void here) so this flow never settles any FeeCorrection amount.
 
             // 1. Update admission
             await tx.studentAdmission.update({
@@ -2795,8 +2745,8 @@ export const AccommodationService = {
         const allocation = await prisma.hostelAllocation.findFirst({ where: { studentId, status: 'ACTIVE' } });
 
         const result = await prisma.$transaction(async (tx) => {
-            // Reclaim any unsettled leftover refund from a prior exit of TRANSPORT (re-entry).
-            await voidReclaimedAccommodationRefunds(tx, studentId, AccommodationType.TRANSPORT, adminId);
+            // NO fee-correction settlement on switch: prior leftover refunds are left untouched
+            // (no reclaim/void here) so this flow never settles any FeeCorrection amount.
 
             // NO auto-adjustment: the old hostel payment is NOT applied as a discount on the
             // new transport demand (billed at FULL cost). Instead the refundable amount
@@ -3107,8 +3057,8 @@ export const AccommodationService = {
         const previousRouteId = admissionRow?.transportRouteId ?? null;
 
         const result = await prisma.$transaction(async (tx) => {
-            // Reclaim any unsettled leftover refund from a prior exit of HOSTEL (re-entry).
-            await voidReclaimedAccommodationRefunds(tx, studentId, AccommodationType.HOSTEL, adminId);
+            // NO fee-correction settlement on switch: prior leftover refunds are left untouched
+            // (no reclaim/void here) so this flow never settles any FeeCorrection amount.
 
             // ── 1. Cancel transport ── (soft-delete ALL active transport demands, not just
             //    PENDING — leaving transport, so no transport demand should remain).
