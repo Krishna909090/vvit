@@ -2619,6 +2619,8 @@ export const getStudentFinancialHistory = async (
         'TRANSPORT_REASSIGNMENT',
         'TRANSPORT_CANCELLATION',
         'ACCOMMODATION_SWITCH',
+        'HOSTEL_TO_TRANSPORT_SWITCH',  // retained-fee ledger row written by switchHostelToTransport
+        'TRANSPORT_TO_HOSTEL_SWITCH',  // retained-fee ledger row written by switchTransportToHostel
         'WAIVER',  // app-fee waivers (e.g., lateral + management quota); shown separately, not as discount
     ]);
     ledgers.forEach(entry => {
@@ -2747,12 +2749,19 @@ export const getStudentFinancialHistory = async (
     const issuedAccRefunds = (feeCorrections as any[])
         .filter(fc => fc.type === 'ACCOMMODATION_CHANGE_REFUND')
         .reduce((s: number, fc: any) => s + (fc.amount ?? 0), 0);
+    // Retained portion (cancellationFee / withheld at cancel time) of those same refund
+    // corrections. The college kept this money legitimately — it must be subtracted out
+    // of `unrefundedAccommodationCredit` so a partially-refunded cancellation doesn't
+    // report the retained amount as "still owed to the student".
+    const issuedAccRetained = (feeCorrections as any[])
+        .filter(fc => fc.type === 'ACCOMMODATION_CHANGE_REFUND')
+        .reduce((s: number, fc: any) => s + (fc.retainedAmount ?? 0), 0);
     const currentAccComponents: string[] =
         accType === AccommodationType.HOSTEL
             ? ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION']
             : accType === AccommodationType.TRANSPORT ? ['TRANSPORT'] : [];
     const currentAccDiscount = currentAccComponents.reduce((s, c) => s + (breakdown[c]?.discount ?? 0), 0);
-    const unrefundedAccommodationCredit = Math.max(0, suppressedAccPaid - issuedAccRefunds - currentAccDiscount);
+    const unrefundedAccommodationCredit = Math.max(0, suppressedAccPaid - issuedAccRefunds - issuedAccRetained - currentAccDiscount);
 
     const summary = {
         totalDemanded,

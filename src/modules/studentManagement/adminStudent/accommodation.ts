@@ -2453,6 +2453,26 @@ export const AccommodationService = {
                 });
             }
 
+            // 5b. Audit ledger entry for the retained portion (cancellation fee that the
+            // college kept). Tagged referenceType=HOSTEL_CANCELLATION so it is visible in
+            // the student's ledger / financial timeline but is SKIPPED by the per-component
+            // breakdown calculation (REFUND_LIKE_REFERENCE_TYPES in getStudentFinancialHistory),
+            // i.e. it never pollutes the OTHER bucket.
+            if (totalWithheld > 0) {
+                await tx.studentLedger.create({
+                    data: {
+                        studentId,
+                        type: LedgerTransactionType.DEBIT,
+                        amount: totalWithheld,
+                        description: `Hostel cancellation fee retained: ${reason}`,
+                        referenceId: feeCorrection?.id ?? previousHostelId ?? null,
+                        referenceType: 'HOSTEL_CANCELLATION',
+                        academicYearId,
+                        createdBy: adminId,
+                    } as any,
+                });
+            }
+
             // 6. Audit
             await tx.auditLog.create({
                 data: {
@@ -2615,6 +2635,25 @@ export const AccommodationService = {
                         isSettled: false,
                         createdBy: adminId,
                     },
+                });
+            }
+
+            // 3b. Audit ledger entry for the retained portion. Same pattern as cancelHostel:
+            // visible in the ledger / financial timeline, but the per-component breakdown in
+            // getStudentFinancialHistory skips TRANSPORT_CANCELLATION (REFUND_LIKE_REFERENCE_TYPES)
+            // so it never pollutes the OTHER bucket.
+            if (totalRetained > 0) {
+                await tx.studentLedger.create({
+                    data: {
+                        studentId,
+                        type: LedgerTransactionType.DEBIT,
+                        amount: totalRetained,
+                        description: `Transport cancellation fee retained: ${reason}`,
+                        referenceId: feeCorrection?.id ?? previousRouteId ?? null,
+                        referenceType: 'TRANSPORT_CANCELLATION',
+                        academicYearId,
+                        createdBy: adminId,
+                    } as any,
                 });
             }
 
@@ -2856,6 +2895,27 @@ export const AccommodationService = {
                     },
                 });
                 feeCorrectionId = fc.id;
+            }
+
+            // Audit ledger entry for the retained portion (hostel-side fee the college kept
+            // at switch). Tagged HOSTEL_TO_TRANSPORT_SWITCH — visible in the student ledger
+            // / financial timeline, but skipped by the per-component breakdown
+            // (REFUND_LIKE_REFERENCE_TYPES in getStudentFinancialHistory), so it never
+            // pollutes the OTHER bucket. Independent of `leftover > 0`: a switch can retain
+            // money even when no refund is owed (full retention).
+            if (totalRetained > 0) {
+                await tx.studentLedger.create({
+                    data: {
+                        studentId,
+                        type: LedgerTransactionType.DEBIT,
+                        amount: totalRetained,
+                        description: `Hostel→Transport switch fee retained: ${reason}`,
+                        referenceId: feeCorrectionId ?? previousHostelId ?? null,
+                        referenceType: 'HOSTEL_TO_TRANSPORT_SWITCH',
+                        academicYearId,
+                        createdBy: adminId,
+                    } as any,
+                });
             }
 
             // ── 5. Audit ──
@@ -3170,6 +3230,25 @@ export const AccommodationService = {
                     },
                 });
                 feeCorrectionId = fc.id;
+            }
+
+            // Audit ledger entry for the retained portion (transport-side fee the college
+            // kept at switch). Same pattern as switchHostelToTransport. Tagged
+            // TRANSPORT_TO_HOSTEL_SWITCH so it's visible in the ledger but skipped by the
+            // per-component breakdown. Independent of `leftover > 0`.
+            if (chargeRetained > 0) {
+                await tx.studentLedger.create({
+                    data: {
+                        studentId,
+                        type: LedgerTransactionType.DEBIT,
+                        amount: chargeRetained,
+                        description: `Transport→Hostel switch fee retained: ${reason}`,
+                        referenceId: feeCorrectionId ?? previousRouteId ?? null,
+                        referenceType: 'TRANSPORT_TO_HOSTEL_SWITCH',
+                        academicYearId,
+                        createdBy: adminId,
+                    } as any,
+                });
             }
 
             // ── 6. Audit ──
