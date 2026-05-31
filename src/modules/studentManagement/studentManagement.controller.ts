@@ -122,9 +122,9 @@ export const approveCancellation = catchAsync(async (req: Request, res: Response
 export const verifyAndAllotSeat = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[verifyAndAllotSeat] by=${req.user?.userId || 'anonymous'}`);
 
-    const { studentId, approved, allottedCourseId } = req.body;
-    
-    const result = await AdminStudentService.verifyAndAllotSeat(studentId, approved, allottedCourseId, req.user?.userId);
+    const { studentId, approved, allottedCourseId, scholarshipPercentage } = req.body;
+
+    const result = await AdminStudentService.verifyAndAllotSeat(studentId, approved, allottedCourseId, req.user?.userId, scholarshipPercentage);
 
     sendResponse({
         res,
@@ -979,7 +979,7 @@ export const updateStudentScholarship = catchAsync(async (req: Request, res: Res
     logger.info(`[updateStudentScholarship] by=${req.user?.userId || 'anonymous'}`);
     const { studentId } = req.body;
 
-    const result = await AdminStudentService.updateStudentScholarship(studentId, req.body, req.user?.userId);
+    const result = await AdminStudentService.updateStudentScholarship(studentId, req.body, req.user?.userId, req.user?.role);
 
     sendResponse({
         res,
@@ -1026,7 +1026,7 @@ export const editStudentScholarship = catchAsync(async (req: Request, res: Respo
     logger.info(`[editStudentScholarship] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
 
-    const result = await AdminStudentService.editStudentScholarship(id, req.body, req.user?.userId);
+    const result = await AdminStudentService.editStudentScholarship(id, req.body, req.user?.userId, req.user?.role);
 
     sendResponse({
         res,
@@ -1034,6 +1034,22 @@ export const editStudentScholarship = catchAsync(async (req: Request, res: Respo
         success: true,
         message: 'Student scholarship updated successfully',
         data: result
+    });
+});
+
+// Reconcile a student's fee state — soft-delete orphan accommodation demands
+// (e.g. HOSTEL_REGISTRATION on a NONE student) and refresh totalFee/paidFee.
+// Destructive: SUPER_ADMIN only (enforced in the service).
+export const reconcileStudentFees = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    logger.info(`[reconcileStudentFees] by=${req.user?.userId || 'anonymous'}`);
+    const { studentId } = req.params;
+    const result = await AdminStudentService.reconcileStudentFees(studentId, req.user?.userId, req.user?.role);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Fee reconciliation complete',
+        data: result,
     });
 });
 

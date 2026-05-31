@@ -60,7 +60,8 @@ import {
     previewSwitchHostelToTransport,
     previewSwitchTransportToHostel,
     bulkAllocateRoomBeds,
-    assignEnrollment
+    assignEnrollment,
+    reconcileStudentFees
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -846,5 +847,23 @@ router.post('/waiting-list/allot', authenticate, authorizePermission(['student.u
  * Body: { waitingListId? } or { studentId?, courseId? }
  */
 router.post('/waiting-list/remove', authenticate, authorizePermission(['student.update.all']), removeFromWaitingList);
+
+// ═══════════════════════════════════════════════════════════
+//  FEE RECONCILIATION
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * POST /admin/student/:studentId/reconcile-fees
+ * One-off reconciliation for a single student's fee state. Soft-deletes orphan
+ * accommodation fee demands (e.g. HOSTEL_REGISTRATION on a NONE student) that have
+ * no linked SUCCESS payments, then recomputes totalFee/paidFee from source rows.
+ * Demands with linked payments are SKIPPED and reported back so the admin can
+ * resolve them via the fee-correction flow before re-running.
+ * Permission gate is permissive at the route layer; SUPER_ADMIN check happens
+ * inside the service (destructive operation).
+ * Params: { studentId: uuid }
+ * Response: { status, data: { studentId, accommodationType, softDeleted, skipped, totalsAfter } }
+ */
+router.post('/:studentId/reconcile-fees', authenticate, authorizePermission(['student.update.all']), reconcileStudentFees);
 
 export default router;

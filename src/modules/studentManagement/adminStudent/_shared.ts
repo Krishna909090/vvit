@@ -3,7 +3,7 @@
 // import from here so the legacy `adminStudent.service.ts` barrel doesn't have to.
 
 import prisma from '../../../config/prisma';
-import { AdmissionStatus, PaymentComponent, PaymentStatus } from '@prisma/client';
+import { AdmissionStatus, PaymentComponent, PaymentStatus, FeeStatus } from '@prisma/client';
 import { Env } from 'pg-sdk-node';
 
 // --- CONFIGURATION CONSTANTS ---
@@ -380,6 +380,35 @@ export const buildApplicationFilters = async (query: any): Promise<any> => {
                 status: PaymentStatus.SUCCESS
             }
         };
+    }
+
+    // Used by the Verify Documents module: "cleared" = SUCCESS APPLICATION_FEE payment
+    // OR a fully-waived APPLICATION_FEE demand (e.g. lateral + management quota — they
+    // never produce a payment row, so the older `applicationFeePaid=PAID` filter would
+    // wrongly exclude them). Unrelated callers should keep using `applicationFeePaid`.
+    //
+    // Default to CLEARED when `hasDocuments=true` (the Verify Documents context — the
+    // only caller passing that flag). Pass `applicationFeeCleared=ALL` to opt out.
+    let applicationFeeCleared = query.applicationFeeCleared;
+    if (!applicationFeeCleared && query.hasDocuments === 'true') {
+        applicationFeeCleared = 'CLEARED';
+    }
+    if (applicationFeeCleared === 'CLEARED' || applicationFeeCleared === 'UNCLEARED') {
+        const clearedConditions = [
+            { payments: { some: { component: PaymentComponent.APPLICATION_FEE, status: PaymentStatus.SUCCESS } } },
+            { feeDemands: { some: {
+                feeHead: { component: PaymentComponent.APPLICATION_FEE },
+                status: FeeStatus.FULL,
+                discountAmount: { gt: 0 },
+                isDeleted: false,
+            } } },
+        ];
+        if (!where.AND) where.AND = [];
+        if (applicationFeeCleared === 'CLEARED') {
+            where.AND.push({ OR: clearedConditions });
+        } else {
+            where.AND.push({ NOT: { OR: clearedConditions } });
+        }
     }
 
     if (dateRange) {

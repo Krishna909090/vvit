@@ -2653,6 +2653,14 @@ export const getStudentFinancialHistory = async (
         }
     });
 
+    // Payments tied to a soft-deleted demand (e.g. paid for an earlier hostel/transport
+    // stint that was cancelled — same accommodation, prior cycle) must not be counted as
+    // `paid` against the current breakdown. The original payment survives as SUCCESS, but
+    // the demand it was paid against is gone; the money is accounted for via the
+    // cancel-flow's FeeCorrection refund (settled on-demand via the apply API). Treated
+    // the same as the cross-accommodation suppression below.
+    const isStalePayment = (p: any): boolean => !!(p.feeDemand && p.feeDemand.isDeleted);
+
     // Payments for an accommodation the student is NO LONGER on (e.g. a TRANSPORT
     // payment after a TRANSPORT→HOSTEL switch) must not be counted as `paid`. The
     // original payment row survives as SUCCESS, but its value was already reallocated
@@ -2676,6 +2684,7 @@ export const getStudentFinancialHistory = async (
     payments.forEach(p => {
          if (p.component === PaymentComponent.APPLICATION_FEE) return; // Skip Application Fee
          if (suppressedAccComponents.has(p.component)) return; // reallocated by an accommodation switch
+         if (isStalePayment(p)) return;                        // demand was soft-deleted (prior-cycle stale)
 
          let key = 'OTHER';
          if (p.feeDemand?.feeStructure?.feeHead) {
@@ -2710,7 +2719,9 @@ export const getStudentFinancialHistory = async (
         .filter(l => l.referenceType === 'COURSE_CHANGE' && l.type === 'DEBIT')
         .reduce((sum, l) => sum + l.amount, 0);
     const totalPaid = payments
-        .filter(p => p.component !== PaymentComponent.APPLICATION_FEE && !suppressedAccComponents.has(p.component))
+        .filter(p => p.component !== PaymentComponent.APPLICATION_FEE
+                  && !suppressedAccComponents.has(p.component)
+                  && !isStalePayment(p))
         .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
     // Total deduction = Σ breakdown[].discount, which already holds the FULL per-head
     // deduction (manual + scholarship). scholarshipAmount is a SUBSET of discount, not
@@ -2730,7 +2741,8 @@ export const getStudentFinancialHistory = async (
     // Case (c) must NOT silently disappear: surface it as `unrefundedAccommodationCredit`
     // (a refund still owed to the student) so the books reconcile to actual cash received.
     const suppressedAccPaid = payments
-        .filter(p => p.component !== PaymentComponent.APPLICATION_FEE && suppressedAccComponents.has(p.component))
+        .filter(p => p.component !== PaymentComponent.APPLICATION_FEE
+                  && (suppressedAccComponents.has(p.component) || isStalePayment(p)))
         .reduce((sum, p) => sum + p.amount, 0);
     const issuedAccRefunds = (feeCorrections as any[])
         .filter(fc => fc.type === 'ACCOMMODATION_CHANGE_REFUND')

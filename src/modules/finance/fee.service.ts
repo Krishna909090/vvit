@@ -1150,10 +1150,26 @@ export const FeeService = {
             `YearOfStudy=${currentYear}`
         );
 
-        // Filter — quota / yearOfStudy. Null = universal (applies to all).
+        // Accommodation-conditional components (HOSTEL_*, TRANSPORT) are dispatched by
+        // assignHostel/assignTransport — NOT by course-level fee generation. Skipping them
+        // here prevents a NONE/TRANSPORT student from being billed HOSTEL_REGISTRATION /
+        // HOSTEL_LAUNDRY (a hostel student gets these from assignHostel; transport gets
+        // its TRANSPORT demand from assignTransport).
+        const ACCOMMODATION_DISPATCHED_COMPONENTS: ReadonlySet<string> = new Set([
+            'HOSTEL',
+            'HOSTEL_ACCOMMODATION',
+            'HOSTEL_MESS',
+            'HOSTEL_LAUNDRY',
+            'HOSTEL_REGISTRATION',
+            'TRANSPORT',
+        ]);
+
+        // Filter — quota / yearOfStudy / accommodation-component. Null = universal.
         const applicableRaw = feeStructures.filter(fs => {
             if (fs.quotaType   && fs.quotaType   !== studentQuota)  return false;
             if (fs.yearOfStudy && fs.yearOfStudy !== currentYear)   return false;
+            const comp = (fs.feeHead as any)?.component as string | null | undefined;
+            if (comp && ACCOMMODATION_DISPATCHED_COMPONENTS.has(comp)) return false;
             return true;
         });
 
@@ -1261,8 +1277,17 @@ export const FeeService = {
             // Note: StudentScholarship has no per-year validity in the schema; this is
             // a global flag. Per-year cohort policies should drive the scholarship
             // record's isEligible value (handled in the scholarship admin flow).
+            // Match any scholarship row with a positive percentage UNLESS the admin
+            // explicitly marked it 'NO'. Tolerates legacy rows where isEligible was
+            // NULL (lateral entries) or 'true' (older scholarship.service writes) —
+            // before the value was standardized to 'YES'. Without this, those legacy
+            // students' scholarships silently failed to appear on fee demands.
             const studentScholarship = await tx.studentScholarship.findFirst({
-                where: { studentId, isEligible: 'YES' as any }
+                where: {
+                    studentId,
+                    scholarshipPercentage: { gt: 0 },
+                    NOT: { isEligible: 'NO' as any },
+                } as any,
             });
             const discountPct = studentScholarship?.scholarshipPercentage || 0;
             logger.info(
@@ -1735,6 +1760,28 @@ export const FeeService = {
             if (a.type === 'CREDIT') breakdown[key].paid += a.amount;
             else breakdown[key].paid -= a.amount;
         });
+
+        // Accommodation override — zero HOSTEL/TRANSPORT buckets when the student is
+        // not currently on that accommodation. Mirrors getStudentFinancialHistory so
+        // legacy demands from before the generateFeeDemands accommodation-component
+        // filter (or stale demands from a prior cycle) don't show as owed.
+        const admissionForOverride = await prisma.studentAdmission.findUnique({
+            where: { studentId },
+            select: { accommodationType: true },
+        });
+        if (admissionForOverride) {
+            const accType = admissionForOverride.accommodationType;
+            if (accType !== 'HOSTEL') {
+                breakdown.HOSTEL.demand = 0;
+                breakdown.HOSTEL.discount = 0;
+                breakdown.HOSTEL.paid = 0;
+            }
+            if (accType !== 'TRANSPORT') {
+                breakdown.TRANSPORT.demand = 0;
+                breakdown.TRANSPORT.discount = 0;
+                breakdown.TRANSPORT.paid = 0;
+            }
+        }
 
         // Calc Balance
         Object.keys(breakdown).forEach(key => {

@@ -22,6 +22,10 @@ export const verifyAndAllotSeatSchema = z.object({
         studentId: z.string().uuid(),
         approved: z.boolean(),
         allottedCourseId: z.string().uuid().optional(), // Required if approved is true, but we can refine this
+        // Optional scholarship % chosen at allotment. Omitted/0 means "no scholarship":
+        // any existing StudentScholarship row is forced to isEligible=NO so stale eligible
+        // rows can't leak into generateFeeDemands.
+        scholarshipPercentage: z.number().min(0).max(100).optional(),
     }).refine((data) => !data.approved || (data.approved && data.allottedCourseId), {
         message: "Allotted course ID is required when approved is true",
         path: ["allottedCourseId"],

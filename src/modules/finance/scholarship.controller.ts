@@ -122,7 +122,7 @@ export const updateStudentScholarship = catchAsync(async (req: Request, res: Res
         throw new AppError("Student ID and Scholarship Percentage required", 400);
     }
     
-    const result = await ScholarshipService.updateStudentScholarship(studentId, Number(scholarshipPercentage), req.user!.userId, feeHeadId);
+    const result = await ScholarshipService.updateStudentScholarship(studentId, Number(scholarshipPercentage), req.user!.userId, feeHeadId, undefined, req.user?.role);
     
     sendResponse({
         res,

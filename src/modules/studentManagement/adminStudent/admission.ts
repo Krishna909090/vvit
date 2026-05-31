@@ -56,6 +56,39 @@ import {
 } from './_shared';
 import { AccommodationService } from './accommodation';
 
+/**
+ * Block scholarship edits once a student's admission has progressed past document
+ * verification (SEAT_ALLOTTED and beyond). Only SUPER_ADMIN can override — every
+ * other role (VERIFICATION_OFFICER / C3 / ADMIN / etc.) gets a 403.
+ *
+ * Used by the three scholarship-mutation entrypoints (updateStudentScholarship,
+ * editStudentScholarship, ScholarshipService.updateStudentScholarship) to enforce
+ * the "C3 has finished allotment" lock at the service layer.
+ */
+const SCHOLARSHIP_LOCKED_STATUSES: ReadonlySet<AdmissionStatus> = new Set([
+    AdmissionStatus.SEAT_ALLOTTED,
+    AdmissionStatus.ADMISSION_CONFIRMED,
+    AdmissionStatus.ENROLLED,
+]);
+
+export const assertScholarshipEditableForStudent = async (
+    studentId: string,
+    adminRole?: string,
+): Promise<void> => {
+    if (adminRole === Role.SUPER_ADMIN) return;
+    const admission = await prisma.studentAdmission.findUnique({
+        where: { studentId },
+        select: { status: true },
+    });
+    if (!admission) return; // no admission row yet — nothing to lock
+    if (SCHOLARSHIP_LOCKED_STATUSES.has(admission.status as AdmissionStatus)) {
+        throw new AppError(
+            `Scholarship cannot be modified after seat allotment (current status: ${admission.status}). Only SUPER_ADMIN can override.`,
+            403,
+        );
+    }
+};
+
 export const AdmissionService = {
     /**
      * Legacy cancellation entrypoint — just records a CancellationRequest row
@@ -136,7 +169,7 @@ export const AdmissionService = {
      * capacity, logs a SeatAllocation row. On reject: marks pending documents
      * as REJECTED so the student is prompted to re-upload.
      */
-    async verifyAndAllotSeat(studentId: string, approved: boolean, allottedCourseId: string, adminId: string | undefined) {
+    async verifyAndAllotSeat(studentId: string, approved: boolean, allottedCourseId: string, adminId: string | undefined, scholarshipPercentage?: number) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
         if (!approved) {
             return { success: false, message: MESSAGES.ERROR.DOCUMENTS_REJECTED };
@@ -144,7 +177,7 @@ export const AdmissionService = {
 
         if (!allottedCourseId) throw new AppError(MESSAGES.ERROR.ALLOTTED_COURSE_REQUIRED, 400);
 
-        const student = await prisma.student.findUnique({ 
+        const student = await prisma.student.findUnique({
             where: { id: studentId },
             include: { examDetails: true }
         });
@@ -155,6 +188,8 @@ export const AdmissionService = {
         // Verify Course
         const course = await prisma.course.findUnique({ where: { id: allottedCourseId } });
         if (!course) throw new AppError("Course not found", 404);
+
+        const hasScholarship = typeof scholarshipPercentage === 'number' && scholarshipPercentage > 0;
 
         await prisma.$transaction(async (tx) => {
             const admission = await tx.studentAdmission.update({
@@ -179,16 +214,100 @@ export const AdmissionService = {
                     notes: 'Initial Seat Allotment'
                 }
             });
+
+            // Scholarship reconciliation at allotment. The admin's selection is authoritative:
+            // if a % is given, upsert an eligible row at that %. If not (the common case),
+            // force any existing row to isEligible='NO' so a stale eligible record (from an
+            // earlier process / import / migration) cannot leak into generateFeeDemands and
+            // produce a phantom discount on the new fee demands.
+            if (hasScholarship) {
+                if (!admission.academicYearId) {
+                    throw new AppError('Cannot set scholarship: admission has no academicYearId', 400);
+                }
+                await tx.studentScholarship.upsert({
+                    where: { studentId },
+                    update: {
+                        scholarshipPercentage,
+                        isEligible: 'YES',
+                        type: 'MANUAL',
+                        updatedBy: adminId,
+                    },
+                    create: {
+                        studentId,
+                        academicYearId: admission.academicYearId,
+                        scholarshipPercentage,
+                        isEligible: 'YES',
+                        type: 'MANUAL',
+                        createdBy: adminId,
+                    },
+                });
+            } else {
+                await tx.studentScholarship.updateMany({
+                    where: { studentId },
+                    data: {
+                        isEligible: 'NO',
+                        scholarshipPercentage: 0,
+                        updatedBy: adminId,
+                    },
+                });
+            }
+
+            // Ensure an APPLICATION_FEE demand exists for the student. Regular registration
+            // never creates one — it's seeded on-the-fly when `payTestFee` is initiated.
+            // When an admin allots a seat BEFORE the student has paid, the student portal
+            // has no pending APPLICATION_FEE demand to render, so the pay button disappears
+            // and they're stuck. Seeding the PENDING demand here ensures the pay path stays
+            // visible post-allotment. Skipped if a SUCCESS payment already exists, or a
+            // demand row (PENDING or fully-waived FULL) is already in place.
+            const appFeeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.APPLICATION_FEE]);
+            const appFeeHead = appFeeHeadMap.get(PaymentComponent.APPLICATION_FEE);
+            if (appFeeHead) {
+                const [existingPayment, existingDemand] = await Promise.all([
+                    tx.payment.findFirst({
+                        where: {
+                            studentId,
+                            component: PaymentComponent.APPLICATION_FEE,
+                            status: PaymentStatus.SUCCESS,
+                            isDeleted: false,
+                        },
+                        select: { id: true },
+                    }),
+                    tx.studentFeeDemand.findFirst({
+                        where: {
+                            studentId,
+                            feeHeadId: appFeeHead.id,
+                            isDeleted: false,
+                        },
+                        select: { id: true },
+                    }),
+                ]);
+
+                if (!existingPayment && !existingDemand) {
+                    const appFeeAmount = await getApplicationFeeAmount();
+                    await tx.studentFeeDemand.create({
+                        data: {
+                            studentId,
+                            feeHeadId: appFeeHead.id,
+                            academicYearId: admission.academicYearId,
+                            amount: appFeeAmount,
+                            netAmount: appFeeAmount,
+                            status: FeeStatus.PENDING,
+                            dueDate: new Date(),
+                            remarks: 'Application fee — seeded at seat allotment (admin allotted before student paid).',
+                            createdBy: adminId,
+                        } as any,
+                    });
+                    logger.info(`[verifyAndAllotSeat] Seeded PENDING APPLICATION_FEE demand for ${studentId} (no payment or prior demand found).`);
+                }
+            } else {
+                logger.warn(`[verifyAndAllotSeat] No FeeHead tagged component=APPLICATION_FEE — cannot seed pending app-fee demand for ${studentId}.`);
+            }
         });
 
-        // Scholarship Allocation (Runs independently of transaction to allow failure without rolling back seat? 
-        // Or should it be atomic? 
-        // User request: "Student will get to know how much he need to pay actual college fees and aslo he got scholarship"
-        // It implies scholarship happens AT allocation. Best to be atomic or immediately following.
-        // Since ScholarshipService handles its own transaction for slots, we call it separately logic-wise, 
-        // but ideally we should wait for it.
-        
-        logger.info(`Skipping scholarship allocation for student ${studentId}: eligibleScholarshipRuleId removed from Student.`);
+        logger.info(
+            `[verifyAndAllotSeat] Scholarship state for ${studentId}: ` +
+            (hasScholarship ? `${scholarshipPercentage}% (manual, eligible)` : 'cleared — any existing row forced to NO')
+        );
 
         return { success: true, message: MESSAGES.SUCCESS.SEAT_ALLOTTED };
     },
@@ -1467,8 +1586,13 @@ export const AdmissionService = {
      * eligibility flag. On percentage change, propagates the new discount into
      * every PENDING tuition demand via propagateScholarshipUpdate.
      */
-    async updateStudentScholarship(studentId: string, data: any, adminId: string | undefined) {
+    async updateStudentScholarship(studentId: string, data: any, adminId: string | undefined, adminRole?: string) {
          if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+         // Lock scholarship edits once the seat is allotted (or further along).
+         // VERIFICATION_OFFICER / other roles must not adjust scholarship after C3
+         // completes allotment — only SUPER_ADMIN can override.
+         await assertScholarshipEditableForStudent(studentId, adminRole);
 
          const { type, degreeType, score, remarks, scholarshipPercentage, qualificationId, isEligible } = data;
 
@@ -1625,11 +1749,14 @@ export const AdmissionService = {
      * Edit a specific scholarship row by id (vs updateStudentScholarship which
      * upserts by studentId). Used by the "edit existing scholarship" admin UI.
      */
-    async editStudentScholarship(scholarshipId: string, data: any, adminId: string | undefined) {
+    async editStudentScholarship(scholarshipId: string, data: any, adminId: string | undefined, adminRole?: string) {
         if (!scholarshipId) throw new AppError('Scholarship ID is required', 400);
 
         const existing = await prisma.studentScholarship.findUnique({ where: { id: scholarshipId } });
         if (!existing) throw new AppError('Scholarship record not found', 404);
+
+        // Lock scholarship edits once the student's seat is allotted (or further along).
+        await assertScholarshipEditableForStudent(existing.studentId, adminRole);
 
         const { type, degreeType, score, remarks, scholarshipPercentage, qualificationId, isEligible } = data;
 
@@ -3645,6 +3772,11 @@ export const AdmissionService = {
                         studentId: student.id,
                         type: entry.type === AdmissionEntryType.LATERAL ? 'LATERAL' : 'MANUAL_ENTRY',
                         scholarshipPercentage: scholarship.percentage,
+                        // Must be 'YES' — generateFeeDemands filters StudentScholarship by
+                        // isEligible='YES'. NULL/'true'/anything else makes the scholarship
+                        // invisible to demand generation (root cause of lateral students'
+                        // scholarship not appearing in fee history).
+                        isEligible: 'YES',
                         remarks: scholarship.ruleId ? `Manual entry — ruleId=${scholarship.ruleId}` : 'Manual entry scholarship intent',
                         // Tag with the cohort's entry year — manual entry has explicit year context.
                         academicYearId: entry.academicYearId,
@@ -3657,6 +3789,16 @@ export const AdmissionService = {
             } catch (err) {
                 logger.error(`[manualEntryAdmission] scholarship intent storage failed for student=${student.id}: ${err}`);
             }
+        }
+
+        // Reconcile totalFee / paidFee from the source-of-truth rows. The increment
+        // updates above (priorPayment) and the demands seeded by generateFeeDemands won't
+        // be reflected in StudentAdmission.totalFee/paidFee until this runs — that's why
+        // the summary numbers were showing as 0 / stale for lateral entries.
+        try {
+            await recomputeStudentTotals(student.id);
+        } catch (err) {
+            logger.error(`[manualEntryAdmission] recomputeStudentTotals failed for student=${student.id}: ${err}`);
         }
 
         // ── Stage 5: Audit ─────────────────────────────────────────────
@@ -3830,6 +3972,103 @@ export const AdmissionService = {
             enrollment: result,
             admissionStatus: AdmissionStatus.SEAT_ALLOTTED,
             feeDemandsSeeded,
+        };
+    },
+
+    /**
+     * One-off reconciliation for a single student's fee state. Use this on students
+     * with inflated/wrong totals caused by orphan accommodation demands — e.g. a NONE
+     * or TRANSPORT student carrying HOSTEL_REGISTRATION / HOSTEL_LAUNDRY demands from
+     * before the generateFeeDemands accommodation-component filter was added.
+     *
+     * Steps:
+     *   1. Find active StudentFeeDemand rows whose feeHead.component is HOSTEL_* but
+     *      the student isn't on HOSTEL, OR TRANSPORT but not on TRANSPORT.
+     *   2. For each orphan with NO linked SUCCESS payments → soft-delete the demand.
+     *      For orphans WITH payments → skip and flag (admin must handle the prior
+     *      payment via the fee-correction flow; auto-deleting would orphan money).
+     *   3. Call `recomputeStudentTotals` so StudentAdmission.totalFee/paidFee reflect
+     *      the cleaned demand set.
+     *
+     * Destructive — SUPER_ADMIN only.
+     */
+    async reconcileStudentFees(studentId: string, adminId: string | undefined, adminRole?: string) {
+        if (adminRole !== Role.SUPER_ADMIN) {
+            throw new AppError('Fee reconciliation is restricted to SUPER_ADMIN.', 403);
+        }
+        if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+        const admission = await prisma.studentAdmission.findUnique({
+            where: { studentId },
+            select: { accommodationType: true },
+        });
+        if (!admission) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
+        const accType = admission.accommodationType;
+
+        const HOSTEL_COMPONENTS: ReadonlySet<string> = new Set([
+            'HOSTEL', 'HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION',
+        ]);
+        const TRANSPORT_COMPONENTS: ReadonlySet<string> = new Set(['TRANSPORT']);
+
+        const allDemands = await prisma.studentFeeDemand.findMany({
+            where: { studentId, isDeleted: false },
+            include: {
+                feeStructure: { include: { feeHead: true } },
+                feeHead: true,
+                payments: { where: { status: PaymentStatus.SUCCESS, isDeleted: false } },
+            },
+        });
+
+        type OrphanReport = { demandId: string; component: string; amount: number };
+        const softDeleted: OrphanReport[] = [];
+        const skipped: (OrphanReport & { reason: string; paidCount: number })[] = [];
+
+        await prisma.$transaction(async (tx) => {
+            for (const d of allDemands) {
+                const comp = ((d.feeHead as any)?.component ?? (d.feeStructure as any)?.feeHead?.component) as string | null | undefined;
+                if (!comp) continue;
+                const isHostelComp = HOSTEL_COMPONENTS.has(comp);
+                const isTransportComp = TRANSPORT_COMPONENTS.has(comp);
+                const orphan =
+                    (isHostelComp && accType !== AccommodationType.HOSTEL) ||
+                    (isTransportComp && accType !== AccommodationType.TRANSPORT);
+                if (!orphan) continue;
+
+                if ((d as any).payments && (d as any).payments.length > 0) {
+                    skipped.push({
+                        demandId: d.id,
+                        component: comp,
+                        amount: d.amount,
+                        paidCount: (d as any).payments.length,
+                        reason: 'Has linked SUCCESS payments — handle via fee-correction flow before deletion.',
+                    });
+                    continue;
+                }
+
+                await tx.studentFeeDemand.update({
+                    where: { id: d.id },
+                    data: { isDeleted: true, updatedBy: adminId },
+                });
+                softDeleted.push({ demandId: d.id, component: comp, amount: d.amount });
+            }
+        });
+
+        const totalsAfter = await recomputeStudentTotals(studentId);
+
+        logger.info(
+            `[reconcileStudentFees] student=${studentId} accType=${accType} ` +
+            `softDeleted=${softDeleted.length} skipped(withPayments)=${skipped.length} ` +
+            `newTotalFee=${totalsAfter.totalFee} newPaidFee=${totalsAfter.paidFee}`
+        );
+
+        return {
+            studentId,
+            accommodationType: accType,
+            softDeletedCount: softDeleted.length,
+            skippedCount: skipped.length,
+            softDeleted,
+            skipped,
+            totalsAfter,
         };
     },
 };

@@ -3,6 +3,7 @@ import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
 import { ScholarshipStatus } from '@prisma/client';
 import { getActiveAcademicYear } from '../../utils/studentContext';
+import { assertScholarshipEditableForStudent } from '../studentManagement/adminStudent/admission';
 
 export const ScholarshipService = {
     /** Create a new ScholarshipRule, tagged to the active academic year. Defines a (minPercentile, discountPercentage, totalSlots, degreeType) tier. */
@@ -327,8 +328,11 @@ export const ScholarshipService = {
      *   3. Record matching DEBIT/CREDIT ledger entries for the delta
      * Pass `feeHeadId` to limit recalibration to one fee head; otherwise applies to all "tuition"-named heads.
      */
-    async updateStudentScholarship(studentId: string, newPercentage: number, adminId: string, feeHeadId?: string, academicYearId?: string | null) {
+    async updateStudentScholarship(studentId: string, newPercentage: number, adminId: string, feeHeadId?: string, academicYearId?: string | null, adminRole?: string) {
         logger.info(`Updating scholarship for student ${studentId} to ${newPercentage}% (FeeHead: ${feeHeadId || 'AUTO-DETECT'})`);
+
+        // Lock scholarship edits once the seat is allotted. Only SUPER_ADMIN can override.
+        await assertScholarshipEditableForStudent(studentId, adminRole);
 
         // Resolve a year tag: caller-provided wins; else fall back to the active academic year.
         // academicYearId is now required on StudentScholarship — error if neither resolves.
@@ -340,6 +344,10 @@ export const ScholarshipService = {
                 where: { studentId },
                 update: {
                     scholarshipPercentage: newPercentage,
+                    // Reconcile eligibility with the new percentage: >0 → 'YES', else 'NO'.
+                    // Without this, a row previously cleared to 'NO' (e.g. at seat allotment)
+                    // would stay invisible to generateFeeDemands even after a percentage update.
+                    isEligible: newPercentage > 0 ? 'YES' : 'NO',
                     updatedBy: adminId
                 },
                 create: {
@@ -348,7 +356,9 @@ export const ScholarshipService = {
                     scholarshipPercentage: newPercentage,
                     academicYearId: resolvedYearId,
                     createdBy: adminId,
-                    isEligible: 'true'
+                    // Must be 'YES' — generateFeeDemands filters StudentScholarship by
+                    // isEligible='YES'. The old lowercase 'true' did not match.
+                    isEligible: 'YES'
                 }
             });
 
