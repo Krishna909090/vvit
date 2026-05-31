@@ -2131,7 +2131,7 @@ export const AdmissionService = {
     async executeAdmissionUpdates(studentId: string, payload: any, _paymentId: string, adminId: string, tx: any) {
         try {
             const { allocation, scholarship, course } = payload;
-            logger.info(`[executeAdmissionUpdates] Allocation: ${allocation.type}, Scholarship: ${scholarship.percentage}%`);
+            logger.info(`[executeAdmissionUpdates] Allocation: ${allocation.type}, Scholarship: ${scholarship?.percentage ?? 'unchanged'}`);
 
             // --- 1. Accommodation Handling ---
             logger.debug(`[executeAdmissionUpdates] Processing Accommodation: ${allocation?.type}`);
@@ -2264,20 +2264,44 @@ export const AdmissionService = {
                 }
             });
             
-            // --- 4. Update Scholarship ---
-            const scholarshipPct = scholarship.percentage ?? 0;
-            await tx.studentScholarship.update({
-                where: { studentId },
-                data: {
-                    scholarshipPercentage: scholarshipPct,
-                    isEligible: scholarshipPct > 0 ? 'YES' : 'NO',
-                    updatedBy: adminId
-                }
-            });
-            logger.debug(`[executeAdmissionUpdates] Scholarship updated: percentage=${scholarshipPct}`);
+            // --- 4. Update Scholarship (only when admin sends a new percentage) ---
+            // The reconciliation work itself (TUITION demand re-bake, ledger sync) lives in
+            // propagateScholarshipUpdate — the same shared helper called by the dedicated
+            // /admin/student/student-scholarship and /finance/fees/update-student-scholarship
+            // endpoints. So there's no duplicate implementation; finalize just opts in via
+            // upsert + the shared propagate when the admin chose to override at this step.
+            //
+            // Guard: only act when the body explicitly carries `scholarship.percentage`
+            // (including 0 / null — that's an explicit clear). Omitting the field leaves
+            // the existing scholarship + demands untouched.
+            if (scholarship && Object.prototype.hasOwnProperty.call(scholarship, 'percentage')) {
+                const scholarshipPct = scholarship.percentage ?? 0;
+                // upsert (not .update) — finalize must not P2025 on students without a row yet.
+                await tx.studentScholarship.upsert({
+                    where: { studentId },
+                    update: {
+                        scholarshipPercentage: scholarshipPct,
+                        isEligible: scholarshipPct > 0 ? 'YES' : 'NO',
+                        updatedBy: adminId,
+                    },
+                    create: {
+                        studentId,
+                        academicYearId: ayId,
+                        type: 'MANUAL',
+                        scholarshipPercentage: scholarshipPct,
+                        isEligible: scholarshipPct > 0 ? 'YES' : 'NO',
+                        createdBy: adminId,
+                        updatedBy: adminId,
+                    } as any,
+                });
+                logger.debug(`[executeAdmissionUpdates] Scholarship upserted: percentage=${scholarshipPct}`);
 
-            if (scholarshipPct > 0) {
+                // Always re-bake — propagateScholarshipUpdate handles 0% correctly by zeroing
+                // scholarshipAmount on each TUITION demand while preserving any manual
+                // discount, and deleting the SCHOLARSHIP ledger CREDIT row.
                 await this.propagateScholarshipUpdate(studentId, scholarshipPct, adminId, tx);
+            } else {
+                logger.debug(`[executeAdmissionUpdates] Scholarship field absent — leaving existing scholarship + demands untouched.`);
             }
 
             // Recompute totalFee (Σ active demand gross) and paidFee (Σ SUCCESS non-application
