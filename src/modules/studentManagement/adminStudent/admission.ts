@@ -3548,7 +3548,7 @@ export const AdmissionService = {
                     entryAcademicYearId: entry.academicYearId,
                     feeCohortAcademicYearId,
                     batchAcademicYearId,
-                    instituteCode: entry.instituteCode ?? 'VVIG',
+                    instituteCode: entry.instituteCode ?? 'MGMT',
                     entryReason: entry.reason,
                     isBackdated: entry.isBackdated,
                     paidFee: 0,

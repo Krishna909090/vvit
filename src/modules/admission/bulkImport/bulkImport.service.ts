@@ -266,7 +266,7 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
                 entryAcademicYearId: activeYear.id,
                 feeCohortAcademicYearId: activeYear.id,
                 batchAcademicYearId: activeYear.id,
-                instituteCode: 'VVIG',
+                instituteCode: 'MGMT',
             }
         });
 
@@ -357,7 +357,7 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 entryAcademicYearId: activeYear.id,
                 feeCohortAcademicYearId: activeYear.id,
                 batchAcademicYearId: activeYear.id,
-                instituteCode: 'VVIG',
+                instituteCode: 'MGMT',
             }
         });
 
@@ -719,7 +719,7 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                         entryAcademicYearId: activeAcademicYear.id,
                         feeCohortAcademicYearId: activeAcademicYear.id,
                         batchAcademicYearId: activeAcademicYear.id,
-                        instituteCode: 'VVIG',
+                        instituteCode: 'MGMT',
                     }
                 });
 

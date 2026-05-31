@@ -247,7 +247,7 @@ export const FeeService = {
         academicYearId:      string;
         entryAcademicYearId?: string;
         entryType?:          'REGULAR' | 'LATERAL' | 'TRANSFER';
-        instituteCode?:      'VVIG' | 'VVITU' | 'VVITPU';
+        instituteCode?:      'MGMT' | 'VVITU' | 'VVITPU';
         quotaType?:          QuotaType;
         yearOfStudy?:        number;
         feeHeads:            Array<{ feeHeadId: string; amount: number }>;
@@ -358,7 +358,7 @@ export const FeeService = {
         feeHeadId?:           string;
         entryAcademicYearId?: string;
         entryType?:           'REGULAR' | 'LATERAL' | 'TRANSFER';
-        instituteCode?:       'VVIG' | 'VVITU' | 'VVITPU';
+        instituteCode?:       'MGMT' | 'VVITU' | 'VVITPU';
         quotaType?:           QuotaType;
         yearOfStudy?:         number;
         minAmount?:           number;

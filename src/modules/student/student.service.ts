@@ -241,8 +241,8 @@ export const registerStudent = async (data: any, userId: string | null, _current
             if (idx >= 0 && batchIdx >= 0) batchAcademicYearId = years[batchIdx].id;
         }
 
-        // Default to VVIG. Admin sets VVITU/VVITPU explicitly only for 2025-26 batch students.
-        const instituteCode = data.instituteCode ?? 'VVIG';
+        // Default to MGMT. Admin sets VVITU/VVITPU explicitly only for 2025-26 batch students.
+        const instituteCode = data.instituteCode ?? 'MGMT';
 
         await tx.studentAdmission.create({
             data: {

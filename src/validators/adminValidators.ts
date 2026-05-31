@@ -413,7 +413,7 @@ export const createFeeStructureSchema = z.object({
         academicYearId: z.string().uuid(),
         entryAcademicYearId: z.string().uuid().optional(),
         entryType: z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
-        instituteCode: z.enum(['VVIG', 'VVITU', 'VVITPU']).optional(),
+        instituteCode: z.enum(['MGMT', 'VVITU', 'VVITPU']).optional(),
         quotaType: z.string().optional(),
         yearOfStudy: z.number().int().min(1).max(10).optional(),
     }),
@@ -438,7 +438,7 @@ export const bulkHeadsFeeStructureSchema = z.object({
         academicYearId:      z.string().uuid('Invalid Academic Year ID'),
         entryAcademicYearId: z.string().uuid('Invalid Entry Academic Year ID').optional(),
         entryType:           z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
-        instituteCode:       z.enum(['VVIG', 'VVITU', 'VVITPU']).optional(),
+        instituteCode:       z.enum(['MGMT', 'VVITU', 'VVITPU']).optional(),
         quotaType:           z.enum(['MANAGEMENT', 'CONVENOR']).optional(),
         yearOfStudy:         z.number().int().min(1).max(10).optional(),
         feeHeads: z.array(z.object({
@@ -502,7 +502,7 @@ export const cloneFeeStructuresSchema = z.object({
         courseIds: z.array(z.string().uuid('Invalid course ID')).optional(),
         entryAcademicYearId: z.string().uuid('Invalid entry academic year ID').optional(),
         entryType: z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
-        instituteCode: z.enum(['VVIG', 'VVITU', 'VVITPU']).optional(),
+        instituteCode: z.enum(['MGMT', 'VVITU', 'VVITPU']).optional(),
     }).refine(
         d => d.sourceAcademicYearId !== d.targetAcademicYearId,
         { message: 'Source and target academic years must differ', path: ['targetAcademicYearId'] }

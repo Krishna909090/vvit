@@ -376,7 +376,7 @@ model StudentAdmission {
   entryAcademicYearId      String?                          // academicYear at admission moment
   feeCohortAcademicYearId  String?                          // which cohort's fee schedule applies (for FRESH = entryAcademicYearId; for LATERAL = the batch they slot into)
   batchAcademicYearId      String?                          // the academic year the student's BATCH started 1st year. For REGULAR = academicYearId; for LATERAL = (yearOfStudy-1) years earlier. Drives the shared course-seat pool.
-  instituteCode            String?                          // 'VVIG' (default for most batches) / 'VVITU' / 'VVITPU' (2025-26 batch only) — picks which institute's fee schedule applies
+  instituteCode            String?                          // 'MGMT' (default for most batches) / 'VVITU' / 'VVITPU' (2025-26 batch only) — picks which institute's fee schedule applies
   entryReason              String?                          // free-text: e.g. "Diploma → BTech 2nd year"
   isBackdated              Boolean?            @default(false) // admin-flagged for back-entry
 

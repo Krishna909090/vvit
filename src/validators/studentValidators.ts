@@ -36,8 +36,8 @@ export const registerStudentSchema = z.object({
         entryType: z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
         entryYearOfStudy: z.number().int().min(1).max(10).optional(),
         // Institute code — VVITU and VVITPU are used only for the 2025-26 batch
-        // cohort; all other batches default to VVIG. Defaults to VVIG when omitted.
-        instituteCode: z.enum(['VVIG', 'VVITU', 'VVITPU']).optional(),
+        // cohort; all other batches default to MGMT. Defaults to MGMT when omitted.
+        instituteCode: z.enum(['MGMT', 'VVITU', 'VVITPU']).optional(),
     }),
 });
 

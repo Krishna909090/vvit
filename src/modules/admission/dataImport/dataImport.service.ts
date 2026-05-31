@@ -203,7 +203,7 @@ export const processExcelImport = async (
                      entryAcademicYear: { connect: { id: activeYear.id } },
                      feeCohortAcademicYear: { connect: { id: activeYear.id } },
                      batchAcademicYear: { connect: { id: activeYear.id } },
-                     instituteCode: 'VVIG',
+                     instituteCode: 'MGMT',
                   },
                   update: {}
                }
@@ -228,7 +228,7 @@ export const processExcelImport = async (
                         entryAcademicYearId: activeYear.id,
                         feeCohortAcademicYearId: activeYear.id,
                         batchAcademicYearId: activeYear.id,
-                        instituteCode: 'VVIG',
+                        instituteCode: 'MGMT',
                     }
                 })
              }
@@ -265,7 +265,7 @@ export const processExcelImport = async (
                     entryAcademicYearId: activeYear.id,
                     feeCohortAcademicYearId: activeYear.id,
                     batchAcademicYearId: activeYear.id,
-                    instituteCode: 'VVIG',
+                    instituteCode: 'MGMT',
                 },
                 update: {
                     status: AdmissionStatus.SEAT_ALLOTTED
