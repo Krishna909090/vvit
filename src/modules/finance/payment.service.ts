@@ -2473,145 +2473,19 @@ export const getStudentFinancialHistory = async (
 
     logger.info(`[FinancialHistory] Data Fetched. Ledgers: ${ledgers.length}, Payments: ${payments.length}, Demands: ${feeDemands.length}, FeeCorrections: ${feeCorrections.length}`);
 
-    // 2. Initialize Breakdown
-    const categories = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION', 'TRANSPORT', 'TUITION', 'BOOK_BANK', 'ADMISSION', 'OTHER'];
-    const breakdown: Record<string, { demanded: number, paid: number, fine: number, discount: number, scholarshipAmount: number, feeHeadId: string }> = {};
-    categories.forEach(cat => {
-        breakdown[cat] = { demanded: 0, paid: 0, fine: 0, discount: 0, scholarshipAmount: 0, feeHeadId: '' };
-    });
+    // ─── Constants ─────────────────────────────────────────────────────────────────
+    const BREAKDOWN_CATEGORIES = [
+        'HOSTEL_ACCOMMODATION',
+        'HOSTEL_MESS',
+        'HOSTEL_LAUNDRY',
+        'HOSTEL_REGISTRATION',
+        'TRANSPORT',
+        'TUITION',
+        'BOOK_BANK',
+        'ADMISSION',
+        'OTHER',
+    ] as const;
 
-    // 3. Helper: Map FeeHead → category bucket.
-    // Strict: only the explicit `feeHead.component` enum is honored. FeeHeads
-    // without a component are bucketed as 'OTHER' (run the backfill SQL to tag them).
-    const getCategoryForHead = (h: { component?: PaymentComponent | null }): string => {
-        return h.component ? (h.component as string) : 'OTHER';
-    };
-
-    // Fee Head ID -> Category Map
-    const feeHeadCategoryMap = new Map<string, string>();
-    allFeeHeads.forEach((h: any) => feeHeadCategoryMap.set(h.id, getCategoryForHead(h)));
-
-    // 4. DEMAND CALCULATION (From Fee Tables)
-    feeDemands.forEach((demand: any) => {
-        // Demands link a FeeHead either directly (hostel/transport) or via FeeStructure (course tuition).
-        const headId = demand.feeHeadId ?? demand.feeStructure?.feeHeadId;
-        const head = demand.feeHead ?? demand.feeStructure?.feeHead;
-        let category: string | undefined;
-
-        if (headId) category = feeHeadCategoryMap.get(headId);
-        if (!category && head) {
-             category = getCategoryForHead(head);
-             if (headId) feeHeadCategoryMap.set(headId, category);
-        }
-
-        const catKey = category || 'OTHER';
-        // Make sure catKey exists in breakdown (handle potential old 'HOSTEL' mapping)
-        let targetKey = catKey;
-        if (!breakdown[targetKey]) {
-            if (targetKey === 'HOSTEL') targetKey = 'HOSTEL_ACCOMMODATION';
-            else targetKey = 'OTHER';
-        }
-
-        const target = breakdown[targetKey];
-        
-        target.demanded += demand.amount;
-        // `discount` is the TOTAL deduction (manual discount-request approvals +
-        // scholarship). demand.discountAmount already accumulates both: finalize writes
-        // the scholarship into it, and discount-approval increments the manual part on
-        // top. The scholarship is ALSO surfaced separately in `scholarshipAmount` for
-        // display, but it is a SUBSET of `discount`, NOT additive — so net is
-        // demanded − discount (do not also subtract scholarshipAmount).
-        target.discount += demand.discountAmount ?? 0;
-        if (demand.scholarshipAmount) target.scholarshipAmount += demand.scholarshipAmount;
-        if (demand.fineAmount) target.fine += demand.fineAmount;
-        if (headId && !target.feeHeadId) target.feeHeadId = headId;
-    });
-
-    // 5. Override hostel/transport demands using the per-student frozen snapshot.
-    //    `getOrCreateAccommodationPricing` is the single source of truth — it returns
-    //    the existing snapshot, auto-creates one for fully-allocated students who don't
-    //    have one yet (legacy/manual data), or returns null when the student isn't yet
-    //    bed-allocated (correct: hostel demand stays 0).
-    if (student && student.admissionDetails) {
-        const admission = student.admissionDetails;
-
-        // When override fires, both `demanded` and `discount` come from the active demand
-        // for the active snapshot/route — NOT the demand-row aggregation, which sums
-        // historical reassign churn (FULL demands with discount=full amount, netAmount=0)
-        // and would inflate `discount` past `demanded`. Active discount = sum of
-        // discountAmount on PENDING/PARTIAL demands of the matching feeHead.
-        const activeDiscountForFeeHead = (feeHeadId: string | undefined): number => {
-            if (!feeHeadId) return 0;
-            return feeDemands
-                .filter((d: any) =>
-                    d.feeHeadId === feeHeadId
-                    && !d.isDeleted
-                    && d.status !== FeeStatus.FULL
-                )
-                .reduce((sum: number, d: any) => sum + (d.discountAmount ?? 0), 0);
-        };
-
-        // Hostel override only when the student is currently on HOSTEL. If they switched to
-        // TRANSPORT/NONE, an old snapshot must not synthesize HOSTEL_* demand lines — the
-        // demand-row aggregation above is the authoritative source for those rows.
-        if (admission.accommodationType === AccommodationType.HOSTEL) {
-            const snapshot = await getOrCreateAccommodationPricing(studentId);
-            if (snapshot) {
-                breakdown.HOSTEL_ACCOMMODATION.demanded = snapshot.accommodationPrice ?? 0;
-                breakdown.HOSTEL_ACCOMMODATION.discount = activeDiscountForFeeHead(breakdown.HOSTEL_ACCOMMODATION.feeHeadId);
-                breakdown.HOSTEL_MESS.demanded          = snapshot.messPrice ?? 0;
-                breakdown.HOSTEL_MESS.discount          = activeDiscountForFeeHead(breakdown.HOSTEL_MESS.feeHeadId);
-                breakdown.HOSTEL_LAUNDRY.demanded       = snapshot.laundryPrice ?? 0;
-                breakdown.HOSTEL_LAUNDRY.discount       = activeDiscountForFeeHead(breakdown.HOSTEL_LAUNDRY.feeHeadId);
-                breakdown.HOSTEL_REGISTRATION.demanded  = snapshot.registrationFee ?? 0;
-                breakdown.HOSTEL_REGISTRATION.discount  = activeDiscountForFeeHead(breakdown.HOSTEL_REGISTRATION.feeHeadId);
-            }
-            // else: student has no bed yet → all hostel buckets remain 0 (correct)
-
-            // Student is on HOSTEL — any TRANSPORT demand rows are stale (from a prior
-            // H→T switch that was reversed). Zero the bucket so it doesn't inflate totals.
-            breakdown.TRANSPORT.demanded = 0;
-            breakdown.TRANSPORT.discount = 0;
-        }
-
-        // Transport — uses live route.cost (no snapshot model for transport pricing).
-        // Discount is reset to the active PENDING demand's discount, same reasoning as hostel.
-        if (admission.accommodationType === AccommodationType.TRANSPORT
-            && admission.transportRouteId && admission.transportRoute) {
-            breakdown.TRANSPORT.demanded = admission.transportRoute.cost;
-            breakdown.TRANSPORT.discount = activeDiscountForFeeHead(breakdown.TRANSPORT.feeHeadId);
-
-            // Mirror inverse: zero hostel buckets so stale snapshots/demands don't leak
-            breakdown.HOSTEL_ACCOMMODATION.demanded = 0;
-            breakdown.HOSTEL_ACCOMMODATION.discount = 0;
-            breakdown.HOSTEL_MESS.demanded          = 0;
-            breakdown.HOSTEL_MESS.discount          = 0;
-            breakdown.HOSTEL_LAUNDRY.demanded       = 0;
-            breakdown.HOSTEL_LAUNDRY.discount       = 0;
-            breakdown.HOSTEL_REGISTRATION.demanded  = 0;
-            breakdown.HOSTEL_REGISTRATION.discount  = 0;
-        }
-
-        // NONE — student has no active accommodation; both buckets must be 0
-        if (admission.accommodationType !== AccommodationType.HOSTEL
-            && admission.accommodationType !== AccommodationType.TRANSPORT) {
-            breakdown.HOSTEL_ACCOMMODATION.demanded = 0;
-            breakdown.HOSTEL_ACCOMMODATION.discount = 0;
-            breakdown.HOSTEL_MESS.demanded          = 0;
-            breakdown.HOSTEL_MESS.discount          = 0;
-            breakdown.HOSTEL_LAUNDRY.demanded       = 0;
-            breakdown.HOSTEL_LAUNDRY.discount       = 0;
-            breakdown.HOSTEL_REGISTRATION.demanded  = 0;
-            breakdown.HOSTEL_REGISTRATION.discount  = 0;
-            breakdown.TRANSPORT.demanded            = 0;
-            breakdown.TRANSPORT.discount            = 0;
-        }
-    }
-
-    // 6. LEDGER ADJUSTMENTS (course-change processing fee only)
-    // Discounts/scholarships come from the demand rows (section 4), NOT the ledger.
-    // Reassign/cancellation/switch CREDITs are mirrored as FeeCorrection refund rows;
-    // counting them here would double-account against `correctionSummary`.
     const REFUND_LIKE_REFERENCE_TYPES = new Set([
         'CANCELLATION',
         'HOSTEL_REASSIGNMENT',
@@ -2619,158 +2493,126 @@ export const getStudentFinancialHistory = async (
         'TRANSPORT_REASSIGNMENT',
         'TRANSPORT_CANCELLATION',
         'ACCOMMODATION_SWITCH',
-        'HOSTEL_TO_TRANSPORT_SWITCH',  // retained-fee ledger row written by switchHostelToTransport
-        'TRANSPORT_TO_HOSTEL_SWITCH',  // retained-fee ledger row written by switchTransportToHostel
-        'WAIVER',  // app-fee waivers (e.g., lateral + management quota); shown separately, not as discount
+        'HOSTEL_TO_TRANSPORT_SWITCH',
+        'TRANSPORT_TO_HOSTEL_SWITCH',
+        'WAIVER',
     ]);
-    ledgers.forEach(entry => {
-        // Skip cancellation/reassign/switch — those are reflected in FeeCorrection, not here.
-        if (REFUND_LIKE_REFERENCE_TYPES.has(entry.referenceType as string)) return;
 
-        // Strict: bucket by feeHeadId only. Ledger entries without a feeHeadId
-        // bucket as OTHER (no description keyword fallback).
-        const category = entry.feeHeadId
-            ? (feeHeadCategoryMap.get(entry.feeHeadId) ?? 'OTHER')
-            : 'OTHER';
+    const HOSTEL_PAYMENT_COMPONENTS: PaymentComponent[] = [
+        PaymentComponent.HOSTEL,
+        PaymentComponent.HOSTEL_ACCOMMODATION,
+        PaymentComponent.HOSTEL_MESS,
+        PaymentComponent.HOSTEL_LAUNDRY,
+        PaymentComponent.HOSTEL_REGISTRATION,
+    ];
+    const HOSTEL_BREAKDOWN_KEYS = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION'] as const;
 
-        let key = category;
-        if (!breakdown[key]) {
-             if (key === 'HOSTEL') key = 'HOSTEL_ACCOMMODATION';
-             else key = 'OTHER';
-        }
+    // ─── Setup: breakdown, fee-head map, accommodation state ───────────────────────
+    type Bucket = { demanded: number; paid: number; fine: number; discount: number; scholarshipAmount: number; feeHeadId: string };
+    const breakdown: Record<string, Bucket> = Object.fromEntries(
+        BREAKDOWN_CATEGORIES.map(c => [c, { demanded: 0, paid: 0, fine: 0, discount: 0, scholarshipAmount: 0, feeHeadId: '' }])
+    );
 
-        const target = breakdown[key];
+    const feeHeadComponentMap = new Map<string, PaymentComponent | null>(
+        allFeeHeads.map((h: any) => [h.id, h.component ?? null])
+    );
 
-        // Discounts & scholarships are NOT read from the ledger. They are authoritatively
-        // carried on the StudentFeeDemand row (discountAmount / scholarshipAmount) and
-        // already applied in section 4. Summing them from the ledger double-counted any
-        // scholarship CREDIT that was orphaned when a demand was soft-deleted/replaced
-        // (the ledger row isn't always cascade-deleted), which inflated `discount` and
-        // silently zeroed out real pending dues. The ledger is consulted here only for the
-        // course-change processing fee — a ledger-only concept with no demand/payment row.
-
-        // Course change processing fee — DEBIT reduces paid on the source category (tuition)
-        if (entry.referenceType === 'COURSE_CHANGE' && entry.type === 'DEBIT') {
-            target.paid -= entry.amount;
-        }
-    });
-
-    // Payments tied to a soft-deleted demand (e.g. paid for an earlier hostel/transport
-    // stint that was cancelled — same accommodation, prior cycle) must not be counted as
-    // `paid` against the current breakdown. The original payment survives as SUCCESS, but
-    // the demand it was paid against is gone; the money is accounted for via the
-    // cancel-flow's FeeCorrection refund (settled on-demand via the apply API). Treated
-    // the same as the cross-accommodation suppression below.
-    const isStalePayment = (p: any): boolean => !!(p.feeDemand && p.feeDemand.isDeleted);
-
-    // Payments for an accommodation the student is NO LONGER on (e.g. a TRANSPORT
-    // payment after a TRANSPORT→HOSTEL switch) must not be counted as `paid`. The
-    // original payment row survives as SUCCESS, but its value was already reallocated
-    // — applied as a DISCOUNT on the new accommodation's demands and/or parked as a
-    // FeeCorrection refund. Counting it here double-represents it (shows up under the
-    // stale category AND understates totalPending, since it's also a discount).
+    const accType = student?.admissionDetails?.accommodationType ?? null;
     const suppressedAccComponents = new Set<PaymentComponent>();
-    const accType = student?.admissionDetails?.accommodationType;
-    if (accType !== AccommodationType.HOSTEL) {
-        suppressedAccComponents.add(PaymentComponent.HOSTEL);
-        suppressedAccComponents.add(PaymentComponent.HOSTEL_ACCOMMODATION);
-        suppressedAccComponents.add(PaymentComponent.HOSTEL_MESS);
-        suppressedAccComponents.add(PaymentComponent.HOSTEL_LAUNDRY);
-        suppressedAccComponents.add(PaymentComponent.HOSTEL_REGISTRATION);
-    }
-    if (accType !== AccommodationType.TRANSPORT) {
-        suppressedAccComponents.add(PaymentComponent.TRANSPORT);
-    }
+    if (accType !== AccommodationType.HOSTEL) HOSTEL_PAYMENT_COMPONENTS.forEach(c => suppressedAccComponents.add(c));
+    if (accType !== AccommodationType.TRANSPORT) suppressedAccComponents.add(PaymentComponent.TRANSPORT);
 
-    // 7. PAID CALCULATION
-    payments.forEach(p => {
-         if (p.component === PaymentComponent.APPLICATION_FEE) return; // Skip Application Fee
-         if (suppressedAccComponents.has(p.component)) return; // reallocated by an accommodation switch
-         if (isStalePayment(p)) return;                        // demand was soft-deleted (prior-cycle stale)
+    // ─── Helpers ───────────────────────────────────────────────────────────────────
+    // SCHOLARSHIP_TOKEN and bare HOSTEL are enum-level aliases preserved for legacy data.
+    const bucketKey = (comp: PaymentComponent | string | null | undefined): string => {
+        if (!comp) return 'OTHER';
+        if (comp === PaymentComponent.SCHOLARSHIP_TOKEN) return 'ADMISSION';
+        if (comp === PaymentComponent.HOSTEL) return 'HOSTEL_ACCOMMODATION';
+        return breakdown[comp as string] ? (comp as string) : 'OTHER';
+    };
 
-         let key = 'OTHER';
-         if (p.feeDemand?.feeStructure?.feeHead) {
-             key = getCategoryForHead(p.feeDemand.feeStructure.feeHead);
-         } else if (p.feeHeadId && feeHeadCategoryMap.has(p.feeHeadId)) {
-             key = feeHeadCategoryMap.get(p.feeHeadId) || 'OTHER';
-         } else {
-             const comp = p.component || 'OTHER';
-             if (comp === PaymentComponent.SCHOLARSHIP_TOKEN) key = 'ADMISSION';
-             else if (comp === PaymentComponent.HOSTEL_ACCOMMODATION) key = 'HOSTEL_ACCOMMODATION';
-             else if (comp === PaymentComponent.HOSTEL_MESS) key = 'HOSTEL_MESS';
-             else if (comp === PaymentComponent.HOSTEL) key = 'HOSTEL_ACCOMMODATION'; // Fallback
-             else key = comp as string;
-         }
-         
-         if (!breakdown[key]) {
-             if (key.includes('HOSTEL')) key = 'HOSTEL_ACCOMMODATION';
-             else if (key.includes('MESS')) key = 'HOSTEL_MESS';
-             else key = 'OTHER';
-         }
-         
-         const target = breakdown[key] || breakdown['OTHER'];
-         target.paid += p.amount;
-         if (p.feeHeadId && !target.feeHeadId) target.feeHeadId = p.feeHeadId;
+    const componentOfDemand = (d: any): PaymentComponent | null | undefined => {
+        const headId = d.feeHeadId ?? d.feeStructure?.feeHeadId;
+        return d.feeHead?.component
+            ?? d.feeStructure?.feeHead?.component
+            ?? (headId ? feeHeadComponentMap.get(headId) : null);
+    };
+
+    const componentOfPayment = (p: any): PaymentComponent | null | undefined =>
+        p.feeDemand?.feeStructure?.feeHead?.component
+        ?? (p.feeHeadId ? feeHeadComponentMap.get(p.feeHeadId) : undefined)
+        ?? p.component;
+
+    const isExternalPayment    = (p: any) => p.component === PaymentComponent.APPLICATION_FEE
+                                          || p.component === PaymentComponent.COURSE_CHANGE_FEE;
+    const isStalePayment       = (p: any) => !!(p.feeDemand && p.feeDemand.isDeleted);
+    const isAccSuppressedPayment = (p: any) => suppressedAccComponents.has(p.component);
+    const isCurrentPayment     = (p: any) => !isExternalPayment(p) && !isAccSuppressedPayment(p) && !isStalePayment(p);
+
+    const isAccommodationRefund = (fc: any) => fc.type === 'ACCOMMODATION_CHANGE_REFUND';
+
+    const sumPayments = (pred: (p: any) => boolean) =>
+        payments.filter(pred).reduce((s, p) => s + p.amount, 0);
+    const sumCorrections = (pred: (fc: any) => boolean, field: 'amount' | 'retainedAmount') =>
+        (feeCorrections as any[]).filter(pred).reduce((s, fc) => s + ((fc as any)[field] ?? 0), 0);
+
+    // ─── 1. Apply demands ──────────────────────────────────────────────────────────
+    feeDemands.forEach((demand: any) => {
+        const headId = demand.feeHeadId ?? demand.feeStructure?.feeHeadId;
+        const target = breakdown[bucketKey(componentOfDemand(demand))];
+        target.demanded += demand.amount;
+        target.discount += demand.discountAmount ?? 0;
+        if (demand.scholarshipAmount) target.scholarshipAmount += demand.scholarshipAmount;
+        if (demand.fineAmount) target.fine += demand.fineAmount;
+        if (headId && !target.feeHeadId) target.feeHeadId = headId;
     });
 
-    // 8. FINAL SUMMARY
-    const totalDemanded = Object.values(breakdown).reduce((sum, cat) => sum + cat.demanded, 0);
+    // ─── 2. Apply ledger adjustments (course-change DEBIT only) ────────────────────
+    ledgers.forEach((entry: any) => {
+        if (REFUND_LIKE_REFERENCE_TYPES.has(entry.referenceType)) return;
+        if (entry.referenceType !== 'COURSE_CHANGE' || entry.type !== 'DEBIT') return;
+        const comp = entry.feeHeadId ? feeHeadComponentMap.get(entry.feeHeadId) : null;
+        breakdown[bucketKey(comp)].paid -= entry.amount;
+    });
 
-    // Course change DEBIT reduces effective paid (processing fee deducted from tuition)
+    // ─── 3. Apply payments ─────────────────────────────────────────────────────────
+    payments.forEach((p: any) => {
+        if (!isCurrentPayment(p)) return;
+        const target = breakdown[bucketKey(componentOfPayment(p))];
+        target.paid += p.amount;
+        if (p.feeHeadId && !target.feeHeadId) target.feeHeadId = p.feeHeadId;
+    });
+
+    // ─── 4. Roll up totals ─────────────────────────────────────────────────────────
+    const totalDemanded = Object.values(breakdown).reduce((s, b) => s + b.demanded, 0);
+    const totalDiscount = Object.values(breakdown).reduce((s, b) => s + b.discount, 0);
+
     const courseChangeDeduction = ledgers
-        .filter(l => l.referenceType === 'COURSE_CHANGE' && l.type === 'DEBIT')
-        .reduce((sum, l) => sum + l.amount, 0);
-    const totalPaid = payments
-        .filter(p => p.component !== PaymentComponent.APPLICATION_FEE
-                  && !suppressedAccComponents.has(p.component)
-                  && !isStalePayment(p))
-        .reduce((sum, p) => sum + p.amount, 0) - courseChangeDeduction;
-    // Total deduction = Σ breakdown[].discount, which already holds the FULL per-head
-    // deduction (manual + scholarship). scholarshipAmount is a SUBSET of discount, not
-    // additive, so it is NOT added again here. Sourced from StudentFeeDemand (not the
-    // ledger) so it stays consistent with totalDemanded and immune to orphaned
-    // scholarship CREDIT ledger rows.
-    const totalDiscount = Object.values(breakdown)
-        .reduce((sum, cat) => sum + cat.discount, 0);
+        .filter((l: any) => l.referenceType === 'COURSE_CHANGE' && l.type === 'DEBIT')
+        .reduce((s, l: any) => s + l.amount, 0);
+    const courseChangeFeePaid = sumPayments(p => p.component === PaymentComponent.COURSE_CHANGE_FEE);
+    const totalPaid           = sumPayments(isCurrentPayment) - courseChangeDeduction;
 
-    // Cash the student paid on accommodation(s) they have since left (these payments are
-    // suppressed from totalPaid + the per-category breakdown above, since they no longer
-    // map to a current obligation). That money is accounted for in one of three ways:
-    //   (a) refunded via a FeeCorrection (ACCOMMODATION_CHANGE_REFUND), or
-    //   (b) reallocated as a discount onto the CURRENT accommodation's demands (a switch
-    //       applies the old payment as a discount, already reducing `totalDemanded`), or
-    //   (c) neither — a refund that was never issued (e.g. transport→NONE with no refund).
-    // Case (c) must NOT silently disappear: surface it as `unrefundedAccommodationCredit`
-    // (a refund still owed to the student) so the books reconcile to actual cash received.
-    const suppressedAccPaid = payments
-        .filter(p => p.component !== PaymentComponent.APPLICATION_FEE
-                  && (suppressedAccComponents.has(p.component) || isStalePayment(p)))
-        .reduce((sum, p) => sum + p.amount, 0);
-    const issuedAccRefunds = (feeCorrections as any[])
-        .filter(fc => fc.type === 'ACCOMMODATION_CHANGE_REFUND')
-        .reduce((s: number, fc: any) => s + (fc.amount ?? 0), 0);
-    // Retained portion (cancellationFee / withheld at cancel time) of those same refund
-    // corrections. The college kept this money legitimately — it must be subtracted out
-    // of `unrefundedAccommodationCredit` so a partially-refunded cancellation doesn't
-    // report the retained amount as "still owed to the student".
-    const issuedAccRetained = (feeCorrections as any[])
-        .filter(fc => fc.type === 'ACCOMMODATION_CHANGE_REFUND')
-        .reduce((s: number, fc: any) => s + (fc.retainedAmount ?? 0), 0);
-    const currentAccComponents: string[] =
-        accType === AccommodationType.HOSTEL
-            ? ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION']
-            : accType === AccommodationType.TRANSPORT ? ['TRANSPORT'] : [];
-    const currentAccDiscount = currentAccComponents.reduce((s, c) => s + (breakdown[c]?.discount ?? 0), 0);
-    const unrefundedAccommodationCredit = Math.max(0, suppressedAccPaid - issuedAccRefunds - issuedAccRetained - currentAccDiscount);
+    // ─── 5. Unrefunded accommodation credit (money paid on a now-removed acc.) ─────
+    const suppressedAccPaid  = sumPayments(p => !isExternalPayment(p) && (isAccSuppressedPayment(p) || isStalePayment(p)));
+    const issuedAccRefunds   = sumCorrections(isAccommodationRefund, 'amount');
+    const issuedAccRetained  = sumCorrections(isAccommodationRefund, 'retainedAmount');
+    const currentAccBucketKeys: readonly string[] =
+        accType === AccommodationType.HOSTEL    ? HOSTEL_BREAKDOWN_KEYS :
+        accType === AccommodationType.TRANSPORT ? ['TRANSPORT']         : [];
+    const currentAccDiscount = currentAccBucketKeys.reduce((s, c) => s + (breakdown[c]?.discount ?? 0), 0);
+    const unrefundedAccommodationCredit = Math.max(0,
+        suppressedAccPaid - issuedAccRefunds - issuedAccRetained - currentAccDiscount
+    );
 
+    // ─── 6. Build summary ──────────────────────────────────────────────────────────
     const summary = {
         totalDemanded,
         totalPaid,
         totalDiscount,
         courseChangeFee: courseChangeDeduction,
+        courseChangeFeePaid,
         totalPending: Math.max(0, totalDemanded - totalPaid - totalDiscount),
-        // Cash paid on a now-removed accommodation that was never refunded/reallocated —
-        // a refund owed to the student (0 for clean students).
         unrefundedAccommodationCredit,
     };
     
