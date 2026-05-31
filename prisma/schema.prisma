@@ -1050,6 +1050,14 @@ model FeeCorrection {
   // i.e. cancellationFee / chargeRetained / Σ withhold. `amount` is the refund; this is the
   // retained counterpart. Stored for future revenue/retention metrics.
   retainedAmount        Float?         @default(0)
+  // Structured breakdown of `retainedAmount` — what was kept and why. Lets the UI show
+  // the split (e.g. "₹3,000 accommodation usage + ₹1,000 cancellation fee") instead of
+  // parsing the free-text `remarks` string. Shape:
+  //   { accommodation?, mess?, laundry?, registration?, transport?, cancellationFee? }
+  // Any subset of those keys may appear; missing keys are zero.
+  // TODO(PR-2): replaced by RetainedRevenueLine ledger; drop after the 4 accommodation
+  // write sites stop populating this field.
+  retentionBreakdown    Json?
   reason                String
   type                  FeeCorrectionType
   referenceId           String?
