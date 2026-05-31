@@ -2444,7 +2444,7 @@ export const getStudentFinancialHistory = async (
         ? { academicYearId }
         : {};
 
-    const [ledgers, payments, feeDemands, feeCorrections] = await Promise.all([
+    const [ledgers, payments, feeDemands, feeCorrections, activeAccPricing] = await Promise.all([
         prisma.studentLedger.findMany({
             where: { studentId, isDeleted: false, ...yearFilter },
             orderBy: { date: 'desc' }
@@ -2458,7 +2458,6 @@ export const getStudentFinancialHistory = async (
             }
         }),
         prisma.studentFeeDemand.findMany({
-            // StudentFeeDemand.academicYearId is now NOT NULL (phase 3 migration) — no legacy NULL rows to OR-include.
             where: { studentId, isDeleted: false, ...yearFilter },
             include: {
                 feeStructure: { include: { feeHead: true } },
@@ -2468,6 +2467,12 @@ export const getStudentFinancialHistory = async (
         (prisma as any).feeCorrection.findMany({
             where: { studentId, ...yearFilter },
             orderBy: { createdAt: 'desc' },
+        }),
+        // Active accommodation snapshot — used as the cutoff for "pre-cycle" hostel
+        // payments (made before the current hostel cycle started).
+        (prisma as any).studentAccommodationPricing.findFirst({
+            where: { studentId, isActive: true },
+            select: { createdAt: true }
         }),
     ]);
 
@@ -2543,9 +2548,44 @@ export const getStudentFinancialHistory = async (
         ?? (p.feeHeadId ? feeHeadComponentMap.get(p.feeHeadId) : undefined)
         ?? p.component;
 
+    // Cutoff for "pre-cycle" stale payments: any unlinked accommodation payment that
+    // predates the start of the current cycle was for an earlier stint (already
+    // accounted for via an ACCOMMODATION_CHANGE_REFUND from that stint). HOSTEL uses
+    // the active StudentAccommodationPricing snapshot's createdAt; TRANSPORT uses the
+    // earliest currently-active TRANSPORT demand's createdAt.
+    const activeAccCycleStart: Date | null = (() => {
+        if (accType === AccommodationType.HOSTEL) {
+            return activeAccPricing?.createdAt ?? null;
+        }
+        if (accType === AccommodationType.TRANSPORT) {
+            const transportDemands = feeDemands
+                .filter((d: any) =>
+                    (d.feeHead?.component === PaymentComponent.TRANSPORT
+                     || d.feeStructure?.feeHead?.component === PaymentComponent.TRANSPORT)
+                )
+                .map((d: any) => new Date(d.createdAt).getTime());
+            return transportDemands.length > 0 ? new Date(Math.min(...transportDemands)) : null;
+        }
+        return null;
+    })();
+
+    const isAccommodationComponent = (c: PaymentComponent | null | undefined): boolean =>
+        c === PaymentComponent.HOSTEL
+        || c === PaymentComponent.HOSTEL_ACCOMMODATION
+        || c === PaymentComponent.HOSTEL_MESS
+        || c === PaymentComponent.HOSTEL_LAUNDRY
+        || c === PaymentComponent.HOSTEL_REGISTRATION
+        || c === PaymentComponent.TRANSPORT;
+
     const isExternalPayment    = (p: any) => p.component === PaymentComponent.APPLICATION_FEE
                                           || p.component === PaymentComponent.COURSE_CHANGE_FEE;
-    const isStalePayment       = (p: any) => !!(p.feeDemand && p.feeDemand.isDeleted);
+    const isStalePayment       = (p: any): boolean => {
+        if (p.feeDemand && p.feeDemand.isDeleted) return true;
+        // Unlinked accommodation payment that predates the current cycle → stale.
+        if (!activeAccCycleStart || p.feeDemandId) return false;
+        if (!isAccommodationComponent(p.component)) return false;
+        return new Date(p.createdAt) < activeAccCycleStart;
+    };
     const isAccSuppressedPayment = (p: any) => suppressedAccComponents.has(p.component);
     const isCurrentPayment     = (p: any) => !isExternalPayment(p) && !isAccSuppressedPayment(p) && !isStalePayment(p);
 

@@ -176,6 +176,7 @@ model AcademicYear {
   payments          Payment[]
   ledgerEntries     StudentLedger[]
   feeCorrections    FeeCorrection[]
+  retainedRevenueLines      RetainedRevenueLine[]
   hostelPriceCategories     HostelPriceCategory[]
   transportYearlyPrices     TransportRouteYearlyPrice[]
   courseCapacities          CourseCapacity[]
@@ -285,6 +286,7 @@ model Student {
   transportAllocations      TransportAllocation[]
   waitingListEntries        WaitingList[]
   feeCorrections            FeeCorrection[]
+  retainedRevenueLines      RetainedRevenueLine[]
   accommodationPricing      StudentAccommodationPricing[]
   semesterMarks             SemesterMark[]
   classAttendance           ClassAttendance[]
@@ -1071,6 +1073,35 @@ model FeeCorrection {
   @@index([carryForward, isSettled])
 }
 
+// Normalized ledger of every rupee the college keeps that is NOT refundable —
+// cancellation fees, accommodation usage, course-change fees, late fees, etc.
+// One row per (source row, category) so finance can `GROUP BY category` for
+// metrics without parsing JSON or scanning unrelated tables. `sourceType` +
+// `sourceId` point back to the originating row (FeeCorrection, Payment, etc.).
+model RetainedRevenueLine {
+  id              String                    @id @default(dbgenerated("gen_random_uuid()"))
+  studentId       String
+  academicYearId  String
+  category        RetainedRevenueCategory
+  amount          Float
+  sourceType      RetainedRevenueSourceType
+  sourceId        String
+  courseId        String?
+  hostelId        String?
+  routeId         String?
+  occurredAt      DateTime
+  createdAt       DateTime?                 @default(now())
+  createdBy       String?
+
+  student         Student                   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear    AcademicYear              @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([category, occurredAt])
+  @@index([academicYearId, category])
+  @@index([studentId])
+  @@index([sourceType, sourceId])
+}
+
 model AgentCommission {
   id        String                 @id @default(dbgenerated("gen_random_uuid()"))
   agentId        String
@@ -1646,6 +1677,26 @@ enum FeeCorrectionType {
   BRANCH_CHANGE_REFUND
   ACCOMMODATION_CHANGE_REFUND
   CARRY_FORWARD
+}
+
+enum RetainedRevenueCategory {
+  SEAT_CANCELLATION_FEE
+  COURSE_CHANGE_FEE
+  HOSTEL_CANCELLATION_FEE
+  HOSTEL_ACCOMMODATION_USAGE
+  HOSTEL_MESS_USAGE
+  HOSTEL_LAUNDRY_USAGE
+  HOSTEL_REGISTRATION_RETAINED
+  TRANSPORT_CANCELLATION_FEE
+  TRANSPORT_USAGE
+  LATE_FEE
+  OTHER
+}
+
+enum RetainedRevenueSourceType {
+  FEE_CORRECTION
+  PAYMENT
+  MANUAL
 }
 
 enum EmailStatus {
