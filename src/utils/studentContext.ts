@@ -284,59 +284,98 @@ export const getActiveAcademicYear = async (tx?: any): Promise<{
 
 /* ─────────────────── Hostel credit accounting (idempotent) ───────────────────── */
 
+// FeeCorrection.referenceType values whose `amount + retainedAmount` already
+// consumed hostel-side payments. Anything tagged with these has already taken
+// rupees out of the hostel pool (either refunded as carry-forward credit or
+// kept as revenue) and must NOT be re-counted on the next cancel/switch/reassign.
+const HOSTEL_REFERENCE_TYPES = [
+    'HOSTEL_REASSIGNMENT',
+    'HOSTEL_CANCELLATION',
+    'HOSTEL_TO_TRANSPORT_SWITCH',
+];
+
+// Same idea for the transport pool.
+const TRANSPORT_REFERENCE_TYPES = [
+    'TRANSPORT_CANCELLATION',
+    'TRANSPORT_TO_HOSTEL_SWITCH',
+];
+
 /**
- * Available hostel credit = gross student-paid hostel money.
+ * Available hostel credit = grossPaid − (prior refunded + prior retained), scoped to
+ * hostel-side FeeCorrection rows. Without this netting the same rupees can be
+ * refunded/kept twice across successive reassign → switch → cancel cycles (see
+ * VLE2600011 case: two cancels accounted for ₹12,500 against ₹6,500 actually paid).
  *
- * Refund de-duplication (ensuring the same rupees aren't refunded twice across
- * reassign/switch/cancel cycles) is handled by a separate refunds module, NOT here —
- * so `availableCredit` is simply `grossPaid` and no prior-refund netting is applied.
- *
- * Pass `tx` when calling inside a Prisma transaction.
+ * Pass `tx` when calling inside a Prisma transaction so the read is race-safe with
+ * the FeeCorrection.create that the caller is about to make.
  */
 export const getAvailableHostelCredit = async (studentId: string, tx?: any): Promise<{
     grossPaid: number;
+    priorRefunded: number;
+    priorRetained: number;
     availableCredit: number;
 }> => {
     const client = tx || prisma;
 
-    const paidAgg = await client.payment.aggregate({
-        where: {
-            studentId,
-            status: 'SUCCESS',
-            isDeleted: false,
-            component: { in: [
-                'HOSTEL',
-                'HOSTEL_ACCOMMODATION',
-                'HOSTEL_MESS',
-                'HOSTEL_LAUNDRY',
-                'HOSTEL_REGISTRATION',
-            ]},
-        },
-        _sum: { amount: true },
-    });
+    const [paidAgg, priorAgg] = await Promise.all([
+        client.payment.aggregate({
+            where: {
+                studentId,
+                status: 'SUCCESS',
+                isDeleted: false,
+                component: { in: [
+                    'HOSTEL',
+                    'HOSTEL_ACCOMMODATION',
+                    'HOSTEL_MESS',
+                    'HOSTEL_LAUNDRY',
+                    'HOSTEL_REGISTRATION',
+                ]},
+            },
+            _sum: { amount: true },
+        }),
+        client.feeCorrection.aggregate({
+            where: { studentId, referenceType: { in: HOSTEL_REFERENCE_TYPES } },
+            _sum: { amount: true, retainedAmount: true },
+        }),
+    ]);
 
-    const grossPaid = paidAgg._sum.amount ?? 0;
-    return { grossPaid, availableCredit: grossPaid };
+    const grossPaid       = paidAgg._sum.amount ?? 0;
+    const priorRefunded   = priorAgg._sum.amount ?? 0;
+    const priorRetained   = priorAgg._sum.retainedAmount ?? 0;
+    const availableCredit = Math.max(0, grossPaid - priorRefunded - priorRetained);
+
+    return { grossPaid, priorRefunded, priorRetained, availableCredit };
 };
 
 /**
- * Transport analogue of getAvailableHostelCredit. Available transport credit =
- * gross TRANSPORT payments. No prior-refund netting (handled by the separate refunds
- * module). Pass `tx` when inside a Prisma transaction.
+ * Transport analogue of getAvailableHostelCredit. Same netting against prior
+ * transport-side FeeCorrection rows so cycles can't double-refund.
  */
 export const getAvailableTransportCredit = async (studentId: string, tx?: any): Promise<{
     grossPaid: number;
+    priorRefunded: number;
+    priorRetained: number;
     availableCredit: number;
 }> => {
     const client = tx || prisma;
 
-    const paidAgg = await client.payment.aggregate({
-        where: { studentId, status: 'SUCCESS', isDeleted: false, component: 'TRANSPORT' },
-        _sum: { amount: true },
-    });
+    const [paidAgg, priorAgg] = await Promise.all([
+        client.payment.aggregate({
+            where: { studentId, status: 'SUCCESS', isDeleted: false, component: 'TRANSPORT' },
+            _sum: { amount: true },
+        }),
+        client.feeCorrection.aggregate({
+            where: { studentId, referenceType: { in: TRANSPORT_REFERENCE_TYPES } },
+            _sum: { amount: true, retainedAmount: true },
+        }),
+    ]);
 
-    const grossPaid = paidAgg._sum.amount ?? 0;
-    return { grossPaid, availableCredit: grossPaid };
+    const grossPaid       = paidAgg._sum.amount ?? 0;
+    const priorRefunded   = priorAgg._sum.amount ?? 0;
+    const priorRetained   = priorAgg._sum.retainedAmount ?? 0;
+    const availableCredit = Math.max(0, grossPaid - priorRefunded - priorRetained);
+
+    return { grossPaid, priorRefunded, priorRetained, availableCredit };
 };
 
 /**
