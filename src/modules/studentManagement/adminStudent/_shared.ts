@@ -81,6 +81,15 @@ export const buildApplicationFilters = async (query: any): Promise<any> => {
         { admissionDetails: { status: AdmissionStatus.CANCELLED } }
     ];
 
+    // Default-exclude REGISTERED too: students at the very first lifecycle step
+    // (just signed up, no app-fee, no docs) shouldn't appear in admin queues by
+    // default. Escape hatch: when the caller explicitly passes `status=REGISTERED`,
+    // honor that and skip the exclusion so admins can still query the REGISTERED
+    // cohort directly (e.g. to follow up on students who haven't paid yet).
+    if (status !== AdmissionStatus.REGISTERED) {
+        where.NOT.push({ admissionDetails: { status: AdmissionStatus.REGISTERED } });
+    }
+
     if (quotaType) {
         where.quotaType = quotaType;
     }
