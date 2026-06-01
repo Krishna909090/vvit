@@ -1479,20 +1479,20 @@ export const AccommodationService = {
             const credit          = await getAvailableHostelCredit(studentId, tx);
             const hostelPaid      = credit.grossPaid;
             const availableCredit = credit.availableCredit;
-            // Custom override → admin decides the exact charge. Do NOT auto-apply paid
-            // credit as discount and do NOT auto-refund leftover; the admin's amounts are
-            // billed in full (admin handles any prior-payment adjustment separately).
-            const appliedToNew    = args.customPricing ? 0 : Math.min(availableCredit, newEffectiveTotal);
-            const leftoverRefund  = args.customPricing ? 0 : Math.max(0, availableCredit - newEffectiveTotal);
+            // Rule (enforced 2026-06-01): refund/retained money never embeds into demand
+            // or accommodation rows. The full availableCredit is parked as a carry-forward
+            // FeeCorrection; admin applies it to specific demands later via the
+            // apply-to-demand API (which creates a Payment(FEE_CORRECTION_TRANSFER) row,
+            // never a discount on the demand itself). For `customPricing` mode the admin's
+            // amounts are billed verbatim AND the credit still gets parked — admin can choose
+            // whether to apply it or refund it.
+            const refundAmount    = availableCredit;
 
-            // Distribute appliedToNew proportionally across the 4 new demands.
-            // Last (registration) absorbs rounding so discounts sum exactly to appliedToNew.
-            const distribute = (componentPrice: number) =>
-                newEffectiveTotal > 0 ? Math.round((componentPrice / newEffectiveTotal) * appliedToNew) : 0;
-            const accDiscount     = distribute(accommodationPrice);
-            const messDiscount    = distribute(messPrice);
-            const laundryDiscount = distribute(laundryPrice);
-            const regDiscount     = appliedToNew - accDiscount - messDiscount - laundryDiscount;
+            // No credit goes into demand.discountAmount — kept as zero per the rule above.
+            const accDiscount     = 0;
+            const messDiscount    = 0;
+            const laundryDiscount = 0;
+            const regDiscount     = 0;
             // a. Vacate old bed (only if changing beds)
             if (newBed.id !== oldAllocation.bedId) {
                 await tx.hostelBed.update({
@@ -1612,19 +1612,24 @@ export const AccommodationService = {
                 createdDemands.push(d.id);
             }
 
-            // f2. If old hostel paid > new cost, the excess is refundable. Park it in FeeCorrection.
+            // f2. Park the ENTIRE prior-payment credit as a carry-forward FeeCorrection.
+            // The new demands above are billed at full price (no embedded discount); the
+            // admin applies this credit to specific demands explicitly via the apply-to-demand
+            // API (which writes Payment(FEE_CORRECTION_TRANSFER) rows, never mutating the
+            // demand's discountAmount). This keeps demands honest billing artifacts and
+            // FeeCorrection the single source of truth for refunds/credits.
             let feeCorrectionId: string | null = null;
-            if (leftoverRefund > 0) {
+            if (refundAmount > 0) {
                 const fc = await (tx.feeCorrection as any).create({
                     data: {
                         studentId,
                         academicYearId,
-                        amount: leftoverRefund,
+                        amount: refundAmount,
                         reason: `Hostel re-assignment refund (${args.reason})`,
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: oldPricing.hostelId,
                         referenceType: 'HOSTEL_REASSIGNMENT',
-                        remarks: `grossPaid: ${hostelPaid}, availableCredit: ${availableCredit}, oldEffectiveTotal: ${oldEffectiveTotal}, newEffectiveTotal: ${newEffectiveTotal}, appliedToNew: ${appliedToNew}, leftover: ${leftoverRefund}`,
+                        remarks: `grossPaid: ${hostelPaid}, availableCredit: ${availableCredit}, oldEffectiveTotal: ${oldEffectiveTotal}, newEffectiveTotal: ${newEffectiveTotal}, refundAmount: ${refundAmount} (full credit parked; admin to apply via apply-to-demand)`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -1670,8 +1675,8 @@ export const AccommodationService = {
                         customPricing: args.customPricing ?? null,
                         feeDelta: totalFeeDelta,
                         hostelPaid,
-                        appliedToNew,
-                        leftoverRefund,
+                        availableCredit,
+                        refundAmount,
                         creditDistribution: { accDiscount, messDiscount, laundryDiscount, regDiscount },
                         feeCorrectionId,
                         reason: args.reason,
@@ -1701,10 +1706,9 @@ export const AccommodationService = {
                 feeDelta: totalFeeDelta,
                 financialAdjustment: {
                     hostelPaid,
-                    appliedToNew,
-                    studentOwes: Math.max(0, newEffectiveTotal - appliedToNew),
-                    leftoverRefund,
-                    creditDistribution: { accDiscount, messDiscount, laundryDiscount, regDiscount },
+                    availableCredit,
+                    studentOwes: newEffectiveTotal, // full new charge; credit is parked separately as FeeCorrection
+                    refundAmount,
                     feeCorrectionId,
                 },
                 supersededDemands,
@@ -3013,6 +3017,13 @@ export const AccommodationService = {
     async switchTransportToHostel(
         studentId: string,
         args: {
+            // Parity with cancelTransport / switchHostelToTransport: two independent levers
+            // the college keeps, ADDED together:
+            //   withhold        — capped ≤ availableCredit (transport pool, post-netting).
+            //   cancellationFee — uncapped flat penalty.
+            // Legacy `chargeRetained` is still accepted and folded into the flat penalty.
+            withhold?: number;
+            cancellationFee?: number;
             chargeRetained?: number;
             reason: string;
             // Optional — the switch + demands + refund are committed by sharing tier;
@@ -3025,7 +3036,11 @@ export const AccommodationService = {
         },
         adminId?: string
     ) {
-        const chargeRetained = Math.max(0, args.chargeRetained ?? 0);
+        const withhold        = Math.max(0, args.withhold ?? 0);
+        const cancellationFee = Math.max(0, args.cancellationFee ?? 0);
+        // Legacy single-lump param. Treated as additional flat penalty on top of cancellationFee.
+        const chargeRetainedLegacy = Math.max(0, args.chargeRetained ?? 0);
+        const flatPenalty = cancellationFee + chargeRetainedLegacy;
         const { reason, hostelId, hostelType, hostelPaymentMode } = args;
 
         const ctx = await getStudentContext(studentId);
@@ -3103,6 +3118,17 @@ export const AccommodationService = {
         const transportCredit = await getAvailableTransportCredit(studentId);
         const transportPaid = transportCredit.availableCredit;
 
+        // Guard: the per-pool `withhold` lever can't exceed what's still refundable from the
+        // transport pool (post-netting). Mirrors cancelTransport — protects against
+        // over-retention across switch ↔ cancel cycles.
+        if (withhold > transportPaid) {
+            throw new AppError(
+                `Cannot withhold more than available transport credit (withhold ${withhold} > available ${transportPaid}).`,
+                400,
+            );
+        }
+        const totalRetained = withhold + flatPenalty;
+
         let pendingTransportTotal = 0;
         if (transportHead) {
             const pAgg = await prisma.studentFeeDemand.aggregate({
@@ -3119,8 +3145,8 @@ export const AccommodationService = {
 
         // NO auto-adjustment: transport credit is NOT applied as a discount on the new hostel
         // demands (each billed at FULL cost). The refundable amount (availableCredit −
-        // chargeRetained) is returned as a carry-forward FeeCorrection, settled separately.
-        const refundPool = Math.max(0, transportPaid - chargeRetained);
+        // totalRetained) is returned as a carry-forward FeeCorrection, settled separately.
+        const refundPool = Math.max(0, transportPaid - totalRetained);
         const appliedToNew = 0;            // never auto-applied to the new demands
         const leftover = refundPool;       // whole pool is refunded
         const accDiscount = 0;
@@ -3236,12 +3262,16 @@ export const AccommodationService = {
                         studentId,
                         academicYearId,
                         amount: leftover,
-                        retainedAmount: chargeRetained,
+                        retainedAmount: totalRetained,
+                        retentionBreakdown: {
+                            transport:       withhold,
+                            cancellationFee: flatPenalty,
+                        },
                         reason: `Transport→Hostel switch refund: ${reason}`,
                         type: 'ACCOMMODATION_CHANGE_REFUND',
                         referenceId: previousRouteId,
                         referenceType: 'TRANSPORT_TO_HOSTEL_SWITCH',
-                        remarks: `transportPaid: ${transportPaid}, chargeRetained: ${chargeRetained}, refund: ${leftover} (no auto-adjustment to new hostel demands)`,
+                        remarks: `transportPaid: ${transportPaid}, withhold: ${withhold}, cancellationFee: ${flatPenalty}, totalRetained: ${totalRetained}, refund: ${leftover} (no auto-adjustment to new hostel demands)`,
                         carryForward: true,
                         isSettled: false,
                         createdBy: adminId,
@@ -3254,12 +3284,12 @@ export const AccommodationService = {
             // kept at switch). Same pattern as switchHostelToTransport. Tagged
             // TRANSPORT_TO_HOSTEL_SWITCH so it's visible in the ledger but skipped by the
             // per-component breakdown. Independent of `leftover > 0`.
-            if (chargeRetained > 0) {
+            if (totalRetained > 0) {
                 await tx.studentLedger.create({
                     data: {
                         studentId,
                         type: LedgerTransactionType.DEBIT,
-                        amount: chargeRetained,
+                        amount: totalRetained,
                         description: `Transport→Hostel switch fee retained: ${reason}`,
                         referenceId: feeCorrectionId ?? previousRouteId ?? null,
                         referenceType: 'TRANSPORT_TO_HOSTEL_SWITCH',
@@ -3282,7 +3312,9 @@ export const AccommodationService = {
                         hostelType,
                         hostelPaymentMode,
                         transportPaid,
-                        chargeRetained,
+                        withhold,
+                        cancellationFee: flatPenalty,
+                        totalRetained,
                         refundPool,
                         appliedToNew,
                         leftover,
@@ -3300,7 +3332,9 @@ export const AccommodationService = {
             return {
                 cancellation: {
                     transportPaid,
-                    chargeRetained,
+                    withhold,
+                    cancellationFee: flatPenalty,
+                    totalRetained,
                     refundPool,
                     pendingTransportRemoved: pendingTransportTotal,
                 },
