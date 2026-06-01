@@ -284,17 +284,13 @@ export const getActiveAcademicYear = async (tx?: any): Promise<{
 
 /* ─────────────────── Hostel credit accounting (idempotent) ───────────────────── */
 
-// FeeCorrection.referenceType values whose `amount + retainedAmount` already
-// consumed hostel-side payments. Anything tagged with these has already taken
-// rupees out of the hostel pool (either refunded as carry-forward credit or
-// kept as revenue) and must NOT be re-counted on the next cancel/switch/reassign.
+// FeeCorrection.referenceType values that consume the hostel pool.
 const HOSTEL_REFERENCE_TYPES = [
     'HOSTEL_REASSIGNMENT',
     'HOSTEL_CANCELLATION',
     'HOSTEL_TO_TRANSPORT_SWITCH',
 ];
 
-// Same idea for the transport pool.
 const TRANSPORT_REFERENCE_TYPES = [
     'TRANSPORT_CANCELLATION',
     'TRANSPORT_TO_HOSTEL_SWITCH',
@@ -302,12 +298,8 @@ const TRANSPORT_REFERENCE_TYPES = [
 
 /**
  * Available hostel credit = grossPaid − (prior refunded + prior retained), scoped to
- * hostel-side FeeCorrection rows. Without this netting the same rupees can be
- * refunded/kept twice across successive reassign → switch → cancel cycles (see
- * VLE2600011 case: two cancels accounted for ₹12,500 against ₹6,500 actually paid).
- *
- * Pass `tx` when calling inside a Prisma transaction so the read is race-safe with
- * the FeeCorrection.create that the caller is about to make.
+ * hostel-side FeeCorrection rows. Pass `tx` when calling inside a Prisma transaction
+ * so the read is race-safe with the FeeCorrection.create the caller is about to make.
  */
 export const getAvailableHostelCredit = async (studentId: string, tx?: any): Promise<{
     grossPaid: number;
@@ -347,10 +339,7 @@ export const getAvailableHostelCredit = async (studentId: string, tx?: any): Pro
     return { grossPaid, priorRefunded, priorRetained, availableCredit };
 };
 
-/**
- * Transport analogue of getAvailableHostelCredit. Same netting against prior
- * transport-side FeeCorrection rows so cycles can't double-refund.
- */
+/** Transport analogue of getAvailableHostelCredit. */
 export const getAvailableTransportCredit = async (studentId: string, tx?: any): Promise<{
     grossPaid: number;
     priorRefunded: number;

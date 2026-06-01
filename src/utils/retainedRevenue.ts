@@ -1,4 +1,4 @@
-import { Prisma, RetainedRevenueCategory, RetainedRevenueSourceType } from '@prisma/client';
+import { RetainedRevenueCategory, RetainedRevenueSourceType } from '@prisma/client';
 import { AppError } from './AppError';
 
 export type RetainedLine = {
@@ -13,9 +13,6 @@ export type RecordRetainedArgs = {
     sourceId: string;
     occurredAt: Date;
     lines: RetainedLine[];
-    // Used to enforce sum(lines) === expectedTotal so the ledger can never drift
-    // from the originating row's retained column. Pass the same number you wrote
-    // to FeeCorrection.retainedAmount (or the equivalent on a Payment).
     expectedTotal: number;
     courseId?: string;
     hostelId?: string;
@@ -26,17 +23,11 @@ export type RecordRetainedArgs = {
 const EPSILON = 0.01;
 
 /**
- * Append per-category retained-revenue lines for a single source row.
- *
- * Zero-amount lines are dropped. Asserts sum(lines) === expectedTotal so the
- * normalized ledger and the parent row's `retainedAmount` (or equivalent) can
- * never silently diverge.
- *
- * Pass a Prisma transaction client so the lines commit atomically with the
- * source row (FeeCorrection / Payment) that produced them.
+ * Append per-category retained-revenue lines. Zero-amount lines are dropped.
+ * Throws if sum(lines) !== expectedTotal (the parent row's retainedAmount).
  */
 export async function recordRetained(
-    tx: Prisma.TransactionClient,
+    tx: any,
     args: RecordRetainedArgs,
 ): Promise<void> {
     const lines = args.lines.filter(l => l.amount > 0);

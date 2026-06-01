@@ -1046,17 +1046,11 @@ model FeeCorrection {
   studentId             String
   academicYearId        String
   amount                Float
-  // Amount the college KEEPS (non-refundable) on the cancel/switch that produced this row —
-  // i.e. cancellationFee / chargeRetained / Σ withhold. `amount` is the refund; this is the
-  // retained counterpart. Stored for future revenue/retention metrics.
+  // Amount the college keeps on the cancel/switch that produced this row. `amount` is
+  // the refund; `retainedAmount` is the retained counterpart.
   retainedAmount        Float?         @default(0)
-  // Structured breakdown of `retainedAmount` — what was kept and why. Lets the UI show
-  // the split (e.g. "₹3,000 accommodation usage + ₹1,000 cancellation fee") instead of
-  // parsing the free-text `remarks` string. Shape:
-  //   { accommodation?, mess?, laundry?, registration?, transport?, cancellationFee? }
-  // Any subset of those keys may appear; missing keys are zero.
-  // TODO(PR-2): replaced by RetainedRevenueLine ledger; drop after the 4 accommodation
-  // write sites stop populating this field.
+  // Denormalized snapshot of retainedAmount split by category. RetainedRevenueLine is
+  // the authoritative ledger; this column is kept for single-row inspection.
   retentionBreakdown    Json?
   reason                String
   type                  FeeCorrectionType
@@ -1081,11 +1075,8 @@ model FeeCorrection {
   @@index([carryForward, isSettled])
 }
 
-// Normalized ledger of every rupee the college keeps that is NOT refundable —
-// cancellation fees, accommodation usage, course-change fees, late fees, etc.
-// One row per (source row, category) so finance can `GROUP BY category` for
-// metrics without parsing JSON or scanning unrelated tables. `sourceType` +
-// `sourceId` point back to the originating row (FeeCorrection, Payment, etc.).
+// One row per (source row, category) of retained revenue. `sourceType` + `sourceId`
+// point back to the originating row (FeeCorrection, Payment, etc.).
 model RetainedRevenueLine {
   id              String                    @id @default(dbgenerated("gen_random_uuid()"))
   studentId       String
