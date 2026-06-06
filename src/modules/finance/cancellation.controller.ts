@@ -132,12 +132,13 @@ export const getCancellationById = catchAsync(async (req: Request, res: Response
 });
 
 export const listRetainedRevenue = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
-    const { category, sourceType, studentId: rawStudentId, academicYearId, isSettled, page, limit, applicationId } = req.query as Record<string, string | undefined>;
+    const { referenceType, studentId: rawStudentId, academicYearId, isSettled, page, limit, applicationId } = req.query as Record<string, string | undefined>;
 
     const pageNum  = Math.max(1, parseInt(page  ?? '1',  10));
     const pageSize = Math.min(100, Math.max(1, parseInt(limit ?? '20', 10)));
     const skip     = (pageNum - 1) * pageSize;
 
+    // Resolve applicationId → studentId if needed
     let studentId = rawStudentId;
     if (applicationId && !studentId) {
         const student = await prisma.student.findUnique({
@@ -151,32 +152,23 @@ export const listRetainedRevenue = catchAsync(async (req: Request, res: Response
         studentId = student.id;
     }
 
-    const correctionWhere: any = {};
-    if (studentId)      correctionWhere.studentId      = studentId;
-    if (academicYearId) correctionWhere.academicYearId = academicYearId;
-    if (isSettled !== undefined) correctionWhere.isSettled = isSettled === 'true';
+    // Base scope — without referenceType so summary always shows all types
+    const baseWhere: any = {};
+    if (studentId)      baseWhere.studentId      = studentId;
+    if (academicYearId) baseWhere.academicYearId = academicYearId;
+    if (isSettled !== undefined) baseWhere.isSettled = isSettled === 'true';
 
-    if (category || sourceType) {
-        const matchingLineWhere: any = {};
-        if (studentId)  matchingLineWhere.studentId  = studentId;
-        if (category)   matchingLineWhere.category   = category;
-        if (sourceType) matchingLineWhere.sourceType = sourceType;
+    // Filtered scope — adds referenceType for the actual list + count
+    const correctionWhere: any = { ...baseWhere };
+    if (referenceType) correctionWhere.referenceType = referenceType;
 
-        const matchingLines = await prisma.retainedRevenueLine.findMany({
-            where: matchingLineWhere,
-            select: { sourceId: true },
-            distinct: ['sourceId'],
-        });
-        correctionWhere.id = { in: matchingLines.map(l => l.sourceId) };
-    }
-
-    const [total, corrections] = await Promise.all([
+    const [total, corrections, referenceSummary] = await Promise.all([
         prisma.feeCorrection.count({ where: correctionWhere }),
         prisma.feeCorrection.findMany({
-            where: correctionWhere,
+            where:   correctionWhere,
             orderBy: { createdAt: 'desc' },
             skip,
-            take: pageSize,
+            take:    pageSize,
             select: {
                 id:                 true,
                 studentId:          true,
@@ -195,16 +187,23 @@ export const listRetainedRevenue = catchAsync(async (req: Request, res: Response
                 createdBy:          true,
             },
         }),
+        // Summary always scoped to base filters (without referenceType) so all tabs show real counts
+        prisma.feeCorrection.groupBy({
+            by:      ['referenceType'],
+            where:   baseWhere,
+            _count:  { referenceType: true },
+            orderBy: { _count: { referenceType: 'desc' } },
+        }),
     ]);
 
-    const correctionIds  = corrections.map(fc => fc.id);
-    const studentIds     = [...new Set(corrections.map(fc => fc.studentId))];
-    const createdByIds   = [...new Set(corrections.map(fc => fc.createdBy).filter((v): v is string => !!v))];
+    const correctionIds = corrections.map(fc => fc.id);
+    const studentIds    = [...new Set(corrections.map(fc => fc.studentId))];
+    const createdByIds  = [...new Set(corrections.map(fc => fc.createdBy).filter((v): v is string => !!v))];
 
     const [lines, students, createdByUsers] = await Promise.all([
         correctionIds.length > 0
             ? prisma.retainedRevenueLine.findMany({
-                where: { sourceId: { in: correctionIds } },
+                where:   { sourceId: { in: correctionIds } },
                 orderBy: { occurredAt: 'asc' },
                 select: {
                     id:             true,
@@ -223,13 +222,13 @@ export const listRetainedRevenue = catchAsync(async (req: Request, res: Response
             : Promise.resolve([] as any[]),
         studentIds.length > 0
             ? prisma.student.findMany({
-                where: { id: { in: studentIds } },
+                where:  { id: { in: studentIds } },
                 select: { id: true, name: true, applicationId: true },
             })
             : Promise.resolve([] as any[]),
         createdByIds.length > 0
             ? prisma.user.findMany({
-                where: { id: { in: createdByIds } },
+                where:  { id: { in: createdByIds } },
                 select: { id: true, name: true },
             })
             : Promise.resolve([] as any[]),
@@ -238,22 +237,59 @@ export const listRetainedRevenue = catchAsync(async (req: Request, res: Response
     const studentMap   = Object.fromEntries(students.map(s => [s.id, s]));
     const createdByMap = Object.fromEntries(createdByUsers.map(u => [u.id, u]));
 
-    const linesBySourceId = lines.reduce<Record<string, typeof lines>>((acc, l) => {
+    const linesBySourceId = (lines as any[]).reduce<Record<string, any[]>>((acc, l) => {
         (acc[l.sourceId] ??= []).push(l);
         return acc;
     }, {});
 
     const data = corrections.map(fc => ({
         ...fc,
-        studentName:    studentMap[fc.studentId]?.name          ?? null,
-        applicationId:  studentMap[fc.studentId]?.applicationId ?? null,
-        createdByName:  createdByMap[fc.createdBy ?? '']?.name  ?? null,
-        retainedLines:  linesBySourceId[fc.id] ?? [],
+        studentName:   studentMap[fc.studentId]?.name          ?? null,
+        applicationId: studentMap[fc.studentId]?.applicationId ?? null,
+        createdByName: createdByMap[fc.createdBy ?? '']?.name  ?? null,
+        retainedLines: linesBySourceId[fc.id] ?? [],
+    }));
+
+    const summary = referenceSummary.map(r => ({
+        referenceType: r.referenceType,
+        count:         r._count.referenceType,
     }));
 
     sendResponse({
         res, statusCode: 200, success: true,
         data,
         pagination: { total, page: pageNum, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
+        summary,
     });
+});
+
+export const listRetainedRevenueReferenceTypes = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
+    const { studentId, academicYearId, applicationId } = req.query as Record<string, string | undefined>;
+
+    let resolvedStudentId = studentId;
+    if (applicationId && !resolvedStudentId) {
+        const student = await prisma.student.findUnique({
+            where: { applicationId },
+            select: { id: true },
+        });
+        resolvedStudentId = student?.id;
+    }
+
+    const where: any = {};
+    if (resolvedStudentId) where.studentId      = resolvedStudentId;
+    if (academicYearId)    where.academicYearId = academicYearId;
+
+    const grouped = await prisma.feeCorrection.groupBy({
+        by:      ['referenceType'],
+        where,
+        _count:  { referenceType: true },
+        orderBy: { _count: { referenceType: 'desc' } },
+    });
+
+    const data = grouped.map(r => ({
+        referenceType: r.referenceType,
+        count:         r._count.referenceType,
+    }));
+
+    sendResponse({ res, statusCode: 200, success: true, data });
 });

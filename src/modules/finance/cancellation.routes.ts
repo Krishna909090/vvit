@@ -9,6 +9,7 @@ import {
     downloadCancellationInvoice,
     getCancellationById,
     listRetainedRevenue,
+    listRetainedRevenueReferenceTypes,
 } from './cancellation.controller';
 import {
     previewAdjustmentSchema,
@@ -48,6 +49,13 @@ router.get(
     authenticate,
     authorizePermission(['student.read.all']),
     listCancellationRequests,
+);
+
+router.get(
+    '/retained-revenue/reference-types',
+    authenticate,
+    authorizePermission(['student.read.all']),
+    listRetainedRevenueReferenceTypes,
 );
 
 router.get(

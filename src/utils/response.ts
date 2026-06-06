@@ -7,9 +7,10 @@ interface ResponseOptions<T> {
     message?: string;
     data?: T;
     pagination?: { total: number; page: number; limit: number; totalPages: number };
+    summary?: any;
 }
 
-export const sendResponse = <T>({ res, statusCode, success, message, data, pagination }: ResponseOptions<T>) => {
+export const sendResponse = <T>({ res, statusCode, success, message, data, pagination, summary }: ResponseOptions<T>) => {
     const responsePayload: any = {
         success,
         message
@@ -21,6 +22,10 @@ export const sendResponse = <T>({ res, statusCode, success, message, data, pagin
 
     if (pagination !== undefined) {
         responsePayload.pagination = pagination;
+    }
+
+    if (summary !== undefined) {
+        responsePayload.summary = summary;
     }
 
     res.status(statusCode).json(responsePayload);
