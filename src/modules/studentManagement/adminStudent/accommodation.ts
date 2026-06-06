@@ -29,6 +29,7 @@ import {
     resolveHostelPriceCategory,
     resolveTransportRouteCost,
     getActiveAcademicYear,
+    recomputeStudentTotals,
 } from '../../../utils/studentContext';
 import { generateAndSaveHostelAllotmentOrder } from '../../finance/payment.service';
 import { recordRetained } from '../../../utils/retainedRevenue';
@@ -1700,6 +1701,7 @@ export const AccommodationService = {
         // Replaces the existing StudentDocument under HOSTEL_ALLOTMENT_ORDER.
         generateAndSaveHostelAllotmentOrder(studentId).catch(() => { /* logged inside */ });
 
+        await recomputeStudentTotals(studentId);
         return result;
     },
 
@@ -1998,6 +2000,7 @@ export const AccommodationService = {
             };
         });
 
+        await recomputeStudentTotals(studentId);
         return result;
     },
 
@@ -2177,6 +2180,7 @@ export const AccommodationService = {
             };
         });
 
+        await recomputeStudentTotals(studentId);
         return result;
     },
 
@@ -2341,6 +2345,7 @@ export const AccommodationService = {
             };
         });
 
+        await recomputeStudentTotals(studentId);
         return result;
     },
 
@@ -2573,6 +2578,7 @@ export const AccommodationService = {
             timeout: 20000,
         });
 
+        await recomputeStudentTotals(studentId);
         return result;
     },
 
@@ -2770,6 +2776,7 @@ export const AccommodationService = {
             };
         });
 
+        await recomputeStudentTotals(studentId);
         return result;
     },
 
@@ -3080,6 +3087,7 @@ export const AccommodationService = {
             timeout: 20000,
         });
 
+        await recomputeStudentTotals(studentId);
         return result;
     },
 
@@ -3424,6 +3432,7 @@ export const AccommodationService = {
             };
         });
 
+        await recomputeStudentTotals(studentId);
         return result;
     },
 
