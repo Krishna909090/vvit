@@ -72,20 +72,18 @@ export const payMultiComponentFee = catchAsync(async (req: Request, res: Respons
     logger.info(`[payMultiComponentFee] START - by=${currentUserId}`);
     const { studentId, components, paymentMethod, remarks, referenceNumber, mode, yearOfStudy } = req.body;
     logger.debug(`[payMultiComponentFee] Request body: ${JSON.stringify({ studentId, componentsCount: components?.length, paymentMethod, mode, hasReferenceNumber: !!referenceNumber })}`);
-    
+
     if (!studentId || !components || !Array.isArray(components) || components.length === 0) {
         logger.error(`[payMultiComponentFee] Validation failed - Missing required fields`);
         throw new AppError("Student ID and components array are required", 400);
     }
     logger.info(`[payMultiComponentFee] Processing ${components.length} components for student: ${studentId}`);
-    
-    // Authorization: User ID should match student's User ID unless Admin (handled by RBAC usually but check logic)
+
     const currentUserIdForAuth = req.user?.userId || undefined;
 
     const result = await initiateMultiComponentPayment(studentId, components, currentUserIdForAuth, paymentMethod, remarks, referenceNumber, mode, yearOfStudy);
     logger.info(`[payMultiComponentFee] SUCCESS - Result: ${JSON.stringify({ success: result.success, paymentIds: result.paymentIds?.length, transactionId: result.transactionId })}`);
 
-    
     sendResponse({
         res,
         statusCode: 200,
@@ -95,19 +93,16 @@ export const payMultiComponentFee = catchAsync(async (req: Request, res: Respons
     });
 });
 
-// Phase 1: Pay Test Fee
-// @deprecated — use POST /finance/pay-component { component: 'APPLICATION_FEE', mode: 'ONLINE', ... }
 export const payTestFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Warning', `299 - "Deprecated: use POST /finance/pay-component { component: 'APPLICATION_FEE', mode: 'ONLINE' }"`);
     logger.warn(`[payTestFee] DEPRECATED endpoint hit by=${req.user?.userId || 'anonymous'} — migrate FE to /pay-component`);
-    logger.debug && logger.debug(`[payTestFee] params=${JSON.stringify(req.params)}`);
+    logger.debug(`[payTestFee] params=${JSON.stringify(req.params)}`);
 
     let { studentId } = req.params;
     if (!studentId && req.body.studentId) {
         studentId = req.body.studentId;
     }
-    
-    // Self-service fallback
+
     if (!studentId && req.user?.role === 'STUDENT') {
         const { getStudentByUserId } = await import('../student/student.service');
         const s = await getStudentByUserId(req.user.userId);
@@ -136,15 +131,15 @@ export const payTokenFee = catchAsync(async (req: Request, res: Response, next: 
     if (!studentId && req.body.studentId) studentId = req.body.studentId;
 
     if (!studentId && req.user?.role === 'STUDENT') {
-         const { getStudentByUserId } = await import('../student/student.service');
-         const s = await getStudentByUserId(req.user.userId);
-         if (s) studentId = s.id;
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user.userId);
+        if (s) studentId = s.id;
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
     const result = await initiateTokenPayment(studentId, req.body);
-    
+
     sendResponse({
         res,
         statusCode: 200,
@@ -154,17 +149,15 @@ export const payTokenFee = catchAsync(async (req: Request, res: Response, next: 
     });
 });
 
-// Phase 6: Final Fee Payment
 export const payCollegeFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[payCollegeFee] by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[payCollegeFee] params=${JSON.stringify(req.params)}`);
+    logger.debug(`[payCollegeFee] params=${JSON.stringify(req.params)}`);
 
     let { studentId } = req.params;
     if (!studentId && req.body.studentId) {
         studentId = req.body.studentId;
     }
-    
-    // Self-service fallback
+
     if (!studentId && req.user?.role === 'STUDENT') {
         const { getStudentByUserId } = await import('../student/student.service');
         const s = await getStudentByUserId(req.user.userId);
@@ -186,13 +179,11 @@ export const payCollegeFee = catchAsync(async (req: Request, res: Response, next
     });
 });
 
-// Fee Reduction Request
 export const requestDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestDiscount] by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[requestDiscount] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
+    logger.debug(`[requestDiscount] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
 
-
-    const { studentId,reason, documentUrl, amount } = req.body;
+    const { studentId, reason, documentUrl, amount } = req.body;
     if (!studentId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_REASON_REQUIRED, 400);
 
     const currentUserId = req.user?.userId || null;
@@ -211,11 +202,11 @@ export const requestDiscount = catchAsync(async (req: Request, res: Response, ne
 export const approveDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { requestId } = req.params;
     const { approvedAmount, component, remarks } = req.body;
-    
+
     if (!approvedAmount || !component) throw new AppError("Approved Amount and Component are required", 400);
 
     const result = await approveDiscountService(requestId, approvedAmount, component, req.user!.userId, remarks);
-    
+
     sendResponse({
         res,
         statusCode: 200,
@@ -227,10 +218,10 @@ export const approveDiscount = catchAsync(async (req: Request, res: Response, ne
 
 export const rejectDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { requestId } = req.params;
-    const { remarks } = req.body; 
-    
+    const { remarks } = req.body;
+
     const result = await rejectDiscountService(requestId, remarks, req.user!.userId);
-    
+
     sendResponse({
         res,
         statusCode: 200,
@@ -240,12 +231,6 @@ export const rejectDiscount = catchAsync(async (req: Request, res: Response, nex
     });
 });
 
-/**
- * IDOR guard — a STUDENT may only access their OWN financial data. Any non-STUDENT
- * role (admin/staff that already passed authorizePermission) is allowed through.
- * Without this, a student holding `finance.read.own` could pass another student's
- * id/paymentId/txnId and read their financials.
- */
 const assertStudentOwns = async (req: Request, studentId: string) => {
     if (req.user?.role === 'STUDENT') {
         const { getStudentByUserId } = await import('../student/student.service');
@@ -262,14 +247,13 @@ export const getInvoice = catchAsync(async (req: Request, res: Response, next: N
     const { paymentId } = req.params;
     if (!paymentId) throw new AppError("Payment ID is required", 400);
 
-    // IDOR guard: resolve the payment's owner and ensure a student only sees their own.
     const { default: prisma } = await import('../../config/prisma');
     const pay = await prisma.payment.findUnique({ where: { id: paymentId }, select: { studentId: true } });
     if (!pay) throw new AppError("Payment not found", 404);
     await assertStudentOwns(req, pay.studentId);
 
     const url = await getInvoiceUrl(paymentId);
-    
+
     sendResponse({
         res,
         statusCode: 200,
@@ -284,8 +268,6 @@ export const checkPaymentStatus = catchAsync(async (req: Request, res: Response,
     const { txnId } = req.params;
     if (!txnId) throw new AppError("Transaction ID is required", 400);
 
-    // IDOR guard: this endpoint also auto-reconciles (can mark SUCCESS/FAILED), so a
-    // student must not be able to poll/trigger it for another student's transaction.
     const { default: prisma } = await import('../../config/prisma');
     const pay = await prisma.payment.findFirst({
         where: { OR: [{ providerTxId: txnId }, { merchantOrderId: txnId }] },
@@ -294,7 +276,7 @@ export const checkPaymentStatus = catchAsync(async (req: Request, res: Response,
     if (pay) await assertStudentOwns(req, pay.studentId);
 
     const status = await checkPaymentStatusService(txnId);
-    
+
     sendResponse({
         res,
         statusCode: 200,
@@ -306,18 +288,15 @@ export const checkPaymentStatus = catchAsync(async (req: Request, res: Response,
 
 export const getPaymentHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     let { studentId } = req.params;
-    
-    // Self-service fallback
+
     if (!studentId && req.user?.role === 'STUDENT') {
-         const { getStudentByUserId } = await import('../student/student.service');
-         const s = await getStudentByUserId(req.user.userId);
-         if (s) studentId = s.id;
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user.userId);
+        if (s) studentId = s.id;
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-    // SECURITY: Authorization Check
-    // If user is STUDENT, ensure they are requesting their own data
     if (req.user?.role === 'STUDENT') {
         const { getStudentByUserId } = await import('../student/student.service');
         const s = await getStudentByUserId(req.user.userId);
@@ -326,11 +305,7 @@ export const getPaymentHistory = catchAsync(async (req: Request, res: Response, 
             throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
         }
     }
-    // If user is AGENT, ensure student belongs to them (Optional/Future scope, currently strictly blocking cross-access)
 
-    // Optional query params to scope results:
-    //   ?academicYearId=<uuid>  — filter to a specific academic year
-    //   ?yearOfStudy=<1|2|3|4> — filter to a specific year of study (useful after promotion)
     const academicYearId = typeof req.query.academicYearId === 'string'
         ? req.query.academicYearId
         : undefined;
@@ -351,16 +326,16 @@ export const getPaymentHistory = catchAsync(async (req: Request, res: Response, 
 
 export const getFinancialSummary = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     let { studentId } = req.params;
-    
+
     if (!studentId && req.user?.role === 'STUDENT') {
-         const { getStudentByUserId } = await import('../student/student.service');
-         const s = await getStudentByUserId(req.user.userId);
-         if (s) studentId = s.id;
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user.userId);
+        if (s) studentId = s.id;
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-    await assertStudentOwns(req, studentId); // IDOR guard
+    await assertStudentOwns(req, studentId);
 
     const { getStudentFinancialSummary } = await import('./payment.service');
     const summary = await getStudentFinancialSummary(studentId);
@@ -374,7 +349,6 @@ export const getFinancialSummary = catchAsync(async (req: Request, res: Response
     });
 });
 
-// @deprecated — use POST /finance/pay-component { component: 'APPLICATION_FEE', mode: 'OFFLINE', method, referenceNumber, ... }
 export const payOfflineApplicationFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Warning', `299 - "Deprecated: use POST /finance/pay-component { component: 'APPLICATION_FEE', mode: 'OFFLINE' }"`);
     logger.warn(`[payOfflineApplicationFee] DEPRECATED endpoint hit by=${req.user?.userId || 'anonymous'} — migrate FE to /pay-component`);
@@ -393,7 +367,6 @@ export const payOfflineApplicationFee = catchAsync(async (req: Request, res: Res
     });
 });
 
-// @deprecated — thin wrapper around processUnifiedPayment. Use POST /finance/pay-component instead.
 export const initiateAdminPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Warning', `299 - "Deprecated: use POST /finance/pay-component"`);
     logger.warn(`[initiateAdminPayment] DEPRECATED endpoint hit by=${req.user?.userId} — migrate FE to /pay-component`);
@@ -401,13 +374,12 @@ export const initiateAdminPayment = catchAsync(async (req: Request, res: Respons
 
     if (!studentId || !amount || !component) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
-    // Use unified processor
     const result = await import('./payment.service').then(s => s.processUnifiedPayment({
         studentId,
         amount: Number(amount),
         component,
-        mode: 'ONLINE', // Admin initiated online payment
-        method: 'UPI',  // Default to UPI/Online
+        mode: 'ONLINE',
+        method: 'UPI',
         feeHeadId,
         remarks,
         initiatedBy: req.user!.userId
@@ -426,40 +398,32 @@ export const payFeeComponent = catchAsync(async (req: Request, res: Response, ne
     const currentUserId = req.user?.userId || 'anonymous';
     const currentUserRole = req.user?.role || 'UNKNOWN';
     logger.info(`[payFeeComponent] START - by=${currentUserId}, role=${currentUserRole}`);
-    
+
     const { studentId, amount, component, mode } = req.body;
     logger.debug(`[payFeeComponent] Request: StudentId=${studentId}, Amount=${amount}, Component=${component}, Mode=${mode}`);
 
-    // 1. Basic Validation
     if (!studentId || !amount || !component) {
         logger.error(`[payFeeComponent] Validation failed - Missing required fields`);
         throw new AppError("Student ID, Amount, and Component are required", 400);
     }
     logger.info(`[payFeeComponent] Validated - Processing ₹${amount} for ${component}`);
 
-    // 2. Security: Authorization & Mode Restrictions
     if (req.user?.role === 'STUDENT') {
         logger.debug(`[payFeeComponent] Student role detected - Verifying authorization`);
         const { getStudentByUserId } = await import('../student/student.service');
         const s = await getStudentByUserId(req.user.userId);
-        
-        // Ensure paying for self
         if (!s || s.id !== studentId) {
             logger.warn(`[payFeeComponent] SECURITY ALERT - Student ${req.user.userId} attempted to pay for ${studentId}`);
             throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
         }
         logger.info(`[payFeeComponent] Authorization verified - Student paying for self`);
-
-        // Students cannot initiate OFFLINE payments directly via API (usually Admin recorded)
         if (mode === 'OFFLINE') {
-             logger.warn(`[payFeeComponent] SECURITY ALERT - Student attempted OFFLINE payment`);
-             throw new AppError("Students cannot record OFFLINE payments. Please contact admin.", 403);
+            logger.warn(`[payFeeComponent] SECURITY ALERT - Student attempted OFFLINE payment`);
+            throw new AppError("Students cannot record OFFLINE payments. Please contact admin.", 403);
         }
     }
-    
-    logger.info(`[payFeeComponent] Calling processUnifiedPayment service`);
 
-    
+    logger.info(`[payFeeComponent] Calling processUnifiedPayment service`);
     const result = await import('./payment.service').then(s => s.processUnifiedPayment({
         ...req.body,
         initiatedBy: req.user?.userId || null
@@ -486,7 +450,7 @@ export const getFinancialFlow = catchAsync(async (req: Request, res: Response, n
 
     if (!studentId) throw new AppError('Student ID is required', 400);
 
-    await assertStudentOwns(req, studentId); // IDOR guard
+    await assertStudentOwns(req, studentId);
 
     const flow = await getStudentFinancialFlow(studentId);
 
@@ -499,8 +463,6 @@ export const getFinancialFlow = catchAsync(async (req: Request, res: Response, n
     });
 });
 
-/** Complete, audit-grade student history — every record (incl. deleted/reversed/superseded),
- *  grouped into sections + a merged chronological timeline + one reconciled summary. */
 export const getCompleteHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     let { studentId } = req.params;
 
@@ -513,7 +475,7 @@ export const getCompleteHistory = catchAsync(async (req: Request, res: Response,
 
     if (!studentId) throw new AppError('Student ID is required', 400);
 
-    await assertStudentOwns(req, studentId); // IDOR guard
+    await assertStudentOwns(req, studentId);
 
     const history = await getStudentCompleteHistory(studentId);
 
