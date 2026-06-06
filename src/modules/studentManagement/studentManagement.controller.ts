@@ -10,6 +10,7 @@ import * as StudentService from '../student/student.service';
 import prisma from '../../config/prisma';
 import { Role } from '../../constants/roles';
 import { assertPricingOverrideAllowed } from '../../middleware/rbac.middleware';
+import { AuditAction, getClientIp } from '../../utils/auditLogger';
 import fs from 'fs';
 import path from 'path';
 
@@ -1305,4 +1306,358 @@ export const getRetainedRevenue = catchAsync(async (req: Request, res: Response,
     }));
 
     sendResponse({ res, statusCode: 200, success: true, data });
+});
+
+export const purgeStudentByApplicationId = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
+    const { applicationId } = req.params;
+    const adminId = req.user?.userId;
+    if (!adminId) throw new AppError('Unauthorized', 401);
+
+    const ipAddress = getClientIp(req);
+    const userAgent = req.headers['user-agent'] ?? 'unknown';
+
+    // ── 1. Resolve student ──────────────────────────────────────────────────
+    const student = await prisma.student.findUnique({
+        where: { applicationId },
+        select: {
+            id: true, userId: true, name: true, phone: true, email: true,
+            applicationId: true, category: true, source: true, quotaType: true,
+            degreeType: true, createdAt: true,
+        },
+    });
+    if (!student) throw new AppError(`No student found with applicationId=${applicationId}`, 404);
+
+    const studentId = student.id;
+    const userId    = student.userId;
+
+    // ── 2. Snapshot financial & identity data before anything is deleted ────
+    const [payments, feeDemands, feeCorrections, ledgerEntries, admission, userRecord] = await Promise.all([
+        prisma.payment.findMany({ where: { studentId } }),
+        prisma.studentFeeDemand.findMany({ where: { studentId } }),
+        prisma.feeCorrection.findMany({ where: { studentId } }),
+        prisma.studentLedger.findMany({ where: { studentId } }),
+        prisma.studentAdmission.findFirst({ where: { studentId } }),
+        userId
+            ? prisma.user.findUnique({
+                where: { id: userId },
+                select: { id: true, phone: true, email: true, role: true, createdAt: true },
+            })
+            : Promise.resolve(null),
+    ]);
+
+    logger.warn(
+        `[purgeStudent] PURGE initiated applicationId=${applicationId} studentId=${studentId}` +
+        ` by admin=${adminId} payments=${payments.length} demands=${feeDemands.length} corrections=${feeCorrections.length}`,
+    );
+
+    const counts: Record<string, number> = {};
+    const now = new Date();
+
+    await prisma.$transaction(async (tx) => {
+
+        // ── 3. Per-record audit logs for every Payment ──────────────────────
+        if (payments.length > 0) {
+            await tx.auditLog.createMany({
+                data: payments.map(p => ({
+                    userId:    adminId,
+                    action:    AuditAction.PAYMENT_HARD_DELETED,
+                    entity:    'Payment',
+                    entityId:  p.id,
+                    ipAddress,
+                    userAgent,
+                    timestamp: now,
+                    details: {
+                        studentId, applicationId,
+                        amount:          p.amount,
+                        component:       p.component,
+                        status:          p.status,
+                        method:          p.method,
+                        mode:            p.mode,
+                        feeDemandId:     p.feeDemandId,
+                        feeHeadId:       p.feeHeadId,
+                        providerTxId:    p.providerTxId,
+                        referenceNumber: p.referenceNumber,
+                        idempotencyKey:  p.idempotencyKey,
+                        collectedBy:     p.collectedBy,
+                        academicYearId:  p.academicYearId,
+                        createdAt:       p.createdAt,
+                    },
+                })),
+            });
+        }
+
+        // ── 4. Per-record audit logs for every StudentFeeDemand ─────────────
+        if (feeDemands.length > 0) {
+            await tx.auditLog.createMany({
+                data: feeDemands.map(d => ({
+                    userId:    adminId,
+                    action:    AuditAction.FEE_DEMAND_HARD_DELETED,
+                    entity:    'StudentFeeDemand',
+                    entityId:  d.id,
+                    ipAddress,
+                    userAgent,
+                    timestamp: now,
+                    details: {
+                        studentId, applicationId,
+                        amount:            d.amount,
+                        netAmount:         d.netAmount,
+                        status:            d.status,
+                        dueDate:           d.dueDate,
+                        feeHeadId:         d.feeHeadId,
+                        feeStructureId:    d.feeStructureId,
+                        discountAmount:    d.discountAmount,
+                        scholarshipAmount: d.scholarshipAmount,
+                        fineAmount:        d.fineAmount,
+                        academicYearId:    d.academicYearId,
+                        createdAt:         d.createdAt,
+                    },
+                })),
+            });
+        }
+
+        // ── 5. Per-record audit logs for every FeeCorrection ────────────────
+        if (feeCorrections.length > 0) {
+            await tx.auditLog.createMany({
+                data: feeCorrections.map(fc => ({
+                    userId:    adminId,
+                    action:    AuditAction.FEE_CORRECTION_HARD_DELETED,
+                    entity:    'FeeCorrection',
+                    entityId:  fc.id,
+                    ipAddress,
+                    userAgent,
+                    timestamp: now,
+                    details: {
+                        studentId, applicationId,
+                        amount:             fc.amount,
+                        retainedAmount:     fc.retainedAmount,
+                        retentionBreakdown: fc.retentionBreakdown,
+                        type:               fc.type,
+                        reason:             fc.reason,
+                        referenceType:      fc.referenceType,
+                        referenceId:        fc.referenceId,
+                        isSettled:          fc.isSettled,
+                        settledAt:          fc.settledAt,
+                        settledBy:          fc.settledBy,
+                        academicYearId:     fc.academicYearId,
+                        createdAt:          fc.createdAt,
+                    },
+                })),
+            });
+        }
+
+        // ── 6. Per-record audit logs for every StudentLedger entry ──────────
+        if (ledgerEntries.length > 0) {
+            await tx.auditLog.createMany({
+                data: ledgerEntries.map(l => ({
+                    userId:    adminId,
+                    action:    AuditAction.LEDGER_ENTRY_HARD_DELETED,
+                    entity:    'StudentLedger',
+                    entityId:  l.id,
+                    ipAddress,
+                    userAgent,
+                    timestamp: now,
+                    details: {
+                        studentId, applicationId,
+                        type:          l.type,
+                        amount:        l.amount,
+                        description:   l.description,
+                        referenceType: l.referenceType,
+                        referenceId:   l.referenceId,
+                        feeHeadId:     l.feeHeadId,
+                        academicYearId: l.academicYearId,
+                        date:          l.date,
+                    },
+                })),
+            });
+        }
+
+        // ── 7. Master audit log — full snapshot of the student being erased ─
+        await tx.auditLog.create({
+            data: {
+                userId:    adminId,
+                action:    AuditAction.STUDENT_PURGED,
+                entity:    'Student',
+                entityId:  studentId,
+                ipAddress,
+                userAgent,
+                timestamp: now,
+                details: {
+                    applicationId,
+                    studentSnapshot: {
+                        id:          student.id,
+                        name:        student.name,
+                        phone:       student.phone,
+                        email:       student.email,
+                        category:    student.category,
+                        source:      student.source,
+                        quotaType:   student.quotaType,
+                        degreeType:  student.degreeType,
+                        createdAt:   student.createdAt,
+                    },
+                    admissionSnapshot: admission ? {
+                        status:              admission.status,
+                        allottedCourseId:    admission.allottedCourseId,
+                        accommodationType:   admission.accommodationType,
+                        totalFee:            admission.totalFee,
+                        paidFee:             admission.paidFee,
+                        feeStatus:           admission.feeStatus,
+                        academicYearId:      admission.academicYearId,
+                        entryType:           admission.entryType,
+                    } : null,
+                    linkedUserId:       userId,
+                    linkedUserSnapshot: userRecord,
+                    financialSummary: {
+                        paymentCount:       payments.length,
+                        successPaymentCount: payments.filter(p => p.status === 'SUCCESS').length,
+                        totalSuccessPaid:   payments
+                            .filter(p => p.status === 'SUCCESS')
+                            .reduce((s, p) => s + p.amount, 0),
+                        feeDemandCount:     feeDemands.length,
+                        feeCorrectionCount: feeCorrections.length,
+                        ledgerEntryCount:   ledgerEntries.length,
+                    },
+                    purgedBy: adminId,
+                },
+            },
+        });
+
+        // ── 8. Hard-delete all records in FK-safe order ─────────────────────
+
+        // Leaf tables (nothing points to them by studentId as a FK target)
+        counts.classAttendance             = (await tx.classAttendance.deleteMany({ where: { studentId } })).count;
+        counts.semesterMark                = (await tx.semesterMark.deleteMany({ where: { studentId } })).count;
+        counts.attendanceRecord            = (await tx.attendanceRecord.deleteMany({ where: { studentId } })).count;
+        counts.seatAllocation              = (await tx.seatAllocation.deleteMany({ where: { studentId } })).count;
+        counts.courseChangeLog             = (await tx.courseChangeLog.deleteMany({ where: { studentId } })).count;
+        counts.courseChangeRequest         = (await tx.courseChangeRequest.deleteMany({ where: { studentId } })).count;
+        counts.discountRequest             = (await tx.discountRequest.deleteMany({ where: { studentId } })).count;
+        counts.hallTicket                  = (await tx.hallTicket.deleteMany({ where: { studentId } })).count;
+        counts.fileUpload                  = (await tx.fileUpload.deleteMany({ where: { studentId } })).count;
+        counts.serviceChangeRequest        = (await tx.serviceChangeRequest.deleteMany({ where: { studentId } })).count;
+        counts.waitingList                 = (await tx.waitingList.deleteMany({ where: { studentId } })).count;
+        counts.agentCommission             = (await tx.agentCommission.deleteMany({ where: { studentId } })).count;
+        counts.retainedRevenueLine         = (await tx.retainedRevenueLine.deleteMany({ where: { studentId } })).count;
+        counts.studentLedger               = (await tx.studentLedger.deleteMany({ where: { studentId } })).count;
+        counts.studentEnrollment           = (await tx.studentEnrollment.deleteMany({ where: { studentId } })).count;
+        counts.studentDocument             = (await tx.studentDocument.deleteMany({ where: { studentId } })).count;
+        counts.hostelAllocation            = (await tx.hostelAllocation.deleteMany({ where: { studentId } })).count;
+        counts.transportAllocation         = (await tx.transportAllocation.deleteMany({ where: { studentId } })).count;
+        counts.studentAccommodationPricing = (await tx.studentAccommodationPricing.deleteMany({ where: { studentId } })).count;
+        counts.convenorAdmission           = (await tx.convenorAdmission.deleteMany({ where: { studentId } })).count;
+        counts.studentExam                 = (await tx.studentExam.deleteMany({ where: { studentId } })).count;
+
+        // Payment before StudentFeeDemand (Payment.feeDemandId → StudentFeeDemand)
+        counts.payment                     = (await tx.payment.deleteMany({ where: { studentId } })).count;
+        counts.studentFeeDemand            = (await tx.studentFeeDemand.deleteMany({ where: { studentId } })).count;
+
+        counts.feeCorrection               = (await tx.feeCorrection.deleteMany({ where: { studentId } })).count;
+
+        // StudentScholarship before AcademicQualification (qualificationId FK)
+        counts.studentScholarship          = (await tx.studentScholarship.deleteMany({ where: { studentId } })).count;
+        counts.academicQualification       = (await tx.academicQualification.deleteMany({ where: { studentId } })).count;
+
+        counts.scholarshipAllocation       = (await tx.scholarshipAllocation.deleteMany({ where: { studentId } })).count;
+        counts.cancellationRequest         = (await tx.cancellationRequest.deleteMany({ where: { studentId } })).count;
+        counts.studentAdmission            = (await tx.studentAdmission.deleteMany({ where: { studentId } })).count;
+
+        await tx.student.delete({ where: { id: studentId } });
+        counts.student = 1;
+
+        // ── 9. User account (if linked) ─────────────────────────────────────
+        if (userId) {
+            // Audit log for user deletion before the user row disappears
+            await tx.auditLog.create({
+                data: {
+                    userId:    adminId,
+                    action:    AuditAction.USER_HARD_DELETED,
+                    entity:    'User',
+                    entityId:  userId,
+                    ipAddress,
+                    userAgent,
+                    timestamp: now,
+                    details: {
+                        studentId, applicationId,
+                        linkedUserSnapshot: userRecord,
+                        purgedBy: adminId,
+                    },
+                },
+            });
+
+            // Preserve student's own login audit trail but unlink the deleted userId
+            await tx.auditLog.updateMany({ where: { userId }, data: { userId: null } });
+
+            counts.userOtp                = (await tx.userOtp.deleteMany({ where: { userId } })).count;
+            counts.notification           = (await tx.notification.deleteMany({ where: { recipientId: userId } })).count;
+            counts.userGroup              = (await tx.userGroup.deleteMany({ where: { userId } })).count;
+            counts.userPermissionOverride = (await tx.userPermissionOverride.deleteMany({ where: { userId } })).count;
+            await tx.user.delete({ where: { id: userId } });
+            counts.user = 1;
+        }
+
+    }, { timeout: 30000 });
+
+    logger.warn(
+        `[purgeStudent] PURGE complete applicationId=${applicationId} studentId=${studentId}` +
+        ` by admin=${adminId} counts=${JSON.stringify(counts)}`,
+    );
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: `Student ${student.name} (${applicationId}) and all related records permanently deleted.`,
+        data: { deletedCounts: counts },
+    });
+});
+
+export const listPurgedStudents = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
+    const { page, limit, purgedBy, applicationId } = req.query as Record<string, string | undefined>;
+
+    const pageNum  = Math.max(1, parseInt(page  ?? '1',  10));
+    const pageSize = Math.min(100, Math.max(1, parseInt(limit ?? '20', 10)));
+    const skip     = (pageNum - 1) * pageSize;
+
+    const where: any = { action: AuditAction.STUDENT_PURGED };
+    if (purgedBy)     where.userId  = purgedBy;
+    if (applicationId) where.details = { path: ['applicationId'], equals: applicationId };
+
+    const [total, logs] = await Promise.all([
+        prisma.auditLog.count({ where }),
+        prisma.auditLog.findMany({
+            where,
+            orderBy: { timestamp: 'desc' },
+            skip,
+            take: pageSize,
+            select: {
+                id:        true,
+                entityId:  true,
+                userId:    true,
+                ipAddress: true,
+                timestamp: true,
+                details:   true,
+            },
+        }),
+    ]);
+
+    const data = logs.map(log => {
+        const d = (log.details ?? {}) as any;
+        return {
+            auditLogId:        log.id,
+            studentId:         log.entityId,
+            applicationId:     d.applicationId,
+            purgedBy:          log.userId,
+            purgedAt:          log.timestamp,
+            ipAddress:         log.ipAddress,
+            studentSnapshot:   d.studentSnapshot,
+            admissionSnapshot: d.admissionSnapshot,
+            financialSummary:  d.financialSummary,
+            linkedUserId:      d.linkedUserId,
+        };
+    });
+
+    sendResponse({
+        res, statusCode: 200, success: true,
+        data,
+        pagination: { total, page: pageNum, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
+    });
 });

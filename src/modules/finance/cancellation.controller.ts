@@ -132,11 +132,24 @@ export const getCancellationById = catchAsync(async (req: Request, res: Response
 });
 
 export const listRetainedRevenue = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
-    const { category, sourceType, studentId, academicYearId, isSettled, page, limit } = req.query as Record<string, string | undefined>;
+    const { category, sourceType, studentId: rawStudentId, academicYearId, isSettled, page, limit, applicationId } = req.query as Record<string, string | undefined>;
 
     const pageNum  = Math.max(1, parseInt(page  ?? '1',  10));
     const pageSize = Math.min(100, Math.max(1, parseInt(limit ?? '20', 10)));
     const skip     = (pageNum - 1) * pageSize;
+
+    let studentId = rawStudentId;
+    if (applicationId && !studentId) {
+        const student = await prisma.student.findUnique({
+            where: { applicationId },
+            select: { id: true },
+        });
+        if (!student) {
+            sendResponse({ res, statusCode: 200, success: true, data: [], pagination: { total: 0, page: pageNum, limit: pageSize, totalPages: 0 } });
+            return;
+        }
+        studentId = student.id;
+    }
 
     const correctionWhere: any = {};
     if (studentId)      correctionWhere.studentId      = studentId;

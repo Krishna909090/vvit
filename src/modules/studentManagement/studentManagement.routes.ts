@@ -63,7 +63,9 @@ import {
     previewSwitchTransportToHostel,
     bulkAllocateRoomBeds,
     assignEnrollment,
-    reconcileStudentFees
+    reconcileStudentFees,
+    purgeStudentByApplicationId,
+    listPurgedStudents,
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -254,5 +256,9 @@ router.post('/waiting-list/remove', authenticate, authorizePermission(['student.
 router.post('/:studentId/reconcile-fees', authenticate, authorizePermission(['student.update.all']), reconcileStudentFees);
 
 router.get('/:studentId/retained-revenue', authenticate, authorizePermission(['student.read.all']), getRetainedRevenue);
+
+router.delete('/purge/:applicationId', authenticate, authorizePermission(['student.delete.all']), purgeStudentByApplicationId);
+
+router.get('/purged', authenticate, authorizePermission(['student.read.all']), listPurgedStudents);
 
 export default router;
