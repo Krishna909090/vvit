@@ -790,12 +790,13 @@ const _processComponentLogic = async (payment: any) => {
                      const ledgers: any[] = [];
                      const admission = detailedStudent.admissionDetails;
                      const tuitionFee = admission.totalFee ?? 0;
+                     const ledgerYearOfStudy = await getStudentYearOfStudy(studentId);
                      if (tuitionFee <= 0) {
                          logger.warn(`[_processComponentLogic] totalFee is ${tuitionFee} for student=${studentId} — skipping tuition ledger entry`);
                      }
-                     if (tuitionFee > 0) ledgers.push({ studentId, type: 'DEBIT', amount: tuitionFee, description: 'Tuition Fee (Annual)', referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() });
-                     if (admission.transportRouteId && admission.transportRoute) { ledgers.push({ studentId, type: 'DEBIT', amount: admission.transportRoute.cost, description: `Transport Fee - ${admission.transportRoute.name}`, referenceId: payment.id, referenceType: 'FEE_GENERATION', date: new Date() }); }
-                     if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) { const rule = detailedStudent.scholarshipAllocation.rule; const discount = (tuitionFee * rule.discountPercentage) / 100; if (discount > 0) { ledgers.push({ studentId, type: 'CREDIT', amount: discount, description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`, referenceId: detailedStudent.scholarshipAllocation.id, referenceType: 'SCHOLARSHIP', date: new Date() }); } }
+                     if (tuitionFee > 0) ledgers.push({ studentId, type: 'DEBIT', amount: tuitionFee, description: 'Tuition Fee (Annual)', referenceId: payment.id, referenceType: 'FEE_GENERATION', yearOfStudy: ledgerYearOfStudy, date: new Date() });
+                     if (admission.transportRouteId && admission.transportRoute) { ledgers.push({ studentId, type: 'DEBIT', amount: admission.transportRoute.cost, description: `Transport Fee - ${admission.transportRoute.name}`, referenceId: payment.id, referenceType: 'FEE_GENERATION', yearOfStudy: ledgerYearOfStudy, date: new Date() }); }
+                     if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) { const rule = detailedStudent.scholarshipAllocation.rule; const discount = (tuitionFee * rule.discountPercentage) / 100; if (discount > 0) { ledgers.push({ studentId, type: 'CREDIT', amount: discount, description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`, referenceId: detailedStudent.scholarshipAllocation.id, referenceType: 'SCHOLARSHIP', yearOfStudy: ledgerYearOfStudy, date: new Date() }); } }
                      if (ledgers.length > 0) await prisma.studentLedger.createMany({ data: ledgers });
                  }
              } else {
@@ -1933,6 +1934,7 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
     const transactionId = `TOK_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
 
     const activeYear = await getActiveAcademicYear();
+    const tokenYearOfStudy = await getStudentYearOfStudy(studentId);
     const createdPayment = await prisma.payment.create({
         data: {
             studentId,
@@ -1942,7 +1944,8 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
             providerTxId: transactionId,
             idempotencyKey: `${transactionId}_SCHOLARSHIP_TOKEN`,
             method: PaymentMethod.UPI,
-            academicYearId: activeYear.id
+            academicYearId: activeYear.id,
+            yearOfStudy: tokenYearOfStudy,
         }
     });
 

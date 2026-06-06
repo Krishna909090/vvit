@@ -391,6 +391,7 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 description: 'Seat Booking Token Fee (Offline)',
                 referenceType: 'PAYMENT',
                 academicYearId: activeYear.id,
+                yearOfStudy: 1,
                 date: new Date()
             }
         });
@@ -461,6 +462,7 @@ export const verifyOfflinePayment = async (studentId: string, amount: number, ty
                 referenceType: 'PAYMENT',
                 referenceId: payment.id,
                 academicYearId,
+                yearOfStudy: 1,
                 date: new Date()
             }
         });
@@ -748,6 +750,7 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                         referenceType: 'PAYMENT',
                         referenceId: payment.id,
                         academicYearId: activeAcademicYear.id,
+                        yearOfStudy: 1,
                         date: new Date()
                     }
                 });

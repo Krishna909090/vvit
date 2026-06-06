@@ -1619,7 +1619,8 @@ export const AccommodationService = {
                     referenceType: 'HOSTEL_REASSIGNMENT',
                     referenceId: studentId,
                     createdBy: adminId,
-                    academicYearId: academicYearId
+                    academicYearId: academicYearId,
+                    yearOfStudy: ctx.yearOfStudy,
                 }
             });
 
@@ -2527,6 +2528,7 @@ export const AccommodationService = {
                         referenceId: feeCorrection?.id ?? previousHostelId ?? null,
                         referenceType: 'HOSTEL_CANCELLATION',
                         academicYearId,
+                        yearOfStudy: ctx.yearOfStudy,
                         createdBy: adminId,
                     } as any,
                 });
@@ -2731,6 +2733,7 @@ export const AccommodationService = {
                         referenceId: feeCorrection?.id ?? previousRouteId ?? null,
                         referenceType: 'TRANSPORT_CANCELLATION',
                         academicYearId,
+                        yearOfStudy: ctx.yearOfStudy,
                         createdBy: adminId,
                     } as any,
                 });
@@ -3363,6 +3366,7 @@ export const AccommodationService = {
                         referenceId: feeCorrectionId ?? previousRouteId ?? null,
                         referenceType: 'TRANSPORT_TO_HOSTEL_SWITCH',
                         academicYearId,
+                        yearOfStudy: ctx.yearOfStudy,
                         createdBy: adminId,
                     } as any,
                 });

@@ -417,6 +417,7 @@ export const ScholarshipService = {
                                 feeHeadId: demand.feeHeadId,
                                 createdBy: adminId,
                                 academicYearId: resolvedYearId,
+                                yearOfStudy: demand.yearOfStudy ?? undefined,
                                 date: new Date()
                             }
                         });

@@ -6,6 +6,7 @@ import { generateInvoicePDF } from '../../utils/invoiceGenerator';
 import { uploadFileToS3, convertToPresignedUrl } from '../../utils/s3Utils';
 import { sendCancellationReceipt } from '../../utils/emailService';
 import { incrementCourseCapacity, decrementCourseCapacity } from '../../utils/courseCapacity';
+import { getStudentYearOfStudy } from '../../utils/studentContext';
 
 const DEFAULT_DEDUCTION = 10_000;
 
@@ -453,6 +454,8 @@ export const CancellationService = {
             request.student?.admissionDetails?.academicYearId
             ?? (await prisma.academicYear.findFirst({ where: { isActive: true, isDeleted: false }, select: { id: true } }))?.id;
 
+        const studentCancellationYear = await getStudentYearOfStudy(request.studentId);
+
         const currentStatus = request.status;
         const newStatus = approved ? CancellationStatus.APPROVED : CancellationStatus.REJECTED;
 
@@ -620,6 +623,7 @@ export const CancellationService = {
                             referenceId:   request.id,
                             referenceType: 'SCHOLARSHIP',
                             academicYearId: ledgerYearId,
+                            yearOfStudy:   studentCancellationYear,
                             createdBy:     adminId,
                             date:          now,
                         } as any,
@@ -685,6 +689,7 @@ export const CancellationService = {
                                 referenceId:   request.id,
                                 referenceType: 'CANCELLATION',
                                 academicYearId: ledgerYearId,
+                                yearOfStudy:   studentCancellationYear,
                                 createdBy:     adminId,
                                 date:          now,
                             } as any,
@@ -702,6 +707,7 @@ export const CancellationService = {
                                 referenceId:   request.id,
                                 referenceType: 'CANCELLATION',
                                 academicYearId: ledgerYearId,
+                                yearOfStudy:   studentCancellationYear,
                                 createdBy:     adminId,
                                 date:          now,
                             } as any,

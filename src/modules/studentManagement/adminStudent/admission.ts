@@ -43,6 +43,7 @@ import {
     assertAcademicYearWritable,
     getActiveAcademicYear,
     recomputeStudentTotals,
+    getStudentYearOfStudy,
 } from '../../../utils/studentContext';
 import { sendPaymentReceipt, sendScholarshipUpdateEmail } from '../../../utils/emailService';
 // @ts-ignore
@@ -273,11 +274,13 @@ export const AdmissionService = {
 
                 if (!existingPayment && !existingDemand) {
                     const appFeeAmount = await getApplicationFeeAmount();
+                    const allotYearOfStudy = await getStudentYearOfStudy(studentId, tx);
                     await tx.studentFeeDemand.create({
                         data: {
                             studentId,
                             feeHeadId: appFeeHead.id,
                             academicYearId: admission.academicYearId,
+                            yearOfStudy: allotYearOfStudy,
                             amount: appFeeAmount,
                             netAmount: appFeeAmount,
                             status: FeeStatus.PENDING,
@@ -691,6 +694,8 @@ export const AdmissionService = {
                     return;
                 }
 
+                const courseChangeYearOfStudy = await getStudentYearOfStudy(request.studentId, tx);
+
                 // Find New Course Fee Structure
                 const newCourseStructures = await tx.feeStructure.findMany({
                     where: {
@@ -811,7 +816,8 @@ export const AdmissionService = {
                                         referenceId: existingDemand.id,
                                         feeHeadId: struct.feeHeadId,
                                         createdBy: adminId,
-                                        academicYearId: academicYearId
+                                        academicYearId: academicYearId,
+                                        yearOfStudy: existingDemand.yearOfStudy ?? courseChangeYearOfStudy,
                                     }
                                 });
                             }
@@ -908,6 +914,7 @@ export const AdmissionService = {
                                     referenceId: requestId,
                                     feeHeadId: demand.feeHeadId,
                                     academicYearId,
+                                    yearOfStudy: demand.yearOfStudy ?? courseChangeYearOfStudy,
                                     createdBy: adminId
                                 }
                             });
@@ -951,6 +958,7 @@ export const AdmissionService = {
                             referenceType: 'FEE_CORRECTION_REVERSAL',
                             referenceId: requestId,
                             academicYearId,
+                            yearOfStudy: courseChangeYearOfStudy,
                             createdBy: adminId
                         }
                     });
@@ -1005,6 +1013,7 @@ export const AdmissionService = {
                                 referenceId: requestId,
                                 feeHeadId: demand.feeHeadId,
                                 academicYearId,
+                                yearOfStudy: demand.yearOfStudy ?? courseChangeYearOfStudy,
                                 createdBy: adminId
                             }
                         });
@@ -1030,6 +1039,7 @@ export const AdmissionService = {
                             referenceType: 'BRANCH_CHANGE_FEE',
                             referenceId: requestId,
                             academicYearId,
+                            yearOfStudy: courseChangeYearOfStudy,
                             createdBy: adminId
                         }
                     });
@@ -1982,6 +1992,7 @@ export const AdmissionService = {
                         referenceType: 'SCHOLARSHIP',
                         feeHeadId: demand.feeHeadId,
                         academicYearId: demand.academicYearId,
+                        yearOfStudy: demand.yearOfStudy ?? undefined,
                         createdBy: adminId
                     } as any
                 });
