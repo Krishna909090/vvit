@@ -70,7 +70,7 @@ export const exportSuccessPaymentsCsvController = catchAsync(async (req: Request
 export const payMultiComponentFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const currentUserId = req.user?.userId || 'anonymous';
     logger.info(`[payMultiComponentFee] START - by=${currentUserId}`);
-    const { studentId, components, paymentMethod, remarks, referenceNumber, mode } = req.body;
+    const { studentId, components, paymentMethod, remarks, referenceNumber, mode, yearOfStudy } = req.body;
     logger.debug(`[payMultiComponentFee] Request body: ${JSON.stringify({ studentId, componentsCount: components?.length, paymentMethod, mode, hasReferenceNumber: !!referenceNumber })}`);
     
     if (!studentId || !components || !Array.isArray(components) || components.length === 0) {
@@ -82,7 +82,7 @@ export const payMultiComponentFee = catchAsync(async (req: Request, res: Respons
     // Authorization: User ID should match student's User ID unless Admin (handled by RBAC usually but check logic)
     const currentUserIdForAuth = req.user?.userId || undefined;
 
-    const result = await initiateMultiComponentPayment(studentId, components, currentUserIdForAuth, paymentMethod, remarks, referenceNumber, mode);
+    const result = await initiateMultiComponentPayment(studentId, components, currentUserIdForAuth, paymentMethod, remarks, referenceNumber, mode, yearOfStudy);
     logger.info(`[payMultiComponentFee] SUCCESS - Result: ${JSON.stringify({ success: result.success, paymentIds: result.paymentIds?.length, transactionId: result.transactionId })}`);
 
     

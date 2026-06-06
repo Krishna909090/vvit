@@ -402,7 +402,8 @@ export const initiateMultiComponentPayment = async (
     paymentMethod: PaymentMethod = PaymentMethod.UPI,
     remarks?: string,
     referenceNumber?: string,
-    mode?: string // NOTE: ignored — mode is derived from paymentMethod above
+    mode?: string, // NOTE: ignored — mode is derived from paymentMethod above
+    payloadYearOfStudy?: number
 ) => {
     logger.info(`[initiateMultiComponentPayment] Student=${studentId}, Components=${JSON.stringify(rawComponents)}, Method=${paymentMethod}, Mode=${mode}, Ref=${referenceNumber}`);
 
@@ -540,9 +541,9 @@ export const initiateMultiComponentPayment = async (
                 }
             }
             // If yearOfStudy still not resolved (no demand found or demand.yearOfStudy is null),
-            // fall back to enrollment → entryYearOfStudy so the Payment row is never wrong.
+            // fall back to payload → enrollment → entryYearOfStudy so the Payment row is never wrong.
             if (!yearOfStudy) {
-                yearOfStudy = await getStudentYearOfStudy(studentId, tx);
+                yearOfStudy = payloadYearOfStudy ?? await getStudentYearOfStudy(studentId, tx);
             }
 
             const payment = await tx.payment.create({
@@ -2366,7 +2367,7 @@ export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
 // Step 4. Unified Payment Processor
 /** Unified entrypoint for any payment: validates fee head, generates a transaction id, creates the Payment (year-tagged), and processes offline ones immediately. */
 export const processUnifiedPayment = async (data: any) => {
-    const { studentId, amount, mode, method, component: rawComponent, feeHeadId: rawFeeHeadId, remarks, initiatedBy, referenceNumber, redirectUrl } = data;
+    const { studentId, amount, mode, method, component: rawComponent, feeHeadId: rawFeeHeadId, remarks, initiatedBy, referenceNumber, redirectUrl, yearOfStudy: payloadYearOfStudy } = data;
     logger.info(`[processUnifiedPayment] START - StudentId=${studentId}, Amount=${amount}, Mode=${mode}, Method=${method}, Component=${rawComponent}, InitiatedBy=${initiatedBy}`);
    
     // Resolve Component
@@ -2470,7 +2471,7 @@ export const processUnifiedPayment = async (data: any) => {
         }
     }
     if (!resolvedYearOfStudy) {
-        resolvedYearOfStudy = await getStudentYearOfStudy(studentId);
+        resolvedYearOfStudy = payloadYearOfStudy ?? await getStudentYearOfStudy(studentId);
     }
 
     // 3. Generate Transaction ID

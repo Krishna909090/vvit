@@ -2564,7 +2564,7 @@ export const AdmissionService = {
                          feeHeadId: payment.feeHeadId,
                          feeDemandId: feeDemandId || undefined,
                          academicYearId: yearCtx.academicYearId,
-                         yearOfStudy: yearCtx.yearOfStudy,
+                         yearOfStudy: yearCtx.yearOfStudy ?? student.admissionDetails?.entryYearOfStudy ?? undefined,
                          collectedBy: adminId,
                          createdBy: adminId,
                          metadata: {
