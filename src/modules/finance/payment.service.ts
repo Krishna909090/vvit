@@ -2336,7 +2336,7 @@ export const getStudentFinancialHistory = async (
     const [ledgers, payments, feeDemands, feeCorrections, activeAccPricing] = await Promise.all([
         prisma.studentLedger.findMany({
             where: { studentId, isDeleted: false, ...yearFilter },
-            orderBy: { date: 'desc' }
+            orderBy: { createdAt: 'asc' }
         }),
         prisma.payment.findMany({
             where: { studentId, status: PaymentStatus.SUCCESS, isDeleted: false, ...yearFilter },

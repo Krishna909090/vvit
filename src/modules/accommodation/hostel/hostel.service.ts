@@ -424,7 +424,7 @@ export const HostelService = {
         const rooms = await prisma.hostelRoom.findMany({
             where,
             include: { beds: bedInclude as any },
-            orderBy: { createdAt: 'asc' }
+            orderBy: { number: 'asc' }
         });
 
         return rooms.map(room => {
