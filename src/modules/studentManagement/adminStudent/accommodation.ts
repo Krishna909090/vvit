@@ -1911,11 +1911,6 @@ export const AccommodationService = {
                 }
             });
 
-            if (previousRouteId && previousRouteId !== transportRouteId) {
-                await tx.transportRoute.update({ where: { id: previousRouteId }, data: { filled: { decrement: 1 } } });
-            }
-            await tx.transportRoute.update({ where: { id: transportRouteId }, data: { filled: { increment: 1 } } });
-
             if (transportHead) {
                 await tx.studentFeeDemand.updateMany({
                     where: {
@@ -2057,11 +2052,6 @@ export const AccommodationService = {
                     totalFee: { increment: totalFeeDelta },
                 }
             });
-
-            if (oldRouteId && oldRouteId !== transportRouteId) {
-                await tx.transportRoute.update({ where: { id: oldRouteId }, data: { filled: { decrement: 1 } } });
-            }
-            await tx.transportRoute.update({ where: { id: transportRouteId }, data: { filled: { increment: 1 } } });
 
             if (transportHead) {
                 await tx.studentFeeDemand.updateMany({
@@ -2422,10 +2412,6 @@ export const AccommodationService = {
                 },
             });
 
-            if (previousRouteId) {
-                await tx.transportRoute.update({ where: { id: previousRouteId }, data: { filled: { decrement: 1 } } });
-            }
-
             let feeCorrection: any = null;
             if (refundAmount > 0 || totalRetained > 0) {
                 feeCorrection = await (tx.feeCorrection as any).create({
@@ -2640,8 +2626,6 @@ export const AccommodationService = {
                     totalFee: { increment: newCost - pendingHostelTotal },
                 },
             });
-
-            await tx.transportRoute.update({ where: { id: transportRouteId }, data: { filled: { increment: 1 } } });
 
             let feeDemandsCreated = 0;
             let createdDemandId: string | null = null;
@@ -2942,10 +2926,6 @@ export const AccommodationService = {
                     totalFee: { increment: effectiveTotal - pendingTransportTotal },
                 },
             });
-
-            if (previousRouteId) {
-                await tx.transportRoute.update({ where: { id: previousRouteId }, data: { filled: { decrement: 1 } } });
-            }
 
             await (tx.studentAccommodationPricing as any).updateMany({
                 where: { studentId, isActive: true },

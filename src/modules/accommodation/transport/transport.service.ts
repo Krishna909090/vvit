@@ -87,24 +87,35 @@ export const TransportService = {
             orderBy: { createdAt: 'desc' },
         });
 
-        const allocCounts = await prisma.studentAdmission.groupBy({
-            by: ['transportRouteId'],
+        // filled = only students who have paid against an active transport demand
+        const paidStudents = await prisma.student.findMany({
             where: {
-                transportRouteId: { not: null },
-                accommodationType: 'TRANSPORT',
-                status: { not: 'CANCELLED' },
+                admissionDetails: {
+                    accommodationType: 'TRANSPORT',
+                    transportRouteId: { not: null },
+                    status: { not: 'CANCELLED' },
+                },
+                payments: {
+                    some: {
+                        component: 'TRANSPORT',
+                        status: 'SUCCESS',
+                        isDeleted: false,
+                        amount: { gt: 0 },
+                        feeDemand: { isDeleted: false },
+                    },
+                },
             },
-            _count: { _all: true },
+            select: { admissionDetails: { select: { transportRouteId: true } } },
         });
-        const filledByRoute = new Map<string, number>(
-            allocCounts
-                .filter(a => a.transportRouteId !== null)
-                .map(a => [a.transportRouteId as string, a._count._all])
-        );
+        const filledByRoute = new Map<string, number>();
+        for (const s of paidStudents) {
+            const routeId = (s.admissionDetails as any)?.transportRouteId;
+            if (routeId) filledByRoute.set(routeId, (filledByRoute.get(routeId) ?? 0) + 1);
+        }
 
         const routes = rows.map(r => {
             const capacity = r.capacity ?? 0;
-            const filled = filledByRoute.get(r.id) ?? (r.filled ?? 0);
+            const filled = filledByRoute.get(r.id) ?? 0;
             const stops = r.stops as any[];
             return {
                 id: r.id,
