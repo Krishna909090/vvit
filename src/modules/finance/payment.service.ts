@@ -475,7 +475,7 @@ export const initiateMultiComponentPayment = async (
                     mode: paymentMode,
                     referenceNumber,
                     createdBy: userId,
-                    collectedBy: paymentMethod === PaymentMethod.CASH ? userId : undefined,
+                    collectedBy: userId,
                     metadata: remarks ? { remarks, mode: 'OFFLINE_ENTRY' } : undefined,
                     feeHeadId: item.feeHeadId,
                     feeDemandId,
