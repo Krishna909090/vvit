@@ -188,7 +188,11 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
     )}, email=${maskEmail(user.email)}`
   );
 
-  return { message: "OTP sent successfully", isNewUser };
+  return {
+    message: "OTP sent successfully",
+    isNewUser,
+    ...(process.env.NODE_ENV === 'development' ? { otp } : {}),
+  };
 };
 
 export const verifyOtp = async (
