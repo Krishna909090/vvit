@@ -9,17 +9,14 @@ import bcrypt from 'bcryptjs';
 
 export const AdminService = {
 
-    /** Aggregate counts for the admin home dashboard (students, staff, pending verifications, etc.). */
     async getDashboardStats() {
         const totalApplications = await prisma.student.count();
         const paidApplications = await prisma.studentAdmission.count({ where: { feeStatus: FeeStatus.FULL } });
         const pendingPayment = await prisma.studentAdmission.count({ where: { feeStatus: { not: FeeStatus.FULL } } });
 
-        // Online vs Offline
         const onlineStudents = await prisma.student.count({ where: { isOffline: false } });
         const offlineStudents = await prisma.student.count({ where: { isOffline: true } });
 
-        // Last 7 days summary
         const sevenDaysAgo = new Date();
         sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
@@ -35,7 +32,7 @@ export const AdminService = {
         });
 
         const dayWiseSummary: Record<string, number> = {};
-        // Initialize last 7 days with 0
+
         for (let i = 0; i < 7; i++) {
             const d = new Date();
             d.setDate(d.getDate() - i);
@@ -62,11 +59,6 @@ export const AdminService = {
         };
     },
 
-    /**
-     * Create a staff/admin user with role + optional group memberships.
-     * Hashes the password, links a PRO record if proNumber given, and rejects
-     * duplicate phone/email.
-     */
     async addAdmin(data: { phone?: string; name?: string; email?: string; role?: any; password?: string; groupIds?: string[]; proNumber?: string }, currentUserId?: string) {
         const { phone, name, email, role, password, groupIds, proNumber } = data;
 
@@ -77,7 +69,6 @@ export const AdminService = {
         const normalizedPhone = phone.trim();
         const normalizedEmail = email?.trim().toLowerCase();
 
-        // If role is PRO, proNumber is mandatory and must exist
         if (role === 'PRO') {
             if (!proNumber) {
                 throw new AppError('PRO Number is required when role is PRO', 400);
@@ -90,7 +81,6 @@ export const AdminService = {
                 throw new AppError(`PRO "${proNumber}" is already linked to another user account`, 409);
             }
 
-            // Also check if this phone is already linked to a different PRO
             const existingUser = await prisma.user.findUnique({ where: { phone: normalizedPhone } });
             if (existingUser) {
                 const existingPro = await prisma.pRO.findUnique({ where: { userId: existingUser.id } });
@@ -114,7 +104,7 @@ export const AdminService = {
         const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
 
         if (user) {
-            // Logic Relaxed: Update role if different, don't throw conflict.
+
             if (role && user.role !== role) {
                 logger.info(`[addAdmin] User exists. Updating role from ${user.role} to ${role}`);
             }
@@ -125,12 +115,12 @@ export const AdminService = {
                     name: name ?? user.name,
                     email: normalizedEmail ?? user.email,
                     password: passwordHash ?? user.password,
-                    role: role ?? user.role, // Update role if provided
+                    role: role ?? user.role,
                     updatedBy: currentUserId
                 },
             });
         } else {
-            // Logic Relaxed: Removed Super Admin uniqueness check and Student restrictions.
+
             logger.info(
                 `[addAdmin] Creating new user with role=${role} and phone=${maskPhone(normalizedPhone)}`
             );
@@ -140,7 +130,7 @@ export const AdminService = {
                     phone: normalizedPhone,
                     name,
                     email: normalizedEmail,
-                    role: role || 'STAFF', // Default if missing, or use payload // Ensure this matches Schema Enum if strict
+                    role: role || 'STAFF',
                     password: passwordHash,
                     createdBy: currentUserId,
                     updatedBy: currentUserId
@@ -148,24 +138,22 @@ export const AdminService = {
             });
         }
 
-        // Explicit Group Assignment via Payload (The Priority)
         if (user && groupIds && groupIds.length > 0) {
             logger.info(`[addAdmin] Assigning user=${user.id} to groups=${groupIds.join(', ')}`);
             const userGroupsData = groupIds.map(groupId => ({
                 userId: user!.id,
                 groupId
             }));
-            
-            // Assign groups properly
+
             for (const ug of userGroupsData) {
                 try {
-                    // Using Upsert or Create based on schema constraints (usually composite userId+groupId)
+
                     await prisma.userGroup.upsert({
                          where: {
                              userId_groupId: { userId: ug.userId, groupId: ug.groupId }
                          },
                          create: ug,
-                         update: {} // No-op if exists
+                         update: {}
                     });
                 } catch (e) {
                      logger.error(`[addAdmin] Failed to assign group ${ug.groupId} to user ${user!.id}: ${e}`);
@@ -173,7 +161,6 @@ export const AdminService = {
             }
         }
 
-        // Link User → PRO record if role is PRO
         if (role === 'PRO' && proNumber) {
             const proNumberTrimmed = String(proNumber).trim();
             await prisma.pRO.update({
@@ -193,10 +180,10 @@ export const AdminService = {
             `[addAdmin] Admin user persisted successfully: id=${user.id}, role=${user.role}, phone=${maskPhone(user.phone)}, email=${maskEmail(user.email)}`
         );
 
-        return user;
+        const { password: _pw, ...safeUser } = user as any;
+        return safeUser;
     },
 
-    /** List agent (PRO) commission rows, optionally filtered to one agent. */
     async getAgentCommissions(agentId?: string) {
         const where: any = {};
         if (agentId) where.agentId = String(agentId);
@@ -208,7 +195,6 @@ export const AdminService = {
         return commissions;
     },
 
-    /** Look up a user by phone or email (admin search helper). */
     async getUserDetails(phone?: string, email?: string) {
         if (!phone && !email) {
             throw new AppError(MESSAGES.ERROR.INVALID_REQUEST, 400);
@@ -221,6 +207,15 @@ export const AdminService = {
         const user = await prisma.user.findFirst({
             where: {
                 OR: searchConditions
+            },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+                role: true,
+                createdAt: true,
+                updatedAt: true
             }
         });
 
@@ -231,24 +226,17 @@ export const AdminService = {
         return user;
     },
 
-    /**
-     * Get all staff users (excluding students)
-     * Supports filtering by role and search term
-     */
-    /** List staff users (non-student roles) with optional role filter + name/email/phone search. */
     async getStaffUsers(filters?: { role?: RoleType; search?: string }) {
         const where: any = {
             role: {
-                not: Role.STUDENT // Exclude students
+                not: Role.STUDENT
             }
         };
 
-        // Filter by specific role if provided
         if (filters?.role) {
             where.role = filters.role;
         }
 
-        // Search by name, phone, or email
         if (filters?.search) {
             const searchTerm = filters.search.trim();
             where.OR = [
@@ -294,21 +282,15 @@ export const AdminService = {
                 id: ug.group.id,
                 name: ug.group.name
             })),
-            userGroups: undefined // Remove the nested prisma structure
+            userGroups: undefined
         }));
     },
 
-    /**
-     * Update staff user details
-     * Can update name, email, and role (excluding STUDENT role)
-     */
-    /** Patch a staff user's name/email/role or soft-delete flag. */
     async updateStaffUser(userId: string, data: { name?: string; email?: string; role?: RoleType, isDeleted?: boolean }, currentUserId?: string) {
         if (!userId) {
             throw new AppError('User ID is required', 400);
         }
 
-        // Find the user
         const user = await prisma.user.findUnique({
             where: { id: userId }
         });
@@ -317,19 +299,16 @@ export const AdminService = {
             throw new AppError('User not found', 404);
         }
 
-        // Cannot update STUDENT role users through this API
         if (user.role === Role.STUDENT) {
             throw new AppError('Cannot update student users through this API', 400);
         }
 
-        // Validate role if being updated
         if (data.role) {
-            // Allow any role EXCEPT Student
-            if (data.role == Role.STUDENT) { // matching check roughly, Role enum is string usually
+
+            if (data.role == Role.STUDENT) {
                  throw new AppError('Cannot set user role to STUDENT via this API', 400);
             }
 
-            // Prevent changing SUPER_ADMIN role if another SUPER_ADMIN exists
             if (data.role === Role.SUPER_ADMIN && user.role !== Role.SUPER_ADMIN) {
                 const existingSuperAdmin = await prisma.user.findFirst({
                     where: { 
@@ -344,7 +323,6 @@ export const AdminService = {
             }
         }
 
-        // Prepare update data
         const updateData: any = {};
         
         if (data.name !== undefined) {
@@ -363,7 +341,6 @@ export const AdminService = {
             updateData.isDeleted = data.isDeleted;
         }
 
-        // Update user
         const updatedUser = await prisma.user.update({
             where: { id: userId },
             data: updateData,
@@ -379,23 +356,10 @@ export const AdminService = {
             }
         });
 
-        // SYNC GROUP REMOVED - Groups must be managed explicitly via RBAC APIs
-        /*
-        if (data.role) {
-             // ... Logic removed to support manual assignment workflow
-        }
-        */
-
-
-
         logger.info(`[updateStaffUser] Updated user id=${userId} by=${currentUserId}`);
         return updatedUser;
     },
 
-    /**
-     * Delete (soft delete) staff user
-     */
-    /** Soft-delete a staff user. Blocks self-deletion. */
     async deleteStaffUser(userId: string, currentUserId?: string) {
         if (!userId) {
             throw new AppError('User ID is required', 400);
@@ -428,13 +392,10 @@ export const AdminService = {
         logger.info(`[deleteStaffUser] Soft deleted user id=${userId} by=${currentUserId}`);
     },
 
-    // System Settings
-    /** Return all key-value system settings rows. */
     async getSystemSettings() {
         return prisma.systemSetting.findMany();
     },
 
-    /** Upsert a single system setting key (e.g. APPLICATION_FEE_AMOUNT). */
     async updateSystemSetting(key: string, value: string, userId: string) {
         return prisma.systemSetting.upsert({
             where: { key },
@@ -443,27 +404,28 @@ export const AdminService = {
         });
     },
 
-    // Agent Commission
-    /** Move an agent commission row through its status (PENDING → PAID etc.). */
     async updateAgentCommissionStatus(commissionId: string, status: AgentCommissionStatus, userId: string) {
         return prisma.agentCommission.update({
             where: { id: commissionId },
             data: { status, updatedBy: userId }
         });
     },
-    
-    // Assign Role and Groups
-    /** Set a user's role and replace their group memberships in one operation. */
+
     async assignUserRoleAndGroups(data: { userId: string, role?: string, groupIds?: string[] }, executedBy?: string) {
         const { userId, role, groupIds } = data;
-        
+
         const user = await prisma.user.findUnique({ where: { id: userId } });
         if (!user) throw new AppError('User not found', 404);
 
-        // Security Check: Cannot modify Super Admin unless executed by a Super Admin (though permission middleware usually handles this)
-        if (user.role === Role.SUPER_ADMIN) {
-             // Optional: strict check
-             // if (executedByRole !== Role.SUPER_ADMIN) throw new AppError('Cannot modify Super Admin', 403);
+        if (role === Role.SUPER_ADMIN) {
+            let executorRole: string | undefined;
+            if (executedBy && executedBy !== 'ADMIN') {
+                const executor = await prisma.user.findUnique({ where: { id: executedBy }, select: { role: true } });
+                executorRole = executor?.role ?? undefined;
+            }
+            if (executorRole !== Role.SUPER_ADMIN) {
+                throw new AppError('Only SUPER_ADMIN can assign SUPER_ADMIN role', 403);
+            }
         }
 
         const updateData: any = { updatedBy: executedBy };
@@ -472,7 +434,7 @@ export const AdminService = {
         }
 
         return await prisma.$transaction(async (tx) => {
-            // 1. Update User Role
+
             let updatedUser = user;
             if (role && role !== user.role) {
                 updatedUser = await tx.user.update({
@@ -482,9 +444,8 @@ export const AdminService = {
                 logger.info(`[assignUserRoleAndGroups] User ${userId} role updated to ${role} by ${executedBy}`);
             }
 
-            // 2. Update Groups (Replace Strategy)
             if (groupIds) {
-                // Verify all groups exist
+
                 const groups = await tx.group.findMany({
                     where: { id: { in: groupIds } }
                 });
@@ -492,12 +453,10 @@ export const AdminService = {
                     throw new AppError('One or more Group IDs are invalid', 400);
                 }
 
-                // Delete existing mappings
                 await tx.userGroup.deleteMany({
                     where: { userId }
                 });
 
-                // Create new mappings
                 if (groupIds.length > 0) {
                     await tx.userGroup.createMany({
                         data: groupIds.map(gid => ({
@@ -513,8 +472,6 @@ export const AdminService = {
         });
     },
 
-    // New API: Update Full Staff Details (Name, Email, Phone, Role, Groups) - REPLACEMENT STRATEGY for Groups
-    /** One-shot staff edit: personal fields + role + group memberships + active flag. Used by the staff-edit modal. */
     async updateFullStaffDetails(data: { userId: string, name?: string, email?: string, phone?: string, role?: string, groupIds?: string[], isDeleted?: boolean }, executedBy?: string) {
         const { userId, name, email, phone, role, groupIds, isDeleted } = data;
 
@@ -542,7 +499,7 @@ export const AdminService = {
         }
 
         return await prisma.$transaction(async (tx) => {
-            // 1. Update User Record
+
             const updatedUser = await tx.user.update({
                 where: { id: userId },
                 data: updateData,
@@ -556,19 +513,16 @@ export const AdminService = {
                 }
             });
 
-            // 2. Update Groups (Replace Strategy)
             let finalGroups = user.userGroups;
             if (groupIds) {
-                 // Verify Groups
+
                  const groups = await tx.group.findMany({ where: { id: { in: groupIds } } });
                  if (groups.length !== groupIds.length) {
                      throw new AppError('Invalid Group IDs provided', 400);
                  }
 
-                 // Delete old
                  await tx.userGroup.deleteMany({ where: { userId } });
-                 
-                 // Create new
+
                  if (groupIds.length > 0) {
                      await tx.userGroup.createMany({
                          data: groupIds.map(gid => ({ userId, groupId: gid }))

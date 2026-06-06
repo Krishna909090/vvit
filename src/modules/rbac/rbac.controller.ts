@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import * as rbacService from './rbac.service';
 
-// --- GROUPS ---
 export const createGroup = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const group = await rbacService.createGroup(req.body);
@@ -62,7 +61,6 @@ export const assignUsersToGroup = async (req: Request, res: Response, next: Next
   }
 };
 
-// --- ROLES ---
 export const createRole = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const role = await rbacService.createRole(req.body);
@@ -104,7 +102,7 @@ export const deleteRole = async (req: Request, res: Response, next: NextFunction
 export const assignPermissionsToRole = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { roleId } = req.params;
-    const { permissions } = req.body; // Expecting IDs now
+    const { permissions } = req.body;
     await rbacService.assignPermissionsToRole(roleId, permissions);
     res.status(200).json({ success: true, message: 'Permissions assigned to role successfully' });
   } catch (error) {
@@ -112,7 +110,6 @@ export const assignPermissionsToRole = async (req: Request, res: Response, next:
   }
 };
 
-// --- PERMISSIONS ---
 export const createPermission = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const permission = await rbacService.createPermission(req.body);
@@ -151,7 +148,6 @@ export const deletePermission = async (req: Request, res: Response, next: NextFu
   }
 };
 
-// --- MODULES ---
 export const createModule = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const module = await rbacService.createModule(req.body);

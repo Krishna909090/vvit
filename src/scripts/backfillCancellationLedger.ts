@@ -1,13 +1,4 @@
-/**
- * One-off backfill: for every existing ACCOMMODATION_CHANGE_REFUND FeeCorrection
- * row that carries a non-zero `retainedAmount`, insert the matching StudentLedger
- * DEBIT row that the new cancel-flow code now writes inline.
- *
- * Idempotent — skips a correction if a ledger row keyed by that correction's id
- * already exists.
- *
- * Run:  npx ts-node src/scripts/backfillCancellationLedger.ts
- */
+
 
 import prisma from '../config/prisma';
 

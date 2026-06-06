@@ -5,15 +5,14 @@ export interface PaymentEmailData {
     transactionId: string;
     amount: number;
     date: Date;
-    paymentType: PaymentEmailType; // New field to distinguish purpose
-    customFeeType?: string; // Fallback for other types
+    paymentType: PaymentEmailType;
+    customFeeType?: string;
     supportEmail?: string;
-    programName?: string; // Optional context
-    invoiceUrl?: string; // Link to invoice if needed
-    allotmentOrderUrl?: string; // Link to allotment if needed (for Admission Fee)
+    programName?: string;
+    invoiceUrl?: string;
+    allotmentOrderUrl?: string;
 }
 
-// Prevent XSS in HTML email templates by escaping user-controlled strings
 const escapeHtml = (str: string): string =>
     (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 
@@ -195,7 +194,7 @@ export const getPaymentReceiptTemplate = (data: PaymentEmailData) => {
           <p>
            VVITU continues to grow as a beacon of innovation and excellence, striving to empower the next generation of engineers.
           </p>
-          <a href="https://vvitu.ac.in" class="cta">Check out About VVITU</a>
+          <a href="https:
         </div>
         <img src="cid:students" class="welcome-img" alt="Students" />
       </div>

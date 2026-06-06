@@ -8,11 +8,6 @@ import { createEmailLog, updateEmailStatus, getEmailLogById } from '../modules/s
 import { generateInvoicePDF, InvoiceData } from './invoiceGenerator';
 import { uploadFileToS3 } from './s3Utils';
 
-// ... (existing helper function and interface code)
-
-/**
- * Send Hall Ticket Email
- */
 export const sendHallTicketEmail = async (
     recipientEmail: string,
     data: HallTicketEmailData,
@@ -26,7 +21,6 @@ export const sendHallTicketEmail = async (
         const htmlContent = getHallTicketTemplate(data);
         const subject = `Hall Ticket - ${data.applicationId} - VVITU Entrance Exam`;
 
-        // Create Log Entry
         const logEntry = await createEmailLog({
             recipientEmail,
             subject,
@@ -40,7 +34,6 @@ export const sendHallTicketEmail = async (
         });
         if (logEntry) emailLogId = logEntry.id;
 
-        // Prepare Images
         const assetsDir = path.join(process.cwd(), 'src/assets');
         let logoBase64 = '';
         let bannerBase64 = '';
@@ -83,8 +76,6 @@ export const sendHallTicketEmail = async (
     }
 };
 
-
-// Old Type wrapper for compatibility if needed, but we will use PaymentEmailData generally
 interface EmailData extends PaymentEmailData {
     invoiceNumber:string;
     items?: { description: string; amount: number }[];
@@ -99,6 +90,13 @@ interface EmailData extends PaymentEmailData {
     skipInvoiceAttachment?: boolean;
 }
 
+const escapeHtml = (s: string) =>
+    String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
 // Environment variables
 const ZEPTO_API_URL = process.env.ZEPTO_API_URL || 'https://api.zeptomail.in/v1.1/email';
 const ZEPTO_API_KEY = process.env.ZEPTO_API_KEY;
@@ -111,8 +109,7 @@ const ZEPTO_FROM_NAME = process.env.ZEPTO_FROM_NAME || '';
 const sendZeptoEmail = async (toEmail: string, subject: string, htmlContent: string, attachments?: any[], inlineImages?: any[]) => {
     if (!ZEPTO_API_KEY) {
         logger.error('[EMAIL SERVICE] Missing ZEPTO_API_KEY. Cannot send email.');
-        // For development, we return true to not block the flow even if email fails due to missing key
-        return { success: true, error: 'Missing ZEPTO_API_KEY (Simulated Success)' };
+        return { success: false, error: 'Missing ZEPTO_API_KEY' };
     }
 
     try {
@@ -320,7 +317,6 @@ export const retryEmail = async (logId: string) => {
         
         return sendPaymentReceipt(log.recipientEmail, emailData);
     }
-    
 
     return { success: false, message: 'Unsupported template type or missing data' };
 };
@@ -395,7 +391,7 @@ export const sendCancellationReceipt = async (
     </table>
 
     <div class="content">
-      <p><strong>Dear ${data.studentName},</strong></p>
+      <p><strong>Dear ${escapeHtml(data.studentName)},</strong></p>
 
       <p><strong>Seat Cancellation Processed</strong></p>
 
@@ -404,10 +400,10 @@ export const sendCancellationReceipt = async (
       <p>Please find the cancellation receipt attached to this email for your records.</p>
 
       <ul class="summary">
-        <li><strong>Student Name:</strong> ${data.studentName}</li>
-        <li><strong>Reference ID:</strong> ${data.applicationId}</li>
-        <li><strong>Cancellation Type:</strong> ${conditionLabel}</li>
-        <li><strong>Date:</strong> ${formattedDate}</li>
+        <li><strong>Student Name:</strong> ${escapeHtml(data.studentName)}</li>
+        <li><strong>Reference ID:</strong> ${escapeHtml(data.applicationId)}</li>
+        <li><strong>Cancellation Type:</strong> ${escapeHtml(conditionLabel)}</li>
+        <li><strong>Date:</strong> ${escapeHtml(formattedDate)}</li>
         <li><strong>Amount:</strong> ₹${data.amount}</li>
       </ul>
 
@@ -537,22 +533,22 @@ export const sendScholarshipUpdateEmail = async (
     </table>
 
     <div class="content">
-      <p><strong>Dear ${data.studentName},</strong></p>
+      <p><strong>Dear ${escapeHtml(data.studentName)},</strong></p>
 
       <p><strong>Scholarship Percentage Updated</strong></p>
 
       <p>We would like to inform you that your scholarship percentage at <strong>Vasireddy Venkatadri International Technological University</strong> has been revised.</p>
 
       <ul class="summary">
-        <li><strong>Student Name:</strong> ${data.studentName}</li>
-        <li><strong>Reference ID:</strong> ${data.applicationId}</li>
+        <li><strong>Student Name:</strong> ${escapeHtml(data.studentName)}</li>
+        <li><strong>Reference ID:</strong> ${escapeHtml(data.applicationId)}</li>
         <li><strong>Previous Scholarship:</strong> ${data.oldPercentage}%</li>
         <li><strong>Updated Scholarship:</strong> ${data.newPercentage}%</li>
       </ul>
 
       <p>Your fee demands have been updated to reflect this change. Please check the student portal for the revised fee details.</p>
 
-      <p>For any queries, please contact us at <strong>${supportEmail}</strong>.</p>
+      <p>For any queries, please contact us at <strong>${escapeHtml(supportEmail)}</strong>.</p>
 
       <div class="signature">
         <p>Yours sincerely,<br><strong>Admissions Office</strong></p>

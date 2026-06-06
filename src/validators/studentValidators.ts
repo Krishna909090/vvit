@@ -17,7 +17,7 @@ export const registerStudentSchema = z.object({
         city: z.string().min(1, "City is required"),
         state: z.string().min(1, "State is required"),
         pincode: z.string().regex(/^\d{6}$/, "Pincode must be exactly 6 digits"),
-        degreeType: z.string().min(1, "Degree Type is required"), // e.g., B.Tech, MBA
+        degreeType: z.string().min(1, "Degree Type is required"),
         pref1: z.string().optional(),
         pref2: z.string().optional(),
         pref3: z.string().optional(),
@@ -29,14 +29,10 @@ export const registerStudentSchema = z.object({
         isKycVerified: z.boolean().optional(),
         applicationMode: z.string().optional(),
         courseCount: z.number().int().optional(),
-        // Entry data — defaults to REGULAR year-1 if omitted. Lateral applicants pass
-        // entryType=LATERAL, entryYearOfStudy=2 so the admission record carries the
-        // right cohort tag from registration onward (rollNumber/section come later
-        // via /admin/student/:id/assign-enrollment).
+
         entryType: z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
         entryYearOfStudy: z.number().int().min(1).max(10).optional(),
-        // Institute code — VVITU and VVITPU are used only for the 2025-26 batch
-        // cohort; all other batches default to MGMT. Defaults to MGMT when omitted.
+
         instituteCode: z.enum(['MGMT', 'VVITU', 'VVITPU']).optional(),
     }),
 });

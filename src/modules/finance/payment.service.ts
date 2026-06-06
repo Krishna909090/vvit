@@ -51,7 +51,6 @@ const PHONEPE_CREDENTIALS = {
 
 const clients: Record<string, any> = {};
 
-/** Return a PhonePe SDK client for the given merchant bucket (ADMISSION / HOSTEL / MESS each have separate merchant credentials). */
 export const getPhonePeClient = (type: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION') => {
     if (clients[type]) {
         return clients[type];
@@ -60,33 +59,12 @@ export const getPhonePeClient = (type: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISS
     const creds = PHONEPE_CREDENTIALS[type] || PHONEPE_CREDENTIALS.ADMISSION;
     logger.info(`[PhonePe] Initializing client for ${type} (Merchant: ${creds.MERCHANT_ID})`);
 
-    // Using 'new' to create independent instances if supported, avoiding the global singleton issue of getInstance
-    // If 'new' is not available (protected constructor), we might have to fallback or rethink,
-    // but usually Node SDKs allow new.
-    // @ts-ignore
+    // @ts-ignore — PhonePe SDK exposes constructor as private in typings but it is callable
     clients[type] = new StandardCheckoutClient(creds.MERCHANT_ID, creds.SALT_KEY, creds.SALT_INDEX as any, ENV);
 
     return clients[type];
 };
 
-/**
- * Resolve which PhonePe merchant (ADMISSION / HOSTEL=TRUST / MESS=LLP) a payment should
- * route through, based on the student's hostel banking config in the DB.
- *
- * Mapping: each hostel-related component reads its corresponding bank field on Hostel:
- *   - HOSTEL / HOSTEL_ACCOMMODATION → hostel.accommodationBank
- *   - HOSTEL_MESS                   → hostel.messBank
- *   - HOSTEL_LAUNDRY                → hostel.laundryBank
- *   - HOSTEL_REGISTRATION           → hostel.registrationBank
- *   - TRANSPORT                     → defaults to HOSTEL merchant (no per-route bank field)
- *
- * Bank value translation:
- *   TRUST → 'HOSTEL' merchant
- *   LLP   → 'MESS' merchant
- *
- * Non-hostel components (TUITION, ADMISSION, BOOK_BANK, etc.) → 'ADMISSION' merchant.
- */
-/** Decide which PhonePe merchant bucket a payment routes to, based on its fee component (hostel/mess vs admission). */
 export const resolvePhonePeClientType = async (
     studentId: string,
     component: PaymentComponent
@@ -105,8 +83,6 @@ export const resolvePhonePeClientType = async (
     if (!hostelComponents.includes(component)) {
         return 'ADMISSION';
     }
-    // Note: legacy `PaymentComponent.HOSTEL` (no sub-component suffix) is treated as
-    // HOSTEL_ACCOMMODATION for routing purposes. New code never writes 'HOSTEL'.
 
     const admission = await prisma.studentAdmission.findUnique({
         where: { studentId },
@@ -152,15 +128,10 @@ export const resolvePhonePeClientType = async (
     return 'HOSTEL';
 };
 
-// Reusable PhonePe Initialization
-/** Internal: normalize a free-text component name (+ optional feeHeadId) into a canonical PaymentComponent enum. */
 const resolveComponent = async (componentName: string, feeHeadId?: string): Promise<{ component: PaymentComponent, feeHeadId?: string }> => {
     const normalize = (s: string) => s.toUpperCase().replace(/ /g, '_');
     const input = normalize(componentName);
 
-    // 1. Map Display Names/Aliases to Enums.
-    // Note: legacy 'HOSTEL FEE' input is now routed to HOSTEL_ACCOMMODATION (the bare HOSTEL
-    // enum value is being phased out — backfill SQL renames existing rows).
     const nameMap: Record<string, PaymentComponent> = {
         'APPLICATION FEE': PaymentComponent.APPLICATION_FEE,
         'TUITION FEE': PaymentComponent.TUITION,
@@ -180,24 +151,21 @@ const resolveComponent = async (componentName: string, feeHeadId?: string): Prom
         'OTHER FEE': PaymentComponent.OTHER
     };
 
-    // Try underscore format (TUITION_FEE) or space format (TUITION FEE)
     const mapped = nameMap[input] || nameMap[input.replace(/_/g, ' ')];
     if (mapped) return { component: mapped, feeHeadId };
 
-    // 2. Direct Enum Match (Case Insensitive)
     const validComponents = Object.values(PaymentComponent) as string[];
     if (validComponents.includes(input)) {
         return { component: input as PaymentComponent, feeHeadId };
     }
 
-    // 3. Try to find FeeHead by Name
     try {
         const feeHead = await prisma.feeHead.findFirst({
             where: { name: { equals: componentName, mode: 'insensitive' } }
         });
 
         if (feeHead) {
-             // If found, treat as OTHER with resolved ID
+
             return { component: PaymentComponent.OTHER, feeHeadId: feeHead.id };
         }
     } catch (e) {
@@ -207,7 +175,6 @@ const resolveComponent = async (componentName: string, feeHeadId?: string): Prom
     throw new AppError(`Invalid Payment Component or Fee Head Name: ${componentName}`, 400);
 };
 
-/** Low-level: create a PhonePe pay request and return the gateway redirect URL for a prepared transaction. */
 export const initiatePhonePePayment = async (studentId: string, amount: number, transactionId: string, redirectUrl: string, feeType: 'ADMISSION' | 'HOSTEL' | 'MESS' = 'ADMISSION') => {
     try {
         const student = await prisma.student.findUnique({ where: { id: studentId } });
@@ -237,18 +204,12 @@ export const initiatePhonePePayment = async (studentId: string, amount: number, 
     }
 };
 
-/**
- * Start an online application-fee payment. Reuses a fresh PENDING payment if
- * one exists within PhonePe's ~20-min order window, else marks it FAILED and
- * creates a new one (year-tagged). Returns the gateway redirect URL.
- */
 export const initiateApplicationFeePayment = async (studentId: string) => {
     const amount = await getApplicationFeeAmount();
     const student = await prisma.student.findUnique({
         where: { id: studentId }
     });
-    
-    // Step 1: Check Student Existence and Payment Status
+
     payLog.info('INITIATE', `Application fee payment started`, { studentId, amount, applicationId: student?.applicationId });
 
     if (!student) {
@@ -268,12 +229,7 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
         throw new AppError('Application fee already paid', 400);
     }
 
-    // Step 2: Reuse existing PENDING payment only if it is still fresh (within PhonePe's
-    // ~20-minute order expiry window). If stale, mark it FAILED and create a fresh one.
-    // This prevents sending expired merchantOrderIds to PhonePe → INVALID_TRANSACTION_ID.
-    // Entire block runs inside a serializable transaction to prevent race conditions where
-    // two simultaneous requests create duplicate PENDING records for the same student.
-    const PHONEPE_ORDER_EXPIRY_MS = 20 * 60 * 1000; // 20 minutes
+    const PHONEPE_ORDER_EXPIRY_MS = 20 * 60 * 1000;
     logger.info(`[initiateApplicationFeePayment] Step 2: Checking for existing PENDING payment`);
 
     let transactionId: string = '';
@@ -298,12 +254,12 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
             const isFresh = ageMs <= PHONEPE_ORDER_EXPIRY_MS;
 
             if (isFresh && existingPending.providerTxId) {
-                // Fresh PENDING (< 20 min) — reuse same transaction ID, PhonePe order is still alive
+
                 transactionId = existingPending.providerTxId;
                 createdPayment = existingPending;
                 logger.info(`[initiateApplicationFeePayment] Reusing fresh PENDING payment ${existingPending.id} (age: ${Math.round(ageMs / 1000)}s) txnId=${transactionId}`);
             } else {
-                // Stale PENDING (> 20 min) — PhonePe order has expired, mark FAILED and create fresh
+
                 logger.warn(`[initiateApplicationFeePayment] Stale PENDING payment found (age: ${Math.round(ageMs / 60000)} mins). Marking FAILED and creating fresh payment.`);
                 await tx.payment.update({
                     where: { id: existingPending.id },
@@ -326,7 +282,7 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
                 logger.info(`[initiateApplicationFeePayment] Created fresh payment ${createdPayment.id} txnId=${transactionId}`);
             }
         } else {
-            // No existing PENDING — create brand new payment
+
             transactionId = `TXN_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
             createdPayment = await tx.payment.create({
                 data: {
@@ -345,11 +301,9 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
         }
     }, { isolationLevel: 'Serializable' });
 
-    // Step 3: Initiate PhonePe Request
     payLog.info('GATEWAY_INIT', `Initiating PhonePe payment`, { studentId, applicationId: student.applicationId, txnId: transactionId, amount });
     const redirectUrl = `${process.env.FRONTEND_URL}/student/payment?txnId=${transactionId}`;
 
-    // Explicitly use 'ADMISSION' credentials for Application Fee
     try {
         const result = await initiatePhonePePayment(studentId, amount, transactionId, redirectUrl, 'ADMISSION');
         payLog.info('GATEWAY_REDIRECT', `PhonePe redirect URL generated`, { studentId, applicationId: student.applicationId, txnId: transactionId, paymentId: createdPayment.id });
@@ -363,38 +317,6 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
     }
 };
 
-/**
- * initiateMultiComponentPayment
- *
- * Handles payment for multiple fee components in a single transaction.
- * Used by POST /multi-component route.
- *
- * IMPORTANT — mode vs paymentMethod:
- *   The `mode` param (ONLINE/OFFLINE) is accepted from the caller but intentionally IGNORED here.
- *   Payment mode is derived automatically from `paymentMethod`:
- *     - CASH, CHEQUE, DEMAND_DRAFT, NEFT, RTGS, NEFT_RTGS, IMPS → OFFLINE
- *     - UPI (or anything else) → ONLINE
- *   Do NOT rely on `mode` to control offline/online behavior in this function.
- *   Use `paymentMethod` instead.
- *
- * Bundle rule: all components must route to the SAME PhonePe merchant.
- *   - Each hostel component routes per the student's hostel bank config:
- *       accommodationBank=TRUST → HOSTEL merchant; messBank=LLP → MESS merchant; etc.
- *   - Non-hostel/transport (TUITION, ADMISSION, BOOK_BANK, etc.) → ADMISSION merchant.
- *   - TRANSPORT → HOSTEL merchant.
- *   - If the bundle spans merchants, the request is rejected — split into per-merchant calls.
- *
- * Online flow:
- *   - All components share a single PhonePe transaction (total amount charged at once).
- *   - Routes to the merchant the bundle resolves to (validated above).
- *   - Individual payment records are created as PENDING; finalized via webhook callback.
- *
- * Offline flow:
- *   - All component payments are immediately marked SUCCESS in the same call.
- *   - A single combined invoice is generated for all components.
- *   - Fee demands are settled per component individually.
- */
-/** Start a single online payment covering multiple fee components (e.g. tuition + hostel + mess) under one transaction. */
 export const initiateMultiComponentPayment = async (
     studentId: string,
     rawComponents: { component: string | PaymentComponent, amount: number, feeHeadId?: string }[],
@@ -402,12 +324,11 @@ export const initiateMultiComponentPayment = async (
     paymentMethod: PaymentMethod = PaymentMethod.UPI,
     remarks?: string,
     referenceNumber?: string,
-    mode?: string, // NOTE: ignored — mode is derived from paymentMethod above
+    mode?: string,
     payloadYearOfStudy?: number
 ) => {
     logger.info(`[initiateMultiComponentPayment] Student=${studentId}, Components=${JSON.stringify(rawComponents)}, Method=${paymentMethod}, Mode=${mode}, Ref=${referenceNumber}`);
 
-    // Resolve Names to IDs
     const components: { component: PaymentComponent, amount: number, feeHeadId?: string }[] = [];
     for (const c of rawComponents) {
         logger.debug(`[initiateMultiComponentPayment] Resolving component: ${c.component}`);
@@ -415,11 +336,6 @@ export const initiateMultiComponentPayment = async (
         components.push({ ...c, ...r });
     }
 
-    // 1. Validate: bundle must route to a single PhonePe merchant.
-    // Hostel sub-components can route to ADMISSION / HOSTEL (TRUST) / MESS (LLP)
-    // depending on the student's hostel banking config. Components going to the
-    // same merchant CAN be bundled; mixing merchants is a hard error because
-    // PhonePe initiates one transaction at one merchant.
     const merchants = new Set<string>();
     const merchantPerComponent: Record<string, string> = {};
     for (const c of components) {
@@ -437,9 +353,6 @@ export const initiateMultiComponentPayment = async (
         );
     }
 
-    // 2. Validate Fee Heads.
-    // For hostel/transport components that omit feeHeadId, auto-resolve from the FeeHead table
-    // so the Payment row is never created with feeHeadId=null for these components.
     for (const item of components) {
         if (!item.feeHeadId && COMPONENT_RESOLVABLE.has(item.component)) {
             const feeHead = await prisma.feeHead.findFirst({
@@ -468,8 +381,6 @@ export const initiateMultiComponentPayment = async (
     const totalAmount = components.reduce((sum, c) => sum + c.amount, 0);
     if (totalAmount <= 0) throw new AppError('Total amount must be greater than zero', 400);
 
-    // Mode is derived from paymentMethod — the `mode` parameter passed in is NOT used.
-    // Any non-cash method (UPI etc.) is treated as ONLINE; all cash/bank-transfer methods as OFFLINE.
     const isOffline = [
         PaymentMethod.CASH,
         PaymentMethod.CHEQUE,
@@ -487,7 +398,6 @@ export const initiateMultiComponentPayment = async (
     const paymentStatus = PaymentStatus.PENDING;
     const paymentMode = isOffline ? PaymentMode.OFFLINE : PaymentMode.ONLINE;
 
-    // 3. Duplicate check for offline payments with reference numbers (skip for CASH)
     if (isOffline && referenceNumber && paymentMethod !== PaymentMethod.CASH) {
         const existingPayment = await prisma.payment.findFirst({
             where: { referenceNumber, studentId, status: PaymentStatus.SUCCESS }
@@ -497,7 +407,6 @@ export const initiateMultiComponentPayment = async (
         }
     }
 
-    // 4. Create Payment Records
     const paymentIds: string[] = [];
     const createdPayments: any[] = [];
 
@@ -506,7 +415,6 @@ export const initiateMultiComponentPayment = async (
             where: { isActive: true, isDeleted: false }
         });
 
-        // Double-check inside transaction to prevent race condition (skip for CASH)
         if (isOffline && referenceNumber && paymentMethod !== PaymentMethod.CASH) {
             const duplicate = await tx.payment.findFirst({
                 where: { referenceNumber, studentId, status: { in: [PaymentStatus.SUCCESS, PaymentStatus.PENDING] } }
@@ -517,8 +425,7 @@ export const initiateMultiComponentPayment = async (
         }
 
         for (const item of components) {
-            // Resolve feeDemandId + yearOfStudy before creating the row so these
-            // fields are never null on the Payment record for hostel/transport.
+
             let feeDemandId: string | undefined;
             let yearOfStudy: number | undefined;
             if (item.feeHeadId) {
@@ -540,8 +447,7 @@ export const initiateMultiComponentPayment = async (
                     yearOfStudy = demand.yearOfStudy ?? undefined;
                 }
             }
-            // If yearOfStudy still not resolved (no demand found or demand.yearOfStudy is null),
-            // fall back to payload → enrollment → entryYearOfStudy so the Payment row is never wrong.
+
             if (!yearOfStudy) {
                 yearOfStudy = payloadYearOfStudy ?? await getStudentYearOfStudy(studentId, tx);
             }
@@ -571,7 +477,6 @@ export const initiateMultiComponentPayment = async (
         }
     });
 
-    // 4. Handle Payment Flow
     if (isOffline) {
         const paymentsWithStudent = createdPayments.map(p => ({ ...p, student }));
         const successResult = await processMultiPaymentSuccess(paymentsWithStudent, { remarks, mode: 'OFFLINE_ENTRY', collectedBy: userId });
@@ -586,7 +491,7 @@ export const initiateMultiComponentPayment = async (
         };
     } else {
         const redirectUrl = `${process.env.FRONTEND_URL_ADMISSION}/admin/fees/offlinepayments?appId=${student.applicationId}&paymentId=${paymentIds.join(',')}`;
-        // Route to the merchant that matches the bundle. Validated above to be a single merchant.
+
         const targetMerchant = (Array.from(merchants)[0] ?? 'ADMISSION') as 'ADMISSION' | 'HOSTEL' | 'MESS';
         try {
             const result = await initiatePhonePePayment(studentId, totalAmount, transactionId, redirectUrl, targetMerchant);
@@ -601,7 +506,6 @@ export const initiateMultiComponentPayment = async (
     }
 };
 
-/** Poll PhonePe for a transaction's status and reconcile the local Payment row(s) (SUCCESS/FAILED). */
 export const checkPaymentStatus = async (merchantTransactionId: string) => {
     logger.info(`[checkPaymentStatus] Request for MerchantTxId=${merchantTransactionId}`);
     try {
@@ -660,13 +564,11 @@ export const checkPaymentStatus = async (merchantTransactionId: string) => {
     }
 };
 
-/** Internal: post-success pipeline for one payment — settle demands, write ledger, run component logic, fire triggers. */
 const processSinglePaymentSuccess = async (payment: any, metadata: any) => {
     logger.info(`[processSinglePaymentSuccess] Delegating to processMultiPaymentSuccess for Payment ${payment.id}`);
     return await processMultiPaymentSuccess([payment], metadata);
 };
 
-/** Internal: post-success pipeline for a bundle of payments sharing one transaction (unified invoice + per-payment settle). */
 const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     if (!payments || payments.length === 0) return;
     const txnId = payments[0].providerTxId;
@@ -675,8 +577,6 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     payLog.info('PROCESSING', `Processing ${payments.length} payment(s)`, { txnId, studentId, applicationId, count: payments.length });
     logger.info(`[processMultiPaymentSuccess] Processing ${payments.length} payments. Ref=${txnId}`);
 
-    // Idempotency guard — only process payments that are still PENDING. Anything
-    // already SUCCESS (duplicate callback) or FAILED must NOT be settled/ledgered again.
     const pendingPayments = payments.filter(p => p.status === PaymentStatus.PENDING);
     if (pendingPayments.length === 0) {
         logger.info(`[processMultiPaymentSuccess] No PENDING payments to process (already handled) — skipping. Ref=${payments[0].providerTxId}`);
@@ -686,11 +586,6 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         logger.warn(`[processMultiPaymentSuccess] ${payments.length - pendingPayments.length} payment(s) not PENDING, processing remaining ${pendingPayments.length}. Ref=${payments[0].providerTxId}`);
     }
 
-    // 1. ATOMIC money pipeline — status flip + per-payment settle + ledger in ONE
-    //    transaction. The status flip is gated on status:PENDING (idempotency vs
-    //    duplicate/concurrent callbacks). If ANY step throws, the whole bundle rolls
-    //    back (payments stay PENDING) so the webhook retry re-processes cleanly — no
-    //    payment is ever left SUCCESS with settlement/ledger half-done.
     let flippedCount = 0;
     await prisma.$transaction(async (tx) => {
         const statusFlip = await tx.payment.updateMany({
@@ -698,7 +593,7 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
             data: { status: PaymentStatus.SUCCESS, metadata }
         });
         flippedCount = statusFlip.count;
-        if (flippedCount === 0) return; // a concurrent callback already transitioned them
+        if (flippedCount === 0) return;
 
         for (const payment of pendingPayments) {
             if (payment.component !== PaymentComponent.APPLICATION_FEE) {
@@ -714,8 +609,6 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     }
     payLog.info('SUCCESS', `${pendingPayments.length} payment(s) marked SUCCESS + settled + ledgered (atomic)`, { txnId, studentId, applicationId, amount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
 
-    // 2. Post-commit side effects (best-effort — must NOT roll back committed money).
-    //    Component side effects (status advancement, scholarship lock, provisional ledger).
     for (const payment of pendingPayments) {
         try {
             await _processComponentLogic(payment);
@@ -724,7 +617,6 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         }
     }
 
-    // 3. Pre-generate Allotment Order for admission payments (before invoice so email can attach it)
     const admissionComponents = [PaymentComponent.SCHOLARSHIP_TOKEN, PaymentComponent.TUITION];
     const hasAdmissionPayment = payments.some((p: any) => admissionComponents.includes(p.component));
     if (hasAdmissionPayment) {
@@ -741,7 +633,6 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         }
     }
 
-    // 4. Generate Invoice (Unified) via InvoiceService — slow S3/PDF, kept OUT of the tx.
     let invoiceUrl = null;
     try {
         const invoiceResult = await InvoiceService.generateInvoiceForPayment(payments[0].id);
@@ -751,14 +642,12 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         payLog.error('INVOICE_FAILED', `Invoice generation failed: ${e}`, { studentId, applicationId, txnId });
     }
 
-    // 5. Triggers (FINALIZE_ADMISSION runs its own transaction)
     await _handleTriggers(payments);
 
     payLog.info('COMPLETED', `Payment processing completed`, { txnId, studentId, applicationId, totalAmount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
     return { invoiceUrl };
 };
 
-/** Internal: component-specific side effects after success (e.g. APPLICATION_FEE advances admission status, hostel triggers allotment order). */
 const _processComponentLogic = async (payment: any) => {
     const { studentId, component } = payment;
     const currentStatus = await prisma.studentAdmission.findUnique({
@@ -776,14 +665,13 @@ const _processComponentLogic = async (payment: any) => {
                 logger.info(`[processComponentLogic] Updated student ${studentId} status to ENTRANCE_FEE_PAID`);
             } catch (error) {
                 logger.error(`[processComponentLogic] Failed to update admission status for student ${studentId}: ${error}`);
-                // Don't fail the payment, but log the issue
+
             }
          }
     } else if (component === PaymentComponent.TUITION || component === PaymentComponent.ADMISSION || component === PaymentComponent.SCHOLARSHIP_TOKEN) {
         if ((component === PaymentComponent.SCHOLARSHIP_TOKEN || component === PaymentComponent.TUITION) && currentStatus?.status !== AdmissionStatus.ADMISSION_CONFIRMED && currentStatus?.status !== AdmissionStatus.ENROLLED) {
              await ScholarshipService.lockAllocation(studentId);
 
-             // Skip FEE_GENERATION ledger if fee demands already exist (finalize admission flow handles this)
              const existingDemands = await prisma.studentFeeDemand.count({ where: { studentId, isDeleted: false } });
              if (existingDemands === 0) {
                  const detailedStudent = await prisma.student.findUnique({ where: { id: studentId }, include: { admissionDetails: { include: { hostel: true, transportRoute: true } }, scholarshipAllocation: { include: { rule: true } } }});
@@ -805,9 +693,7 @@ const _processComponentLogic = async (payment: any) => {
                  logger.info(`[_processComponentLogic] Skipping FEE_GENERATION for student=${studentId} — ${existingDemands} fee demands already exist`);
              }
         }
-        // Guard: a payment for a student with no admission row (manual/bulk import, or a
-        // deleted admission) would otherwise throw P2025 here and abort the (non-atomic)
-        // success loop, leaving the payment SUCCESS but unsettled. Log-and-continue instead.
+
         try {
             await prisma.studentAdmission.update({
                 where: { studentId },
@@ -819,9 +705,6 @@ const _processComponentLogic = async (payment: any) => {
     }
 };
 
-
-// Components whose FeeHead + FeeDemand can be auto-resolved by component name
-// when the caller did not supply feeHeadId. Kept in sync with exemptComponents above.
 const COMPONENT_RESOLVABLE = new Set<PaymentComponent>([
     PaymentComponent.HOSTEL,
     PaymentComponent.HOSTEL_ACCOMMODATION,
@@ -831,19 +714,10 @@ const COMPONENT_RESOLVABLE = new Set<PaymentComponent>([
     PaymentComponent.TRANSPORT,
 ]);
 
-/**
- * Internal: apply a successful payment against matching StudentFeeDemand rows.
- * Accepts a Prisma client/tx (`db`) so it can run inside the atomic success transaction.
- * Errors PROPAGATE (no swallow) so a failure rolls the whole bundle back rather than
- * leaving a payment SUCCESS with settlement half-done.
- */
 const _settleFeeDemands = async (payment: any, db: any = prisma) => {
     let targetDemandId = payment.feeDemandId;
     let resolvedFeeHeadId = payment.feeHeadId ?? null;
 
-    // Step 1: if feeHeadId is missing but the component is hostel/transport,
-    // auto-resolve the FeeHead from the FeeHead table by component so we can
-    // find the exact matching StudentFeeDemand (fixes feeHeadId + feeDemandId + yearOfStudy).
     if (!resolvedFeeHeadId && COMPONENT_RESOLVABLE.has(payment.component)) {
         const feeHead = await db.feeHead.findFirst({
             where: { component: payment.component, isDeleted: false },
@@ -851,8 +725,7 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
         });
         if (feeHead) {
             resolvedFeeHeadId = feeHead.id;
-            // Persist the resolved feeHeadId onto the Payment row immediately so it is
-            // never null for hostel/transport payments going forward.
+
             await db.payment.update({
                 where: { id: payment.id },
                 data: { feeHeadId: resolvedFeeHeadId },
@@ -861,7 +734,6 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
         }
     }
 
-    // Step 2: resolve feeDemandId via feeHeadId when not explicitly provided
     if (!targetDemandId && resolvedFeeHeadId) {
          const matchingDemand = await db.studentFeeDemand.findFirst({
              where: {
@@ -878,21 +750,19 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
          if (matchingDemand) targetDemandId = matchingDemand.id;
     }
 
-    // Strict Settlement — exact demand known
     if (targetDemandId) {
         const demand = await db.studentFeeDemand.findUnique({ where: { id: targetDemandId } });
         if (demand) {
-            // Compare against the NET payable (amount − discount − scholarship + fine),
-            // not the gross amount. Mirrors admission.ts settlement.
+
             const targetAmount = demand.netAmount ?? demand.amount;
             const newStatus = payment.amount >= targetAmount ? 'FULL' : 'PARTIAL';
             await db.studentFeeDemand.update({
                 where: { id: demand.id },
                 data: { status: newStatus as any }
             });
-            // demand.yearOfStudy may be null for legacy rows; fall back to enrollment/admission
+
             const resolvedYear = demand.yearOfStudy ?? await getStudentYearOfStudy(payment.studentId, db);
-            // Copy feeDemandId + academicYearId + yearOfStudy onto the Payment row
+
             await db.payment.update({
                 where: { id: payment.id },
                 data: {
@@ -902,22 +772,21 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
                     yearOfStudy: resolvedYear,
                 }
             });
-            // Mutate in-memory so the subsequent _createPaymentLedger() picks up the year context
+
             payment.feeDemandId = targetDemandId;
             payment.feeHeadId = resolvedFeeHeadId;
             payment.academicYearId = demand.academicYearId ?? null;
             payment.yearOfStudy = resolvedYear;
         }
     }
-    // Waterfall Settlement — no specific demand identified; filter by component if possible
+
     else {
         const demandWhere: any = {
             studentId: payment.studentId,
             isDeleted: false,
             status: FeeStatus.PENDING,
         };
-        // Narrow the waterfall to demands that match this component's feeHead so a hostel
-        // payment doesn't accidentally settle a tuition demand and vice-versa.
+
         if (resolvedFeeHeadId) {
             demandWhere.OR = [
                 { feeHeadId: resolvedFeeHeadId },
@@ -930,10 +799,9 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
             orderBy: { dueDate: 'asc' }
         });
 
-        // Use the first matching demand's year + link feeDemandId to Payment
         if (pendingDemands.length > 0) {
             const first = pendingDemands[0];
-            // first.yearOfStudy may be null for legacy rows; fall back to enrollment/admission
+
             const resolvedYear = first.yearOfStudy ?? await getStudentYearOfStudy(payment.studentId, db);
             await db.payment.update({
                 where: { id: payment.id },
@@ -953,7 +821,7 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
         let remaining = payment.amount;
         for (const demand of pendingDemands) {
             if (remaining <= 0) break;
-            // Settle against NET payable (amount − discount − scholarship), not gross.
+
             const target = demand.netAmount ?? demand.amount;
             if (remaining >= target) {
                 await db.studentFeeDemand.update({ where: { id: demand.id }, data: { status: FeeStatus.FULL } });
@@ -965,18 +833,11 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
         }
     }
 
-    // Recompute paidFee/totalFee from the source-of-truth (within the same tx).
     await recomputeStudentTotals(payment.studentId, db);
 };
 
-/**
- * Internal: write the CREDIT ledger entry for a successful payment (year-tagged).
- * Accepts `db` so it participates in the atomic transaction; errors propagate.
- */
 const _createPaymentLedger = async (payment: any, db: any = prisma) => {
-    // Idempotency guard — one CREDIT per payment. Prevents a duplicate ledger
-    // entry if the success pipeline ever re-runs for the same payment. Mirrors
-    // admission.ts:processPaymentSuccess.
+
     const existingLedger = await db.studentLedger.findFirst({
         where: { referenceId: payment.id, referenceType: 'PAYMENT', studentId: payment.studentId }
     });
@@ -1001,7 +862,6 @@ const _createPaymentLedger = async (payment: any, db: any = prisma) => {
     });
 };
 
-/** Internal: fire post-payment triggers flagged in metadata (e.g. FINALIZE_ADMISSION runs executeAdmissionUpdates). */
 const _handleTriggers = async (payments: any[]) => {
     const finalizeTrigger = payments.find(p => p.metadata?.targetAction === 'FINALIZE_ADMISSION');
     if (finalizeTrigger) {
@@ -1016,8 +876,6 @@ const _handleTriggers = async (payments: any[]) => {
     }
 };
 
-
-/** Record a cash/offline application-fee payment (admin-entered). Creates a SUCCESS Payment (year-tagged) and runs the success pipeline. */
 export const recordOfflineApplicationFeePayment = async (studentId: string, paymentMethod: PaymentMethod, transactionId?: string, remarks?: string, adminId?: string, referenceNumber?: string) => {
     const amount = await getApplicationFeeAmount();
 
@@ -1027,17 +885,14 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
     const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
     if (!admission) throw new AppError('Student admission record not found. Please ensure the student has completed registration.', 400);
 
-    // If CASH, generate a system transaction ID
     const providerTxId = transactionId || `CASH_${Date.now()}_${studentId.substring(0, 8)}`;
 
-    // Transaction to prevent race conditions and ensure atomicity
     const result = await prisma.$transaction(async (tx) => {
         const activeYear = await tx.academicYear.findFirstOrThrow({
             where: { isActive: true, isDeleted: false }
         });
         const yearOfStudy = await getStudentYearOfStudy(studentId, tx);
 
-        // Duplicate check inside transaction to prevent race conditions
         const existingPayment = await tx.payment.findFirst({
             where: {
                 studentId,
@@ -1073,11 +928,8 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
         return payment;
     });
 
-    // Process success logic (Invoice, Admission Status, Ledger)
-    // Outside transaction since it has its own DB writes + external calls (S3)
     await processSinglePaymentSuccess({ ...result, student }, { remarks, adminId });
 
-    // Verify critical side-effects completed
     const updatedPayment = await prisma.payment.findUnique({ where: { id: result.id } });
 
     if (!updatedPayment || updatedPayment.status !== PaymentStatus.SUCCESS) {
@@ -1092,11 +944,9 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
     return updatedPayment;
 };
 
-/** Handle the legacy PhonePe redirect callback: verify the X-VERIFY checksum, decode payload, reconcile the payment. */
 export const handlePaymentCallback = async (base64Payload: string, xVerify: string) => {
     webhookLog.info('RECEIVED', `Legacy callback received`);
 
-    // 1. Decode Payload first to identify Merchant
     const decodedBuffer = Buffer.from(base64Payload, 'base64');
     const decodedString = decodedBuffer.toString('utf-8');
     const decodedPayload = JSON.parse(decodedString);
@@ -1104,7 +954,6 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
 
     webhookLog.info('DECODED', `Callback decoded`, { txnId: merchantTransactionId, code, merchantId });
 
-    // 2. Select Credentials
     let saltKey = PHONEPE_CREDENTIALS.ADMISSION.SALT_KEY;
     let saltIndex = PHONEPE_CREDENTIALS.ADMISSION.SALT_INDEX;
 
@@ -1113,9 +962,6 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
         saltIndex = PHONEPE_CREDENTIALS.HOSTEL.SALT_INDEX;
     }
 
-    // 3. Verify Checksum
-    // Fail closed if the salt is not configured — otherwise the checksum is computable
-    // by anyone and a forged PAYMENT_SUCCESS callback would be accepted.
     if (!saltKey) {
         webhookLog.error('CHECKSUM_MISCONFIG', `Salt key not configured — rejecting callback`, { txnId: merchantTransactionId, merchantId });
         throw new AppError('Payment verification not configured', 500);
@@ -1164,14 +1010,8 @@ export const handlePaymentCallback = async (base64Payload: string, xVerify: stri
     return { status: 'OK' };
 };
 
-/**
- * New Standard Checkout Webhook Handler
- * PhonePe sends: { type, payload } with Authorization: SHA256(username:password)
- * Events: checkout.order.completed, checkout.order.failed, pg.refund.completed, pg.refund.failed
- */
-/** Handle the new PhonePe server-to-server webhook: validate auth header, then reconcile the payment status. */
 export const handleNewWebhook = async (body: any, authHeader: string) => {
-    // 1. Verify Authorization
+
     const webhookUsername = process.env.PHONEPE_WEBHOOK_USERNAME || '';
     const webhookPassword = process.env.PHONEPE_WEBHOOK_PASSWORD || '';
 
@@ -1197,7 +1037,6 @@ export const handleNewWebhook = async (body: any, authHeader: string) => {
 
     logger.info(`[Webhook] Received event=${type} merchantOrderId=${merchantOrderId} merchantId=${merchantId}`);
 
-    // 2. Find payments by merchantOrderId (this is our providerTxId)
     const payments = await prisma.payment.findMany({
         where: { providerTxId: merchantOrderId },
         include: { student: true }
@@ -1210,7 +1049,6 @@ export const handleNewWebhook = async (body: any, authHeader: string) => {
 
     logger.info(`[Webhook] Found ${payments.length} payment(s) for merchantOrderId=${merchantOrderId}`);
 
-    // 3. Process based on event type
     switch (type) {
         case 'checkout.order.completed': {
             const needsUpdate = payments.some(p => p.status !== PaymentStatus.SUCCESS);
@@ -1242,13 +1080,13 @@ export const handleNewWebhook = async (body: any, authHeader: string) => {
 
         case 'pg.refund.completed': {
             logger.info(`[Webhook] Refund completed: refundId=${payload.refundId}, originalOrder=${payload.originalMerchantOrderId}, amount=${payload.amount}`);
-            // TODO: Implement refund processing when refund flow is built
+
             break;
         }
 
         case 'pg.refund.failed': {
             logger.warn(`[Webhook] Refund failed: refundId=${payload.refundId}, originalOrder=${payload.originalMerchantOrderId}, error=${payload.errorCode}`);
-            // TODO: Implement refund failure handling
+
             break;
         }
 
@@ -1259,19 +1097,15 @@ export const handleNewWebhook = async (body: any, authHeader: string) => {
     return { status: 'OK' };
 };
 
-// Functions expected by PaymentController
-/** Controller-facing wrapper: initiate the application ("test") fee payment. */
 export const payTestFee = async (studentId: string, _userId: string | null) => {
     const { redirectUrl, paymentId } = await initiateApplicationFeePayment(studentId);
     return { redirectUrl, paymentId };
 };
 
-/** Controller-facing: compute the student's outstanding college/hostel/transport fees and initiate a multi-component payment. */
 export const payCollegeFee = async (studentId: string, data: any, _userId: string | null) => {
     const { hostelSelection, transportSelection, paymentDetails } = data;
     const { } = paymentDetails || {};
 
-    // 1. Get Student Admission Details
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         include: { admissionDetails: true }
@@ -1281,18 +1115,13 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
         throw new AppError('Student admission details not found', 404);
     }
 
-    // Allow payment only if Seat Allotted or Confirmed
     if (student.admissionDetails.status !== AdmissionStatus.SEAT_ALLOTTED && 
         student.admissionDetails.status !== AdmissionStatus.ADMISSION_CONFIRMED) {
         throw new AppError('Seat not allotted yet. Cannot pay college fee.', 400);
     }
 
-    // 2. Determine Transaction ID
     const transactionId = `TXN_${Date.now()}_${studentId.replace(/-/g, '').substring(0, 6)}`;
 
-    // 3. Calculate Dynamic Fees (Logic Updated for Split)
-    // Check what is already paid logic might be complex if we use Ledger/Demands.
-    // Simplifying: Check DB for successful payments OF SPECIFIC COMPONENTS.
     const paidComponents = await prisma.payment.findMany({
         where: { studentId, status: PaymentStatus.SUCCESS },
         select: { component: true, amount: true }
@@ -1313,8 +1142,7 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
     let accommodationFee = 0;
     let messFee = 0;
     let transportFee = 0;
-    
-    // Validate & Calculate Hostel Fee — pricing comes from HostelPriceCategory keyed by (sharing, roomType)
+
     if (hostelSelection?.hostelId) {
         const hostel = await prisma.hostel.findUnique({ where: { id: hostelSelection.hostelId } });
         if (!hostel) throw new AppError('Selected hostel not found', 404);
@@ -1337,7 +1165,6 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
              }
         }
 
-        // Deduct paid
         accommodationFee = Math.max(0, accommodationFee - paidAccommodation);
         messFee = Math.max(0, messFee - paidMess);
     }
@@ -1345,23 +1172,13 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
     if (transportSelection?.routeId) {
         const route = await prisma.transportRoute.findUnique({ where: { id: transportSelection.routeId } });
         if (!route) throw new AppError('Selected transport route not found', 404);
-        // Check paid transport
+
         const paidTransport = paidComponents.filter(p => p.component === PaymentComponent.TRANSPORT).reduce((s,p) => s + p.amount, 0);
         transportFee = Math.max(0, route.cost - paidTransport);
     }
 
-    // SEQUENTIAL PAYMENT LOGIC
-    // Preference: 1. Tuition, 2. Transport, 3. Accommodation, 4. Mess
-    // Actually, usually user pays "College Fee" (Tuition) first.
-    // If user is selecting Hostel, they want to pay Hostel most likely.
-    
     let amountToPay = 0;
     let paymentComponent: PaymentComponent = PaymentComponent.TUITION;
-
-    // Logic: If Tuition/Transport is PENDING, pay that first? Or if user explicitly selected hostel?
-    // The current input `data` has `hostelSelection`. If present, we assume Hostel Payment intent.
-    // But usually this API pays EVERYTHING.
-    // We must split.
 
     if (collegeFee > 0) {
         amountToPay = collegeFee;
@@ -1376,14 +1193,12 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
         amountToPay = messFee;
         paymentComponent = PaymentComponent.HOSTEL_MESS;
     } else {
-        // Nothing to pay
+
         return { redirectUrl: null, message: "All fees paid" };
     }
 
-    // 4. Process Logic (Update Selections if needed)
     await prisma.$transaction(async (tx) => {
-        // Update Hostel/Transport Selections (Only if not already set/confirmed)
-        // ... (Existing logic to update admissionDetails if provided) ...
+
         if (hostelSelection || transportSelection) {
             const updateData: any = {};
             if (hostelSelection?.hostelId) { updateData.hostelId = hostelSelection.hostelId; updateData.accommodationType = 'HOSTEL'; }
@@ -1394,10 +1209,8 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
         }
     });
 
-    // 5. Create Payment Record — resolve feeHeadId + feeDemandId + yearOfStudy upfront
     let { feeHeadId: callerFeeHeadId, feeDemandId: callerFeeDemandId } = paymentDetails || {};
 
-    // Auto-resolve feeHeadId if caller omitted it
     if (!callerFeeHeadId) {
         const feeHead = await prisma.feeHead.findFirst({
             where: { component: paymentComponent as any, isDeleted: false },
@@ -1406,7 +1219,6 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
         if (feeHead) callerFeeHeadId = feeHead.id;
     }
 
-    // Resolve feeDemandId from the matching PENDING/PARTIAL demand when caller omits it
     if (!callerFeeDemandId && callerFeeHeadId) {
         const demand = await prisma.studentFeeDemand.findFirst({
             where: {
@@ -1440,7 +1252,6 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
         } as any
     });
 
-    // PhonePe Integration — pick merchant from DB-driven banking config
     try {
         const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
         const feeType = await resolvePhonePeClientType(studentId, paymentComponent);
@@ -1448,8 +1259,8 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
 
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(transactionId)
-            // .amount(amountToPay * 100) // Original
-            .amount(Math.round(amountToPay * 100)) // Safety round
+
+            .amount(Math.round(amountToPay * 100))
             .redirectUrl(redirectUrl)
             .build();
 
@@ -1466,15 +1277,6 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
 
 };
 
-// [Removed initiateAdminOnlinePayment] - Use processUnifiedPayment instead
-
-/**
- * Admin: List all SUCCESS payments with pagination and filters.
- * Filters: search (applicationId/name/phone), component (feeType), mode,
- *          method, createdBy, dateRange (today|yesterday|7d|15d|30d|custom),
- *          startDate + endDate (if dateRange=custom), page, limit.
- */
-/** Paginated, filterable list of all SUCCESS payments for the finance reconciliation screen. */
 export const getAllSuccessPayments = async (query: any) => {
     const page = Math.max(1, parseInt(String(query.page || 1)));
     const limit = Math.min(100, Math.max(1, parseInt(String(query.limit || 25))));
@@ -1485,7 +1287,6 @@ export const getAllSuccessPayments = async (query: any) => {
         isDeleted: false
     };
 
-    // Global search — applicationId OR name OR phone
     const searchTerm = query.search || query.applicationId;
     if (searchTerm) {
         where.student = {
@@ -1497,7 +1298,6 @@ export const getAllSuccessPayments = async (query: any) => {
         };
     }
 
-    // Fee type / Component filter (supports comma-separated values, validate against enum)
     if (query.component || query.feeType) {
         const val = String(query.component || query.feeType);
         const values = val.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
@@ -1527,7 +1327,6 @@ export const getAllSuccessPayments = async (query: any) => {
 
     if (query.createdBy) where.createdBy = String(query.createdBy);
 
-    // Date range — preset or custom
     const dateRange = query.dateRange ? String(query.dateRange).toLowerCase() : null;
     if (dateRange && dateRange !== 'custom' && dateRange !== 'all') {
         const now = new Date();
@@ -1594,14 +1393,12 @@ export const getAllSuccessPayments = async (query: any) => {
         prisma.payment.aggregate({ where, _sum: { amount: true } })
     ]);
 
-    // Resolve createdBy user names in a single query
     const creatorIds = [...new Set(payments.map(p => p.createdBy).filter(Boolean) as string[])];
     const creators = creatorIds.length > 0
         ? await prisma.user.findMany({ where: { id: { in: creatorIds } }, select: { id: true, name: true } })
         : [];
     const creatorMap = Object.fromEntries(creators.map(c => [c.id, c.name]));
 
-    // Convert invoice URLs to presigned + attach creator name + flatten allottedCourse
     const paymentsWithUrls = await Promise.all(payments.map(async p => {
         const allottedCourse = (p.student as any)?.admissionDetails?.allottedCourse ?? null;
         return {
@@ -1628,10 +1425,6 @@ export const getAllSuccessPayments = async (query: any) => {
     };
 };
 
-/**
- * Admin: Distinct payment components that actually have SUCCESS payments (for fee type dropdown).
- */
-/** List the distinct payment components present (for the report filter dropdown). */
 export const getPaymentComponents = async () => {
     const rows = await prisma.payment.findMany({
         where: { status: PaymentStatus.SUCCESS, isDeleted: false },
@@ -1644,10 +1437,6 @@ export const getPaymentComponents = async () => {
         .sort();
 };
 
-/**
- * Admin: Get distinct list of users who have recorded SUCCESS payments (for filter dropdown).
- */
-/** List the distinct admins who recorded payments (for the "collected by" report filter). */
 export const getPaymentCreators = async () => {
     const creatorIds = await prisma.payment.findMany({
         where: { status: PaymentStatus.SUCCESS, isDeleted: false, createdBy: { not: null } },
@@ -1666,12 +1455,8 @@ export const getPaymentCreators = async () => {
     });
 };
 
-/**
- * Admin: Export SUCCESS payments to CSV (respects same filters as getAllSuccessPayments).
- */
-/** Same filters as getAllSuccessPayments but returns a CSV string for download. */
 export const exportSuccessPaymentsCsv = async (query: any) => {
-    // Fetch all matching (no pagination)
+
     const result = await getAllSuccessPayments({ ...query, page: 1, limit: 100000 });
     const rows = result.data;
 
@@ -1704,9 +1489,8 @@ export const exportSuccessPaymentsCsv = async (query: any) => {
     return [headers.join(','), ...csvRows].join('\n');
 };
 
-/** Student/admin-facing thin wrapper to file a discount request (delegates to the discount-request flow). */
 export const requestDiscount = async (studentId: string, reason: string, amount: number, documentUrl?: string, userId?: string | null) => {
-     // Prevent duplicate pending discount requests
+
      const pendingRequest = await prisma.discountRequest.findFirst({
          where: {
              studentId,
@@ -1718,7 +1502,6 @@ export const requestDiscount = async (studentId: string, reason: string, amount:
          throw new AppError(`A discount request is already pending for this student (ID: ${pendingRequest.id}). Approve or reject it before raising a new one.`, 409);
      }
 
-     // Default item structure for legacy requestDiscount
      const items = [{ component: 'OTHER', amount: Number(amount) }];
 
      return prisma.discountRequest.create({
@@ -1734,7 +1517,6 @@ export const requestDiscount = async (studentId: string, reason: string, amount:
         });
 };
 
-/** Legacy discount-approval path: marks the request APPROVED and writes a CREDIT ledger entry (year-tagged). */
 export const approveDiscount = async (requestId: string, approvedAmount: number, component: string, adminId: string, remarks?: string) => {
     const request = await prisma.discountRequest.findUnique({ where: { id: requestId } });
     if (!request) throw new AppError('Discount Request not found', 404);
@@ -1747,7 +1529,6 @@ export const approveDiscount = async (requestId: string, approvedAmount: number,
              where: { isActive: true, isDeleted: false }
          });
 
-         // Resolve feeHeadId + yearOfStudy from the student's matching demand
          const discountDemand = await tx.studentFeeDemand.findFirst({
              where: {
                  studentId: request.studentId,
@@ -1797,7 +1578,6 @@ export const approveDiscount = async (requestId: string, approvedAmount: number,
     });
 };
 
-/** Mark a discount request REJECTED with remarks. */
 export const rejectDiscount = async (requestId: string, remarks: string, adminId: string) => {
      return prisma.discountRequest.update({
          where: { id: requestId },
@@ -1810,7 +1590,6 @@ export const rejectDiscount = async (requestId: string, remarks: string, adminId
      });
 };
 
-/** Return a presigned URL for a payment's invoice PDF (generates it if missing). */
 export const getInvoiceUrl = async (paymentId: string) => {
     const payment = await prisma.payment.findUnique({
         where: { id: paymentId },
@@ -1822,12 +1601,11 @@ export const getInvoiceUrl = async (paymentId: string) => {
     }
 
     if (!payment.invoiceUrl) {
-        // Self-healing: If payment is success but invoice is missing, try to generate it again
+
         if (payment.status === PaymentStatus.SUCCESS) {
             logger.warn(`Payment ${paymentId} is SUCCESS but missing invoiceUrl. Attempting to regenerate...`);
             await processSinglePaymentSuccess(payment, payment.metadata);
-            
-            // Refetch to get the updated URL
+
             const updatedPayment = await prisma.payment.findUnique({ where: { id: paymentId } });
             if (updatedPayment?.invoiceUrl) {
                 const key = getS3KeyFromUrl(updatedPayment.invoiceUrl);
@@ -1853,8 +1631,6 @@ export const getInvoiceUrl = async (paymentId: string) => {
     return presignedUrl;
 };
 
-// Helper to extract key from various URL formats
-/** Internal: extract the S3 object key from a full S3 URL (null if it doesn't look like one). */
 const getS3KeyFromUrl = (url: string): string | null => {
     const keyMatch = url.match(/(student\/.*\.pdf)/);
     if (keyMatch) return keyMatch[1];
@@ -1865,10 +1641,8 @@ const getS3KeyFromUrl = (url: string): string | null => {
     return null;
 };
 
-/** Return a presigned URL for the student's provisional allotment-order PDF; pass `regenerate` to rebuild it. */
 export const getAllotmentOrderUrl = async (studentId: string, regenerate: boolean = false) => {
-    
-    // Check if document exists first
+
     let doc = await prisma.studentDocument.findUnique({
         where: {
             studentId_documentKey: {
@@ -1878,11 +1652,9 @@ export const getAllotmentOrderUrl = async (studentId: string, regenerate: boolea
         }
     });
 
-    // Generate if missing or requested to regenerate
     if (!doc || regenerate) {
         await generateAndSaveAllotmentOrder(studentId);
-        
-        // Fetch fresh copy
+
         doc = await prisma.studentDocument.findUnique({
             where: {
                 studentId_documentKey: {
@@ -1897,22 +1669,15 @@ export const getAllotmentOrderUrl = async (studentId: string, regenerate: boolea
         throw new AppError('Allotment Order not found', 404);
     }
 
-    // Extract key from URL if it's full URL, or use as is if it's key. 
-    // Utils logic usually returns full URL "https://bucket.s3.../key"
-    // s3Utils.getPresignedUrl takes Key. 
-    
-    // Logic to extract key from full URL:
     return await convertToPresignedUrl(doc.url) || doc.url;
 };
 
-/** Start the scholarship-token online payment (records hostel/transport selections first if provided). */
 export const initiateTokenPayment = async (studentId: string, data: any = {}) => {
-    const TOKEN_AMOUNT = 10000; // Fixed Token Amount
+    const TOKEN_AMOUNT = 10000;
 
     const student = await prisma.student.findUnique({ where: { id: studentId } });
     if (!student) throw new AppError('Student not found', 404);
-    
-    // 1. Update Selections (Hostel/Transport) if provided
+
     if (data.hostelSelection || data.transportSelection) {
         await prisma.$transaction(async (tx) => {
              const updateData: any = {};
@@ -1951,12 +1716,9 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
         }
     });
 
-
-
     try {
         const redirectUrl = `${process.env.FRONTEND_URL}/payment/status?txnId=${transactionId}`;
-        
-        // Token Payment = Admission
+
         const client = getPhonePeClient('ADMISSION');
 
         const request = StandardCheckoutPayRequest.builder()
@@ -1976,12 +1738,8 @@ export const initiateTokenPayment = async (studentId: string, data: any = {}) =>
     }
 };
 
-// [REMOVED] Old getStudentFinancialHistory replaced by enhanced version below
-
-
-/** High-level financial summary card for one student (total demand / paid / balance / scholarship). */
 export const getStudentFinancialSummary = async (studentId: string) => {
-    // 1. Fetch Student Config & Admission Details (incl. frozen pricing snapshot)
+
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         include: {
@@ -1998,7 +1756,6 @@ export const getStudentFinancialSummary = async (studentId: string) => {
         throw new AppError('Student admission details not found', 404);
     }
 
-    // 2. Fetch All Successful Payments
     const payments = await prisma.payment.findMany({
         where: {
             studentId,
@@ -2006,14 +1763,12 @@ export const getStudentFinancialSummary = async (studentId: string) => {
         }
     });
 
-    // 3. Initialize Summary Structure
     const summary = {
         applicationFee: { expected: 0, paid: 0, pending: 0, status: 'PENDING' },
         collegeFee: { expected: 0, paid: 0, pending: 0, breakdown: {}, status: 'PENDING' },
         totalPaid: 0
     };
 
-    // --- APPLICATION FEE ---
     summary.applicationFee.expected = await getApplicationFeeAmount();
     summary.applicationFee.paid = payments
         .filter(p => p.component === PaymentComponent.APPLICATION_FEE)
@@ -2022,17 +1777,12 @@ export const getStudentFinancialSummary = async (studentId: string) => {
     summary.applicationFee.pending = Math.max(0, summary.applicationFee.expected - summary.applicationFee.paid);
     summary.applicationFee.status = summary.applicationFee.pending === 0 ? 'PAID' : (summary.applicationFee.paid > 0 ? 'PARTIAL' : 'PENDING');
 
-    // --- COLLEGE FEE (Tuition + Hostel + Transport) ---
-    // Calculate Breakdown
-    const baseTuition = (student.admissionDetails.totalFee ?? 0) > 0 ? (student.admissionDetails.totalFee ?? 0) : 25000; // Default or DB value
+    const baseTuition = (student.admissionDetails.totalFee ?? 0) > 0 ? (student.admissionDetails.totalFee ?? 0) : 25000;
     let hostelFee = 0;
     let transportFee = 0;
 
     logger.info(`[FinancialSummary] Student: ${studentId}, HostelType: ${student.admissionDetails.hostelType}, Mode: ${student.admissionDetails.hostelPaymentMode}`);
 
-    // Hostel Cost — single source of truth via getOrCreateAccommodationPricing.
-    // Auto-creates snapshot for fully-allocated students who don't have one yet;
-    // returns null for students without a bed (hostelFee stays 0 — correct).
     const snap = await getOrCreateAccommodationPricing(studentId);
     if (snap) {
         hostelFee = (snap.accommodationPrice ?? 0)
@@ -2042,7 +1792,6 @@ export const getStudentFinancialSummary = async (studentId: string) => {
         logger.info(`[FinancialSummary] Snapshot used: total=${hostelFee} (mode=${snap.paymentMode})`);
     }
 
-    // Transport Cost
     if (student.admissionDetails.transportRouteId) {
         transportFee = student.admissionDetails.transportRoute?.cost || 0;
     }
@@ -2053,7 +1802,6 @@ export const getStudentFinancialSummary = async (studentId: string) => {
         transport: transportFee
     };
 
-    // Calculate Paid Breakdown
     const paidBreakdown = {
         tuition: 0,
         hostel: 0,
@@ -2078,8 +1826,6 @@ export const getStudentFinancialSummary = async (studentId: string) => {
 
     summary.collegeFee.expected = baseTuition + hostelFee + transportFee;
 
-    // --- SCHOLARSHIP & DISCOUNTS ---
-    // Fetch Active Scholarships
     const scholarship = await prisma.scholarshipAllocation.findUnique({
         where: { studentId },
         include: { rule: true }
@@ -2087,14 +1833,10 @@ export const getStudentFinancialSummary = async (studentId: string) => {
 
     let scholarshipAmount = 0;
     if (scholarship && scholarship.status === 'LOCKED' && scholarship.rule) {
-        // Calculate Discount
-        // Assuming percentage of TUITION Fee
+
         scholarshipAmount = (baseTuition * scholarship.rule.discountPercentage) / 100;
     }
 
-    // Fetch Manual Discounts from Ledger (Type: CREDIT, RefType: DISCOUNT or Custom)
-    // Or check if there is a 'DiscountRequest' APPROVED with specific amount. 
-    // Since DiscountRequest schema doesn't have amount, we rely on Ledger entries created during approval.
     const discountLedgerEntries = await prisma.studentLedger.findMany({
         where: {
             studentId,
@@ -2110,7 +1852,6 @@ export const getStudentFinancialSummary = async (studentId: string) => {
 
     const totalDiscount = scholarshipAmount + manualDiscountAmount;
 
-    // Update College Fee Paid Logic to Include Discounts
     const collegeFeeComponents = [
         PaymentComponent.TUITION,
         PaymentComponent.HOSTEL,
@@ -2127,28 +1868,18 @@ export const getStudentFinancialSummary = async (studentId: string) => {
         .filter(p => collegeFeeComponents.includes(p.component as any))
         .reduce((sum, p) => sum + p.amount, 0);
 
-    // Add Discount to "Paid/Waived" coverage
-    // Effectively, Discount reduces the Pending Amount.
-    // We can show it as "Waived" or just subtract from Expected.
-    // Let's add specific field for Clarity.
     (summary.collegeFee as any).discount = totalDiscount;
     (summary.collegeFee as any).scholarship = scholarshipAmount;
     (summary.collegeFee as any).manualDiscount = manualDiscountAmount;
 
-    // Pending = Expected - (Paid + Discount)
     summary.collegeFee.pending = Math.max(0, summary.collegeFee.expected - (summary.collegeFee.paid + totalDiscount));
     summary.collegeFee.status = summary.collegeFee.pending === 0 ? 'PAID' : (summary.collegeFee.paid > 0 ? 'PARTIAL' : 'PENDING');
 
-    // --- TOTAL PAID ---
     summary.totalPaid = summary.collegeFee.paid;
 
     return summary;
 };
 
-
-// Helper to generate and save allotment order
-// Helper to generate and save allotment order
-/** Render the provisional allotment-order PDF, upload to S3, and upsert the StudentDocument record (year-tagged). */
 export async function generateAndSaveAllotmentOrder(studentId: string) {
     try {
         const student = await prisma.student.findUnique({
@@ -2169,21 +1900,18 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
         if (student && student.admissionDetails) {
              const reportingDate = new Date();
              reportingDate.setDate(reportingDate.getDate() + 7);
-             
-             // Get Presigned Profile Photo URL
+
              let profilePhotoUrl = undefined;
              if (student.profilePhotoUrl) {
                  profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl) || undefined;
              }
-             
-             // Check Pending Fee
+
              const financialHistory = await getStudentFinancialHistory(studentId);
              const { summary, breakdown } = financialHistory;
              const totalPending = summary.totalPending;
 
-             // Extract Fee and Scholarship Details
              const tuitionFee = breakdown['TUITION']?.demanded || 0;
-             // Read the scholarship portion (breakdown.discount is now manual-only).
+
              let scholarshipDiscount = breakdown['TUITION']?.scholarshipAmount || 0;
              
              let scholarshipPercentage = student.scholarshipAllocation?.rule?.discountPercentage || 0;
@@ -2204,7 +1932,7 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                 state: 'Andhra Pradesh', 
                 allottedCollege: 'VVIT UNIVERSITY (VVIT), GUNTUR',
                 allottedCourse: student.admissionDetails.allottedCourse?.name || 'N/A',
-                // Extra fields kept for potential future use but not currently in interface:
+
                 allottedCategory: student.convenorDetails?.category || `${student.category}_GEN_AU`,
                 reportingDate: format(reportingDate, 'dd.MM.yyyy'),
                 phase: 'First Phase',
@@ -2217,7 +1945,7 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
             };
 
             const pdfBuffer = await generateAllotmentOrderPDF(allotmentData);
-            // Force unique key to avoid cache
+
             const timestamp = Date.now();
             const s3Key = `student/${student.phone}/documents/ProvisionalAllotmentOrder_${timestamp}.pdf`;
             const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
@@ -2251,17 +1979,6 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
     }
 };
 
-/**
- * Generate + save the Hostel Allotment Order PDF for a student.
- *
- * Reads the frozen pricing snapshot (StudentAccommodationPricing) so the document
- * shows what THIS student locked in at allocation time. Upserts under StudentDocument
- * key 'HOSTEL_ALLOTMENT_ORDER' — re-running (e.g. after re-assignment) replaces the
- * file at S3 and refreshes the row.
- *
- * Best-effort: never throws. Failure is logged and the calling flow continues.
- */
-/** Render the hostel allotment-order PDF (bed/room/warden details), upload to S3, upsert the StudentDocument (year-tagged). */
 export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
     try {
         const student = await prisma.student.findUnique({
@@ -2284,7 +2001,6 @@ export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
 
         const admission = student.admissionDetails;
 
-        // Pull hostel + the allocated bed for warden + floor + bed number
         const hostel = admission.hostelId
             ? await prisma.hostel.findUnique({ where: { id: admission.hostelId } })
             : null;
@@ -2364,20 +2080,15 @@ export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
     }
 }
 
-// Step 4. Unified Payment Processor
-/** Unified entrypoint for any payment: validates fee head, generates a transaction id, creates the Payment (year-tagged), and processes offline ones immediately. */
 export const processUnifiedPayment = async (data: any) => {
     const { studentId, amount, mode, method, component: rawComponent, feeHeadId: rawFeeHeadId, remarks, initiatedBy, referenceNumber, redirectUrl, yearOfStudy: payloadYearOfStudy } = data;
     logger.info(`[processUnifiedPayment] START - StudentId=${studentId}, Amount=${amount}, Mode=${mode}, Method=${method}, Component=${rawComponent}, InitiatedBy=${initiatedBy}`);
-   
-    // Resolve Component
+
     logger.debug(`[processUnifiedPayment] Resolving component: ${rawComponent}`);
     const { component, feeHeadId: _feeHeadId } = await resolveComponent(rawComponent, rawFeeHeadId);
     let feeHeadId: string | null = _feeHeadId ?? null;
     logger.info(`[processUnifiedPayment] Component resolved to: ${component}, FeeHeadId=${feeHeadId || 'N/A'}`);
 
-
-    // 0. Strict Input Validation
     if (!studentId) throw new AppError('Student ID is required', 400);
     if (!amount || typeof amount !== 'number' || amount <= 0) throw new AppError('Amount must be a positive number', 400);
     
@@ -2385,12 +2096,10 @@ export const processUnifiedPayment = async (data: any) => {
         throw new AppError(`Invalid Payment Mode. Allowed: ${Object.values(PaymentMode).join(', ')}`, 400);
     }
 
-
     if (mode === PaymentMode.OFFLINE && !referenceNumber) {
         throw new AppError('Reference Number is required for OFFLINE payments', 400);
     }
 
-    // Check for Duplicate Reference Number (OFFLINE ONLY, skip for CASH)
     if (mode === PaymentMode.OFFLINE && referenceNumber && data.method !== PaymentMethod.CASH) {
         const existingRef = await prisma.payment.findFirst({
             where: { referenceNumber: referenceNumber }
@@ -2400,9 +2109,6 @@ export const processUnifiedPayment = async (data: any) => {
         }
     }
 
-
-
-    // 1. Validate Student
     logger.debug(`[processUnifiedPayment] Looking up student: ${studentId}`);
     const student = await prisma.student.findUnique({ 
         where: { id: studentId },
@@ -2414,8 +2120,6 @@ export const processUnifiedPayment = async (data: any) => {
     }
     logger.info(`[processUnifiedPayment] Student found: ${student.name} (${student.applicationId})`);
 
-
-    // 2. Validate Fee Head - Mandatory (Exempting specific types)
     const exemptFromFeeHead: PaymentComponent[] = [
         PaymentComponent.HOSTEL,
         PaymentComponent.HOSTEL_ACCOMMODATION,
@@ -2430,8 +2134,7 @@ export const processUnifiedPayment = async (data: any) => {
     if (!feeHeadId && !exemptFromFeeHead.includes(component)) {
         throw new AppError(`Fee Head ID is mandatory for ${component}`, 400);
     }
-    
-    // Auto-resolve feeHeadId for hostel/transport components when caller omits it
+
     if (!feeHeadId && COMPONENT_RESOLVABLE.has(component)) {
         const feeHead = await prisma.feeHead.findFirst({
             where: { component, isDeleted: false },
@@ -2447,8 +2150,6 @@ export const processUnifiedPayment = async (data: any) => {
         }
     }
 
-    // Resolve feeDemandId + yearOfStudy upfront so the Payment row is never null
-    // for these fields (mirrors the payMultiComponentFee path).
     let resolvedFeeDemandId: string | undefined;
     let resolvedYearOfStudy: number | undefined;
     if (feeHeadId) {
@@ -2474,22 +2175,15 @@ export const processUnifiedPayment = async (data: any) => {
         resolvedYearOfStudy = payloadYearOfStudy ?? await getStudentYearOfStudy(studentId);
     }
 
-    // 3. Generate Transaction ID
     const providerTxId = mode === PaymentMode.OFFLINE 
         ? (referenceNumber || `CASH_${Date.now()}_${studentId.substring(0, 8)}`)
         : `TXN_${Date.now()}_${studentId.substring(0, 8)}`;
     logger.info(`[processUnifiedPayment] Transaction ID generated: ${providerTxId}`);
 
-    // 4. Create Payment Record
     logger.info(`[processUnifiedPayment] Creating payment record with status=PENDING`);
 
     const unifiedYear = await getActiveAcademicYear();
-    // idempotencyKey is globally @unique. For ONLINE the providerTxId is already
-    // unique per attempt. For OFFLINE, providerTxId derives from the human-entered
-    // referenceNumber (e.g. a cash receipt no.), which is freely reused across
-    // students and re-attempts — so `${ref}_${component}` collides and Prisma throws
-    // P2002 (HTTP 500). Offline manual entries aren't auto-retried, so scope the key
-    // to the student + a per-attempt timestamp to guarantee uniqueness.
+
     const idempotencyKey = mode === PaymentMode.OFFLINE
         ? `OFF_${studentId}_${component}_${Date.now()}`
         : `${providerTxId}_${component}`;
@@ -2511,13 +2205,13 @@ export const processUnifiedPayment = async (data: any) => {
                 providerTxId,
                 idempotencyKey,
                 collectedBy: initiatedBy,
-                createdBy: initiatedBy, // Strict data
+                createdBy: initiatedBy,
                 metadata: { remarks, source: 'UNIFIED_API' },
                 academicYearId: unifiedYear.id
             }
         });
     } catch (e: any) {
-        // Safety net: surface a duplicate key as a clean 409 instead of a raw 500.
+
         if (e?.code === 'P2002') {
             throw new AppError('A payment with this reference is already in progress for this student. Please refresh and try again.', 409);
         }
@@ -2526,17 +2220,14 @@ export const processUnifiedPayment = async (data: any) => {
 
     logger.info(`[processUnifiedPayment] Payment record created: ID=${payment.id}, Status=${payment.status}`);
 
-    // 5. Handle Offline Success Immediate Processing
     if (mode === PaymentMode.OFFLINE) {
         logger.info(`[processUnifiedPayment] Processing OFFLINE payment immediately`);
-        // Reuse Success Logic (Ledger, Invoice, Email)
+
         const successResult = await processSinglePaymentSuccess({ ...payment, student }, { remarks, adminId: initiatedBy });
         
         const presignedInvoiceUrl = await convertToPresignedUrl(successResult?.invoiceUrl);
         logger.info(`[processUnifiedPayment] OFFLINE payment processed successfully. InvoiceUrl=${presignedInvoiceUrl ? 'Generated' : 'N/A'}`);
 
-
-        // Return Success Response
         return { 
             message: "Payment recorded successfully", 
             data: { 
@@ -2547,7 +2238,7 @@ export const processUnifiedPayment = async (data: any) => {
             } 
         };
     } else {
-        // 6. Handle Online Initiation
+
         try {
             const path = redirectUrl ?? '/admin/fees/offlinepayments';
             const queryParams = redirectUrl 
@@ -2556,8 +2247,7 @@ export const processUnifiedPayment = async (data: any) => {
             const finalRedirectUrl = `${process.env.FRONTEND_URL_ADMISSION}${path}?${queryParams}`;
             
             logger.info(`[processUnifiedPayment] Initiating online payment: Amount=₹${amount}, FinalUrl=${finalRedirectUrl}`);
-            
-            // Pick PhonePe merchant from DB-driven banking config (Hostel.<component>Bank)
+
             const feeType = await resolvePhonePeClientType(studentId, component);
             const client = getPhonePeClient(feeType);
 
@@ -2584,17 +2274,12 @@ export const processUnifiedPayment = async (data: any) => {
     }
 };
 
-// Enhanced History
-// Enhanced History
-/** Full per-year financial history for a student: ledgers + payments + demands + corrections, scoped by optional academicYearId. */
 export const getStudentFinancialHistory = async (
     studentId: string,
     options: { academicYearId?: string; yearOfStudy?: number } = {}
 ) => {
     const { academicYearId, yearOfStudy } = options;
 
-    // 1. Parallel Data Fetching
-    // 1. Fetch Student Details First (Required for context)
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         include: {
@@ -2607,18 +2292,13 @@ export const getStudentFinancialHistory = async (
         }
     }) as any;
 
-    // 2. Fetch Configuration Data
     const allFeeHeads = await prisma.feeHead.findMany();
 
-    // 3. Fetch Financial Records (Parallel).
-    // academicYearId is now NOT NULL on every financial table (Payment, StudentLedger,
-    // StudentFeeDemand) after the year-tag migration — so a strict year filter is enough,
-    // no NULL-fallback OR-branch needed.
     const yearFilter = {
         ...(academicYearId ? { academicYearId } : {}),
         ...(yearOfStudy    ? { yearOfStudy }    : {}),
     };
-    // FeeCorrection has no yearOfStudy column — scope it to academicYearId only
+
     const correctionFilter = {
         ...(academicYearId ? { academicYearId } : {}),
     };
@@ -2647,8 +2327,7 @@ export const getStudentFinancialHistory = async (
             where: { studentId, ...correctionFilter },
             orderBy: { createdAt: 'desc' },
         }),
-        // Active accommodation snapshot — used as the cutoff for "pre-cycle" hostel
-        // payments (made before the current hostel cycle started).
+
         (prisma as any).studentAccommodationPricing.findFirst({
             where: { studentId, isActive: true },
             select: { createdAt: true }
@@ -2657,7 +2336,6 @@ export const getStudentFinancialHistory = async (
 
     logger.info(`[FinancialHistory] Data Fetched. Ledgers: ${ledgers.length}, Payments: ${payments.length}, Demands: ${feeDemands.length}, FeeCorrections: ${feeCorrections.length}`);
 
-    // ─── Constants ─────────────────────────────────────────────────────────────────
     const BREAKDOWN_CATEGORIES = [
         'HOSTEL_ACCOMMODATION',
         'HOSTEL_MESS',
@@ -2691,7 +2369,6 @@ export const getStudentFinancialHistory = async (
     ];
     const HOSTEL_BREAKDOWN_KEYS = ['HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION'] as const;
 
-    // ─── Setup: breakdown, fee-head map, accommodation state ───────────────────────
     type Bucket = { demanded: number; paid: number; fine: number; discount: number; scholarshipAmount: number; feeHeadId: string };
     const breakdown: Record<string, Bucket> = Object.fromEntries(
         BREAKDOWN_CATEGORIES.map(c => [c, { demanded: 0, paid: 0, fine: 0, discount: 0, scholarshipAmount: 0, feeHeadId: '' }])
@@ -2706,8 +2383,6 @@ export const getStudentFinancialHistory = async (
     if (accType !== AccommodationType.HOSTEL) HOSTEL_PAYMENT_COMPONENTS.forEach(c => suppressedAccComponents.add(c));
     if (accType !== AccommodationType.TRANSPORT) suppressedAccComponents.add(PaymentComponent.TRANSPORT);
 
-    // ─── Helpers ───────────────────────────────────────────────────────────────────
-    // SCHOLARSHIP_TOKEN and bare HOSTEL are enum-level aliases preserved for legacy data.
     const bucketKey = (comp: PaymentComponent | string | null | undefined): string => {
         if (!comp) return 'OTHER';
         if (comp === PaymentComponent.SCHOLARSHIP_TOKEN) return 'ADMISSION';
@@ -2727,11 +2402,6 @@ export const getStudentFinancialHistory = async (
         ?? (p.feeHeadId ? feeHeadComponentMap.get(p.feeHeadId) : undefined)
         ?? p.component;
 
-    // Cutoff for "pre-cycle" stale payments: any unlinked accommodation payment that
-    // predates the start of the current cycle was for an earlier stint (already
-    // accounted for via an ACCOMMODATION_CHANGE_REFUND from that stint). HOSTEL uses
-    // the active StudentAccommodationPricing snapshot's createdAt; TRANSPORT uses the
-    // earliest currently-active TRANSPORT demand's createdAt.
     const activeAccCycleStart: Date | null = (() => {
         if (accType === AccommodationType.HOSTEL) {
             return activeAccPricing?.createdAt ?? null;
@@ -2760,7 +2430,7 @@ export const getStudentFinancialHistory = async (
                                           || p.component === PaymentComponent.COURSE_CHANGE_FEE;
     const isStalePayment       = (p: any): boolean => {
         if (p.feeDemand && p.feeDemand.isDeleted) return true;
-        // Unlinked accommodation payment that predates the current cycle → stale.
+
         if (!activeAccCycleStart || p.feeDemandId) return false;
         if (!isAccommodationComponent(p.component)) return false;
         return new Date(p.createdAt) < activeAccCycleStart;
@@ -2775,7 +2445,6 @@ export const getStudentFinancialHistory = async (
     const sumCorrections = (pred: (fc: any) => boolean, field: 'amount' | 'retainedAmount') =>
         (feeCorrections as any[]).filter(pred).reduce((s, fc) => s + ((fc as any)[field] ?? 0), 0);
 
-    // ─── 1. Apply demands ──────────────────────────────────────────────────────────
     feeDemands.forEach((demand: any) => {
         const headId = demand.feeHeadId ?? demand.feeStructure?.feeHeadId;
         const target = breakdown[bucketKey(componentOfDemand(demand))];
@@ -2786,7 +2455,6 @@ export const getStudentFinancialHistory = async (
         if (headId && !target.feeHeadId) target.feeHeadId = headId;
     });
 
-    // ─── 2. Apply ledger adjustments (course-change DEBIT only) ────────────────────
     ledgers.forEach((entry: any) => {
         if (REFUND_LIKE_REFERENCE_TYPES.has(entry.referenceType)) return;
         if (entry.referenceType !== 'COURSE_CHANGE' || entry.type !== 'DEBIT') return;
@@ -2794,7 +2462,6 @@ export const getStudentFinancialHistory = async (
         breakdown[bucketKey(comp)].paid -= entry.amount;
     });
 
-    // ─── 3. Apply payments ─────────────────────────────────────────────────────────
     payments.forEach((p: any) => {
         if (!isCurrentPayment(p)) return;
         const target = breakdown[bucketKey(componentOfPayment(p))];
@@ -2802,7 +2469,6 @@ export const getStudentFinancialHistory = async (
         if (p.feeHeadId && !target.feeHeadId) target.feeHeadId = p.feeHeadId;
     });
 
-    // ─── 4. Roll up totals ─────────────────────────────────────────────────────────
     const totalDemanded = Object.values(breakdown).reduce((s, b) => s + b.demanded, 0);
     const totalDiscount = Object.values(breakdown).reduce((s, b) => s + b.discount, 0);
 
@@ -2812,7 +2478,6 @@ export const getStudentFinancialHistory = async (
     const courseChangeFeePaid = sumPayments(p => p.component === PaymentComponent.COURSE_CHANGE_FEE);
     const totalPaid           = sumPayments(isCurrentPayment) - courseChangeDeduction;
 
-    // ─── 5. Unrefunded accommodation credit (money paid on a now-removed acc.) ─────
     const suppressedAccPaid  = sumPayments(p => !isExternalPayment(p) && (isAccSuppressedPayment(p) || isStalePayment(p)));
     const issuedAccRefunds   = sumCorrections(isAccommodationRefund, 'amount');
     const issuedAccRetained  = sumCorrections(isAccommodationRefund, 'retainedAmount');
@@ -2824,7 +2489,6 @@ export const getStudentFinancialHistory = async (
         suppressedAccPaid - issuedAccRefunds - issuedAccRetained - currentAccDiscount
     );
 
-    // ─── 6. Build summary ──────────────────────────────────────────────────────────
     const summary = {
         totalDemanded,
         totalPaid,
@@ -2834,8 +2498,7 @@ export const getStudentFinancialHistory = async (
         totalPending: Math.max(0, totalDemanded - totalPaid - totalDiscount),
         unrefundedAccommodationCredit,
     };
-    
-    // Generate presigned URLs for payments
+
     const paymentsWithUrls = await Promise.all(payments.map(async (p) => {
         return {
             ...p,
@@ -2843,7 +2506,6 @@ export const getStudentFinancialHistory = async (
         };
     }));
 
-    // Log formatted table for debugging
     const tableData = Object.keys(breakdown).map(key => ({
         Category: key,
         Demanded: breakdown[key].demanded,
@@ -2858,7 +2520,6 @@ export const getStudentFinancialHistory = async (
     console.table(tableData);
     console.log('======================================================\n');
 
-    // Fee correction summary: pending refunds (isSettled=false) and total settled
     const pendingRefunds = (feeCorrections as any[]).filter(fc => !fc.isSettled);
     const settledRefunds = (feeCorrections as any[]).filter(fc => fc.isSettled);
     const correctionSummary = {
@@ -2880,22 +2541,6 @@ export const getStudentFinancialHistory = async (
     };
 };
 
-/**
- * COMPLETE, audit-grade student history — the single source of truth.
- *
- * Aggregates EVERY record across every source the student touched, WITHOUT an
- * isDeleted/status filter, so deleted / reversed / superseded rows are included and
- * flagged (this is the whole point: see what was actually done, not just what survives).
- *
- * Returns:
- *   - sections: complete per-source arrays (payments, demands, ledger, scholarships,
- *               corrections, accommodation, courseChanges, cancellations, auditLog)
- *   - timeline: every event interleaved in chronological order, normalized + flagged
- *   - summary:  one reconciled summary (demand-sourced, option-B discount), plus the
- *               refund liability and counts of deleted/reversed rows.
- *
- * Read-only. Never mutates.
- */
 export const getStudentCompleteHistory = async (studentId: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
@@ -2911,8 +2556,6 @@ export const getStudentCompleteHistory = async (studentId: string) => {
     }) as any;
     if (!student) throw new AppError('Student not found', 404);
 
-    // Soft-fail each source independently so a single missing table/relation never
-    // blanks the whole history.
     const safe = <T>(p: Promise<T>, fallback: T): Promise<T> => p.catch(() => fallback);
 
     const [
@@ -2921,9 +2564,9 @@ export const getStudentCompleteHistory = async (studentId: string) => {
         hostelAllocs, transportAllocs, accommodationSnapshots, auditLogs,
     ] = await Promise.all([
         safe(prisma.feeHead.findMany({ select: { id: true, name: true, component: true } }), [] as any[]),
-        safe(prisma.payment.findMany({ where: { studentId }, orderBy: { createdAt: 'asc' } }), [] as any[]),                       // ALL statuses
-        safe(prisma.studentFeeDemand.findMany({ where: { studentId }, include: { feeHead: true, feeStructure: { include: { feeHead: true } } }, orderBy: { createdAt: 'asc' } }), [] as any[]), // incl deleted
-        safe(prisma.studentLedger.findMany({ where: { studentId }, orderBy: { date: 'asc' } }), [] as any[]),                      // incl deleted
+        safe(prisma.payment.findMany({ where: { studentId }, orderBy: { createdAt: 'asc' } }), [] as any[]),
+        safe(prisma.studentFeeDemand.findMany({ where: { studentId }, include: { feeHead: true, feeStructure: { include: { feeHead: true } } }, orderBy: { createdAt: 'asc' } }), [] as any[]),
+        safe(prisma.studentLedger.findMany({ where: { studentId }, orderBy: { date: 'asc' } }), [] as any[]),
         safe((prisma as any).feeCorrection.findMany({ where: { studentId }, orderBy: { createdAt: 'asc' } }), [] as any[]),
         safe(prisma.studentScholarship.findUnique({ where: { studentId } }), null as any),
         safe((prisma as any).scholarshipAllocation.findUnique({ where: { studentId }, include: { rule: true } }), null as any),
@@ -2939,7 +2582,6 @@ export const getStudentCompleteHistory = async (studentId: string) => {
     (feeHeads as any[]).forEach(h => headName.set(h.id, h.name));
     const activeDemandIds = new Set((demands as any[]).filter(d => !d.isDeleted).map(d => d.id));
 
-    // ---- SECTIONS (raw rows + audit flags) ----
     const paymentsSection = (payments as any[]).map(p => ({
         ...p,
         isApplicationFee: p.component === PaymentComponent.APPLICATION_FEE,
@@ -2949,7 +2591,7 @@ export const getStudentCompleteHistory = async (studentId: string) => {
     const demandsSection = (demands as any[]).map(d => ({
         ...d,
         active: !d.isDeleted,
-        // when deleted, the remark usually records why (course change / cancellation / reassign)
+
         removedReason: d.isDeleted ? (d.remarks ?? null) : null,
     }));
 
@@ -2959,10 +2601,9 @@ export const getStudentCompleteHistory = async (studentId: string) => {
         return { ...l, active: !l.isDeleted, orphaned };
     });
 
-    // ---- RECONCILED SUMMARY (demand-sourced; option-B discount) ----
     const active = (demands as any[]).filter(d => !d.isDeleted);
     const grossDemanded   = active.reduce((s, d) => s + (d.amount ?? 0), 0);
-    const totalDiscount   = active.reduce((s, d) => s + (d.discountAmount ?? 0), 0);      // manual + scholarship
+    const totalDiscount   = active.reduce((s, d) => s + (d.discountAmount ?? 0), 0);
     const scholarshipTotal = active.reduce((s, d) => s + (d.scholarshipAmount ?? 0), 0);
     const netPayable      = active.reduce((s, d) => s + (d.netAmount ?? d.amount ?? 0), 0);
     const paid = (payments as any[])
@@ -2974,7 +2615,7 @@ export const getStudentCompleteHistory = async (studentId: string) => {
     const refundedPaymentsTotal = (payments as any[])
         .filter(p => p.status === PaymentStatus.REFUNDED)
         .reduce((s, p) => s + (p.amount ?? 0), 0);
-    // Money owed back to the student: unsettled fee corrections + cancellation refund credits.
+
     const pendingCorrectionRefunds = (corrections as any[])
         .filter(c => !c.isSettled).reduce((s, c) => s + (c.amount ?? 0), 0);
     const cancellationRefunds = (ledger as any[])
@@ -2990,7 +2631,7 @@ export const getStudentCompleteHistory = async (studentId: string) => {
         applicationFeePaid,
         pending: Math.max(0, netPayable - paid),
         refundDue: pendingCorrectionRefunds + cancellationRefunds,
-        // audit counts — what was changed/removed over the lifetime
+
         counts: {
             demandsTotal: (demands as any[]).length,
             demandsActive: active.length,
@@ -3006,7 +2647,6 @@ export const getStudentCompleteHistory = async (studentId: string) => {
         refundedPaymentsTotal,
     };
 
-    // ---- MERGED CHRONOLOGICAL TIMELINE ----
     const timeline: Array<any> = [];
     const at = (...c: any[]) => { for (const d of c) if (d) return new Date(d).toISOString(); return new Date(0).toISOString(); };
     const push = (e: any) => timeline.push(e);
@@ -3070,7 +2710,6 @@ export const getStudentCompleteHistory = async (studentId: string) => {
 
     timeline.sort((a, b) => a.date.localeCompare(b.date));
 
-    // Presigned invoice URLs for payments (best-effort).
     const paymentsWithUrls = await Promise.all(paymentsSection.map(async p => ({
         ...p, invoiceUrl: p.invoiceUrl ? await convertToPresignedUrl(p.invoiceUrl).catch(() => p.invoiceUrl) : null,
     })));
@@ -3102,13 +2741,8 @@ export const getStudentCompleteHistory = async (studentId: string) => {
     };
 };
 
-/**
- * Get a chronological flowchart of all financial events for a student.
- * Returns a timeline that clearly explains: what happened, when, how much, and the running balance.
- */
-/** Chronological money-flow timeline (debits/credits in order) for a student's account statement view. */
 export const getStudentFinancialFlow = async (studentId: string) => {
-    // Fetch all data in parallel
+
     const [student, ledgers, allFeeHeads, courseChangeLogs, scholarship, scholarshipAuditLogs] = await Promise.all([
         prisma.student.findUnique({
             where: { id: studentId },
@@ -3140,7 +2774,7 @@ export const getStudentFinancialFlow = async (studentId: string) => {
             where: { studentId },
             select: { id: true, scholarshipPercentage: true, type: true, createdAt: true }
         }),
-        // Fetch audit logs for scholarship changes (CREATE + UPDATE)
+
         prisma.auditLog.findMany({
             where: { entity: 'StudentScholarship', action: { in: ['CREATE', 'UPDATE'] } },
             orderBy: { timestamp: 'asc' },
@@ -3148,13 +2782,11 @@ export const getStudentFinancialFlow = async (studentId: string) => {
         })
     ]);
 
-    // Build feeHeadId -> name map for resolving ledger entries
     const feeHeadMap = new Map<string, string>();
     allFeeHeads.forEach(h => feeHeadMap.set(h.id, h.name));
 
     if (!student) throw new AppError('Student not found', 404);
 
-    // Build timeline events
     const timeline: Array<{
         step: number;
         date: string;
@@ -3166,7 +2798,6 @@ export const getStudentFinancialFlow = async (studentId: string) => {
         description: string;
     }> = [];
 
-    // 1. Seat allotment event
     if (student.admissionDetails?.seatAllottedAt) {
         timeline.push({
             step: 0,
@@ -3180,9 +2811,8 @@ export const getStudentFinancialFlow = async (studentId: string) => {
         });
     }
 
-    // 2. Scholarship events (from AuditLog for CREATE/UPDATE on StudentScholarship)
     if (scholarship) {
-        // Filter audit logs for this student's scholarship record
+
         const scholarshipLogs = scholarshipAuditLogs.filter(log => log.entityId === scholarship.id);
 
         if (scholarshipLogs.length > 0) {
@@ -3205,7 +2835,7 @@ export const getStudentFinancialFlow = async (studentId: string) => {
                 });
             });
         } else {
-            // Fallback: no audit logs found, use createdAt from scholarship record
+
             timeline.push({
                 step: 0,
                 date: scholarship.createdAt.toISOString(),
@@ -3219,7 +2849,6 @@ export const getStudentFinancialFlow = async (studentId: string) => {
         }
     }
 
-    // 3. Process each ledger entry into a timeline event
     ledgers.forEach(entry => {
         const feeHeadName = (entry.feeHeadId ? feeHeadMap.get(entry.feeHeadId) : '') || '';
         const refType = entry.referenceType || '';
@@ -3270,7 +2899,6 @@ export const getStudentFinancialFlow = async (studentId: string) => {
         });
     });
 
-    // 3. Course change events (from CourseChangeLog)
     courseChangeLogs.forEach(log => {
         timeline.push({
             step: 0,
@@ -3284,13 +2912,11 @@ export const getStudentFinancialFlow = async (studentId: string) => {
         });
     });
 
-    // Sort by date ascending, then assign step numbers
     timeline.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     timeline.forEach((item, i) => { item.step = i + 1; });
 
-    // 4. Compute running balance after each step
     let totalCharged = 0;
-    let totalCredits = 0; // payments + scholarships + discounts
+    let totalCredits = 0;
     const flow = timeline.map(item => {
         if (item.sign === '-' && item.amount) totalCharged += item.amount;
         if (item.sign === '+' && item.amount) totalCredits += item.amount;
@@ -3301,7 +2927,6 @@ export const getStudentFinancialFlow = async (studentId: string) => {
         };
     });
 
-    // 5. Summary at the end
     const currentPending = Math.max(0, totalCharged - totalCredits);
 
     return {

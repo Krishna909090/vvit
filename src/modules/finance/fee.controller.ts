@@ -10,7 +10,6 @@ import { Role, RoleType } from '../../constants/roles';
 import { assertStudentOwns } from '../../utils/ownership';
 import { AdmissionEntryType } from '@prisma/client';
 
-// Fee Head
 export const createFeeHead = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, description, component } = req.body;
     const adminId = req.user!.userId;
@@ -64,7 +63,6 @@ export const deleteFeeHead = catchAsync(async (req: Request, res: Response, next
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.FEE_HEAD_DELETED });
 });
 
-// Fee Structure
 export const createFeeStructure = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const {
         courseId, feeHeadId, amount, academicYearId,
@@ -210,8 +208,6 @@ export const deleteFeeStructure = catchAsync(async (req: Request, res: Response,
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.FEE_STRUCTURE_DELETED });
 });
 
-
-// Fee Statistics
 export const getFeeStatistics = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const stats = await FeeService.getFeeStatistics();
 
@@ -224,7 +220,6 @@ export const getFeeStatistics = catchAsync(async (req: Request, res: Response, n
     });
 });
 
-// Generate Fee Demands (single student)
 export const generateFeeDemands = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId, courseId, academicYearId, deleteExisting, allowLegacyFallback, requireEnrollment, dueDateFallbackDays } = req.body;
     const adminId = req.user!.userId;
@@ -263,7 +258,6 @@ export const generateFeeDemands = catchAsync(async (req: Request, res: Response,
     });
 });
 
-// Generate Fee Demands (bulk — across a cohort filter for an academic year)
 export const generateFeeDemandsBulk = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { academicYearId, filters = {}, runOptions = {} } = req.body;
     const adminId = req.user!.userId;
@@ -279,7 +273,6 @@ export const generateFeeDemandsBulk = catchAsync(async (req: Request, res: Respo
     });
 });
 
-// Create DiscountRequest
 export const createDiscountRequest = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[createDiscountRequest] by=${req.user?.userId || 'anonymous'}`);
     logger.info(`[createDiscountRequest] payload: ${JSON.stringify(req.body)}`);
@@ -334,7 +327,6 @@ export const deleteDiscountRequest = catchAsync(async (req: Request, res: Respon
     });
 });
 
-// Approve Discount
 export const approveDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[approveDiscount] by=${req.user?.userId || 'anonymous'}`);
 
@@ -351,13 +343,12 @@ export const approveDiscount = catchAsync(async (req: Request, res: Response, ne
     });
 });
 
-// Get All Discount Requests
 export const getDiscountRequests = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getDiscountRequests] by=${req.user?.userId || 'anonymous'}`);
 
     const { status, studentId, applicationId, degree, allottedCourseId } = req.query;
     const filters = {
-        status: status as any, // Enum validation handled by service if strict or Prisma throws
+        status: status as any,
         studentId: studentId as string,
         applicationId: applicationId as string,
         degree: degree as string,
@@ -375,7 +366,6 @@ export const getDiscountRequests = catchAsync(async (req: Request, res: Response
     });
 });
 
-// Application Fee
 export const getApplicationFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const amount = await getApplicationFeeAmount();
     sendResponse({ res, statusCode: 200, success: true, data: { amount } });
@@ -399,11 +389,9 @@ export const updateApplicationFee = catchAsync(async (req: Request, res: Respons
     });
 });
 
-// Manual Payment Collection
 export const collectFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[collectFee] by=${req.user?.userId || 'anonymous'}`);
-    
-    // Basic validation (ideally use Zod)
+
     const { 
         studentId, 
         amount, 
@@ -440,12 +428,11 @@ export const collectFee = catchAsync(async (req: Request, res: Response, next: N
     });
 });
 
-// Student Ledger
 export const getStudentLedger = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const academicYearId = req.query.academicYearId as string | undefined;
 
-    await assertStudentOwns(req, studentId); // IDOR guard — a student may only see their own
+    await assertStudentOwns(req, studentId);
 
     const ledger = await FeeService.getStudentFeeDetails(studentId, academicYearId);
 
@@ -462,9 +449,8 @@ export const downloadAllotmentOrder = catchAsync(async (req: Request, res: Respo
     const { studentId } = req.params;
     const { courseChange } = req.query;
 
-    await assertStudentOwns(req, studentId); // IDOR guard
+    await assertStudentOwns(req, studentId);
 
-    // Regenerate if courseChange is explicitly 'true'
     const regenerate = courseChange === 'true';
 
     const url = await getAllotmentOrderUrl(studentId, regenerate);
@@ -477,16 +463,15 @@ export const downloadAllotmentOrder = catchAsync(async (req: Request, res: Respo
         data: { url }
     });
 });
-// Get Student Fee Demands (Simplified View)
+
 export const getStudentFeeDemands = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const academicYearId = req.query.academicYearId as string | undefined;
 
-    await assertStudentOwns(req, studentId); // IDOR guard
+    await assertStudentOwns(req, studentId);
 
     const feeDetails = await FeeService.getStudentFeeDetails(studentId, academicYearId);
 
-    // Map to simplified list: { feeHeadName, amount, dueDate, status }
     const demands = feeDetails.demands.map(d => ({
         id: d.id,
         feeHeadName: d.feeStructure.feeHead.name,
@@ -511,7 +496,7 @@ export const getStudentFeeDemands = catchAsync(async (req: Request, res: Respons
 export const getPaymentHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
 
-    await assertStudentOwns(req, studentId); // IDOR guard
+    await assertStudentOwns(req, studentId);
 
     const history = await FeeService.getStudentPaymentHistory(studentId);
 
@@ -565,11 +550,6 @@ export const changeAccommodationType = catchAsync(async (req: Request, res: Resp
     });
 });
 
-// ═══════════════════════════════════════════════════════════
-// FEE CORRECTIONS (credits / refunds)
-// ═══════════════════════════════════════════════════════════
-
-// GET /admin/fee/fee-corrections — list fee corrections with filters + remaining credit.
 export const getFeeCorrections = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const {
         studentId, academicYearId, type, isSettled, carryForward, referenceType, applicationId, page, limit,
@@ -593,7 +573,6 @@ export const getFeeCorrections = catchAsync(async (req: Request, res: Response, 
     sendResponse({ res, statusCode: 200, success: true, message: 'Fee corrections fetched', data: result });
 });
 
-// POST /admin/fee/fee-corrections/:id/apply — transfer (apply) correction credit onto a fee demand.
 export const applyFeeCorrection = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
     const { feeDemandId, amount, remarks } = req.body;
@@ -606,7 +585,6 @@ export const applyFeeCorrection = catchAsync(async (req: Request, res: Response,
     sendResponse({ res, statusCode: 200, success: true, message: 'Fee correction transferred to demand', data: result });
 });
 
-// GET /admin/fee/cancellation-metrics — how much retained vs refunded across cancels/switches.
 export const getCancellationMetrics = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { academicYearId, from, to, referenceType } = req.query;
     const result = await FeeService.getCancellationMetrics({

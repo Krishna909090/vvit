@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import prisma from '../../../config/prisma';
 import {
     AdmissionStatus,
@@ -14,7 +15,6 @@ import { Role } from '../../../constants/roles';
 import { AppError } from '../../../utils/AppError';
 import logger from '../../../utils/logger';
 
-// Type definitions for Excel Row Data
 interface StudentImportRow {
     name: string;
     fatherName: string;
@@ -34,15 +34,9 @@ interface StudentImportRow {
     amount?: number;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────
-/**
- * Resolve an academic year identifier that may be either a UUID or a code
- * (e.g. "2025-26"). Admins typically supply the code in import sheets, not
- * the UUID. Returns null if neither resolves.
- */
 const resolveAcademicYearId = async (codeOrId: string): Promise<string | null> => {
     if (!codeOrId) return null;
-    // UUID v4 detection
+
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(codeOrId);
     if (isUuid) {
         const ay = await prisma.academicYear.findUnique({ where: { id: codeOrId } });
@@ -52,7 +46,6 @@ const resolveAcademicYearId = async (codeOrId: string): Promise<string | null> =
     return ay?.id ?? null;
 };
 
-/** Parse an offline-registration Excel and create REGISTERED students row-by-row. Returns per-row results. */
 export const processOfflineRegistration = async (fileBuffer: any, adminId: string) => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(fileBuffer);
@@ -70,25 +63,13 @@ export const processOfflineRegistration = async (fileBuffer: any, adminId: strin
 
     const rows: StudentImportRow[] = [];
 
-    // Parse Headers
-    // Allowing flexible headers or assuming fixed order/names. 
-    // For robustness, let's assume specific headers map to keys.
-    // Row 1 is header.
-    
     worksheet.eachRow((row, rowNumber) => {
-        if (rowNumber === 1) return; // Skip Header
-
-        // naive mapping by index, or better by column name if we could.
-        // Let's assume a strict template for now or Row values.
-        // Assuming strict column order: 
-        // 1: Name, 2: FatherName, 3: MotherName, 4: Email, 5: Phone, 6: DOB, 7: Gender, 8: Aadhar, 
-        // 9: Address, 10: City, 11: State, 12: Pincode, 13: CourseType, 14: Category, 15: TokenAmount (Optional)
+        if (rowNumber === 1) return;
 
         const values = row.values as any[]; 
-        // values is 1-based index array usually in ExcelJS. values[1] is col 1.
-        
-        if (!values[1] || !values[4] || !values[5]) { // Check minimal required: Name, Email, Phone
-             // Skip empty rows
+
+        if (!values[1] || !values[4] || !values[5]) {
+
              return; 
         }
 
@@ -96,7 +77,7 @@ export const processOfflineRegistration = async (fileBuffer: any, adminId: strin
             name: values[1],
             fatherName: values[2],
             motherName: values[3],
-            email: values[4]?.text || values[4], // Handle hyperlinks
+            email: values[4]?.text || values[4],
             phone: values[5]?.toString(),
             dob: values[6],
             gender: values[7],
@@ -124,8 +105,6 @@ export const processOfflineRegistration = async (fileBuffer: any, adminId: strin
     return results;
 };
 
-
-/** Parse a seat-booking Excel and create students at ENTRANCE_FEE_PAID with a token payment. Returns per-row results. */
 export const processSeatBookingRegistration = async (fileBuffer: any, adminId: string) => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(fileBuffer);
@@ -164,7 +143,7 @@ export const processSeatBookingRegistration = async (fileBuffer: any, adminId: s
             pincode: values[12]?.toString(),
             degreeType: values[13],
             category: values[14],
-            amount: values[15] ? Number(values[15]) : 10000 // Default token amount
+            amount: values[15] ? Number(values[15]) : 10000
         });
     });
 
@@ -182,10 +161,8 @@ export const processSeatBookingRegistration = async (fileBuffer: any, adminId: s
     return results;
 };
 
-// Helper to Create User and Student
-/** Internal: create User + Student + StudentAdmission (REGISTERED) for one offline-import row, in a tx. */
 const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMode, adminId: string) => {
-    // 1. Check Duplicates
+
     const existing = await prisma.student.findFirst({
         where: {
             OR: [
@@ -199,16 +176,10 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
         throw new Error('Student already registered (Email or Aadhar match)');
     }
 
-    // 2. Generate Application ID
-    const prefix = mode === ApplicationMode.OFFLINE ? 'VOF' : 'VSB'; // VSB for Verified Seat Booking? Or just modify prefix logic
-    // Using simple random or timestamp for now to avoid complexity of sequential check in loop inside loop
-    // But keeping consistent with student service is better.
-    // Let's rely on a simplified ID generator for bulk to be faster? 
-    // Or just use the timestamp approach combined.
-    // VOF2024...
-    const applicationId = `${prefix}${Date.now()}${Math.floor(Math.random() * 100)}`;
+    const prefix = mode === ApplicationMode.OFFLINE ? 'VOF' : 'VSB';
 
-    // 3. Create User
+    const applicationId = `${prefix}${Date.now()}${randomBytes(4).toString('hex')}`;
+
     const hashedPassword = await bcrypt.hash('Welcome@123', 10);
     
     return await prisma.$transaction(async (tx) => {
@@ -231,26 +202,25 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
                 name: data.name,
                 fatherName: data.fatherName,
                 motherName: data.motherName,
-                gender: data.gender || 'MALE', // Fallback or strictly validate?
+                gender: data.gender || 'MALE',
                 dob: isValidDate(dobDate) ? dobDate : new Date(),
                 phone: data.phone,
                 email: data.email,
                 aadharNumber: data.aadharNumber,
                 category: data.category || 'OC',
-                country: 'India', // Default
+                country: 'India',
                 address: data.address || '',
                 city: data.city || '',
                 state: data.state || '',
                 pincode: data.pincode || '',
                 degreeType: data.degreeType,
                 applicationMode: mode,
-                isOffline: mode === ApplicationMode.OFFLINE, // Backward compat
+                isOffline: mode === ApplicationMode.OFFLINE,
                 userId: user.id,
                 createdBy: adminId
             }
         });
 
-        // 4. Admission Status
         const activeYear = await tx.academicYear.findFirstOrThrow({
             where: { isActive: true, isDeleted: false }
         });
@@ -259,8 +229,7 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
                 studentId: student.id,
                 academicYearId: activeYear.id,
                 status: AdmissionStatus.REGISTERED,
-                // Cohort tags — required for fee-demand resolution (matches register/manual-entry).
-                // Without these, generateFeeDemands resolves 0 structures for cohort-tagged fees.
+
                 entryType: AdmissionEntryType.REGULAR,
                 entryYearOfStudy: 1,
                 entryAcademicYearId: activeYear.id,
@@ -270,7 +239,6 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
             }
         });
 
-        // 5. Exam Details
         await tx.studentExam.create({
             data: { studentId: student.id }
         });
@@ -279,9 +247,8 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
     });
 };
 
-/** Internal: create one seat-booking student (ENTRANCE_FEE_PAID + token Payment + Ledger), in a tx. */
 const registerSeatBookingStudent = async (data: StudentImportRow, adminId: string) => {
-     // 1. Check Duplicates (Same as above)
+
      const existing = await prisma.student.findFirst({
         where: {
             OR: [
@@ -295,7 +262,7 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
         throw new Error('Student already registered');
     }
 
-    const applicationId = `VSB${Date.now()}${Math.floor(Math.random() * 100)}`;
+    const applicationId = `VSB${Date.now()}${randomBytes(4).toString('hex')}`;
     const hashedPassword = await bcrypt.hash('Welcome@123', 10);
 
     return await prisma.$transaction(async (tx) => {
@@ -329,16 +296,13 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 state: data.state || '',
                 pincode: data.pincode || '',
                 degreeType: data.degreeType,
-                applicationMode: 'SEAT_BOOKING' as ApplicationMode, // Cast to avoid lint error if d.ts outdated
+                applicationMode: 'SEAT_BOOKING' as ApplicationMode,
                 isOffline: true, 
                 userId: user.id,
                 createdBy: adminId
             }
         });
 
-
-        // 4. Create Admission - Status ENTRANCE_FEE_PAID to allow slot booking
-        // RECORD TOKEN PAYMENT
         const tokenAmount = data.amount || 10000;
         
         const activeYear = await tx.academicYear.findFirstOrThrow({
@@ -351,7 +315,7 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 status: AdmissionStatus.ENTRANCE_FEE_PAID,
                 feeStatus: FeeStatus.PARTIAL,
                 paidFee: tokenAmount,
-                totalFee: 0, // Will be updated later
+                totalFee: 0,
                 entryType: AdmissionEntryType.REGULAR,
                 entryYearOfStudy: 1,
                 entryAcademicYearId: activeYear.id,
@@ -365,15 +329,14 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
             data: { studentId: student.id }
         });
 
-        // Create Payment Record (Token). Year-tag with the active academic year.
         const tokenTxnId = `OFF_TOK_${Date.now()}_${student.applicationId}`;
         await tx.payment.create({
             data: {
                 studentId: student.id,
                 amount: tokenAmount,
                 status: PaymentStatus.SUCCESS,
-                component: PaymentComponent.SCHOLARSHIP_TOKEN, // Mapping to Token
-                method: PaymentMethod.CASH, // or OFFLINE
+                component: PaymentComponent.SCHOLARSHIP_TOKEN,
+                method: PaymentMethod.CASH,
                 providerTxId: tokenTxnId,
                 idempotencyKey: `${tokenTxnId}_SCHOLARSHIP_TOKEN`,
                 yearOfStudy: 1,
@@ -382,7 +345,6 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
             }
         });
 
-        // Create Ledger Entry
         await tx.studentLedger.create({
             data: {
                 studentId: student.id,
@@ -400,12 +362,10 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
     });
 };
 
-/** Internal: true if `d` is a parseable, valid Date. */
 const isValidDate = (d: any) => {
     return d instanceof Date && !isNaN(d.getTime());
 };
 
-/** Record + verify an offline (cash) entrance/token payment for a student: creates Payment + Ledger, advances admission status. */
 export const verifyOfflinePayment = async (studentId: string, amount: number, type: 'ENTRANCE' | 'TOKEN', adminId: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
@@ -425,7 +385,7 @@ export const verifyOfflinePayment = async (studentId: string, amount: number, ty
     const academicYearId = student.admissionDetails.academicYearId;
 
     return await prisma.$transaction(async (tx) => {
-        // Create Payment
+
         const verifyTxnId = `OFF_${type}_${Date.now()}`;
         const payment = await tx.payment.create({
             data: {
@@ -442,7 +402,6 @@ export const verifyOfflinePayment = async (studentId: string, amount: number, ty
             }
         });
 
-        // Update Admission
         await tx.studentAdmission.update({
             where: { studentId },
             data: {
@@ -451,8 +410,7 @@ export const verifyOfflinePayment = async (studentId: string, amount: number, ty
                 paidFee: { increment: amount }
             }
         });
-        
-        // Ledger
+
         await tx.studentLedger.create({
             data: {
                 studentId,
@@ -496,7 +454,6 @@ interface OfflineApplicationInput {
     isKycVerified?: string;
 }
 
-/** Dry-run validation of an offline-application batch: returns per-row errors without writing anything. */
 export const validateOfflineApplications = async (applications: OfflineApplicationInput[]) => {
     const results = {
         valid: 0,
@@ -505,7 +462,6 @@ export const validateOfflineApplications = async (applications: OfflineApplicati
         invalidRecords: [] as (OfflineApplicationInput & { errors: string[] })[]
     };
 
-    // Check for duplicates within the input array itself
     const seenApplicationIds = new Set<string>();
     const seenPhones = new Set<string>();
     const seenEmails = new Set<string>();
@@ -514,12 +470,10 @@ export const validateOfflineApplications = async (applications: OfflineApplicati
         const data = applications[i];
         const rowErrors: string[] = [];
 
-        // Required fields
         if (!data.applicationId) rowErrors.push('applicationId is required');
         if (!data.name) rowErrors.push('name is required');
         if (!data.phone) rowErrors.push('phone is required');
 
-        // Duplicate within batch
         if (data.applicationId && seenApplicationIds.has(data.applicationId)) {
             rowErrors.push(`Duplicate applicationId '${data.applicationId}' within batch`);
         }
@@ -534,7 +488,6 @@ export const validateOfflineApplications = async (applications: OfflineApplicati
         if (data.phone) seenPhones.add(data.phone);
         if (data.email) seenEmails.add(data.email);
 
-        // DOB validation
         if (data.dob) {
             const dobDate = new Date(data.dob);
             if (isNaN(dobDate.getTime())) {
@@ -542,7 +495,6 @@ export const validateOfflineApplications = async (applications: OfflineApplicati
             }
         }
 
-        // Check duplicates against DB
         if (data.applicationId || data.phone) {
             const orConditions: any[] = [];
             if (data.applicationId) orConditions.push({ applicationId: data.applicationId });
@@ -565,7 +517,6 @@ export const validateOfflineApplications = async (applications: OfflineApplicati
             }
         }
 
-        // Check user table for email/phone conflict
         if (data.phone || data.email) {
             const userOrConditions: any[] = [];
             if (data.phone) userOrConditions.push({ phone: data.phone });
@@ -584,7 +535,6 @@ export const validateOfflineApplications = async (applications: OfflineApplicati
             }
         }
 
-        // Course preference validation
         for (const prefKey of ['pref1', 'pref2', 'pref3'] as const) {
             const prefValue = data[prefKey];
             if (prefValue) {
@@ -607,9 +557,8 @@ export const validateOfflineApplications = async (applications: OfflineApplicati
     return results;
 };
 
-/** Commit an offline-application batch: creates each student + application-fee payment. Fails fast if no active year. */
 export const processOfflineApplications = async (applications: OfflineApplicationInput[], adminId: string) => {
-    // Re-validate on backend even though UI already validated (can't trust client)
+
     const validation = await validateOfflineApplications(applications);
     const invalidAppIds = new Set(validation.invalidRecords.map(r => r.applicationId));
 
@@ -622,7 +571,6 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
         created: [] as { applicationId: string; studentId: string }[]
     };
 
-    // Pre-fetch shared data — fail fast if no active year configured.
     const activeAcademicYear = await prisma.academicYear.findFirst({
         where: { isActive: true, isDeleted: false }
     });
@@ -638,7 +586,6 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
 
     const hashedPassword = await bcrypt.hash('Welcome@123', 10);
 
-    // Pre-fetch StudentGroup for auto-assignment
     const studentGroup = await prisma.group.findUnique({ where: { name: 'StudentGroup' } });
     if (!studentGroup) {
         logger.error('[processOfflineApplications] CRITICAL: StudentGroup not found. Users will be created without group.');
@@ -648,10 +595,9 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
         return results;
     }
 
-    // Individual transaction per student (so one failure doesn't block others)
     for (let index = 0; index < applications.length; index++) {
         const data = applications[index];
-        if (invalidAppIds.has(data.applicationId)) continue; // Skip records that failed validation
+        if (invalidAppIds.has(data.applicationId)) continue;
         try {
             const dobDate = data.dob ? new Date(data.dob) : undefined;
             const proId = data.pro ? (proMap.get(data.pro) || null) : null;
@@ -668,7 +614,6 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                     }
                 });
 
-                // Auto-assign to StudentGroup
                 if (studentGroup) {
                     await tx.userGroup.create({
                         data: {
@@ -771,12 +716,6 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
     return results;
 };
 
-// ── Bulk Manual-Entry Admission ────────────────────────────────────────
-// Pre-flight validation for the bulk manual-entry flow (lateral / transfer /
-// back-dated admissions). Mirrors validateOfflineApplications: accepts a JSON
-// array (frontend parses CSV/Excel client-side and posts JSON), returns
-// detailed per-row errors and does NOT touch the DB beyond reads.
-/** Dry-run validation of a manual-entry batch (lateral/transfer admissions): per-row errors, no writes. */
 export const validateBulkManualEntry = async (rows: any[]) => {
     const results = {
         total: rows.length,
@@ -786,17 +725,15 @@ export const validateBulkManualEntry = async (rows: any[]) => {
         invalidRecords: [] as (any & { errors: string[] })[]
     };
 
-    // Track within-batch duplicates
     const seenEmails = new Set<string>();
     const seenPhones = new Set<string>();
     const seenAadhars = new Set<string>();
-    const seenRollNumbers = new Set<string>();  // rollNumber must be unique within batch
+    const seenRollNumbers = new Set<string>();
 
     for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         const errors: string[] = [];
 
-        // 1. Required field presence
         if (!row.student?.name)         errors.push('student.name is required');
         if (!row.student?.phone)        errors.push('student.phone is required');
         if (!row.student?.aadharNumber) errors.push('student.aadharNumber is required');
@@ -808,7 +745,6 @@ export const validateBulkManualEntry = async (rows: any[]) => {
         if (!row.enrollment?.sectionId) errors.push('enrollment.sectionId is required');
         if (!row.enrollment?.rollNumber) errors.push('enrollment.rollNumber is required');
 
-        // 2. Lateral-specific rules
         if (row.entry?.type === 'LATERAL' && (row.entry?.yearOfStudy ?? 1) < 2) {
             errors.push('LATERAL entry requires yearOfStudy >= 2');
         }
@@ -819,7 +755,6 @@ export const validateBulkManualEntry = async (rows: any[]) => {
             }
         }
 
-        // 3. Within-batch duplicates
         if (row.student?.email) {
             if (seenEmails.has(row.student.email)) errors.push(`Duplicate email '${row.student.email}' within batch`);
             else seenEmails.add(row.student.email);
@@ -837,7 +772,6 @@ export const validateBulkManualEntry = async (rows: any[]) => {
             else seenRollNumbers.add(row.enrollment.rollNumber);
         }
 
-        // 4. Resolve academic year code → id (in-place for the row, so process step doesn't redo it)
         if (row.entry?.academicYearId) {
             const resolvedId = await resolveAcademicYearId(row.entry.academicYearId);
             if (!resolvedId) {
@@ -847,7 +781,6 @@ export const validateBulkManualEntry = async (rows: any[]) => {
             }
         }
 
-        // 5. DB existence checks (only if no critical errors so far)
         if (errors.length === 0) {
             const [course, section, dbDuplicate] = await Promise.all([
                 prisma.course.findUnique({ where: { id: row.course.allottedCourseId } }),
@@ -866,7 +799,6 @@ export const validateBulkManualEntry = async (rows: any[]) => {
             if (!section) errors.push(`Invalid sectionId: ${row.enrollment.sectionId}`);
             if (dbDuplicate) errors.push(`Student already exists (email/phone/aadhar match)`);
 
-            // Backdated check: academic year startDate must be < NOW()
             if (row.entry?.isBackdated) {
                 const ay = await prisma.academicYear.findUnique({ where: { id: row.entry.academicYearId } });
                 if (ay && ay.startDate > new Date()) {
@@ -887,13 +819,8 @@ export const validateBulkManualEntry = async (rows: any[]) => {
     return results;
 };
 
-// Process a validated batch of manual-entry admissions. Re-runs validation on
-// the backend (can't trust the client), then invokes
-// AdminStudentService.manualEntryAdmission per valid row sequentially. Lazy
-// import is used to dodge any circular-dep risk between admin services.
-/** Commit a manual-entry batch by delegating each row to AdminStudentService.manualEntryAdmission. Returns per-row results. */
 export const processBulkManualEntry = async (rows: any[], adminId: string) => {
-    // Re-validate on backend
+
     const validation = await validateBulkManualEntry(rows);
 
     const results = {
@@ -909,12 +836,10 @@ export const processBulkManualEntry = async (rows: any[], adminId: string) => {
         created: [] as { rowIndex: number, studentId: string, applicationId: string, entryType: string }[]
     };
 
-    // Process valid rows one at a time (the underlying service uses transactions; running in parallel
-    // would multiply DB connection use and complicate error attribution)
     for (let i = 0; i < validation.validRecords.length; i++) {
         const row = validation.validRecords[i];
         try {
-            // Lazy-import to avoid circular dep risk
+
             const { AdminStudentService } = await import('../../studentManagement/adminStudent.service');
             const result = await AdminStudentService.manualEntryAdmission(row, adminId);
             results.success++;
@@ -940,60 +865,49 @@ export const processBulkManualEntry = async (rows: any[], adminId: string) => {
     return results;
 };
 
-/**
- * Generate a CSV template for the bulk manual-entry import.
- *
- * The template uses a flat (non-nested) header structure for ease of editing in
- * Excel. Frontend parses CSV → re-nests into the manualEntryAdmissionSchema shape
- * before POSTing to /admin/bulk-import/manual-entry. The header names match the
- * dot-paths of the validator schema fields.
- */
-/** Return a CSV template (headers + one example row) for the manual-entry bulk import. */
 export const generateManualEntryTemplate = (): string => {
     const headers = [
-        // Student profile
+
         'student.name', 'student.fatherName', 'student.motherName', 'student.gender', 'student.dob',
         'student.phone', 'student.email', 'student.aadharNumber', 'student.category',
         'student.country', 'student.address', 'student.address2', 'student.city',
         'student.state', 'student.pincode', 'student.profilePhotoUrl', 'student.quotaType',
-        // Course allocation
+
         'course.allottedCourseId',
-        // Entry context
+
         'entry.type', 'entry.yearOfStudy', 'entry.academicYearId',
         'entry.currentSemester', 'entry.reason', 'entry.isBackdated',
-        // Enrollment
+
         'enrollment.sectionId', 'enrollment.rollNumber',
-        // Scholarship (optional)
+
         'scholarship.percentage', 'scholarship.ruleId',
-        // Accommodation (optional)
+
         'accommodation.type', 'accommodation.hostelId', 'accommodation.hostelType',
         'accommodation.hostelPaymentMode', 'accommodation.transportRouteId',
-        // Prior payment (optional)
+
         'priorPayment.amount', 'priorPayment.method', 'priorPayment.component',
         'priorPayment.referenceNumber', 'priorPayment.date', 'priorPayment.feeHeadId',
     ];
 
-    // One example row showing a lateral-entry management-quota student with 50% scholarship
     const exampleRow = [
         'Ravi Kumar', 'Mohan Kumar', 'Sita Devi', 'MALE', '2003-06-15',
         '9876543210', 'ravi@example.com', '123456789012', 'OC',
         'India', 'Plot 12, Main Road', '', 'Vijayawada',
         'AP', '520001', '', 'MANAGEMENT',
-        // course.allottedCourseId — paste a course UUID from your DB
+
         '00000000-0000-0000-0000-000000000000',
-        // entry
+
         'LATERAL', '2', '2025-26', '3', 'Diploma → BTech 2nd year', 'false',
-        // enrollment
+
         '00000000-0000-0000-0000-000000000000', 'L25BTC001',
-        // scholarship
+
         '50', '',
-        // accommodation
+
         'NONE', '', '', '', '',
-        // prior payment
+
         '', '', '', '', '', '',
     ];
 
-    // Properly escape commas/quotes/newlines in CSV cells
     const escapeCsv = (cell: string): string => {
         if (cell == null) return '';
         const s = String(cell);
@@ -1006,7 +920,6 @@ export const generateManualEntryTemplate = (): string => {
     const headerLine = headers.map(escapeCsv).join(',');
     const exampleLine = exampleRow.map(escapeCsv).join(',');
 
-    // Add a leading explanatory comment row (CSVs commonly tolerate this; admins can delete it)
     const notesLine = [
         '# Bulk manual-entry template. Replace the example row below with real data, then upload via your admin UI.',
         '# entry.academicYearId can be either a UUID or a code like "2025-26".',

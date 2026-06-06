@@ -1,5 +1,4 @@
-// Waiting-list operations split out of adminStudent.service.ts.
-// Exposes an object that the barrel composes into AdminStudentService.
+
 
 import prisma from '../../../config/prisma';
 import { AdmissionStatus, AdmissionEntryType, WaitingListStatus, WaitingListCategory, PaymentStatus, AccommodationType, HostelType, HostelPaymentMode } from '@prisma/client';
@@ -19,19 +18,7 @@ import {
 import { FeeService } from '../../finance/fee.service';
 
 export const WaitingListService = {
-    /**
-     * Add a student to the waitlist for a single course in the active year.
-     *
-     * Rules:
-     *  - One student → one course per academic year. A student with an active
-     *    (WAITING) entry that year is rejected (409).
-     *  - Only first-year REGULAR-entry admissions are eligible (no lateral /
-     *    transfer / promoted students).
-     *  - Each entry gets a fixed waitingNumber = MAX(waitingNumber)+1 within the
-     *    (courseId, academicYearId) queue, assigned atomically. The number is a
-     *    permanent token; it does not shift when entries ahead are allotted or
-     *    cancelled (live rank is computed in getWaitingList).
-     */
+
     async addToWaitingList(data: { studentId: string; courseId: string; category: WaitingListCategory; remarks?: string }, adminId: string) {
         const { studentId, courseId, category, remarks } = data;
 
@@ -52,7 +39,6 @@ export const WaitingListService = {
         });
         if (!student) throw new AppError('Student not found', 404);
 
-        // The waitlisted course must be one of the student's opted preferences.
         const preferences = [student.pref1, student.pref2, student.pref3].filter(Boolean) as string[];
         if (preferences.length === 0) {
             throw new AppError('Student has no course preferences (pref1/pref2/pref3) set; cannot waitlist', 400);
@@ -61,9 +47,6 @@ export const WaitingListService = {
             throw new AppError('Course must be one of the student\'s opted preferences (pref1, pref2 or pref3)', 400);
         }
 
-        // Eligibility: only first-year REGULAR admissions get a waiting list.
-        // entryType/entryYearOfStudy default to REGULAR/1 in the schema, so treat
-        // null as the first-year-regular default.
         const adm = student.admissionDetails;
         if (!adm) throw new AppError('Student has no admission record; cannot waitlist', 400);
         const entryType = adm.entryType ?? AdmissionEntryType.REGULAR;
@@ -80,7 +63,6 @@ export const WaitingListService = {
 
         const { id: academicYearId } = await getActiveAcademicYear();
 
-        // One active entry per student per year (regardless of course).
         const activeEntry = await prisma.waitingList.findFirst({
             where: { studentId, academicYearId, status: WaitingListStatus.WAITING },
             include: { course: { select: { name: true } } },
@@ -92,10 +74,6 @@ export const WaitingListService = {
             );
         }
 
-        // Assign the next number atomically: MAX(waitingNumber)+1 for this
-        // course-queue/year, then create. The unique constraint on
-        // (courseId, academicYearId, waitingNumber) is the safety net — under a
-        // concurrent insert one create hits P2002, and we retry with a fresh max.
         let entry: any;
         for (let attempt = 0; attempt < 5; attempt++) {
             const { _max } = await prisma.waitingList.aggregate({
@@ -119,7 +97,7 @@ export const WaitingListService = {
                 });
                 break;
             } catch (e: any) {
-                // P2002 = unique violation (number raced). Retry with a fresh max.
+
                 if (e?.code === 'P2002' && attempt < 4) {
                     logger.warn(`[addToWaitingList] waitingNumber ${nextNumber} raced for course=${courseId}; retrying (attempt ${attempt + 1})`);
                     continue;
@@ -130,13 +108,6 @@ export const WaitingListService = {
 
         logger.info(`[addToWaitingList] Student=${studentId} added to course=${courseId} as waitingNumber=${entry.waitingNumber}`);
 
-        // Seed fee demands for the waitlisted course up front so the tuition
-        // advance (paid via /finance/pay-component) settles against a real demand
-        // instead of floating as an unmatched credit. This generates StudentFeeDemand
-        // rows + their DEBIT ledger entries and recomputes admission.totalFee — it does
-        // NOT claim a seat or confirm admission. Best-effort: if no FeeStructure exists
-        // for this course/year it logs and returns 0 demands (non-fatal); the demands
-        // can be regenerated later (allotment uses deleteExisting). Mirrors manualEntryAdmission.
         let feeDemands = { generated: 0 };
         let feeDemandWarning: string | undefined;
         try {
@@ -156,8 +127,7 @@ export const WaitingListService = {
                 logger.warn(`[addToWaitingList] No new fee demands for course=${courseId} year=${academicYearId}: ${feeDemandWarning}`);
             }
         } catch (err: any) {
-            // Never fail the waitlist add because demand seeding had trouble — but
-            // surface WHY (e.g. transaction timeout) instead of silently returning 0.
+
             feeDemandWarning = `Fee demands could not be generated: ${err?.message?.split('\n')[0] || err}. Re-run demand generation for this student.`;
             logger.error(`[addToWaitingList] generateFeeDemands failed for student=${studentId} course=${courseId}: ${err}`);
         }
@@ -177,18 +147,6 @@ export const WaitingListService = {
         };
     },
 
-    /**
-     * Get the waiting list, filterable by course, status and category, with an
-     * explicit amount-paid sort toggle.
-     *
-     * amountSort:
-     *  - 'high' → by total amount paid (Σ SUCCESS payments this year) DESC (biggest payer first)
-     *  - 'low'  → by total amount paid ASC (smallest payer first)
-     *  - 'all'  → no amount sort; ordered by createdAt (FIFO by registration time)
-     * Default: MANAGEMENT → 'high'; POLICE/GENERAL/none → 'all' (i.e. createdAt order).
-     * The paid sorts are computed from payments, so those pages are ranked + sliced
-     * in memory; 'all' paginates in the DB. Every entry returns amountPaid.
-     */
     async getWaitingList(query: { courseId?: string; status?: string; category?: string; amountSort?: string; page?: number; limit?: number }) {
         const { courseId, status, category, amountSort, page = 1, limit = 50 } = query;
         const skip = (Number(page) - 1) * Number(limit);
@@ -205,8 +163,6 @@ export const WaitingListService = {
             where.category = category;
         }
 
-        // Resolve the amount-paid sort. Explicit param wins; otherwise MANAGEMENT
-        // defaults to 'high' (biggest payer first), everyone else to 'all' (rank).
         const ALLOWED_SORTS = ['low', 'high', 'all'];
         let resolvedSort = amountSort ? String(amountSort).toLowerCase() : undefined;
         if (resolvedSort && !ALLOWED_SORTS.includes(resolvedSort)) {
@@ -230,7 +186,6 @@ export const WaitingListService = {
             }
         };
 
-        // Sum of SUCCESS payments per student (active year) — the management sort key.
         const paidByStudent = async (studentIds: string[]) => {
             if (studentIds.length === 0 || !activeYear) return new Map<string, number>();
             const sums = await prisma.payment.groupBy({
@@ -247,8 +202,7 @@ export const WaitingListService = {
         let paidMap: Map<string, number>;
 
         if (sortByPaid) {
-            // Computed sort key → fetch all matching, rank by paid (asc for 'low',
-            // desc for 'high'), slice in memory. Ties broken by waitingNumber.
+
             const all = await prisma.waitingList.findMany({
                 where,
                 orderBy: { waitingNumber: 'asc' },
@@ -259,14 +213,13 @@ export const WaitingListService = {
             all.sort((a, b) => {
                 const pa = paidMap.get(a.studentId) ?? 0;
                 const pb = paidMap.get(b.studentId) ?? 0;
-                if (pa !== pb) return (pa - pb) * dir;     // 'low' → asc, 'high' → desc
-                return a.waitingNumber - b.waitingNumber;  // tie-break by rank
+                if (pa !== pb) return (pa - pb) * dir;
+                return a.waitingNumber - b.waitingNumber;
             });
             total = all.length;
             pageEntries = all.slice(skip, skip + take);
         } else {
-            // No amount sort (POLICE / GENERAL / amountSort=all) → FIFO by createdAt
-            // (registration time), paginated in the DB.
+
             const [entries, count] = await Promise.all([
                 prisma.waitingList.findMany({ where, skip, take, orderBy: { createdAt: 'asc' }, include }),
                 prisma.waitingList.count({ where }),
@@ -276,7 +229,6 @@ export const WaitingListService = {
             paidMap = await paidByStudent(pageEntries.map(e => e.studentId));
         }
 
-        // Batch-load CourseCapacity for the active year, keyed by courseId
         const uniqueCourseIds = Array.from(new Set(pageEntries.map(e => e.courseId)));
         const capacities = activeYear
             ? await prisma.courseCapacity.findMany({
@@ -293,8 +245,7 @@ export const WaitingListService = {
                 const filled = cap?.filledSeats ?? 0;
                 return {
                     id: e.id,
-                    // waitingNumber = fixed token assigned at join (stable, may have gaps).
-                    // position = live rank in this result ordering (rank or paid-rank).
+
                     waitingNumber: e.waitingNumber,
                     position: skip + i + 1,
                     category: e.category,
@@ -319,11 +270,6 @@ export const WaitingListService = {
         };
     },
 
-    /**
-     * Get waiting list entries for a specific student.
-     * availableSeats is scoped to the student's admission academic year
-     * (falls back to active year if no admission yet).
-     */
     async getStudentWaitingList(studentId: string) {
         if (!studentId) throw new AppError('Student ID is required', 400);
 
@@ -377,11 +323,6 @@ export const WaitingListService = {
         });
     },
 
-    /**
-     * Get a single waiting-list entry by its id, with full details: student,
-     * course (+ live seats for the entry's year), category, waitingNumber, status,
-     * amountPaid (Σ SUCCESS payments that year), and academic year.
-     */
     async getWaitingListEntry(waitingListId: string) {
         if (!waitingListId) throw new AppError('Waiting list entry ID is required', 400);
 
@@ -395,7 +336,6 @@ export const WaitingListService = {
         });
         if (!entry) throw new AppError('Waiting list entry not found', 404);
 
-        // Live seats for the entry's academic year (the pool it's queued against).
         const cap = await prisma.courseCapacity.findUnique({
             where: { courseId_academicYearId: { courseId: entry.courseId, academicYearId: entry.academicYearId } },
             select: { totalSeats: true, filledSeats: true },
@@ -403,7 +343,6 @@ export const WaitingListService = {
         const totalSeats  = cap?.totalSeats  ?? 0;
         const filledSeats = cap?.filledSeats ?? 0;
 
-        // Total amount the student has paid (SUCCESS) for that year.
         const paid = await prisma.payment.aggregate({
             where: { studentId: entry.studentId, status: PaymentStatus.SUCCESS, academicYearId: entry.academicYearId },
             _sum: { amount: true },
@@ -432,22 +371,6 @@ export const WaitingListService = {
         };
     },
 
-    /**
-     * Allot a seat from the waiting list. Moves student from WAITING → ALLOTTED,
-     * sets admission to SEAT_ALLOTTED, and applies the chosen accommodation.
-     *
-     * allocation.type:
-     *   - HOSTEL    → requires { hostelType (SHARING_*), hostelPaymentMode (YEARWISE|SEMWISE) }.
-     *                 hostelId is OPTIONAL — the student picks sharing + payment mode here;
-     *                 the specific hostel/bed is assigned later. With no hostelId the choice
-     *                 is recorded on the admission and hostel fee demands are deferred to the
-     *                 assign-hostel/allocate-bed step. With a hostelId, assignHostel runs now.
-     *   - TRANSPORT → requires { transportRouteId }
-     *   - NONE      → no accommodation
-     * The seat is claimed first (the scarce resource); accommodation is applied
-     * afterwards via AccommodationService and is best-effort — if it fails the seat
-     * stays allotted and an accommodationWarning is returned (admin can re-run assign).
-     */
     async allotFromWaitingList(
         waitingListId: string,
         allocation: {
@@ -465,10 +388,8 @@ export const WaitingListService = {
             throw new AppError(`Invalid accommodation type. Allowed: ${Object.values(AccommodationType).join(', ')}`, 400);
         }
 
-        // Validate accommodation inputs up front (before claiming the seat).
         if (allocation.type === AccommodationType.HOSTEL) {
-            // hostelId is optional at this stage — sharing + payment mode are what the
-            // student picks; the specific hostel is allocated later.
+
             if (!allocation.hostelType || !Object.values(HostelType).includes(allocation.hostelType)) {
                 throw new AppError(`Valid hostelType (sharing) is required for HOSTEL. Allowed: ${Object.values(HostelType).join(', ')}`, 400);
             }
@@ -499,22 +420,17 @@ export const WaitingListService = {
         const ayId = entry.student.admissionDetails.academicYearId;
         if (!ayId) throw new AppError('Admission has no academic year', 400);
 
-        // Check seat availability for this academic year
         const capacity = await getCourseCapacity(prisma, entry.courseId, ayId);
         const availableSeats = capacity.totalSeats - capacity.filledSeats;
         if (availableSeats <= 0) throw new AppError(`No seats available in ${entry.course.name}`, 400);
 
         await prisma.$transaction(async (tx) => {
-            // 1. Atomic check-and-increment for this year's capacity
+
             const claimed = await tryAtomicIncrementCourseCapacity(tx, entry.courseId, ayId);
             if (!claimed) {
                 throw new AppError(`No seats available in ${entry.course.name}`, 400);
             }
 
-            // 2. Update admission — seat + the student's accommodation choice.
-            //    For HOSTEL we record type/sharing/mode now (hostelId may be null until
-            //    the specific hostel is assigned). For TRANSPORT, assignTransport (below)
-            //    sets the route. NONE leaves accommodationType = NONE.
             const accommodationData: any = {};
             if (allocation.type === AccommodationType.HOSTEL) {
                 accommodationData.accommodationType = AccommodationType.HOSTEL;
@@ -535,15 +451,11 @@ export const WaitingListService = {
                 }
             });
 
-            // 3. Mark this entry as ALLOTTED
             await tx.waitingList.update({
                 where: { id: waitingListId },
                 data: { status: WaitingListStatus.ALLOTTED, allottedAt: new Date(), allottedBy: adminId, updatedBy: adminId }
             });
 
-            // 4. Cancel any other WAITING entries for this student in the SAME year.
-            // With one-course-per-year this is normally a no-op; the year scope
-            // ensures a future-year entry is never collaterally cancelled.
             await tx.waitingList.updateMany({
                 where: {
                     studentId: entry.studentId,
@@ -554,7 +466,6 @@ export const WaitingListService = {
                 data: { status: WaitingListStatus.CANCELLED, updatedBy: adminId }
             });
 
-            // 5. Log seat allocation
             const seatAllocYearId = (await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } })).id;
             await tx.seatAllocation.create({
                 data: {
@@ -569,14 +480,12 @@ export const WaitingListService = {
 
         logger.info(`[allotFromWaitingList] Student=${entry.studentId} allotted to ${entry.course.name} from waiting list`);
 
-        // Apply the chosen accommodation after the seat is secured. Best-effort:
-        // a failure here must not undo the (already committed) seat allotment.
         let accommodationWarning: string | undefined;
         let accommodationNote: string | undefined;
         try {
             if (allocation.type === AccommodationType.HOSTEL) {
                 if (allocation.hostelId) {
-                    // Specific hostel chosen → assign now (creates pricing snapshot + demands).
+
                     await AccommodationService.assignHostel(
                         entry.studentId,
                         allocation.hostelId,
@@ -586,8 +495,7 @@ export const WaitingListService = {
                     );
                     logger.info(`[allotFromWaitingList] Hostel assigned for student=${entry.studentId} hostel=${allocation.hostelId} type=${allocation.hostelType} mode=${allocation.hostelPaymentMode}`);
                 } else {
-                    // No specific hostel yet — choice (sharing + mode) is recorded on the
-                    // admission; hostel fee demands + bed are created when assign-hostel runs.
+
                     accommodationNote = `Hostel choice recorded (${allocation.hostelType}, ${allocation.hostelPaymentMode}). Assign a specific hostel/bed later to generate hostel fee demands.`;
                     logger.info(`[allotFromWaitingList] Hostel intent recorded (no hostelId) for student=${entry.studentId} type=${allocation.hostelType} mode=${allocation.hostelPaymentMode}`);
                 }
@@ -599,15 +507,12 @@ export const WaitingListService = {
                 );
                 logger.info(`[allotFromWaitingList] Transport assigned for student=${entry.studentId} route=${allocation.transportRouteId}`);
             }
-            // NONE → nothing to assign; admission stays accommodationType=NONE.
+
         } catch (err: any) {
             accommodationWarning = `Seat allotted, but accommodation (${allocation.type}) could not be applied: ${err?.message || err}. Re-run the assign-${allocation.type === AccommodationType.HOSTEL ? 'hostel' : 'transport'} flow.`;
             logger.error(`[allotFromWaitingList] Accommodation apply failed for student=${entry.studentId}: ${err}`);
         }
 
-        // Generate the allotment order (same as the regular seat-allotment flow) and
-        // return a presigned URL to the PDF. Best-effort: a PDF/S3 hiccup must not undo
-        // the committed allotment.
         let allotmentOrderGenerated = false;
         let allotmentOrderUrl: string | null = null;
         try {
@@ -626,7 +531,7 @@ export const WaitingListService = {
         }
 
         return {
-            // Top-level kept for the controller's success message + backward compatibility.
+
             studentId: entry.studentId,
             studentName: entry.student.name,
             courseId: entry.courseId,
@@ -658,21 +563,18 @@ export const WaitingListService = {
             },
             allotmentOrder: {
                 generated: allotmentOrderGenerated,
-                url: allotmentOrderUrl,   // presigned (≈1h); null if generation/lookup failed
+                url: allotmentOrderUrl,
             },
             ...(accommodationNote ? { accommodationNote } : {}),
             ...(accommodationWarning ? { accommodationWarning } : {}),
         };
     },
 
-    /**
-     * Remove a student from the waiting list (cancel specific entry or all).
-     */
     async removeFromWaitingList(data: { waitingListId?: string; studentId?: string; courseId?: string }, adminId: string) {
         const { waitingListId, studentId, courseId } = data;
 
         if (waitingListId) {
-            // Cancel specific entry
+
             const entry = await prisma.waitingList.findUnique({ where: { id: waitingListId } });
             if (!entry) throw new AppError('Waiting list entry not found', 404);
             if (entry.status !== WaitingListStatus.WAITING) throw new AppError(`Entry is already ${entry.status}`, 400);
@@ -686,7 +588,7 @@ export const WaitingListService = {
         }
 
         if (studentId) {
-            // Cancel all waiting entries for a student (optionally filtered by course)
+
             const where: any = { studentId, status: WaitingListStatus.WAITING };
             if (courseId) where.courseId = courseId;
 
@@ -701,14 +603,8 @@ export const WaitingListService = {
         throw new AppError('Either waitingListId or studentId is required', 400);
     },
 
-    /**
-     * Export the waiting list to Excel (.xlsx), honouring the SAME filters and
-     * ordering as getWaitingList (courseId, status, category, amountSort) — but
-     * all rows, not paginated. Returns the workbook buffer.
-     */
     async exportWaitingListExcel(query: { courseId?: string; status?: string; category?: string; amountSort?: string }) {
-        // Reuse getWaitingList so the export matches the on-screen list exactly
-        // (same category filter + amountSort/createdAt ordering + amountPaid).
+
         const { entries, sortedBy } = await this.getWaitingList({ ...query, page: 1, limit: 1_000_000 });
 
         const workbook = new ExcelJS.Workbook();

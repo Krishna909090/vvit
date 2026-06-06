@@ -5,7 +5,7 @@ import { Role } from '../constants/roles';
 export const enableExamSchema = z.object({
     body: z.object({
         studentIds: z.array(z.string().uuid()),
-        testDate: z.string().datetime().or(z.date()), // Accept ISO string or Date object
+        testDate: z.string().datetime().or(z.date()),
         testCenter: z.string().min(1, "Test center is required"),
     }),
 });
@@ -21,10 +21,8 @@ export const verifyAndAllotSeatSchema = z.object({
     body: z.object({
         studentId: z.string().uuid(),
         approved: z.boolean(),
-        allottedCourseId: z.string().uuid().optional(), // Required if approved is true, but we can refine this
-        // Optional scholarship % chosen at allotment. Omitted/0 means "no scholarship":
-        // any existing StudentScholarship row is forced to isEligible=NO so stale eligible
-        // rows can't leak into generateFeeDemands.
+        allottedCourseId: z.string().uuid().optional(),
+
         scholarshipPercentage: z.number().min(0).max(100).optional(),
     }).refine((data) => !data.approved || (data.approved && data.allottedCourseId), {
         message: "Allotted course ID is required when approved is true",
@@ -65,7 +63,7 @@ export const createDiscountRequestSchema = z.object({
         reason: z.string().min(1, "Reason is required"),
         documentUrl: z.string().url("Invalid URL").optional(),
         referredBy: z.string().optional(),
-        // New optional flag to bypass duplicate‑request check
+
         forceCreate: z.boolean().optional(),
         items: z.array(z.object({
             feeHeadId: z.string().optional().nullable(),
@@ -84,7 +82,7 @@ export const approveDiscountSchema = z.object({
             approvedAmount: z.number().min(0)
         })).optional(),
         remarks: z.string().optional(),
-        // New optional flag to bypass conflict check
+
         forceApprove: z.boolean().optional(),
     }),
 });
@@ -128,7 +126,6 @@ export const updateExamScoreSchema = z.object({
     }),
 });
 
-// HH:MM in 24-hour format, e.g. "07:30", "17:00". Allows HH:MM:SS too ("07:30:00").
 const timeRegex = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
 export const createTransportRouteSchema = z.object({
@@ -195,10 +192,10 @@ export const getAllApplicationsSchema = z.object({
         certificateStatus: z.string().optional(),
         qualificationLevel: z.string().optional(),
         qualificationBoard: z.string().optional(),
-        marks10thMin: z.string().optional(),
-        marks10thMax: z.string().optional(),
-        marks12thMin: z.string().optional(),
-        marks12thMax: z.string().optional(),
+        marks10thMin: z.coerce.number().optional(),
+        marks10thMax: z.coerce.number().optional(),
+        marks12thMin: z.coerce.number().optional(),
+        marks12thMax: z.coerce.number().optional(),
         certificatesApproved: z.string().optional(),
         seatStatus: z.string().optional(),
         scholarship: z.string().optional(),
@@ -285,9 +282,6 @@ export const getAgentCommissionsSchema = z.object({
     }),
 });
 
-// ERP Schemas
-
-// Academics
 export const createSchoolSchema = z.object({
     body: z.object({
         name: z.string().min(1, "Name is required"),
@@ -330,7 +324,6 @@ export const createSectionSchema = z.object({
     }),
 });
 
-// Hostel
 export const createHostelBlockSchema = z.object({
     body: z.object({
         hostelId: z.string().uuid(),
@@ -349,7 +342,6 @@ export const createHostelRoomSchema = z.object({
     }),
 });
 
-// Transport
 export const createVehicleSchema = z.object({
     body: z.object({
         number: z.string().min(1),
@@ -368,7 +360,6 @@ export const createTransportStopSchema = z.object({
     }),
 });
 
-// Finance
 export const createAcademicYearSchema = z.object({
     body: z.object({
         code: z.string().min(1, "Code is required"),
@@ -430,8 +421,6 @@ export const createBulkFeeStructureSchema = z.object({
     }),
 });
 
-// Create fee-structure rows for many fee heads in one go, all sharing the same
-// (course, year, entryType, quota, etc.) combination. Each entry sets its own amount.
 export const bulkHeadsFeeStructureSchema = z.object({
     body: z.object({
         courseId:            z.string().uuid('Invalid Course ID'),
@@ -450,37 +439,23 @@ export const bulkHeadsFeeStructureSchema = z.object({
         .min(1,   'feeHeads must contain at least one entry')
         .max(50,  'feeHeads cannot exceed 50 entries per call'),
     })
-    // LATERAL business rule: entries at year 2 or later only.
+
     .refine(
         b => !(b.entryType === 'LATERAL' && (b.yearOfStudy ?? 2) < 2),
         { message: 'LATERAL entry requires yearOfStudy >= 2', path: ['yearOfStudy'] },
     )
-    // No duplicate feeHeadIds within the array.
+
     .refine(
         b => new Set(b.feeHeads.map(h => h.feeHeadId)).size === b.feeHeads.length,
         { message: 'Duplicate feeHeadId(s) in array — each fee head can appear only once', path: ['feeHeads'] },
     )
-    // entryAcademicYearId, if provided, should equal academicYearId per our cohort rule.
-    // (Soft check — log via service if they disagree.)
+
     .refine(
         b => !b.entryAcademicYearId || b.entryAcademicYearId === b.academicYearId,
         { message: 'entryAcademicYearId should equal academicYearId (fee cohort = entry year)', path: ['entryAcademicYearId'] },
     ),
 });
 
-/**
- * Clone fee structures from one academic year to another. Used for:
- *  - Setting up a new academic year (clone prior year, then edit individual rows)
- *  - Back-filling past years for lateral / back-dated admissions
- *
- * `multiplier` applies a flat percentage adjustment (1.05 = +5%, 0.95 = -5%).
- * `courseIds` restricts the clone to specific courses (omit to clone all).
- */
-/**
- * Assigns rollNumber + section to a previously-registered student. Used after
- * counseling / seat allotment for both fresh and lateral students. Creates the
- * StudentEnrollment row for the active academic year.
- */
 export const assignEnrollmentSchema = z.object({
     params: z.object({
         studentId: z.string().uuid('Invalid student ID'),
@@ -531,8 +506,7 @@ export const generateFeeDemandsSchema = z.object({
         studentId: z.string().uuid(),
         courseId: z.string().uuid(),
         academicYearId: z.string().uuid(),
-        // Optional — when not provided, service defaults preserve legacy behavior
-        // (allowLegacyFallback=true, requireEnrollment=false, deleteExisting=false).
+
         deleteExisting:       z.boolean().optional(),
         allowLegacyFallback:  z.boolean().optional(),
         requireEnrollment:    z.boolean().optional(),
@@ -552,9 +526,9 @@ export const generateFeeDemandsBulkSchema = z.object({
             studentIds:           z.array(z.string().uuid()).optional(),
         }).optional(),
         runOptions: z.object({
-            allowLegacyFallback:  z.boolean().optional(), // default false (strict for bulk)
-            requireEnrollment:    z.boolean().optional(), // default true  (bulk verifies)
-            deleteExisting:       z.boolean().optional(), // default false
+            allowLegacyFallback:  z.boolean().optional(),
+            requireEnrollment:    z.boolean().optional(),
+            deleteExisting:       z.boolean().optional(),
             dueDateFallbackDays:  z.number().int().min(0).max(365).optional(),
         }).optional(),
     }),
@@ -577,10 +551,6 @@ export const applyFeeCorrectionSchema = z.object({
         remarks:     z.string().trim().max(500).optional(),
     }),
 });
-
-// ════════════════════════════════════════════════════════════════════════════
-// Semester marks (Subject + SemesterMark)
-// ════════════════════════════════════════════════════════════════════════════
 
 export const createSubjectSchema = z.object({
     body: z.object({
@@ -657,10 +627,6 @@ export const updateMarkSchema = z.object({
         { message: 'At least one field must be provided' }
     ),
 });
-
-// ════════════════════════════════════════════════════════════════════════════
-// Class attendance
-// ════════════════════════════════════════════════════════════════════════════
 
 const dateInputSchema = z.union([z.string().datetime(), z.string().regex(/^\d{4}-\d{2}-\d{2}/), z.date()]);
 
@@ -775,7 +741,6 @@ export const updateAcademicQualificationSchema = z.object({
     }),
 });
 
-
 export const deleteAcademicQualificationSchema = z.object({
     params: z.object({
         id: z.string().uuid("Invalid Qualification ID"),
@@ -799,13 +764,13 @@ export const finalizeAdmissionSchema = z.object({
         }).nullable(),
         allocation: z.object({
             type: z.nativeEnum(AccommodationType),
-            hostelId: z.string().uuid().optional(),                         // optional — inferred from student's admission if not sent
+            hostelId: z.string().uuid().optional(),
             transportRouteId: z.string().uuid().optional(),
             hostelType: z.nativeEnum(HostelType).optional(),
             hostelPaymentMode: z.nativeEnum(HostelPaymentMode).optional(),
         }).refine((data) => {
             if (data.type === AccommodationType.HOSTEL) {
-                // hostelId is no longer required in body — picked up from student's admission
+
                 return !!data.hostelType && !!data.hostelPaymentMode;
             }
             if (data.type === AccommodationType.TRANSPORT) return !!data.transportRouteId;
@@ -816,30 +781,14 @@ export const finalizeAdmissionSchema = z.object({
         course: z.object({
             allottedCourseId: z.string().uuid(),
         }),
-        // Optional: the academic year of the BATCH the student joins (the seat pool
-        // to claim from). For a lateral via finalize, send the batch's year (e.g. the
-        // previous year). Omit for regular first-year students → defaults to current year.
+
         batchAcademicYearId: z.string().uuid().optional(),
     }),
 });
 
-/**
- * Manual entry admission — lateral entry, transfer, or back-dated admission.
- *
- * The endpoint is used when a student needs to be added directly into the system
- * outside the normal application → entrance → seat-allotment → finalize flow.
- *
- * Three valid scenarios:
- *   1. Lateral year-2/3/4 (e.g., diploma → BTech)
- *   2. Transfer from another institution at any year
- *   3. Back-dated admission (entering a past academic year's cohort now)
- *
- * Defaults: entry.type=REGULAR, entry.yearOfStudy=1, entry.isBackdated=false.
- * Currying these defaults makes this validator usable for fresh manual admissions too.
- */
 export const manualEntryAdmissionSchema = z.object({
     body: z.object({
-        // ── Student profile ────────────────────────────────────────────
+
         student: z.object({
             name:          z.string().trim().min(1),
             fatherName:    z.string().trim().min(1),
@@ -860,40 +809,34 @@ export const manualEntryAdmissionSchema = z.object({
             quotaType:     z.nativeEnum(QuotaType),
         }),
 
-        // ── Course allocation ──────────────────────────────────────────
         course: z.object({
             allottedCourseId: z.string().uuid('Invalid Course ID'),
         }),
 
-        // ── Entry context ──────────────────────────────────────────────
         entry: z.object({
             type:           z.nativeEnum(AdmissionEntryType).default(AdmissionEntryType.REGULAR),
             yearOfStudy:    z.number().int().min(1).max(10).default(1),
             academicYearId: z.string().uuid('Invalid Academic Year ID'),
-            currentSemester: z.number().int().min(1).max(20).optional(), // defaults to (yearOfStudy*2 - 1)
+            currentSemester: z.number().int().min(1).max(20).optional(),
             reason:         z.string().trim().max(500).optional(),
             isBackdated:    z.boolean().default(false),
-            instituteCode:  z.enum(['VVITU', 'VVITPU']).optional(),  // defaults to VVITU server-side
+            instituteCode:  z.enum(['VVITU', 'VVITPU']).optional(),
         }).refine(
             e => e.type !== AdmissionEntryType.LATERAL || e.yearOfStudy >= 2,
             { message: 'LATERAL entry requires yearOfStudy >= 2', path: ['yearOfStudy'] }
         ),
 
-        // ── Enrollment (section + roll number) ─────────────────────────
         enrollment: z.object({
             sectionId:  z.string().uuid('Invalid Section ID'),
             rollNumber: z.string().trim().min(1),
         }),
 
-        // ── Scholarship — strict tier list for lateral, free for fresh ─
         scholarship: z.object({
             ruleId:     z.string().uuid().optional(),
-            // Lateral entries are restricted to 0/15/25/50; REGULAR entries can use any value.
-            // The service layer enforces the lateral-only restriction.
+
             percentage: z.number().min(0).max(100),
         }).optional(),
 
-        // ── Optional same-day accommodation ────────────────────────────
         accommodation: z.object({
             type:              z.nativeEnum(AccommodationType).default(AccommodationType.NONE),
             hostelId:          z.string().uuid().optional(),
@@ -906,7 +849,6 @@ export const manualEntryAdmissionSchema = z.object({
             return true;
         }, { message: 'HOSTEL needs hostelId+hostelType+hostelPaymentMode; TRANSPORT needs transportRouteId' }).optional(),
 
-        // ── Optional carried-over payment from prior institution ───────
         priorPayment: z.object({
             amount:          z.number().positive(),
             method:          z.nativeEnum(PaymentMethod),
@@ -928,7 +870,7 @@ export const assignRoleGroupSchema = z.object({
     body: z.object({
         userId: z.string().uuid("Invalid User ID"),
         role: z.string().optional(),
-        // Refine for stricter strings if needed, but assuming any valid string for now
+
         groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
     }).refine((data: any) => data.role !== undefined || data.groupIds !== undefined, {
         message: "Either role or groupIds must be provided",
@@ -975,7 +917,6 @@ export const updateSeatAllotedBySchema = z.object({
     }),
 });
 
-// CourseCapacity (per-year sanctioned + filled seats)
 export const createCourseCapacitySchema = z.object({
     body: z.object({
         courseId:       z.string().uuid(),

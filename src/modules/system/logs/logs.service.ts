@@ -8,16 +8,12 @@ const cwClient = new CloudWatchLogsClient({
 
 const LOG_GROUP = process.env.CW_LOG_GROUP || '/vvitu/erp/application';
 
-/**
- * Search logs by correlationId, studentId, applicationId, or txnId.
- * Returns structured timeline entries.
- */
 export const searchTransactionLogs = async (
     searchTerm: string | null,
     startTime?: Date,
     endTime?: Date
 ) => {
-    const start = startTime || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // default 7 days
+    const start = startTime || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const end = endTime || new Date();
 
     const query = searchTerm
@@ -35,13 +31,12 @@ export const searchTransactionLogs = async (
         const queryId = startQuery.queryId;
         if (!queryId) throw new AppError('Failed to start CloudWatch query', 500);
 
-        // Poll for results (CloudWatch Insights is async)
         let results: any[] = [];
         let status = 'Running';
         let attempts = 0;
 
         while (status === 'Running' || status === 'Scheduled') {
-            if (attempts++ > 20) break; // max ~10 seconds
+            if (attempts++ > 20) break;
             await new Promise(r => setTimeout(r, 500));
 
             const response = await cwClient.send(new GetQueryResultsCommand({ queryId }));
@@ -51,7 +46,6 @@ export const searchTransactionLogs = async (
             }
         }
 
-        // Parse results into structured timeline
         const timeline = results.map(row => {
             const timestampField = row.find((f: any) => f.field === '@timestamp');
             const messageField = row.find((f: any) => f.field === '@message');
@@ -59,7 +53,6 @@ export const searchTransactionLogs = async (
             const timestamp = timestampField?.value || '';
             const rawMessage = messageField?.value || '';
 
-            // Try to parse as JSON (structured log)
             try {
                 const parsed = JSON.parse(rawMessage);
                 return {
@@ -72,7 +65,7 @@ export const searchTransactionLogs = async (
                     meta: parsed.meta
                 };
             } catch {
-                // Plain text log — extract what we can
+
                 return {
                     timestamp,
                     level: rawMessage.includes('error') ? 'error' : rawMessage.includes('warn') ? 'warn' : 'info',
@@ -97,9 +90,6 @@ export const searchTransactionLogs = async (
     }
 };
 
-/**
- * Fallback: Search from local log files when CloudWatch is not configured.
- */
 export const searchLocalLogs = async (
     searchTerm: string | null,
     days: number = 7,
@@ -125,7 +115,6 @@ export const searchLocalLogs = async (
             if (!line.trim()) continue;
             if (searchTerm && !line.includes(searchTerm)) continue;
 
-            // Deduplicate (error.log entries also appear in application.log)
             if (seenLines.has(line)) continue;
             seenLines.add(line);
 
@@ -162,7 +151,6 @@ export const searchLocalLogs = async (
         date.setDate(date.getDate() - d);
         const dateStr = date.toISOString().split('T')[0];
 
-        // Read both application and error log files for the date
         await readLogFile(path.join(logDir, `application-${dateStr}.log`));
         await readLogFile(path.join(logDir, `error-${dateStr}.log`));
     }
@@ -179,17 +167,11 @@ export const searchLocalLogs = async (
     };
 };
 
-/**
- * Extract a coarse module name from legacy log messages like
- * "[initiateApplicationFeePayment]" or "[InvoiceService]". Maps prefixes to
- * canonical module tags (PAYMENT / INVOICE / LEDGER / etc.) so the UI
- * timeline can color-code by domain. Falls back to "SYSTEM".
- */
 function extractModule(message: string): string {
     const match = message?.match(/\[(\w+?)(?:Service|Controller)?\]/);
     if (match) {
         const raw = match[1];
-        // Map common prefixes to module names
+
         if (raw.includes('payment') || raw.includes('Payment') || raw.includes('PhonePe')) return 'PAYMENT';
         if (raw.includes('invoice') || raw.includes('Invoice')) return 'INVOICE';
         if (raw.includes('admission') || raw.includes('Admission')) return 'ADMISSION';
@@ -204,11 +186,6 @@ function extractModule(message: string): string {
     return 'SYSTEM';
 }
 
-/**
- * Extract a coarse action tag (INITIATE / SUCCESS / FAILED / GENERATED / …)
- * from legacy log message text. Used to render timeline entries with the
- * right icon/badge in the UI. Returns "" when no verb matches.
- */
 function extractAction(message: string): string {
     if (!message) return '';
     const lower = message.toLowerCase();

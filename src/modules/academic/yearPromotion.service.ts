@@ -4,33 +4,17 @@ import { AppError } from '../../utils/AppError';
 import { assertAcademicYearWritable } from '../../utils/studentContext';
 import { FeeService } from '../finance/fee.service';
 
-/**
- * Year Promotion Service
- * Handles student progression from one academic year to the next.
- */
-
 interface PromotionResult {
     total: number;
     promoted: number;
     skipped: number;
     failed: number;
-    creditsCarriedForward: number;     // count of FeeCorrection rows carried
-    creditAmountCarriedForward: number; // ₹ total of carried credit
-    demandsSeeded: number;             // count of new-year demands created
+    creditsCarriedForward: number;
+    creditAmountCarriedForward: number;
+    demandsSeeded: number;
     details: { studentId: string; status: string; message?: string }[];
 }
 
-/**
- * Promote all active students from current academic year to new academic year.
- * Creates new StudentEnrollment records with incremented semester/year.
- *
- * For each promoted student, this also (when options enabled — default ON):
- *   - Validates the target academic year is writable (not isLocked)
- *   - Seeds next-year fee demands via FeeService.generateFeeDemands (if FeeStructure rows exist)
- *   - Carries forward unsettled FeeCorrection refunds:
- *       * applies the credit as discount across new-year PENDING demands (largest first)
- *       * marks each carried correction isSettled=true with carriedForwardToYearId
- */
 export const promoteStudents = async (
     fromAcademicYearId: string,
     toAcademicYearId: string,
@@ -42,7 +26,6 @@ export const promoteStudents = async (
 
     logger.info(`[YearPromotion] Starting promotion from=${fromAcademicYearId} to=${toAcademicYearId} by=${adminId} seed=${seedFeeDemands} carry=${carryForwardCredits}`);
 
-    // Validate academic years
     const [fromYear, toYear] = await Promise.all([
         prisma.academicYear.findUnique({ where: { id: fromAcademicYearId } }),
         prisma.academicYear.findUnique({ where: { id: toAcademicYearId } })
@@ -51,11 +34,9 @@ export const promoteStudents = async (
     if (!fromYear) throw new AppError('Source academic year not found', 404);
     if (!toYear) throw new AppError('Target academic year not found', 404);
     if (fromAcademicYearId === toAcademicYearId) throw new AppError('Source and target academic year cannot be the same', 400);
-    // Target year must be writable. Source year may be locked — that's fine because
-    // we don't write to source-year records; we only read enrollment.
+
     await assertAcademicYearWritable(toAcademicYearId);
 
-    // Get all active enrollments in the source academic year
     const activeEnrollments = await prisma.studentEnrollment.findMany({
         where: {
             academicYearId: fromAcademicYearId,
@@ -81,7 +62,7 @@ export const promoteStudents = async (
 
     for (const enrollment of activeEnrollments) {
         try {
-            // Check if student already has enrollment in target year
+
             const existingInTarget = await prisma.studentEnrollment.findUnique({
                 where: {
                     studentId_academicYearId: {
@@ -101,10 +82,9 @@ export const promoteStudents = async (
                 continue;
             }
 
-            const newSemester = (enrollment.currentSemester || 1) + 2; // Advance by 2 semesters (1 year)
+            const newSemester = (enrollment.currentSemester || 1) + 2;
             const newYearOfStudy = Math.ceil(newSemester / 2);
 
-            // Create new enrollment for target year
             await prisma.studentEnrollment.create({
                 data: {
                     studentId: enrollment.studentId,
@@ -117,14 +97,11 @@ export const promoteStudents = async (
                 }
             });
 
-            // Mark old enrollment as completed
             await prisma.studentEnrollment.update({
                 where: { id: enrollment.id },
                 data: { status: 'COMPLETED' as any }
             });
 
-            // Advance the admission's "current year" pointer too. entryAcademicYearId
-            // stays frozen for cohort reporting.
             const admission = await prisma.studentAdmission.findUnique({
                 where: { studentId: enrollment.studentId },
                 select: { id: true, allottedCourseId: true, academicYearId: true }
@@ -136,8 +113,6 @@ export const promoteStudents = async (
                 });
             }
 
-            // Optional: seed next-year fee demands. Quietly skip if course missing
-            // (manual entries that didn't go through normal admission).
             let seededCount = 0;
             if (seedFeeDemands && admission?.allottedCourseId) {
                 try {
@@ -157,7 +132,7 @@ export const promoteStudents = async (
                             toAcademicYearId,
                             adminId,
                             false
-                            // allowLegacyFallback defaults to true → preserves legacy promotion behavior
+
                         );
                         seededCount = seeded?.generated ?? 0;
                         result.demandsSeeded += seededCount;
@@ -167,9 +142,6 @@ export const promoteStudents = async (
                 }
             }
 
-            // Optional: carry forward unsettled FeeCorrection credits as discount on
-            // the new year's largest PENDING demands. Settles each correction with
-            // carriedForwardToYearId set so audit trail links source → target.
             let carriedAmount = 0;
             if (carryForwardCredits) {
                 try {
@@ -183,7 +155,7 @@ export const promoteStudents = async (
                     });
                     if (unsettled.length > 0) {
                         const totalCredit = unsettled.reduce((s: number, c: any) => s + (c.amount ?? 0), 0);
-                        // Apply credit across PENDING/PARTIAL demands in the new year, largest first
+
                         const targets = await prisma.studentFeeDemand.findMany({
                             where: {
                                 studentId: enrollment.studentId,
@@ -198,8 +170,7 @@ export const promoteStudents = async (
                         let remaining = totalCredit;
                         for (const d of targets) {
                             if (remaining <= 0) break;
-                            // Only the UNPAID portion is open to credit — applying credit against
-                            // money already paid would silently destroy the carried-forward credit.
+
                             const paidOnDemand = (d as any).payments.reduce((s: number, p: any) => s + (p.amount ?? 0), 0);
                             const open = Math.max(0, (d.netAmount ?? d.amount) - paidOnDemand);
                             if (open <= 0) continue;
@@ -220,19 +191,13 @@ export const promoteStudents = async (
                             remaining -= apply;
                         }
 
-                        // Mark all carried corrections settled. If `remaining > 0` (no eligible
-                        // demand to absorb full credit), the leftover stays in the response so
-                        // admin knows to issue a cash refund manually.
                         carriedAmount = totalCredit - remaining;
-                        // Settle ONLY corrections whose full amount was actually applied. If
-                        // `remaining > 0`, the corrections that couldn't be absorbed stay
-                        // isSettled=false so the credit remains claimable later — never
-                        // force-settle a credit that wasn't delivered.
+
                         let settleBudget = carriedAmount;
                         let settledCount = 0;
                         for (const c of unsettled) {
                             const amt = c.amount ?? 0;
-                            if (settleBudget + 1e-6 < amt) break; // not enough applied to fully cover this one
+                            if (settleBudget + 1e-6 < amt) break;
                             await (prisma as any).feeCorrection.update({
                                 where: { id: c.id },
                                 data: {
@@ -284,9 +249,6 @@ export const promoteStudents = async (
     return result;
 };
 
-/**
- * Get enrollment history for a student across all academic years.
- */
 export const getStudentEnrollmentHistory = async (studentId: string) => {
     const enrollments = await prisma.studentEnrollment.findMany({
         where: { studentId },
@@ -309,9 +271,6 @@ export const getStudentEnrollmentHistory = async (studentId: string) => {
     }));
 };
 
-/**
- * Get financial summary for a student by academic year.
- */
 export const getStudentYearWiseFinancials = async (studentId: string) => {
     const [payments, demands, ledger] = await Promise.all([
         prisma.payment.findMany({
@@ -331,7 +290,6 @@ export const getStudentYearWiseFinancials = async (studentId: string) => {
         })
     ]);
 
-    // Group by academic year
     const yearMap = new Map<string, { year: string, demands: any[], payments: any[], ledger: any[], totalDemand: number, totalPaid: number }>();
 
     for (const d of demands) {

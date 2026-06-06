@@ -1,26 +1,15 @@
-// Shared helpers + constants for the adminStudent service modules.
-// All split files (applications.ts, accommodation.ts, admission.ts, waitingList.ts)
-// import from here so the legacy `adminStudent.service.ts` barrel doesn't have to.
+
 
 import prisma from '../../../config/prisma';
-import { AdmissionStatus, PaymentComponent, PaymentStatus, FeeStatus } from '@prisma/client';
+import { AdmissionStatus, PaymentComponent, PaymentStatus, FeeStatus, Prisma } from '@prisma/client';
 import { Env } from 'pg-sdk-node';
 
-// --- CONFIGURATION CONSTANTS ---
 export const PHONEPE_MERCHANT_ID = process.env.PHONEPE_MERCHANT_ID || '';
 export const PHONEPE_SALT_KEY = process.env.PHONEPE_SALT_KEY || '';
 export const PHONEPE_SALT_INDEX = parseInt(process.env.PHONEPE_SALT_INDEX || '1', 10);
 export const PHONEPE_ENV = process.env.PHONEPE_ENV === 'PROD' ? Env.PRODUCTION : Env.SANDBOX;
 export const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://localhost:5173';
 
-/**
- * Prisma include fragment for a preference course: pulls every per-year capacity
- * row (totalSeats / filledSeats) plus its academic year tag. The caller selects the
- * right row via {@link attachCourseCapacity} — for a lateral student that's the
- * batch's 1st-year pool (an inactive prior year), NOT the active year. We can't
- * filter to that year here because the batch year is per-student, not known at
- * include-build time, so we fetch all rows (a handful per course) and pick in JS.
- */
 export const PREF_COURSE_WITH_CAPACITY = {
     include: {
         capacities: {
@@ -29,16 +18,6 @@ export const PREF_COURSE_WITH_CAPACITY = {
     },
 } as const;
 
-/**
- * Flatten the matching capacity row into top-level `totalSeats / filledSeats /
- * academicYear` on a pref-course object so the UI doesn't have to dig into the array.
- *
- * Picks the capacity for `batchAcademicYearId` when given — that's the seat pool a
- * student is actually allotted from. For a lateral, the batch's 1st-year (an inactive
- * prior year); for a regular student it equals the active year, so the result is
- * unchanged. Falls back to the active-year row when no batch year is passed or the
- * course has no capacity configured for it. Returns null/undefined unchanged.
- */
 export const attachCourseCapacity = (course: any, batchAcademicYearId?: string | null): any => {
     if (!course) return course;
     const caps: any[] = course.capacities ?? [];
@@ -55,13 +34,6 @@ export const attachCourseCapacity = (course: any, batchAcademicYearId?: string |
     };
 };
 
-/**
- * Build the Prisma `where` object for the application list/export endpoints.
- * Accepts the full query payload and returns a Prisma-shaped where clause that
- * applies search, status, quotaType, degreeType, scholarship, exam-date, marks,
- * facilities, branch-change, cancellation, allotment-order, fee-paid and date-range
- * filters in one place.
- */
 export const buildApplicationFilters = async (query: any): Promise<any> => {
     const { search, status, quotaType, degreeType, applicationId, isScholarshipEligible, createdBy, qualificationVerifiedBy, gender, pref1, pref2, pref3, applicationFeePaid, examDate, examStartDate, examEndDate, qualificationVerified, certificateStatus, qualificationLevel, qualificationBoard, marks10thMin, marks10thMax, marks12thMin, marks12thMax, certificatesApproved, seatStatus, scholarship, scholarshipPercentage, program, branch, facilities, discountApplied, branchChange, seatCancellation, cancellationReason, allotmentOrder, dateRange, startDate, endDate, seatAllotedBy, proCode, proReq } = query;
 
@@ -85,18 +57,11 @@ export const buildApplicationFilters = async (query: any): Promise<any> => {
         };
     }
 
-    // Always exclude students whose admission has been CANCELLED — irrespective of
-    // any other filter the caller passes in.
     where.NOT = [
         ...(Array.isArray(where.NOT) ? where.NOT : []),
         { admissionDetails: { status: AdmissionStatus.CANCELLED } }
     ];
 
-    // Default-exclude REGISTERED too: students at the very first lifecycle step
-    // (just signed up, no app-fee, no docs) shouldn't appear in admin queues by
-    // default. Escape hatch: when the caller explicitly passes `status=REGISTERED`,
-    // honor that and skip the exclusion so admins can still query the REGISTERED
-    // cohort directly (e.g. to follow up on students who haven't paid yet).
     if (status !== AdmissionStatus.REGISTERED) {
         where.NOT.push({ admissionDetails: { status: AdmissionStatus.REGISTERED } });
     }
@@ -249,25 +214,41 @@ export const buildApplicationFilters = async (query: any): Promise<any> => {
         });
     }
 
-    if (marks10thMin || marks10thMax) {
-        const conditions: string[] = [`"level" = '10th'`, `"gpaOrMarks" IS NOT NULL`];
-        if (marks10thMin) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${Number(marks10thMin)}`);
-        if (marks10thMax) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${Number(marks10thMax)}`);
-        const studentIds10th: { studentId: string }[] = await prisma.$queryRawUnsafe(
-            `SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE ${conditions.join(' AND ')}`
-        );
+    if (marks10thMin != null || marks10thMax != null) {
+        let studentIds10th: { studentId: string }[];
+        if (marks10thMin != null && marks10thMax != null) {
+            studentIds10th = await prisma.$queryRaw<{ studentId: string }[]>(
+                Prisma.sql`SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE "level" = '10th' AND "gpaOrMarks" IS NOT NULL AND CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${marks10thMin} AND CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${marks10thMax}`
+            );
+        } else if (marks10thMin != null) {
+            studentIds10th = await prisma.$queryRaw<{ studentId: string }[]>(
+                Prisma.sql`SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE "level" = '10th' AND "gpaOrMarks" IS NOT NULL AND CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${marks10thMin}`
+            );
+        } else {
+            studentIds10th = await prisma.$queryRaw<{ studentId: string }[]>(
+                Prisma.sql`SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE "level" = '10th' AND "gpaOrMarks" IS NOT NULL AND CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${marks10thMax}`
+            );
+        }
         academicQualificationConditions.push({
             id: { in: studentIds10th.map(r => r.studentId) }
         });
     }
 
-    if (marks12thMin || marks12thMax) {
-        const conditions: string[] = [`"level" = '12th'`, `"gpaOrMarks" IS NOT NULL`];
-        if (marks12thMin) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${Number(marks12thMin)}`);
-        if (marks12thMax) conditions.push(`CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${Number(marks12thMax)}`);
-        const studentIds12th: { studentId: string }[] = await prisma.$queryRawUnsafe(
-            `SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE ${conditions.join(' AND ')}`
-        );
+    if (marks12thMin != null || marks12thMax != null) {
+        let studentIds12th: { studentId: string }[];
+        if (marks12thMin != null && marks12thMax != null) {
+            studentIds12th = await prisma.$queryRaw<{ studentId: string }[]>(
+                Prisma.sql`SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE "level" = '12th' AND "gpaOrMarks" IS NOT NULL AND CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${marks12thMin} AND CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${marks12thMax}`
+            );
+        } else if (marks12thMin != null) {
+            studentIds12th = await prisma.$queryRaw<{ studentId: string }[]>(
+                Prisma.sql`SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE "level" = '12th' AND "gpaOrMarks" IS NOT NULL AND CAST("gpaOrMarks" AS DOUBLE PRECISION) >= ${marks12thMin}`
+            );
+        } else {
+            studentIds12th = await prisma.$queryRaw<{ studentId: string }[]>(
+                Prisma.sql`SELECT DISTINCT "studentId" FROM "AcademicQualification" WHERE "level" = '12th' AND "gpaOrMarks" IS NOT NULL AND CAST("gpaOrMarks" AS DOUBLE PRECISION) <= ${marks12thMax}`
+            );
+        }
         academicQualificationConditions.push({
             id: { in: studentIds12th.map(r => r.studentId) }
         });
@@ -402,13 +383,6 @@ export const buildApplicationFilters = async (query: any): Promise<any> => {
         };
     }
 
-    // Used by the Verify Documents module: "cleared" = SUCCESS APPLICATION_FEE payment
-    // OR a fully-waived APPLICATION_FEE demand (e.g. lateral + management quota — they
-    // never produce a payment row, so the older `applicationFeePaid=PAID` filter would
-    // wrongly exclude them). Unrelated callers should keep using `applicationFeePaid`.
-    //
-    // Default to CLEARED when `hasDocuments=true` (the Verify Documents context — the
-    // only caller passing that flag). Pass `applicationFeeCleared=ALL` to opt out.
     let applicationFeeCleared = query.applicationFeeCleared;
     if (!applicationFeeCleared && query.hasDocuments === 'true') {
         applicationFeeCleared = 'CLEARED';

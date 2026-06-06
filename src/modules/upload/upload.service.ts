@@ -4,6 +4,8 @@ import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3Client } from "../../config/awsConfig";
 import { convertToPresignedUrl } from '../../utils/s3Utils';
+import prisma from '../../config/prisma';
+import { Role } from '../../constants/roles';
 
 export interface UploadResult {
     url: string;
@@ -12,14 +14,12 @@ export interface UploadResult {
     presignedUrl?: string;
 }
 
-
 export const uploadFileToS3 = async (
     file: Express.Multer.File,
     _folder: string = 'documents'
 ): Promise<UploadResult> => {
-    // Since we are using multer-s3, the file is already uploaded to S3
-    // and the file object contains the location (url) and key.
-    const s3File = file as any; // multer-s3 adds 'location' and 'key' to file object
+
+    const s3File = file as any;
 
     if (!s3File.location || !s3File.key) {
         throw new AppError('File upload to S3 failed (missing location/key)', 500);
@@ -27,7 +27,6 @@ export const uploadFileToS3 = async (
 
     logger.info(`File uploaded to S3: ${s3File.key}`);
 
-    // Generate presigned URL for immediate use using the same method that works everywhere else
     let presignedUrl: string | undefined;
     try {
         presignedUrl = await convertToPresignedUrl(s3File.location) || undefined;
@@ -53,12 +52,15 @@ export const uploadMultipleFilesToS3 = async (
     return results;
 };
 
-export const generatePresignedUrl = async (fileUrl: string) => {
+export const generatePresignedUrl = async (
+    fileUrl: string,
+    callerRole?: string,
+    callerUserId?: string,
+) => {
     let key = '';
     try {
         const urlObj = new URL(fileUrl);
-        // Extracts the pathname without the leading slash. works for both path-style and virtual-hosted style if key is in path.
-        // decoding to handle spaces/special chars
+
         key = decodeURIComponent(urlObj.pathname.substring(1));
     } catch (e) {
         throw new AppError('Invalid URL format', 400);
@@ -66,16 +68,51 @@ export const generatePresignedUrl = async (fileUrl: string) => {
 
     if (!key) throw new AppError('Could not extract key from URL', 400);
 
+    const isAdminRole = callerRole && callerRole !== Role.STUDENT;
+
+    if (!isAdminRole && callerUserId) {
+
+        const student = await prisma.student.findFirst({
+            where: { userId: callerUserId },
+            select: { id: true },
+        });
+
+        const studentId = student?.id;
+
+        if (studentId) {
+
+            const keyBelongsToStudent = key.startsWith(`students/${studentId}/`) || key.includes(`/${studentId}/`);
+
+            const docMatch = !keyBelongsToStudent
+                ? await prisma.studentDocument.findFirst({
+                    where: { studentId, url: { contains: key } },
+                    select: { id: true },
+                })
+                : null;
+
+            const paymentMatch = !keyBelongsToStudent && !docMatch
+                ? await prisma.payment.findFirst({
+                    where: { studentId, invoiceUrl: { contains: key } },
+                    select: { id: true },
+                })
+                : null;
+
+            if (!keyBelongsToStudent && !docMatch && !paymentMatch) {
+                logger.warn(`[generatePresignedUrl] Access denied: user ${callerUserId} (student ${studentId}) requested key "${key}" which does not belong to them.`);
+                throw new AppError('Access denied to this resource', 403);
+            }
+        }
+    }
+
     const bucketName = process.env.AWS_BUCKET_NAME || '';
-    
-    // Create the command
+
     const command = new GetObjectCommand({
         Bucket: bucketName,
         Key: key
     });
 
     try {
-        const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 }); // 1 hour expiration
+        const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
         return { presignedUrl: url };
     } catch (error) {
         logger.error(`Error generating presigned URL: ${error}`);

@@ -5,12 +5,7 @@ import logger from '../../../utils/logger';
 import { convertToPresignedUrl } from '../../../utils/s3Utils';
 
 export const TransportService = {
-    // ─────────────────────────── Transport Route ───────────────────────────
 
-    /**
-     * Create a new transport route. Validates required fields, optional vehicleId,
-     * and rejects duplicate route name or bus number (case-insensitive).
-     */
     async createTransportRoute(
         name: string,
         city: string,
@@ -65,12 +60,6 @@ export const TransportService = {
         return route;
     },
 
-    /**
-     * List routes with optional `search` (matches name/city/busNumber) or
-     * targeted filters. Recomputes `filled` from current StudentAdmission rows
-     * because the cached `TransportRoute.filled` column drifts across
-     * switches/cancellations. Returns per-route stops + totals.
-     */
     async getTransportRoutes(filters?: { search?: string; name?: string; city?: string; busNumber?: string }) {
         const where: any = { isDeleted: false };
 
@@ -98,8 +87,6 @@ export const TransportService = {
             orderBy: { createdAt: 'desc' },
         });
 
-        // Recompute filled live from StudentAdmission (route.filled column drifts across switches/cancels).
-        // Counts students currently assigned to each route (excluding cancelled admissions).
         const allocCounts = await prisma.studentAdmission.groupBy({
             by: ['transportRouteId'],
             where: {
@@ -153,7 +140,6 @@ export const TransportService = {
         return { routes, totals };
     },
 
-    /** Fetch a single non-deleted route by id, with stops (ordered) + vehicle eager-loaded. */
     async getTransportRouteById(id: string) {
         const route = await prisma.transportRoute.findFirst({
             where: { id, isDeleted: false },
@@ -163,7 +149,6 @@ export const TransportService = {
         return route;
     },
 
-    /** Patch route fields (name/city/cost/busNumber/capacity/times/vehicle). Validates vehicleId if changed. */
     async updateTransportRoute(id: string, data: any, updatedBy?: string) {
         logger.info(`[updateTransportRoute] Updating route: ${id}`);
         const route = await prisma.transportRoute.findUnique({ where: { id } });
@@ -192,7 +177,6 @@ export const TransportService = {
         return updated;
     },
 
-    /** Soft-delete a route (isDeleted=true). Does NOT cascade to stops or allocations — caller's responsibility. */
     async deleteTransportRoute(id: string) {
         logger.info(`[deleteTransportRoute] Deleting route: ${id}`);
         const route = await prisma.transportRoute.findUnique({ where: { id } });
@@ -205,9 +189,6 @@ export const TransportService = {
         logger.info(`[deleteTransportRoute] Route deleted successfully: ${id}`);
     },
 
-    // ────────────────────────────── Vehicle ──────────────────────────────
-
-    /** Register a new vehicle (bus). Rejects duplicate number among non-deleted rows. */
     async createVehicle(
         number: string,
         capacity: number,
@@ -245,7 +226,6 @@ export const TransportService = {
         return vehicle;
     },
 
-    /** List vehicles with optional `search` over driver name/phone or vehicle number. Photos presigned. */
     async getVehicles(filters?: { search?: string }) {
         const where: any = { isDeleted: false };
 
@@ -267,7 +247,6 @@ export const TransportService = {
         })));
     },
 
-    /** Fetch one vehicle by id, photo presigned for the admin UI. */
     async getVehicleById(id: string) {
         const vehicle = await prisma.vehicle.findFirst({ where: { id, isDeleted: false } });
         if (!vehicle) throw new AppError(MESSAGES.ERROR.VEHICLE_NOT_FOUND, 404);
@@ -277,7 +256,6 @@ export const TransportService = {
         };
     },
 
-    /** Patch vehicle fields (number/capacity/driver/photo). */
     async updateVehicle(id: string, data: any, updatedBy?: string) {
         logger.info(`[updateVehicle] Updating vehicle: ${id}`);
         const vehicle = await prisma.vehicle.findUnique({ where: { id } });
@@ -298,7 +276,6 @@ export const TransportService = {
         return updated;
     },
 
-    /** Soft-delete a vehicle. Routes referencing it are NOT automatically unlinked. */
     async deleteVehicle(id: string) {
         logger.info(`[deleteVehicle] Deleting vehicle: ${id}`);
         const vehicle = await prisma.vehicle.findUnique({ where: { id } });
@@ -308,9 +285,6 @@ export const TransportService = {
         logger.info(`[deleteVehicle] Vehicle deleted successfully: ${id}`);
     },
 
-    // ───────────────────────── Transport Stop ─────────────────────────
-
-    /** Add a stop to a route with a sequence number. Rejects duplicate stop name per route. */
     async createTransportStop(routeId: string, name: string, sequence: number, createdBy?: string) {
         logger.info(`[createTransportStop] Creating stop for route: ${routeId} - ${name}`);
         const existingStop = await prisma.transportStop.findFirst({
@@ -338,7 +312,6 @@ export const TransportService = {
         return stop;
     },
 
-    /** List stops, optionally narrowed by routeId. Ordered by sequence ASC. */
     async getTransportStops(routeId?: string) {
         const where: any = { isDeleted: false };
         if (routeId) where.routeId = String(routeId);
@@ -350,14 +323,12 @@ export const TransportService = {
         });
     },
 
-    /** Fetch one stop by id with its route eager-loaded. */
     async getTransportStopById(id: string) {
         const stop = await prisma.transportStop.findUnique({ where: { id }, include: { route: true } });
         if (!stop) throw new AppError(MESSAGES.ERROR.TRANSPORT_STOP_NOT_FOUND, 404);
         return stop;
     },
 
-    /** Patch stop fields (name / sequence / move-to-different-route). */
     async updateTransportStop(id: string, data: any, updatedBy?: string) {
         logger.info(`[updateTransportStop] Updating stop: ${id}`);
         const stop = await prisma.transportStop.findUnique({ where: { id } });
@@ -376,7 +347,6 @@ export const TransportService = {
         return updated;
     },
 
-    /** Soft-delete a stop. Doesn't reshuffle sequence numbers of remaining stops. */
     async deleteTransportStop(id: string) {
         logger.info(`[deleteTransportStop] Deleting stop: ${id}`);
         const stop = await prisma.transportStop.findUnique({ where: { id } });

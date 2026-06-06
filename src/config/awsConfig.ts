@@ -2,8 +2,6 @@ import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-sec
 import { S3Client } from "@aws-sdk/client-s3";
 import logger from "../utils/logger";
 
-// AWS Configuration
-// AWS Configuration
 const REGION = process.env.AWS_REGION || "ap-south-1";
 
 const AWS_CREDENTIALS = (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) 
@@ -21,9 +19,7 @@ export const secretsManagerClient = new SecretsManagerClient({
 export const s3Client = new S3Client({
     region: REGION,
     credentials: AWS_CREDENTIALS,
-    // Disable default checksum validation on GET requests — AWS SDK v3.729+ adds
-    // `x-amz-checksum-mode=ENABLED` to presigned URLs which breaks browser access
-    // due to CORS/signature mismatch.
+
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED'
 } as any);

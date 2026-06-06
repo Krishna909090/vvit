@@ -13,7 +13,6 @@ export const createHostelSchema = z.object({
         wardenName: z.string().trim().min(1, "Warden name is required").max(100, "Warden name too long"),
         photoUrl: z.string().url("Photo URL must be a valid URL").optional().or(z.literal('')),
 
-        // Bank routing — defaults applied if omitted
         accommodationBank: bankEnum(),
         messBank: bankEnum(),
         laundryBank: bankEnum(),
@@ -53,7 +52,7 @@ export const createHostelRoomsBulkSchema = z.object({
         capacity: z.number().int().refine(v => [2, 4, 6, 8, 10].includes(v), { message: "Capacity must be 2, 4, 6, 8, or 10" }),
         type: z.string().transform(v => v.toUpperCase()).pipe(z.enum(['AC', 'NON_AC'])).optional().default('AC'),
     }).refine(data => {
-        // Both start and end must share the same prefix
+
         const startMatch = data.roomRangeStart.match(/^(.*?)(\d+)$/);
         const endMatch = data.roomRangeEnd.match(/^(.*?)(\d+)$/);
         if (!startMatch || !endMatch) return false;
@@ -114,17 +113,14 @@ export const createHostelPriceCategorySchema = z.object({
         roomType: z.string().transform(v => v.toUpperCase()).pipe(z.enum(['AC', 'NON_AC'])),
         academicYearId: z.string().uuid('academicYearId must be a valid UUID'),
 
-        // Yearwise (Single Instalment)
         accommodationYearwise: z.number().min(0).optional(),
         messYearwise: z.number().min(0).optional(),
         laundryYearwise: z.number().min(0).optional(),
 
-        // Semwise (Two Instalment) — total amount across both instalments
         accommodationSemwise: z.number().min(0).optional(),
         messSemwise: z.number().min(0).optional(),
         laundrySemwise: z.number().min(0).optional(),
 
-        // One-time non-refundable
         registrationFee: z.number().min(0).optional(),
 
         metadata: z.record(z.string(), z.any()).optional(),

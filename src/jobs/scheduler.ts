@@ -2,22 +2,20 @@ import prisma from '../config/prisma';
 import logger from '../utils/logger';
 import { ScholarshipStatus, PaymentStatus, PaymentMode } from '@prisma/client';
 
-// ─────────────────────────────────────────────
-// Job 1: Scholarship Expiry
-// ─────────────────────────────────────────────
-
 export const startScholarshipExpiryJob = () => {
-    logger.info('⏳ Starting Scholarship Expiry Job (Interval: 1 hour)');
-    logger.info('[ScholarshipExpiryJob] Running initial check on startup...');
+    try {
+        logger.info('⏳ Starting Scholarship Expiry Job (Interval: 1 hour)');
+        logger.info('[ScholarshipExpiryJob] Running initial check on startup...');
 
-    // Run immediately on startup
-    checkExpiredScholarships();
+        checkExpiredScholarships();
 
-    // Run every 1 hour
-    setInterval(async () => {
-        logger.info('[ScholarshipExpiryJob] Interval triggered. Running check...');
-        await checkExpiredScholarships();
-    }, 3600000);
+        setInterval(async () => {
+            logger.info('[ScholarshipExpiryJob] Interval triggered. Running check...');
+            await checkExpiredScholarships();
+        }, 3600000);
+    } catch (err) {
+        logger.error(`[ScholarshipExpiryJob] Failed to start: ${err}`);
+    }
 };
 
 const checkExpiredScholarships = async () => {
@@ -68,20 +66,17 @@ const checkExpiredScholarships = async () => {
     }
 };
 
-// ─────────────────────────────────────────────
-// Job 2: Stale PENDING Payment Cleanup
-// Marks ONLINE payments older than 22 minutes as FAILED
-// PhonePe QR expires at 20 min — 22 min gives 2 min buffer
-// ─────────────────────────────────────────────
-
 export const startStalePaymentCleanupJob = () => {
-    logger.info('[StalePaymentCleanup] Starting (Interval: 5 minutes)');
+    try {
+        logger.info('[StalePaymentCleanup] Starting (Interval: 5 minutes)');
 
-    // Run immediately on startup, then every 5 minutes
-    cleanupStalePayments();
-    setInterval(async () => {
-        await cleanupStalePayments();
-    }, 5 * 60 * 1000);
+        cleanupStalePayments();
+        setInterval(async () => {
+            await cleanupStalePayments();
+        }, 5 * 60 * 1000);
+    } catch (err) {
+        logger.error(`[StalePaymentCleanup] Failed to start: ${err}`);
+    }
 };
 
 const cleanupStalePayments = async () => {
@@ -101,33 +96,48 @@ const cleanupStalePayments = async () => {
 
         logger.info(`[StalePaymentCleanup] Found ${stalePayments.length} stale PENDING payment(s)`);
 
-        // Mark as FAILED
-        const ids = stalePayments.map(p => p.id);
-        await prisma.payment.updateMany({
-            where: { id: { in: ids } },
-            data: { status: PaymentStatus.FAILED, metadata: { reason: 'AUTO_EXPIRED', expiredAt: new Date().toISOString() } as any }
+        const fullPayments = await prisma.payment.findMany({
+            where: { id: { in: stalePayments.map(p => p.id) } },
+            select: { id: true, metadata: true }
         });
 
-        logger.info(`[StalePaymentCleanup] Marked ${ids.length} stale payments as FAILED`);
+        const expiredAt = new Date().toISOString();
+        let markedCount = 0;
+        for (const payment of fullPayments) {
+            try {
+                const existingMetadata = (payment.metadata && typeof payment.metadata === 'object' && !Array.isArray(payment.metadata))
+                    ? payment.metadata as Record<string, unknown>
+                    : {};
+                await prisma.payment.update({
+                    where: { id: payment.id },
+                    data: {
+                        status: PaymentStatus.FAILED,
+                        metadata: { ...existingMetadata, reason: 'AUTO_EXPIRED', expiredAt } as any
+                    }
+                });
+                markedCount++;
+            } catch (err) {
+                logger.error(`[StalePaymentCleanup] Failed to expire payment ${payment.id}: ${err}`);
+            }
+        }
+
+        logger.info(`[StalePaymentCleanup] Marked ${markedCount} stale payments as FAILED`);
     } catch (error) {
         logger.error(`[StalePaymentCleanup] Error: ${error}`);
     }
 };
 
-// ─────────────────────────────────────────────
-// Job 3: Payment Reconciliation
-// Checks PhonePe status for PENDING online payments (5-30 min old)
-// to catch missed callbacks
-// ─────────────────────────────────────────────
-
 export const startPaymentReconciliationJob = () => {
-    logger.info('[PaymentReconciliation] Starting (Interval: 10 minutes)');
+    try {
+        logger.info('[PaymentReconciliation] Starting (Interval: 10 minutes)');
 
-    // Run immediately on startup, then every 10 minutes
-    reconcilePendingPayments();
-    setInterval(async () => {
-        await reconcilePendingPayments();
-    }, 10 * 60 * 1000);
+        reconcilePendingPayments();
+        setInterval(async () => {
+            await reconcilePendingPayments();
+        }, 10 * 60 * 1000);
+    } catch (err) {
+        logger.error(`[PaymentReconciliation] Failed to start: ${err}`);
+    }
 };
 
 const reconcilePendingPayments = async () => {
@@ -135,9 +145,6 @@ const reconcilePendingPayments = async () => {
         const threeMinAgo = new Date(Date.now() - 3 * 60 * 1000);
         const twentyTwoMinAgo = new Date(Date.now() - 22 * 60 * 1000);
 
-        // Find PENDING online payments between 3-22 minutes old
-        // Lower: 3 min gives PhonePe time to send webhook first
-        // Upper: 22 min aligns with PhonePe QR expiry (20 min) + 2 min buffer
         const pendingPayments = await prisma.payment.findMany({
             where: {
                 status: PaymentStatus.PENDING,
@@ -170,7 +177,6 @@ const reconcilePendingPayments = async () => {
                 logger.warn(`[PaymentReconciliation] Failed to reconcile ${payment.providerTxId}: ${err}`);
             }
 
-            // Small delay to avoid hammering PhonePe API
             await new Promise(r => setTimeout(r, 500));
         }
 

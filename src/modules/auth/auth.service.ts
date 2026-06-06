@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import axios from "axios";
 import bcrypt from "bcryptjs";
 import prisma from '../../config/prisma';
-import { Role } from '../../constants/roles'; // Updated Import
+import { Role } from '../../constants/roles';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { sendBsnlOtp, sendZeptoEmail } from '../integration/integration.service';
@@ -11,13 +11,10 @@ import { MESSAGES } from '../../constants/messages';
 import { maskPhone, maskEmail } from '../../utils/mask';
 import { getUserPermissions, getUserModules } from '../rbac/rbac.service';
 
-// JWT_SECRET is validated on startup by envValidator - no fallback needed
 const JWT_SECRET = process.env.JWT_SECRET!;
 
-// In-memory token blacklist for logout. Tokens auto-expire so this stays bounded.
-const tokenBlacklist = new Map<string, number>(); // token → expiresAt (epoch ms)
+const tokenBlacklist = new Map<string, number>();
 
-// Clean up expired entries every 30 minutes
 setInterval(() => {
     const now = Date.now();
     for (const [token, expiresAt] of tokenBlacklist) {
@@ -25,12 +22,10 @@ setInterval(() => {
     }
 }, 30 * 60 * 1000);
 
-/** Add a JWT to the in-memory blacklist until `expiresAt`. Used on logout / forced session kill. */
 export const blacklistToken = (token: string, expiresAt: number) => {
     tokenBlacklist.set(token, expiresAt);
 };
 
-/** Check whether a JWT is in the blacklist. Called by auth middleware on every protected request. */
 export const isTokenBlacklisted = (token: string): boolean => {
     return tokenBlacklist.has(token);
 };
@@ -39,13 +34,8 @@ const OTP_MAX_ATTEMPTS = 5;
 const STUDENT_OTP_EXPIRY_MIN = 10;
 const STAFF_OTP_EXPIRY_MIN = 5;
 
-
-// Generate 6-digit numeric OTP securely
 const generateOtp = () => crypto.randomInt(100000, 999999).toString();
 
-// Returns true if the student is enrolled in the active academic year (i.e. has
-// a rollNumber). Such students must log in via /auth/student/login (rollNumber +
-// password); the phone-OTP path is only for pre-admission applicants.
 const studentHasActiveEnrollment = async (userId: string): Promise<boolean> => {
   const activeYear = await prisma.academicYear.findFirst({
     where: { isActive: true, isDeleted: false },
@@ -68,14 +58,6 @@ const studentHasActiveEnrollment = async (userId: string): Promise<boolean> => {
 const ENROLLED_STUDENT_OTP_BLOCK_MSG =
   "Please use the ERP application, not the CMS platform. Log in with your roll number and password.";
 
-// Service: Verifies user identity, auto-registers student users by phone,
-// generates a hashed OTP, stores it in UserOtp, and triggers notification(s).
-/**
- * Issue an OTP to a user's phone / email. Detects whether the identifier
- * belongs to a student (longer expiry, max 5 attempts) or staff (shorter
- * expiry), generates a 6-digit code, bcrypt-hashes it, and dispatches via
- * SMS / email.
- */
 export const sendOtp = async (identifier: { phone?: string; email?: string }) => {
   const phone = identifier.phone?.trim();
   const email = identifier.email?.trim().toLowerCase();
@@ -99,7 +81,7 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
 
   if (!user) {
     if (phone) {
-      // 1. Create User
+
       user = await prisma.user.create({
         data: {
           phone,
@@ -107,7 +89,6 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
         },
       });
 
-      // 2. Assign to Student Group
       const studentGroup = await prisma.group.findUnique({ where: { name: 'StudentGroup' } });
       if (studentGroup) {
         await prisma.userGroup.create({
@@ -148,7 +129,7 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
     );
   }
 
-  const otp = generateOtp(); // e.g. 6-digit numeric
+  const otp = generateOtp();
   const otpHash = await bcrypt.hash(otp, OTP_SALT_ROUNDS);
 
   const expiresInMinutes =
@@ -207,19 +188,9 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
     )}, email=${maskEmail(user.email)}`
   );
 
-  return { message: "OTP sent successfully", isNewUser, otp };
+  return { message: "OTP sent successfully", isNewUser };
 };
 
-
-
-
-// Service: Validates OTP using hashed comparison, enforces channel rules,
-// attempts + lockout, expiry, and generates access token on success.
-/**
- * Verify an OTP against the latest unused row for an identifier. On match:
- * marks the OTP used, increments login session, returns a signed JWT.
- * Tracks failed attempts; locks the account after OTP_MAX_ATTEMPTS.
- */
 export const verifyOtp = async (
   identifier: { phone?: string; email?: string },
   otp: string
@@ -329,14 +300,14 @@ export const verifyOtp = async (
     where: { id: userOtp.id },
     data: {
       used: true,
-      attempts: { increment: 1 }, // also increment on success
+      attempts: { increment: 1 },
     },
   });
 
   const token = jwt.sign(
     { userId: user.id, role: user.role },
     JWT_SECRET,
-    { expiresIn: (process.env.JWT_EXPIRY || "4h") as any }
+    { expiresIn: (process.env.NODE_ENV === 'development' ? '24h' : (process.env.JWT_EXPIRY || '4h')) as any }
   );
 
   logger.info(
@@ -345,12 +316,9 @@ export const verifyOtp = async (
     )}, email=${maskEmail(user.email)}`
   );
 
-  // Fetch Permissions and Modules
   const { permissions } = await getUserPermissions(user.id);
   const modules = await getUserModules(permissions);
 
-  // Group permissions by module
-  // Group permissions by module
   const groupedPermissions = permissions.reduce((acc: any, p: string) => {
     const key = p.split('.')[0];
     if (!acc[key]) acc[key] = [];
@@ -368,11 +336,6 @@ export const verifyOtp = async (
   };
 };
 
-// Service: Password Login for Staff/Admins
-/**
- * Username/password login (staff path). Bcrypt-compares against User.password,
- * returns a signed JWT on success. Tracks failed attempts in user record.
- */
 export const login = async (identifier: { phone?: string; email?: string }, password: string) => {
   let user = null;
   if (identifier.phone) {
@@ -385,7 +348,6 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
 
   if (user.isDeleted) throw new AppError("Admin blocked you", 403);
 
-  // Students use OTP
   if (user?.role === Role.STUDENT) throw new AppError("Students must login via OTP", 400);
 
   if (!user.password) throw new AppError("Password login not enabled for this user", 400);
@@ -396,17 +358,14 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
   const token = jwt.sign(
     { userId: user.id, role: user.role },
     JWT_SECRET,
-    { expiresIn: (process.env.JWT_EXPIRY || "4h") as any }
+    { expiresIn: (process.env.NODE_ENV === 'development' ? '24h' : (process.env.JWT_EXPIRY || '4h')) as any }
   );
 
   logger.info(`[login] Password login success: userId=${user.id}`);
 
-  // Fetch Permissions and Modules
   const { permissions } = await getUserPermissions(user.id);
   const modules = await getUserModules(permissions);
 
-  // Group permissions by module
-  // Group permissions by module
   const groupedPermissions = permissions.reduce((acc: any, p: string) => {
     const key = p.split('.')[0];
     if (!acc[key]) acc[key] = [];
@@ -419,7 +378,6 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
   return { token, role: user.role, id: user.id, permissions: groupedPermissions, modules };
 };
 
-/** Kick off the third-party Aadhaar e-KYC flow: server returns a requestId the client uses to submit the OTP. */
 export const generateAadhaarOtp = async (idNumber: string) => {
   const apiKey = process.env.QUICK_KYC_API_KEY;
   if (!apiKey) {
@@ -455,7 +413,6 @@ export const generateAadhaarOtp = async (idNumber: string) => {
   }
 };
 
-/** Submit the OTP for an in-flight Aadhaar e-KYC requestId; returns decrypted demographic data on success. */
 export const submitAadhaarOtp = async (requestId: string | number, otp: string) => {
   const apiKey = process.env.QUICK_KYC_API_KEY;
   if (!apiKey) {
@@ -491,6 +448,4 @@ export const submitAadhaarOtp = async (requestId: string | number, otp: string) 
     );
   }
 };
-
-
 

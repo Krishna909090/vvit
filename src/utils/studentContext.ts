@@ -10,13 +10,6 @@ import {
     QuotaType
 } from '@prisma/client';
 
-/**
- * Fully-loaded student context — everything our services need to make decisions
- * about a student in one shot. Replaces the duplicated `findUnique + derive year +
- * fetch enrollment + check status` pattern scattered across the codebase.
- *
- * Pass `tx` when calling inside a Prisma transaction.
- */
 export interface StudentContext {
     studentId: string;
     name: string;
@@ -59,18 +52,14 @@ export interface StudentContext {
         isDeleted: boolean | null;
     } | null;
 
-    // Derived fields — already resolved with sensible fallbacks
-    yearOfStudy: number;          // never null: enrollment.yearOfStudy → derived from semester → 1
-    currentSemester: number;      // never null: enrollment.currentSemester → 1
-    academicYearId: string | null; // admission.academicYearId → enrollment.academicYearId → null (kept nullable for callers that lack admission)
+    yearOfStudy: number;
+    currentSemester: number;
+    academicYearId: string | null;
     quotaType: QuotaType | null;
     courseType: string | null;
     proId: string | null;
 }
 
-/**
- * Load full student context. Throws 404 if the student doesn't exist.
- */
 export const getStudentContext = async (studentId: string, tx?: any): Promise<StudentContext> => {
     const client = tx || prisma;
 
@@ -107,8 +96,6 @@ export const getStudentContext = async (studentId: string, tx?: any): Promise<St
         });
     }
 
-    // Year-of-study fallback chain:
-    // enrollment.yearOfStudy → derived from semester → admission.entryYearOfStudy → 1
     const yearOfStudy = enrollment?.yearOfStudy
         ?? (enrollment?.currentSemester ? Math.ceil(enrollment.currentSemester / 2) : null)
         ?? (admission as any)?.entryYearOfStudy
@@ -158,9 +145,6 @@ export const getStudentContext = async (studentId: string, tx?: any): Promise<St
     };
 };
 
-/**
- * Resolve only the student's year-of-study (lighter call when full context isn't needed).
- */
 export const getStudentYearOfStudy = async (studentId: string, tx?: any): Promise<number> => {
     const client = tx || prisma;
     const [enrollment, admission] = await Promise.all([
@@ -180,18 +164,6 @@ export const getStudentYearOfStudy = async (studentId: string, tx?: any): Promis
     return 1;
 };
 
-/* ──────────────── Payment context resolution from fee demand ─────────────── */
-
-/**
- * Resolve `{ academicYearId, yearOfStudy }` from a fee demand.
- *
- * Used at Payment.create time to denormalize these onto the Payment row, so reports
- * filtered by year/academic-year don't need a JOIN through the demand every read.
- *
- * Returns `{ academicYearId: undefined, yearOfStudy: undefined }` if `feeDemandId`
- * is missing, the demand doesn't exist, or its values are null. Callers should
- * spread this result into the Payment data object.
- */
 export const resolveFeeDemandContext = async (
     feeDemandId: string | null | undefined,
     tx?: any
@@ -209,27 +181,11 @@ export const resolveFeeDemandContext = async (
             };
         }
     }
-    // No demand → fall back to the active academic year so Payment.academicYearId is always set.
+
     const active = await getActiveAcademicYear(tx);
     return { academicYearId: active.id, yearOfStudy: undefined };
 };
 
-/* ──────────────────── Academic year guards (write-path safety) ───────────────────── */
-
-/**
- * Assert the academic year is writable: exists, not soft-deleted, not locked.
- *
- * Use this in any flow that writes financial or enrollment data tied to a specific
- * academic year — admissions, fee demands, payments, ledger entries, reassign /
- * switch / cancel flows. Locking a year (via AcademicYear.isLocked=true) is the
- * year-end "books closed" signal — once locked, no further writes against that
- * year's records should be allowed.
- *
- * Use 423 Locked (HTTP) for the lock case so the client UI can render a clear
- * "this year is closed" message instead of a generic 400.
- *
- * Pass `tx` when calling inside a transaction so the read sees pending changes.
- */
 export const assertAcademicYearWritable = async (academicYearId: string, tx?: any): Promise<{
     id: string;
     code: string;
@@ -248,23 +204,12 @@ export const assertAcademicYearWritable = async (academicYearId: string, tx?: an
         throw new AppError(`Academic year ${ay.code} has been deleted`, 410);
     }
     if (ay.isLocked) {
-        // 423 Locked — client should render "this year is closed" rather than retry
+
         throw new AppError(`Academic year ${ay.code} is locked; financial / enrollment writes are not permitted`, 423);
     }
     return { id: ay.id, code: ay.code, startDate: ay.startDate, endDate: ay.endDate };
 };
 
-/**
- * Returns the current active academic year. Throws if none configured or multiple
- * are flagged active (which is a data-integrity error — at most one year should be
- * isActive=true at a time).
- *
- * Use this whenever a flow needs to default to "the year we're currently in" —
- * for example, when an admin creates an admission without specifying a year.
- *
- * For back-dated admissions, callers should NOT use this — they should accept an
- * explicit `academicYearId` from the caller (since "current year" wouldn't apply).
- */
 export const getActiveAcademicYear = async (tx?: any): Promise<{
     id: string;
     code: string;
@@ -281,7 +226,7 @@ export const getActiveAcademicYear = async (tx?: any): Promise<{
         throw new AppError('No active academic year configured. Create one and mark isActive=true.', 500);
     }
     if (candidates.length > 1) {
-        // Data-integrity warning, not a fatal — pick the most recent and log
+
         logger.warn(
             `[getActiveAcademicYear] Multiple active academic years detected (${candidates.map((c: any) => c.code).join(', ')}). ` +
             `Returning the most recent (${candidates[0].code}). Fix data so only one year is isActive=true.`
@@ -290,9 +235,6 @@ export const getActiveAcademicYear = async (tx?: any): Promise<{
     return candidates[0];
 };
 
-/* ─────────────────── Hostel credit accounting (idempotent) ───────────────────── */
-
-// FeeCorrection.referenceType values that consume the hostel pool.
 const HOSTEL_REFERENCE_TYPES = [
     'HOSTEL_REASSIGNMENT',
     'HOSTEL_CANCELLATION',
@@ -304,11 +246,6 @@ const TRANSPORT_REFERENCE_TYPES = [
     'TRANSPORT_TO_HOSTEL_SWITCH',
 ];
 
-/**
- * Available hostel credit = grossPaid − (prior refunded + prior retained), scoped to
- * hostel-side FeeCorrection rows. Pass `tx` when calling inside a Prisma transaction
- * so the read is race-safe with the FeeCorrection.create the caller is about to make.
- */
 export const getAvailableHostelCredit = async (studentId: string, tx?: any): Promise<{
     grossPaid: number;
     priorRefunded: number;
@@ -347,7 +284,6 @@ export const getAvailableHostelCredit = async (studentId: string, tx?: any): Pro
     return { grossPaid, priorRefunded, priorRetained, availableCredit };
 };
 
-/** Transport analogue of getAvailableHostelCredit. */
 export const getAvailableTransportCredit = async (studentId: string, tx?: any): Promise<{
     grossPaid: number;
     priorRefunded: number;
@@ -375,21 +311,6 @@ export const getAvailableTransportCredit = async (studentId: string, tx?: any): 
     return { grossPaid, priorRefunded, priorRetained, availableCredit };
 };
 
-/**
- * Recompute and persist a student's `totalFee` and `paidFee` from the source-of-truth
- * rows instead of relying on running increment/decrement deltas (which drift over time
- * — see the year-long audit: re-assign/switch/cancel flows left paid demands behind and
- * over/under-counted totals).
- *
- *   totalFee = Σ `amount` of active (non-deleted) StudentFeeDemand rows.
- *              Gross, matching the historical "sum of base amounts" semantic; callers
- *              that need net-of-scholarship aggregate from `netAmount` directly.
- *   paidFee  = Σ `amount` of SUCCESS, non-deleted Payment rows EXCLUDING APPLICATION_FEE
- *              (the application fee is tracked separately and was never part of paidFee).
- *
- * Idempotent and self-healing — safe to call at the end of ANY money-mutating flow, and
- * safe to re-run. Pass `tx` to participate in an open transaction.
- */
 export const recomputeStudentTotals = async (
     studentId: string,
     tx?: any
@@ -405,10 +326,7 @@ export const recomputeStudentTotals = async (
             where: { studentId, status: 'SUCCESS', isDeleted: false, component: { not: 'APPLICATION_FEE' } },
             _sum: { amount: true },
         }),
-        // Fee-correction transfers are Payment rows that settle a demand using credit the
-        // student ALREADY paid (and that's already in paidFee from the original payment).
-        // Subtract them so the same rupees aren't counted twice. Positive `equals` filter —
-        // matches only tagged rows, so null-metadata payments are unaffected.
+
         client.payment.aggregate({
             where: {
                 studentId, status: 'SUCCESS', isDeleted: false,
@@ -430,16 +348,6 @@ export const recomputeStudentTotals = async (
     return { totalFee, paidFee };
 };
 
-/**
- * Resolve the active HostelPriceCategory for a (sharing, roomType, academicYearId)
- * tuple. academicYearId is required since the year-tag migration — every price row
- * is now bound to a specific academic year.
- *
- * Returns null if no matching active price exists — caller should treat as
- * "no pricing configured for this year."
- *
- * Pass `tx` when calling inside a Prisma transaction.
- */
 export const resolveHostelPriceCategory = async (
     args: { sharing: number; roomType: string; academicYearId: string },
     tx?: any
@@ -451,14 +359,6 @@ export const resolveHostelPriceCategory = async (
     }) ?? null;
 };
 
-/**
- * Resolve transport route cost for a given academic year. Prefers the year-specific
- * override in TransportRouteYearlyPrice; falls back to TransportRoute.cost.
- *
- * Useful for back-dated / lateral admissions billed against a past year's route fee.
- *
- * Pass `tx` when calling inside a Prisma transaction.
- */
 export const resolveTransportRouteCost = async (
     routeId: string,
     academicYearId: string | null | undefined,
@@ -478,41 +378,14 @@ export const resolveTransportRouteCost = async (
     return route?.cost ?? 0;
 };
 
-/* ────────────── Self-healing accommodation pricing snapshot ──────────────── */
-
-/**
- * Returns the student's frozen accommodation pricing snapshot.
- *
- * Behaviour (single source of truth — no fallback paths in callers):
- *   1. Snapshot exists → return it.
- *   2. No snapshot AND student is FULLY bed-allocated
- *      (accommodationType=HOSTEL + hostelId + hostelType + roomNumber):
- *      → auto-create one from current config (self-healing for legacy data).
- *   3. No snapshot AND student is NOT fully allocated
- *      (e.g. between assign-hostel and allocate-bed, or pure NONE/TRANSPORT):
- *      → return null. Caller should show ₹0 hostel demand — student isn't yet
- *      eligible to be billed for accommodation.
- *
- * This eliminates divergent code paths in financial-history/summary readers.
- *
- * Why auto-create: ensures snapshot is the *only* source of truth at read time.
- * Legacy or manually-inserted allocations get a snapshot on first read; future
- * config edits never affect them again. No future code changes needed.
- *
- * Pass `tx` when calling inside a Prisma transaction.
- */
 export const getOrCreateAccommodationPricing = async (studentId: string, tx?: any): Promise<any | null> => {
     const client = tx || prisma;
 
-    // 1. Existing active snapshot — return as-is.
-    // Supersede semantics: at most one row per studentId has isActive=true at any time.
-    // Older rows (isActive=false) are kept for audit/refund history but never read here.
     const existing = await client.studentAccommodationPricing.findFirst({
         where: { studentId, isActive: true }
     });
     if (existing) return existing;
 
-    // 2. No snapshot — see if we have enough info to create one
     const admission = await client.studentAdmission.findUnique({
         where: { studentId },
         select: {
@@ -531,11 +404,10 @@ export const getOrCreateAccommodationPricing = async (studentId: string, tx?: an
         || !admission.hostelId
         || !admission.hostelType
         || !admission.roomNumber) {
-        // Student is not fully bed-allocated — caller should show 0 for hostel demand
+
         return null;
     }
 
-    // 3. Resolve sharing/roomType from the room (single source of truth on dimensions)
     const room = await client.hostelRoom.findFirst({
         where: { hostelId: admission.hostelId, number: admission.roomNumber, isDeleted: false },
         select: { capacity: true, type: true }
@@ -548,7 +420,6 @@ export const getOrCreateAccommodationPricing = async (studentId: string, tx?: an
     const sharing = room.capacity;
     const roomType = room.type;
 
-    // 4. Resolve active price tier (year-scoped, falls back to legacy year-null row).
     const priceCategory = await resolveHostelPriceCategory(
         { sharing, roomType, academicYearId: admission.academicYearId },
         client
@@ -565,8 +436,6 @@ export const getOrCreateAccommodationPricing = async (studentId: string, tx?: an
     const registrationFee    = priceCategory.registrationFee ?? 0;
     const effectiveTotal     = accommodationPrice + messPrice + laundryPrice + registrationFee;
 
-    // 5. Self-healing create. Race-condition safe via the partial unique index
-    // (studentId) WHERE isActive=true — see migration SQL.
     try {
         const snapshot = await client.studentAccommodationPricing.create({
             data: {
@@ -589,7 +458,7 @@ export const getOrCreateAccommodationPricing = async (studentId: string, tx?: an
         logger.info(`[getOrCreateAccommodationPricing] Auto-backfilled snapshot for student ${studentId} (mode=${isSemwise ? 'SEMWISE' : 'YEARWISE'}, total=₹${effectiveTotal})`);
         return snapshot;
     } catch (err: any) {
-        // P2002 = unique constraint violation; another concurrent request created it first.
+
         if (err?.code === 'P2002') {
             return await client.studentAccommodationPricing.findFirst({
                 where: { studentId, isActive: true }
@@ -599,23 +468,8 @@ export const getOrCreateAccommodationPricing = async (studentId: string, tx?: an
     }
 };
 
-/* ──────────────────────────── FeeHead resolution ─────────────────────────── */
-
-/**
- * Cached map of `PaymentComponent` → matching FeeHead row.
- *
- * Strict mode (no fallback): every FeeHead must have an explicit `component` column set.
- * Run the backfill SQL provided in the migration docs to tag legacy heads. Untagged heads
- * will return `null` here, and any flow depending on that component will skip cleanly.
- */
 export type FeeHeadByComponent = Map<PaymentComponent, { id: string; name: string } | null>;
 
-/**
- * Build a `PaymentComponent → FeeHead` lookup map by reading the explicit `component` column.
- * No name-keyword fallback. If a FeeHead doesn't have its `component` set, it won't be matched.
- *
- * Pass `tx` when calling inside a Prisma transaction.
- */
 export const resolveFeeHeadsByComponent = async (
     components: PaymentComponent[],
     tx?: any
@@ -634,12 +488,6 @@ export const resolveFeeHeadsByComponent = async (
     return result;
 };
 
-/* ──────────────────────────── Status assertions ──────────────────────────── */
-
-/**
- * Throws 400 if the admission is cancelled. Use as the first guard in any
- * write-flow that touches a student's admission/hostel/fees.
- */
 export const assertActiveAdmission = (
     admission: { status: AdmissionStatus | null } | null | undefined,
     actionLabel: string = 'perform this action'
@@ -652,9 +500,6 @@ export const assertActiveAdmission = (
     }
 };
 
-/**
- * Throws 400 if the student is not currently in HOSTEL accommodation.
- */
 export const assertHostelAccommodation = (
     admission: { accommodationType: AccommodationType | null } | null | undefined,
     extraHint: string = 'Run assign-hostel first.'
@@ -664,10 +509,6 @@ export const assertHostelAccommodation = (
     }
 };
 
-/**
- * Throws 400 if the student already has a frozen pricing snapshot
- * (i.e. a bed has already been allocated).
- */
 export const assertNoBedAllocated = (
     accommodationPricing: any | null | undefined,
     extraHint: string = 'Use the re-assignment flow instead.'

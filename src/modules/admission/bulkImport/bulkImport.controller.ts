@@ -30,6 +30,9 @@ export const validateOfflineApplications = catchAsync(async (req: Request, res: 
     if (!Array.isArray(applications) || applications.length === 0) {
         throw new AppError('Request body must be a non-empty array of applications', 400);
     }
+    if (applications.length > 500) {
+        throw new AppError('Batch size cannot exceed 500 rows', 400);
+    }
     const results = await bulkImportService.validateOfflineApplications(applications);
     res.status(200).json({
         status: 'success',
@@ -42,6 +45,9 @@ export const importOfflineApplications = catchAsync(async (req: Request, res: Re
     const applications = req.body;
     if (!Array.isArray(applications) || applications.length === 0) {
         throw new AppError('Request body must be a non-empty array of applications', 400);
+    }
+    if (applications.length > 500) {
+        throw new AppError('Batch size cannot exceed 500 rows', 400);
     }
     const results = await bulkImportService.processOfflineApplications(applications, req.user?.userId || 'ADMIN');
     res.status(200).json({
@@ -61,10 +67,6 @@ export const verifyPayment = catchAsync(async (req: Request, res: Response, next
         data: result
     });
 });
-
-// ═══════════════════════════════════════════════════════════
-//  BULK MANUAL ENTRY (lateral / transfer / back-dated)
-// ═══════════════════════════════════════════════════════════
 
 export const validateBulkManualEntry = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const rows = req.body;

@@ -4,7 +4,6 @@ import { sendResponse } from '../../utils/response';
 import { AppError } from '../../utils/AppError';
 import { CourseCapacityService } from './courseCapacity.service';
 
-// POST /admin/academic/capacity   { courseId, academicYearId, totalSeats, filledSeats? }
 export const createCapacity = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const { courseId, academicYearId, totalSeats, filledSeats } = req.body;
     const adminId = req.user?.userId;
@@ -12,7 +11,6 @@ export const createCapacity = catchAsync(async (req: Request, res: Response, _ne
     sendResponse({ res, statusCode: 201, success: true, message: 'Course capacity created', data: row });
 });
 
-// POST /admin/academic/capacity/upsert   { courseId, academicYearId, totalSeats }
 export const upsertCapacity = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const { courseId, academicYearId, totalSeats } = req.body;
     const adminId = req.user?.userId;
@@ -20,7 +18,6 @@ export const upsertCapacity = catchAsync(async (req: Request, res: Response, _ne
     sendResponse({ res, statusCode: 200, success: true, message: 'Course capacity saved', data: row });
 });
 
-// POST /admin/academic/capacity/bulk   { academicYearId, rows: [{ courseId, totalSeats }] }
 export const bulkUpsertCapacity = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const { academicYearId, rows } = req.body;
     const adminId = req.user?.userId;
@@ -28,7 +25,6 @@ export const bulkUpsertCapacity = catchAsync(async (req: Request, res: Response,
     sendResponse({ res, statusCode: 200, success: true, message: `Saved capacity for ${result.count} course(s)`, data: result });
 });
 
-// GET /admin/academic/capacity?courseId=&academicYearId=&degree=&search=
 export const listCapacity = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const { courseId, academicYearId, degree, search } = req.query;
     const rows = await CourseCapacityService.list({
@@ -40,7 +36,6 @@ export const listCapacity = catchAsync(async (req: Request, res: Response, _next
     sendResponse({ res, statusCode: 200, success: true, data: rows });
 });
 
-// GET /admin/academic/capacity/:id
 export const getCapacity = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const { id } = req.params;
     if (!id) throw new AppError('id is required', 400);
@@ -48,7 +43,6 @@ export const getCapacity = catchAsync(async (req: Request, res: Response, _next:
     sendResponse({ res, statusCode: 200, success: true, data: row });
 });
 
-// PUT /admin/academic/capacity/:id   { totalSeats?, filledSeats? }
 export const updateCapacity = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const { id } = req.params;
     const { totalSeats, filledSeats } = req.body;
@@ -57,7 +51,6 @@ export const updateCapacity = catchAsync(async (req: Request, res: Response, _ne
     sendResponse({ res, statusCode: 200, success: true, message: 'Course capacity updated', data: row });
 });
 
-// DELETE /admin/academic/capacity/:id
 export const deleteCapacity = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const { id } = req.params;
     const result = await CourseCapacityService.remove(id);

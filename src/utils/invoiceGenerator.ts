@@ -3,8 +3,6 @@ import path from 'path'
 import fs from 'fs'
 import { format } from 'date-fns'
 
-/* ================= INTERFACES ================= */
-
 export interface InvoiceItem {
   description: string
   amount: number
@@ -37,8 +35,6 @@ export interface InvoiceData {
   }
 }
 
-/* ================= MAIN ================= */
-
 export const generateInvoicePDF = async (
   data: InvoiceData
 ): Promise<Buffer> => {
@@ -54,10 +50,8 @@ export const generateInvoicePDF = async (
       doc.on('end', () => resolve(Buffer.concat(buffers)))
       doc.on('error', reject)
 
-      // Top Half - Student Copy
       drawInvoiceInstance(doc, data, 0, 'STUDENT COPY')
 
-      // Cut Line (Dashed)
       const midY = 421;
       doc
          .strokeColor('#ccc')
@@ -66,9 +60,8 @@ export const generateInvoicePDF = async (
          .lineTo(595, midY)
          .stroke();
       
-      doc.undash(); // Reset dash
-      
-      // Bottom Half - Office Copy
+      doc.undash();
+
       drawInvoiceInstance(doc, data, 421, 'OFFICE COPY')
 
       doc.end()
@@ -77,8 +70,6 @@ export const generateInvoicePDF = async (
     }
   })
 }
-
-/* ================= DRAWING LOGIC ================= */
 
 function drawInvoiceInstance(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number, copyLabel: string) {
     drawHeader(doc, offsetY)
@@ -101,12 +92,9 @@ function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) 
     doc.restore()
 }
 
-/* ================= HEADER ================= */
-
 function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
   const logoPath = path.join(process.cwd(), 'src/assets/logo.png')
 
-  // University name
   doc
     .font('Helvetica-Bold')
     .fontSize(11)
@@ -118,7 +106,6 @@ function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
       { align: 'center', width: doc.page.width }
     )
 
-  // Logo (left)
   if (fs.existsSync(logoPath)) {
     doc.image(logoPath, 30, topY + 45, { width: 60 })
   } else {
@@ -129,7 +116,6 @@ function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
       .text('VVIT', 30, topY + 55)
   }
 
-  // Address (right – unchanged content)
   doc
     .font('Helvetica')
     .fontSize(8)
@@ -141,8 +127,6 @@ function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
       { align: 'right' }
     )
 }
-
-/* ================= INFO GRID ================= */
 
 function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
   const top = offsetY + 95
@@ -197,8 +181,6 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
   }
 }
 
-/* ================= SUBJECT BAR ================= */
-
 function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number) {
   const hasCourse = !!data.courseName
   const barHeight = hasCourse ? 44 : 32
@@ -207,7 +189,6 @@ function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: num
   const barWidth = 535
   const padding = 15
 
-  // Draw background
   doc
     .save()
     .roundedRect(barX, y, barWidth, barHeight, 6)
@@ -216,7 +197,6 @@ function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: num
 
   let textY = y + 8
 
-  // Course Name (above subject)
   if (hasCourse) {
     doc
       .fillColor('#333')
@@ -228,16 +208,14 @@ function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: num
     textY += 14
   }
 
-  // Subject (left)
   doc
     .fillColor('#000')
     .font('Helvetica-Bold')
     .fontSize(9)
     .text(`Subject: ${data.description}`, barX + padding, textY, {
-      width: barWidth - 120 // reserve space for amount
+      width: barWidth - 120
     })
 
-  // Amount (RIGHT – SAFE positioning)
   const totalStr = data.amount.toLocaleString('en-IN', {
     minimumFractionDigits: 2
   })
@@ -254,9 +232,6 @@ function drawSubjectBar(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: num
 
   return barHeight
 }
-
-
-/* ================= ITEMS TABLE ================= */
 
 function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number, subjectBarHeight: number) {
   let y = offsetY + 195 + subjectBarHeight + 13
@@ -294,7 +269,6 @@ function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: num
   drawLine(doc, y + 4)
   y += 8
 
-  // TOTAL Row
   doc.font('Helvetica-Bold').fontSize(10).fillColor('#000')
   doc.text('TOTAL', 90, y)
   doc.text(
@@ -303,8 +277,6 @@ function drawItemsTable(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: num
     y
   )
 }
-
-/* ================= FOOTER ================= */
 
 function drawFooter(doc: PDFKit.PDFDocument, offsetY: number, data?: InvoiceData) {
   if (data?.counterName) {
@@ -331,8 +303,6 @@ function drawFooter(doc: PDFKit.PDFDocument, offsetY: number, data?: InvoiceData
       { align: 'center', width: doc.page.width }
     )
 }
-
-/* ================= HELPER ================= */
 
 function drawLine(
   doc: PDFKit.PDFDocument,

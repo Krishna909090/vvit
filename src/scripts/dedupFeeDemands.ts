@@ -1,26 +1,4 @@
-/**
- * dedupFeeDemands — one-shot detection and merge of duplicate StudentFeeDemand rows.
- *
- * A duplicate is two or more non-deleted demands with the same (studentId, feeStructureId).
- * This shouldn't happen, but the application had no DB-level uniqueness, so racing parallel
- * calls (promotion job + manual button) could produce them. Run this BEFORE applying
- * prisma/migrations/fee_demand_unique_constraint.sql.
- *
- * Merge rules — for each duplicate group:
- *   1. If any duplicate has linked SUCCESS payments → KEEP that one (preserve audit trail).
- *      If multiple have payments → fail loud (manual review needed; refusing to merge).
- *   2. Else keep the oldest (smallest createdAt).
- *   3. Soft-delete the rest (isDeleted=true, deletedAt=now, deletedBy='dedup-script').
- *
- * The script does NOT touch StudentLedger entries — those remain as the audit trail.
- * It does NOT adjust StudentAdmission.totalFee either: the kept demand's amount is the
- * correct base for that fee head; the soft-deleted duplicates inflated totalFee in error,
- * so we adjust totalFee by subtracting the soft-deleted amounts.
- *
- * Usage:
- *   ts-node src/scripts/dedupFeeDemands.ts --dry-run   # report only, no writes
- *   ts-node src/scripts/dedupFeeDemands.ts --apply     # apply merges
- */
+
 
 import dotenv from 'dotenv';
 dotenv.config();
@@ -39,7 +17,7 @@ interface DupGroup {
 }
 
 async function findDuplicateGroups(): Promise<DupGroup[]> {
-    // Raw SQL is the cleanest way to find groups with COUNT(*) > 1.
+
     const rows = await prisma.$queryRaw<Array<{ studentId: string; feeStructureId: string; cnt: bigint }>>`
         SELECT "studentId", "feeStructureId", COUNT(*)::bigint AS cnt
         FROM "StudentFeeDemand"
@@ -90,7 +68,7 @@ function pickKeeper(g: DupGroup): { keep: string; drop: string[]; reason: string
     );
 
     if (withPaidPayments.length > 1) {
-        // Multiple demands have successful payments — refuse to auto-merge.
+
         return {
             keep: withPaidPayments[0].id,
             drop: [],
@@ -107,7 +85,6 @@ function pickKeeper(g: DupGroup): { keep: string; drop: string[]; reason: string
         };
     }
 
-    // No payments anywhere — keep oldest.
     const oldest = g.rows[0];
     return {
         keep: oldest.id,

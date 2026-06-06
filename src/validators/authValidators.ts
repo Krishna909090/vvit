@@ -7,7 +7,7 @@ export const sendOtpSchema = z.object({
         role: z.enum(['STUDENT', 'ADMIN', 'SUPER_ADMIN', 'AGENT', 'INVIGILATOR']).optional(),
     }).refine(data => data.phone || data.email, {
         message: "Either phone or email is required",
-        path: ["phone"] // Error will be attached to phone field
+        path: ["phone"]
     }),
 });
 
@@ -35,7 +35,6 @@ export const submitAadhaarOtpSchema = z.object({
     }),
 });
 
-// Student auth: rollNumber + password
 export const studentLoginSchema = z.object({
     body: z.object({
         rollNumber: z.string().trim().min(1, "Roll number is required"),
@@ -43,7 +42,6 @@ export const studentLoginSchema = z.object({
     }),
 });
 
-// Student first-time setup: PII verification (rollNumber + DOB + Aadhaar last 4)
 export const studentInitialSetupSchema = z.object({
     body: z.object({
         rollNumber: z.string().trim().min(1, "Roll number is required"),
@@ -53,14 +51,12 @@ export const studentInitialSetupSchema = z.object({
     }),
 });
 
-// Admin issuing forgot-password OTP for a student
 export const adminIssueStudentOtpSchema = z.object({
     body: z.object({
         rollNumber: z.string().trim().min(1, "Roll number is required"),
     }),
 });
 
-// Student consuming an admin-issued OTP to set a new password
 export const studentResetPasswordSchema = z.object({
     body: z.object({
         rollNumber: z.string().trim().min(1, "Roll number is required"),

@@ -2,10 +2,7 @@ import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 
 export const CourseCapacityService = {
-    /**
-     * Create a fresh `(courseId, academicYearId)` capacity row. Rejects with 409
-     * if a row already exists for that pair — use `upsert` to set-or-update.
-     */
+
     async create(data: {
         courseId: string;
         academicYearId: string;
@@ -48,11 +45,6 @@ export const CourseCapacityService = {
         }
     },
 
-    /**
-     * Set capacity for a `(courseId, academicYearId)` pair, creating the row if
-     * missing or updating `totalSeats` if it already exists. `filledSeats` is
-     * never overwritten on update — admins manage it via {@link update}.
-     */
     async upsert(data: {
         courseId: string;
         academicYearId: string;
@@ -94,11 +86,6 @@ export const CourseCapacityService = {
         });
     },
 
-    /**
-     * Set capacity for many courses in a single academic year atomically.
-     * Validates every courseId up front; rolls back if any row is invalid.
-     * Used by the admin "configure capacities for the year" bulk screen.
-     */
     async bulkUpsert(data: {
         academicYearId: string;
         rows: Array<{ courseId: string; totalSeats: number }>;
@@ -148,17 +135,11 @@ export const CourseCapacityService = {
         return { count: results.length, rows: results };
     },
 
-    /**
-     * List capacities with optional filters: `courseId`, `academicYearId`,
-     * `degree` (case-insensitive), or `search` (matches course name/code).
-     * Eager-loads the parent course + academic year for UI display.
-     */
     async list(filters?: { courseId?: string; academicYearId?: string; degree?: string; search?: string }) {
         const where: any = {};
         if (filters?.courseId)       where.courseId       = filters.courseId;
         if (filters?.academicYearId) where.academicYearId = filters.academicYearId;
 
-        // Filter by Course.degree (e.g. "B.Tech", "M.Tech", "MBA"). Case-insensitive equality.
         const courseFilter: any = {};
         if (filters?.degree) {
             courseFilter.degree = { equals: filters.degree, mode: 'insensitive' };
@@ -185,12 +166,9 @@ export const CourseCapacityService = {
             ],
         });
 
-        // Surface the course's degree as a top-level `degreeType` for convenience (still
-        // available nested under `course.degree`).
         return rows.map((r: any) => ({ ...r, degreeType: r.course?.degree ?? null }));
     },
 
-    /** Fetch a single capacity row by primary key, with course + year eager-loaded. */
     async getOne(id: string) {
         const row = await prisma.courseCapacity.findUnique({
             where: { id },
@@ -203,10 +181,6 @@ export const CourseCapacityService = {
         return row;
     },
 
-    /**
-     * Update `totalSeats` or `filledSeats` on a specific capacity row.
-     * Enforces `filledSeats <= totalSeats` as a hard invariant.
-     */
     async update(id: string, data: { totalSeats?: number; filledSeats?: number; updatedBy?: string }) {
         if (data.totalSeats !== undefined && data.totalSeats < 0) {
             throw new AppError('totalSeats must be >= 0', 400);
@@ -234,10 +208,6 @@ export const CourseCapacityService = {
         });
     },
 
-    /**
-     * Hard-delete a capacity row. Blocks if `filledSeats > 0` so we don't lose
-     * track of allotted students — admin must reassign/cancel them first.
-     */
     async remove(id: string) {
         const existing = await prisma.courseCapacity.findUnique({ where: { id } });
         if (!existing) throw new AppError('Capacity not found', 404);

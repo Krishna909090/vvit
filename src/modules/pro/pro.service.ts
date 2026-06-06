@@ -4,10 +4,6 @@ import logger from '../../utils/logger';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { maskAadhaar } from '../../utils/mask';
 
-/**
- * Resolve the PRO record for a logged-in user.
- * Looks up PRO.userId === current user id.
- */
 const getProByUserId = async (userId: string) => {
     const pro = await prisma.pRO.findUnique({
         where: { userId },
@@ -19,19 +15,10 @@ const getProByUserId = async (userId: string) => {
     return pro;
 };
 
-/**
- * PRO Self: Get PRO profile for the authenticated user.
- */
 export const getMyProProfile = async (userId: string) => {
     return getProByUserId(userId);
 };
 
-/**
- * PRO Self: List all students assigned to this PRO (with pagination + search).
- *
- * Search supports applicationId, name, phone.
- * Filters: page, limit, search, status (admission status).
- */
 export const getMyProStudents = async (userId: string, query: any) => {
     const pro = await getProByUserId(userId);
 
@@ -82,7 +69,6 @@ export const getMyProStudents = async (userId: string, query: any) => {
         })
     ]);
 
-    // Presigned profile photos + masked aadhaar
     const data = await Promise.all(students.map(async (s: any) => ({
         ...s,
         profilePhotoUrl: await convertToPresignedUrl(s.profilePhotoUrl),
@@ -103,9 +89,6 @@ export const getMyProStudents = async (userId: string, query: any) => {
     };
 };
 
-/**
- * PRO Self: Commission summary for all students assigned.
- */
 export const getMyProCommissionSummary = async (userId: string) => {
     const pro = await getProByUserId(userId);
 

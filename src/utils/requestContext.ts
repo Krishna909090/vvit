@@ -12,18 +12,17 @@ export interface RequestContext {
 const context = new AsyncLocalStorage<RequestContext>();
 
 export const requestContextMiddleware = (req: Request, res: Response, next: NextFunction) => {
-    // Honour an incoming correlation ID (e.g. from API gateway or frontend) or generate a fresh one
+
     const correlationId =
         (req.headers['x-correlation-id'] as string) ||
         (req.headers['x-request-id'] as string) ||
         randomUUID();
 
-    // Echo the correlation ID back so callers can trace their request
     res.setHeader('x-correlation-id', correlationId);
 
     const defaultContext: RequestContext = {
         correlationId,
-        userId: 'system', // Default to system for unauthenticated or background tasks
+        userId: 'system',
     };
 
     context.run(defaultContext, () => {

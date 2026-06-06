@@ -6,12 +6,6 @@ import { AppError } from '../../utils/AppError';
 import { sendResponse } from '../../utils/response';
 import { MESSAGES } from '../../constants/messages';
 
-/**
- * Upload single file
- * POST /api/upload/single
- * Form-data: file (required)
- * Query params: folder (optional, default: 'documents')
- */
 export const uploadSingleFile = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[uploadSingleFile] by=${req.user?.userId || 'anonymous'}`);
     logger.debug(`[uploadSingleFile] file=${req.file?.originalname || 'n/a'} query=${JSON.stringify(req.query)}`);
@@ -34,12 +28,6 @@ export const uploadSingleFile = catchAsync(async (req: Request, res: Response, n
     });
 });
 
-/**
- * Upload multiple files
- * POST /api/upload/multiple
- * Form-data: files[] (required, max 10 files)
- * Query params: folder (optional, default: 'documents')
- */
 export const uploadMultipleFiles = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[uploadMultipleFiles] by=${req.user?.userId || 'anonymous'}`);
     logger.debug(`[uploadMultipleFiles] files=${Array.isArray(req.files) ? (req.files as any[]).length : 0} query=${JSON.stringify(req.query)}`);
@@ -62,11 +50,6 @@ export const uploadMultipleFiles = catchAsync(async (req: Request, res: Response
     });
 });
 
-/**
- * Generate Presigned URL for viewing file
- * POST /api/upload/presigned-url
- * Body: { url: string }
- */
 export const getPresignedUrl = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { url } = req.body;
     
@@ -74,7 +57,7 @@ export const getPresignedUrl = catchAsync(async (req: Request, res: Response, ne
         throw new AppError("URL is required", 400);
     }
 
-    const result = await generatePresignedUrl(url);
+    const result = await generatePresignedUrl(url, req.user?.role, req.user?.userId);
 
     sendResponse({
         res,

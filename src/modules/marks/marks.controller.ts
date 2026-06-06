@@ -3,10 +3,6 @@ import { catchAsync } from '../../utils/catchAsync';
 import { sendResponse } from '../../utils/response';
 import { MarksService } from './marks.service';
 
-// ════════════════════════════════════════════════════════════════════════════
-// Subject
-// ════════════════════════════════════════════════════════════════════════════
-
 export const createSubject = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const userId = req.user!.userId;
     const subject = await MarksService.createSubject(req.body, userId);
@@ -35,10 +31,6 @@ export const deleteSubject = catchAsync(async (req: Request, res: Response, _nex
     const subject = await MarksService.deleteSubject(req.params.id, userId);
     sendResponse({ res, statusCode: 200, success: true, message: 'Subject deleted', data: subject });
 });
-
-// ════════════════════════════════════════════════════════════════════════════
-// SemesterMark
-// ════════════════════════════════════════════════════════════════════════════
 
 export const recordMark = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const userId = req.user!.userId;

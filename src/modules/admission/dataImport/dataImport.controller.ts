@@ -21,13 +21,10 @@ export const importAdmissionData = async (
       throw new AppError("Mapping ID and Import Type are required", 400);
     }
 
-    // Validate ImportType enum
     if (!Object.values(ImportType).includes(importType as ImportType)) {
        throw new AppError("Invalid Import Type", 400);
     }
 
-    // Admins only (Middleware handles authentication, we just use req.user.id)
-    // Assuming req.user is populated by auth middleware
     const adminId = (req as any).user?.id || "SYSTEM"; 
 
     const results = await processExcelImport(
@@ -62,7 +59,7 @@ export const createImportMapping = async (
     const newMapping = await prisma.dataImportMapping.create({
       data: {
         name,
-        type, // Ensure this matches ImportType enum from frontend
+        type,
         mapping,
         createdBy: (req as any).user?.userId || "SYSTEM",
       },

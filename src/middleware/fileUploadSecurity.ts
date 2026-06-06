@@ -1,14 +1,10 @@
-// middlewares/fileUploadSecurity.ts
-// Comprehensive file upload security middleware
+
 
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/AppError';
 import logger from '../utils/logger';
 import path from 'path';
 
-/**
- * Allowed MIME types for different document categories
- */
 const ALLOWED_MIME_TYPES = {
     images: [
         'image/jpeg',
@@ -31,63 +27,62 @@ const ALLOWED_MIME_TYPES = {
     ]
 };
 
-/**
- * File size limits (in bytes)
- */
 const FILE_SIZE_LIMITS = {
-    profilePhoto: 2 * 1024 * 1024,      // 2MB for profile photos
-    document: 5 * 1024 * 1024,          // 5MB for documents (PDFs, scanned docs)
-    hallTicket: 1 * 1024 * 1024,        // 1MB for hall tickets
-    default: 5 * 1024 * 1024            // 5MB default
+    profilePhoto: 2 * 1024 * 1024,
+    document: 5 * 1024 * 1024,
+    hallTicket: 1 * 1024 * 1024,
+    default: 5 * 1024 * 1024
 };
 
-/**
- * Magic numbers (file signatures) for validating actual file type
- * Prevents file extension spoofing
- */
 const FILE_SIGNATURES: { [key: string]: number[][] } = {
     'image/jpeg': [
-        [0xFF, 0xD8, 0xFF, 0xE0],  // JPEG JFIF
-        [0xFF, 0xD8, 0xFF, 0xE1],  // JPEG EXIF
-        [0xFF, 0xD8, 0xFF, 0xE2],  // JPEG
-        [0xFF, 0xD8, 0xFF, 0xE3]   // JPEG
+        [0xFF, 0xD8, 0xFF, 0xE0],
+        [0xFF, 0xD8, 0xFF, 0xE1],
+        [0xFF, 0xD8, 0xFF, 0xE2],
+        [0xFF, 0xD8, 0xFF, 0xE3]
     ],
     'image/png': [
-        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]  // PNG
+        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
     ],
     'image/webp': [
-        [0x52, 0x49, 0x46, 0x46]  // WEBP (RIFF)
+        [0x52, 0x49, 0x46, 0x46]
     ],
     'application/pdf': [
-        [0x25, 0x50, 0x44, 0x46]  // PDF (%PDF)
+        [0x25, 0x50, 0x44, 0x46]
     ]
 };
 
-/**
- * Check if file signature matches the declared MIME type
- */
 function validateFileSignature(buffer: Buffer, mimeType: string): boolean {
     const signatures = FILE_SIGNATURES[mimeType];
     if (!signatures) {
         return false;
     }
 
-    return signatures.some(signature => {
+    const headerMatch = signatures.some(signature => {
         return signature.every((byte, index) => buffer[index] === byte);
     });
+
+    if (!headerMatch) {
+        return false;
+    }
+
+    if (mimeType === 'image/webp') {
+        const webpMarker = [0x57, 0x45, 0x42, 0x50];
+        const markerMatch = webpMarker.every((byte, index) => buffer[8 + index] === byte);
+        if (!markerMatch) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
-/**
- * Sanitize filename to prevent directory traversal and other attacks
- */
 function sanitizeFilename(filename: string): string {
-    // Remove path separators and null bytes
+
     let sanitized = filename.replace(/[\/\\]/g, '_').replace(/\0/g, '');
-    
-    // Remove any non-alphanumeric characters except dots, dashes, and underscores
+
     sanitized = sanitized.replace(/[^a-zA-Z0-9._-]/g, '_');
-    
-    // Limit filename length
+
     const ext = path.extname(sanitized);
     const name = path.basename(sanitized, ext);
     const maxLength = 100;
@@ -99,31 +94,24 @@ function sanitizeFilename(filename: string): string {
     return sanitized;
 }
 
-/**
- * Validate file upload security
- * @param allowedTypes - Array of allowed MIME types or category name
- * @param maxSize - Maximum file size in bytes
- */
 export const validateFileUpload = (
     allowedTypes: string[] | 'images' | 'documents' | 'all' = 'all',
     maxSize: number = FILE_SIZE_LIMITS.default
 ) => {
     return (req: Request, res: Response, next: NextFunction) => {
         try {
-            // Get file from request (assuming multer or similar middleware)
+
             const file = req.file;
             
             if (!file) {
-                // No file uploaded - might be optional, let route handler decide
+
                 return next();
             }
 
-            // Get allowed MIME types
             const allowedMimeTypes = typeof allowedTypes === 'string' 
                 ? ALLOWED_MIME_TYPES[allowedTypes] 
                 : allowedTypes;
 
-            // 1. Check file size
             if (file.size > maxSize) {
                 logger.warn(`[FileUpload] File too large: ${file.size} bytes (max: ${maxSize}), user: ${req.user?.userId}`);
                 throw new AppError(
@@ -132,7 +120,6 @@ export const validateFileUpload = (
                 );
             }
 
-            // 2. Check MIME type
             if (!allowedMimeTypes.includes(file.mimetype)) {
                 logger.warn(`[FileUpload] Invalid MIME type: ${file.mimetype}, user: ${req.user?.userId}`);
                 throw new AppError(
@@ -141,24 +128,26 @@ export const validateFileUpload = (
                 );
             }
 
-            // 3. Validate file signature (magic number check)
-            if (file.buffer) {
-                const isValidSignature = validateFileSignature(file.buffer, file.mimetype);
-                if (!isValidSignature) {
-                    logger.warn(`[FileUpload] File signature mismatch for MIME type: ${file.mimetype}, user: ${req.user?.userId}`);
-                    throw new AppError(
-                        'File content does not match declared file type. Possible file spoofing detected.',
-                        400
-                    );
-                }
+            if (!file.buffer) {
+                logger.warn(`[FileUpload] File buffer unavailable (disk storage not supported), user: ${req.user?.userId}`);
+                throw new AppError(
+                    'File buffer is unavailable. Memory storage is required for file validation.',
+                    400
+                );
+            }
+            const isValidSignature = validateFileSignature(file.buffer, file.mimetype);
+            if (!isValidSignature) {
+                logger.warn(`[FileUpload] File signature mismatch for MIME type: ${file.mimetype}, user: ${req.user?.userId}`);
+                throw new AppError(
+                    'File content does not match declared file type. Possible file spoofing detected.',
+                    400
+                );
             }
 
-            // 4. Sanitize filename
             if (file.originalname) {
                 file.originalname = sanitizeFilename(file.originalname);
             }
 
-            // 5. Check for suspicious file extensions
             const suspiciousExtensions = ['.exe', '.bat', '.cmd', '.sh', '.ps1', '.vbs', '.js', '.jar', '.app'];
             const fileExt = path.extname(file.originalname).toLowerCase();
             if (suspiciousExtensions.includes(fileExt)) {
@@ -166,7 +155,6 @@ export const validateFileUpload = (
                 throw new AppError('File type not allowed for security reasons', 400);
             }
 
-            // Log successful validation
             logger.info(`[FileUpload] File validated: ${file.originalname}, size: ${file.size}, type: ${file.mimetype}, user: ${req.user?.userId}`);
 
             next();
@@ -176,29 +164,19 @@ export const validateFileUpload = (
     };
 };
 
-/**
- * Specific validators for common use cases
- */
 export const validateProfilePhoto = validateFileUpload('images', FILE_SIZE_LIMITS.profilePhoto);
 export const validateDocument = validateFileUpload('documents', FILE_SIZE_LIMITS.document);
 export const validateHallTicket = validateFileUpload(['application/pdf', 'image/jpeg', 'image/png'], FILE_SIZE_LIMITS.hallTicket);
 
-/**
- * Generate secure random filename
- * Prevents filename collisions and makes files non-guessable
- */
 export function generateSecureFilename(originalFilename: string, userId?: string): string {
     const timestamp = Date.now();
-    const randomString = Math.random().toString(36).substring(2, 15);
+    const randomString = require('crypto').randomBytes(8).toString('hex');
     const ext = path.extname(originalFilename);
     const userPrefix = userId ? `${userId.substring(0, 8)}_` : '';
-    
+
     return `${userPrefix}${timestamp}_${randomString}${ext}`;
 }
 
-/**
- * Validate file count in request
- */
 export const validateFileCount = (maxFiles: number = 1) => {
     return (req: Request, res: Response, next: NextFunction) => {
         const files = req.files;

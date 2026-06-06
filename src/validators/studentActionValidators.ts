@@ -1,11 +1,5 @@
 import { z } from 'zod';
 
-/**
- * Optional admin pricing overrides shared across accommodation/transport flows.
- * When present they fully replace the config tier / route cost (the system value
- * is not consulted), so every charged amount must be supplied. Use 0 to skip a
- * component. Supplying an override additionally requires `student.pricing.override`.
- */
 const hostelCustomPricingField = z.object({
     accommodation: z.number().min(0, "accommodation must be >= 0"),
     mess: z.number().min(0, "mess must be >= 0"),
@@ -39,8 +33,7 @@ export const assignHostelSchema = z.object({
         studentId: z.string().uuid("Invalid Student ID"),
     }),
     body: z.object({
-        // Optional: assign-hostel sets the pricing tier + payment mode + fee demands.
-        // The specific hostel (and bed) can be bound later via allocate-bed.
+
         hostelId: z.string().uuid("Invalid Hostel ID").optional(),
         hostelPaymentMode: z.string()
             .transform(v => v.toUpperCase())
@@ -160,9 +153,6 @@ export const reassignTransportSchema = z.object({
     }),
 });
 
-// Per-component amount the college keeps on hostel cancellation. When present, each value is
-// capped against what the student paid into that component (validated in the service). When
-// absent, the legacy single-lump `cancellationFee` is used instead.
 const hostelWithholdField = z.object({
     accommodation: z.number().min(0).optional(),
     mess: z.number().min(0).optional(),
@@ -186,8 +176,8 @@ export const cancelTransportSchema = z.object({
         studentId: z.string().uuid("Invalid Student ID"),
     }),
     body: z.object({
-        withhold: z.number().min(0).optional(),         // amount kept from transport paid (≤ paid)
-        cancellationFee: z.number().min(0).optional().default(0),  // separate flat penalty on top
+        withhold: z.number().min(0).optional(),
+        cancellationFee: z.number().min(0).optional().default(0),
         reason: z.string().trim().min(1, "Reason is required").max(500),
     }),
 });
@@ -197,11 +187,7 @@ export const switchHostelToTransportSchema = z.object({
         studentId: z.string().uuid("Invalid Student ID"),
     }),
     body: z.object({
-        // What the college keeps from the HOSTEL side being left:
-        //   withhold        — per-component, each ≤ what was paid for that component
-        //   cancellationFee — separate flat penalty on top
-        //   chargeRetained  — legacy single flat amount (folded into the fee; kept for compat)
-        // refund = max(0, hostelPaid − (Σ withhold + cancellationFee + chargeRetained))
+
         withhold: hostelWithholdField,
         cancellationFee: z.number().min(0).optional().default(0),
         chargeRetained: z.number().min(0).optional().default(0),
@@ -218,8 +204,7 @@ export const switchTransportToHostelSchema = z.object({
     body: z.object({
         chargeRetained: z.number().min(0).optional().default(0),
         reason: z.string().trim().min(1, "Reason is required").max(500),
-        // Optional — the switch commits by sharing tier; the specific hostel/bed is
-        // assigned later (assign-hostel/allocate-bed).
+
         hostelId: z.string().uuid("Invalid Hostel ID").optional(),
         hostelPaymentMode: z.string()
             .transform(v => v.toUpperCase())
@@ -231,10 +216,6 @@ export const switchTransportToHostelSchema = z.object({
     }),
 });
 
-/* ───── Preview (dry-run) schemas ─────
- * Same body as the write counterpart but `reason` is omitted — a preview
- * doesn't record anything, so no reason is needed.
- */
 export const reassignHostelPreviewSchema = z.object({
     params: z.object({
         studentId: z.string().uuid("Invalid Student ID"),
@@ -285,8 +266,7 @@ export const switchTransportToHostelPreviewSchema = z.object({
     }),
     body: z.object({
         chargeRetained: z.number().min(0).optional().default(0),
-        // Optional for the preview — pricing is keyed by sharing, not the specific
-        // hostel; the hostel/bed is chosen later at assign-hostel/allocate-bed.
+
         hostelId: z.string().uuid("Invalid Hostel ID").optional(),
         hostelPaymentMode: z.string()
             .transform(v => v.toUpperCase())

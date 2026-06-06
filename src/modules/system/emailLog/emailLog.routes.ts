@@ -5,10 +5,6 @@ import { authenticate, authorizePermission } from '../../../middleware/rbac.midd
 
 const router = express.Router();
 
-// ═══════════════════════════════════════════════════════════
-//  EMAIL LOG — FAILED EMAIL MANAGEMENT (SUPER_ADMIN / ADMIN only)
-// ═══════════════════════════════════════════════════════════
-
 router.get('/failed', authenticate, authorizePermission(['system.email-logs.read']), listFailedEmails);
 
 router.post('/retry/:id', authenticate, authorizePermission(['system.email-logs.write']), retryFailedEmail);

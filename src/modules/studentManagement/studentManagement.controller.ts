@@ -13,7 +13,6 @@ import { assertPricingOverrideAllowed } from '../../middleware/rbac.middleware';
 import fs from 'fs';
 import path from 'path';
 
-// Export Applications as CSV
 export const exportApplicationsCsv = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[exportApplicationsCsv] by=${req.user?.userId || 'anonymous'}`);
     const csv = await AdminStudentService.exportApplicationsCsv(req.query);
@@ -22,7 +21,6 @@ export const exportApplicationsCsv = catchAsync(async (req: Request, res: Respon
     res.send(csv);
 });
 
-// Get All Applications
 export const getAllApplications = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getAllApplications] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[getAllApplications] query=${JSON.stringify(req.query)}`);
@@ -38,7 +36,6 @@ export const getAllApplications = catchAsync(async (req: Request, res: Response,
     });
 });
 
-// Get Expanded Applications (with filters)
 export const getApplicationsExtended = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getApplicationsExtended] by=${req.user?.userId || 'anonymous'}`);
     const result = await AdminStudentService.getApplicationsExtended(req.query);
@@ -51,7 +48,6 @@ export const getApplicationsExtended = catchAsync(async (req: Request, res: Resp
     });
 });
 
-// Upload Bulk Applications
 export const uploadBulkApplications = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[uploadBulkApplications] by=${req.user?.userId || 'anonymous'}`);
 
@@ -81,7 +77,6 @@ export const uploadBulkApplications = catchAsync(async (req: Request, res: Respo
     }
 });
 
-// Request Cancellation
 export const requestCancellation = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestCancellation] by=${req.user?.userId || 'anonymous'}`);
 
@@ -98,16 +93,11 @@ export const requestCancellation = catchAsync(async (req: Request, res: Response
     });
 });
 
-// Approve Cancellation
 export const approveCancellation = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[approveCancellation] by=${req.user?.userId || 'anonymous'}`);
 
     const { requestId, approved } = req.body;
-    
-    // Logic for role check handled in service or here? Logic for role is access control.
-    // Service has check: if (adminRole !== Role.SUPER_ADMIN).
-    // So pass role to service.
-    
+
     await AdminStudentService.approveCancellation(requestId, approved, req.user?.role, req.user?.userId);
 
     sendResponse({
@@ -118,7 +108,6 @@ export const approveCancellation = catchAsync(async (req: Request, res: Response
     });
 });
 
-// Verify Docs & Allot Seat
 export const verifyAndAllotSeat = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[verifyAndAllotSeat] by=${req.user?.userId || 'anonymous'}`);
 
@@ -134,7 +123,6 @@ export const verifyAndAllotSeat = catchAsync(async (req: Request, res: Response,
     });
 });
 
-// Re-upload a single document on behalf of a student
 export const reUploadDocument = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { documentKey, url } = req.body;
@@ -147,7 +135,6 @@ export const reUploadDocument = catchAsync(async (req: Request, res: Response, n
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.FILE_UPLOADED, data: doc });
 });
 
-// Verify Student Document
 export const verifyStudentDocument = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { documentKey, status, remarks } = req.body;
@@ -163,7 +150,6 @@ export const verifyStudentDocument = catchAsync(async (req: Request, res: Respon
     });
 });
 
-// Request Course Change (generic)
 export const requestCourseChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestCourseChange] by=${req.user?.userId || 'anonymous'}`);
 
@@ -180,7 +166,6 @@ export const requestCourseChange = catchAsync(async (req: Request, res: Response
     });
 });
 
-// Request Branch Change (same program, different branch)
 export const requestBranchChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestBranchChange] by=${req.user?.userId || 'anonymous'}`);
 
@@ -197,7 +182,6 @@ export const requestBranchChange = catchAsync(async (req: Request, res: Response
     });
 });
 
-// Request Program Change (cross-program transfer, e.g. B.Tech → BBA)
 export const requestProgramChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestProgramChange] by=${req.user?.userId || 'anonymous'}`);
 
@@ -214,7 +198,6 @@ export const requestProgramChange = catchAsync(async (req: Request, res: Respons
     });
 });
 
-// Approve Course Change
 export const approveCourseChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[approveCourseChange] by=${req.user?.userId || 'anonymous'}`);
 
@@ -230,7 +213,6 @@ export const approveCourseChange = catchAsync(async (req: Request, res: Response
     });
 });
 
-// Debug: Inspect raw allotments for a course
 export const debugCourseAllotments = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[debugCourseAllotments] by=${req.user?.userId || 'anonymous'}`);
     const { courseId } = req.params;
@@ -244,7 +226,6 @@ export const debugCourseAllotments = catchAsync(async (req: Request, res: Respon
     });
 });
 
-// Get Course Change Requests
 export const getCourseChangeRequests = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getCourseChangeRequests] by=${req.user?.userId || 'anonymous'}`);
 
@@ -259,7 +240,6 @@ export const getCourseChangeRequests = catchAsync(async (req: Request, res: Resp
     });
 });
 
-// Update Admission Details
 export const updateAdmissionDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateAdmissionDetails] by=${req.user?.userId || 'anonymous'}`);
 
@@ -273,7 +253,6 @@ export const updateAdmissionDetails = catchAsync(async (req: Request, res: Respo
     });
 });
 
-// Bulk-allocate vacant beds in a single room to a list of students
 export const bulkAllocateRoomBeds = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { roomId, studentIds, academicYearId } = req.body;
     logger.info(`[bulkAllocateRoomBeds] roomId=${roomId} count=${studentIds?.length} by=${req.user?.userId || 'anonymous'}`);
@@ -297,7 +276,6 @@ export const bulkAllocateRoomBeds = catchAsync(async (req: Request, res: Respons
     });
 });
 
-// Re-assign a student to a different hostel/bed AFTER initial bed allocation
 export const reassignHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { hostelId, bedId, hostelPaymentMode, reason, customPricing } = req.body;
@@ -314,8 +292,6 @@ export const reassignHostel = catchAsync(async (req: Request, res: Response, nex
         req.user?.userId
     );
 
-    // Re-assert totalFee = Σ active demands and paidFee = Σ SUCCESS payments from the
-    // source rows, so totals can never drift from the underlying demands/payments.
     await recomputeStudentTotals(studentId).catch(err => logger.error(`[reassignHostel] totals recompute failed for ${studentId}: ${err}`));
 
     sendResponse({
@@ -327,7 +303,6 @@ export const reassignHostel = catchAsync(async (req: Request, res: Response, nex
     });
 });
 
-// Allocate a specific bed to a student already assigned to a hostel
 export const allocateBed = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { bedId, hostelId, academicYearId } = req.body;
@@ -348,7 +323,6 @@ export const allocateBed = catchAsync(async (req: Request, res: Response, next: 
     });
 });
 
-// List students who opted for hostel but have no active bed allocation
 export const getPendingHostelAllocations = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getPendingHostelAllocations] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[getPendingHostelAllocations] query=${JSON.stringify(req.query)}`);
@@ -364,7 +338,6 @@ export const getPendingHostelAllocations = catchAsync(async (req: Request, res: 
     });
 });
 
-// List every student with a transportRouteId set (route fee + paid breakdown)
 export const getTransportAllocatedStudents = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getTransportAllocatedStudents] by=${req.user?.userId || 'anonymous'}`);
     const result = await AdminStudentService.getTransportAllocatedStudents(req.query);
@@ -378,7 +351,6 @@ export const getTransportAllocatedStudents = catchAsync(async (req: Request, res
     });
 });
 
-// List every student with an active bed allocation (across all hostels)
 export const getBedAllocatedStudents = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getBedAllocatedStudents] by=${req.user?.userId || 'anonymous'}`);
     const result = await AdminStudentService.getBedAllocatedStudents(req.query);
@@ -392,7 +364,6 @@ export const getBedAllocatedStudents = catchAsync(async (req: Request, res: Resp
     });
 });
 
-// List students currently on HOSTEL who've paid at least ₹1 toward hostel
 export const getHostelPaidStudents = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getHostelPaidStudents] by=${req.user?.userId || 'anonymous'}`);
     const result = await AdminStudentService.getHostelPaidStudents(req.query);
@@ -406,7 +377,6 @@ export const getHostelPaidStudents = catchAsync(async (req: Request, res: Respon
     });
 });
 
-// List students currently on TRANSPORT who've paid at least ₹1 toward transport
 export const getTransportPaidStudents = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getTransportPaidStudents] by=${req.user?.userId || 'anonymous'}`);
     const result = await AdminStudentService.getTransportPaidStudents(req.query);
@@ -420,7 +390,6 @@ export const getTransportPaidStudents = catchAsync(async (req: Request, res: Res
     });
 });
 
-// List all students assigned to a specific hostel (roster view)
 export const getStudentsByHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { hostelId } = req.params;
     logger.info(`[getStudentsByHostel] hostelId=${hostelId} by=${req.user?.userId || 'anonymous'}`);
@@ -436,10 +405,6 @@ export const getStudentsByHostel = catchAsync(async (req: Request, res: Response
     });
 });
 
-// Switch student from HOSTEL to TRANSPORT with proration.
-// chargeRetained = what college keeps for the period the student actually used hostel.
-// refundPool = paid - chargeRetained → applied to new transport demand as discount,
-// leftover goes to FeeCorrection.
 export const switchHostelToTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { withhold, cancellationFee, chargeRetained, reason, transportRouteId, customCost } = req.body;
@@ -467,10 +432,6 @@ export const switchHostelToTransport = catchAsync(async (req: Request, res: Resp
     });
 });
 
-// Switch student from TRANSPORT to HOSTEL with proration.
-// chargeRetained = what college keeps for the period the student actually used transport.
-// refundPool = paid - chargeRetained → applied across the 4 new hostel demands as discount,
-// leftover goes to FeeCorrection.
 export const switchTransportToHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { chargeRetained, reason, hostelId, hostelType, hostelPaymentMode, customPricing } = req.body;
@@ -497,10 +458,6 @@ export const switchTransportToHostel = catchAsync(async (req: Request, res: Resp
         data: result
     });
 });
-
-// ───────────────────────── Preview (dry-run) ─────────────────────────
-// Compute the financial impact of an accommodation change WITHOUT applying it.
-// Same validation/auth as the write counterpart; no demands/refunds/audit written.
 
 export const previewReassignHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
@@ -575,8 +532,6 @@ export const previewSwitchTransportToHostel = catchAsync(async (req: Request, re
     sendResponse({ res, statusCode: 200, success: true, message: 'Transport→Hostel switch preview', data: result });
 });
 
-// Cancel a student's HOSTEL — flips accommodationType to NONE, vacates bed,
-// soft-deletes pending demands, drops snapshot, creates FeeCorrection refund.
 export const cancelHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { cancellationFee, withhold, reason } = req.body;
@@ -603,8 +558,6 @@ export const cancelHostel = catchAsync(async (req: Request, res: Response, next:
     });
 });
 
-// Cancel a student's TRANSPORT — flips accommodationType to NONE, soft-deletes
-// pending demand, creates FeeCorrection refund.
 export const cancelTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { withhold, cancellationFee, reason } = req.body;
@@ -631,7 +584,6 @@ export const cancelTransport = catchAsync(async (req: Request, res: Response, ne
     });
 });
 
-// Re-assign a TRANSPORT student to a different route. Adjusts demand + totalFee.
 export const reassignTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { transportRouteId, reason, customCost } = req.body;
@@ -659,8 +611,6 @@ export const reassignTransport = catchAsync(async (req: Request, res: Response, 
     });
 });
 
-// Assign transport — flips accommodationType from NONE to TRANSPORT, sets routeId,
-// creates TRANSPORT StudentFeeDemand, increments totalFee.
 export const assignTransport = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { transportRouteId, customCost } = req.body;
@@ -684,7 +634,6 @@ export const assignTransport = catchAsync(async (req: Request, res: Response, ne
     });
 });
 
-// List vacant beds in a hostel for the assignment-UI dropdown
 export const getAvailableBeds = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { hostelId } = req.params;
     const { sharing, roomType, floor } = req.query as any;
@@ -703,13 +652,11 @@ export const getAvailableBeds = catchAsync(async (req: Request, res: Response, n
     });
 });
 
-// Assign hostel — flips accommodationType from NONE to HOSTEL
 export const assignHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { hostelId, hostelPaymentMode, hostelType, customPricing } = req.body;
     logger.info(`[assignHostel] studentId=${studentId} hostelId=${hostelId ?? 'unset'} mode=${hostelPaymentMode} type=${hostelType ?? 'unset'} custom=${customPricing ? 'yes' : 'no'} by=${req.user?.userId || 'anonymous'} role=${req.user?.role || 'unknown'}`);
 
-    // Students cannot self-assign hostel
     if (req.user?.role === Role.STUDENT) {
         throw new AppError('Students cannot assign their own hostel', 403);
     }
@@ -751,7 +698,6 @@ export const updateHostelId = catchAsync(async (req: Request, res: Response, _ne
     });
 });
 
-// Get Student Certificates
 export const getStudentCertificates = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     
@@ -766,7 +712,6 @@ export const getStudentCertificates = catchAsync(async (req: Request, res: Respo
     });
 });
 
-// Download Student Documents as Zip
 export const downloadStudentDocuments = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     
@@ -783,7 +728,6 @@ export const downloadStudentDocuments = catchAsync(async (req: Request, res: Res
     });
 });
 
-// Download Application PDF
 export const downloadApplication = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
 
@@ -794,7 +738,6 @@ export const downloadApplication = catchAsync(async (req: Request, res: Response
     res.send(pdfBuffer);
 });
 
-// Update Roll Number
 export const updateRollNumber = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateRollNumber] by=${req.user?.userId || 'anonymous'}`);
     const { studentId, rollNumber, sectionId, academicYearId } = req.body;
@@ -810,7 +753,6 @@ export const updateRollNumber = catchAsync(async (req: Request, res: Response, n
     });
 });
 
-// Update Student Admission Status Manually
 export const updateStudentStatus = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateStudentStatus] by=${req.user?.userId || 'anonymous'}`);
     const { studentId, status } = req.body;
@@ -825,7 +767,6 @@ export const updateStudentStatus = catchAsync(async (req: Request, res: Response
     });
 });
 
-// Set Scholarship Eligibility Manual
 export const setScholarshipEligibility = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[setScholarshipEligibility] by=${req.user?.userId || 'anonymous'}`);
     const { studentId, ruleId } = req.body;
@@ -840,11 +781,9 @@ export const setScholarshipEligibility = catchAsync(async (req: Request, res: Re
     });
 });
 
-// Update Student Personal Details
 export const updateStudentPersonalDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateStudentPersonalDetails] by=${req.user?.userId || 'anonymous'}`);
-    
-    // SECURITY: If Student Role, enforce Own Data Check
+
     if (req.user?.role === Role.STUDENT) {
         if (!req.user.userId) throw new AppError('User ID missing', 400);
 
@@ -852,8 +791,7 @@ export const updateStudentPersonalDetails = catchAsync(async (req: Request, res:
         if (!student) {
             throw new AppError('Student profile not found for this user', 404);
         }
-        
-        // Force the studentId to match their own profile
+
         req.body.studentId = student.id;
     }
 
@@ -870,7 +808,6 @@ export const updateStudentPersonalDetails = catchAsync(async (req: Request, res:
     });
 });
 
-// Get All Student Details
 export const getStudentDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
 
@@ -885,7 +822,6 @@ export const getStudentDetails = catchAsync(async (req: Request, res: Response, 
     });
 });
 
-// Get Student Details By Application ID
 export const getStudentDetailsByApplicationId = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { applicationId } = req.params;
 
@@ -900,12 +836,10 @@ export const getStudentDetailsByApplicationId = catchAsync(async (req: Request, 
     });
 });
 
-// Update Academic Qualification
 export const updateAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
 
-    // SECURITY: If Student Role, enforce Ownership Check
     if (req.user?.role === Role.STUDENT) {
         if (!req.user.userId) throw new AppError('User ID missing', 400);
 
@@ -939,12 +873,10 @@ export const updateAcademicQualification = catchAsync(async (req: Request, res: 
     });
 });
 
-// Delete Academic Qualification
 export const deleteAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[deleteAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
 
-    // SECURITY: If Student Role, enforce Ownership Check
     if (req.user?.role === Role.STUDENT) {
         if (!req.user.userId) throw new AppError('User ID missing', 400);
 
@@ -974,7 +906,6 @@ export const deleteAcademicQualification = catchAsync(async (req: Request, res: 
     });
 });
 
-// Validate Academic Qualification
 export const validateAcademicQualification = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[validateAcademicQualification] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
@@ -990,7 +921,6 @@ export const validateAcademicQualification = catchAsync(async (req: Request, res
     });
 });
 
-// Update Student Scholarship
 export const updateStudentScholarship = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateStudentScholarship] by=${req.user?.userId || 'anonymous'}`);
     const { studentId } = req.body;
@@ -1006,7 +936,6 @@ export const updateStudentScholarship = catchAsync(async (req: Request, res: Res
     });
 });
 
-// Get Student Scholarships
 export const getStudentScholarships = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getStudentScholarships] by=${req.user?.userId || 'anonymous'}`);
     const { studentId } = req.params;
@@ -1022,7 +951,6 @@ export const getStudentScholarships = catchAsync(async (req: Request, res: Respo
     });
 });
 
-// Get Scholarship Stats
 export const getScholarshipStats = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getScholarshipStats] by=${req.user?.userId || 'anonymous'}`);
 
@@ -1037,7 +965,6 @@ export const getScholarshipStats = catchAsync(async (req: Request, res: Response
     });
 });
 
-// Edit Student Scholarship (PUT)
 export const editStudentScholarship = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[editStudentScholarship] by=${req.user?.userId || 'anonymous'}`);
     const { id } = req.params;
@@ -1053,9 +980,6 @@ export const editStudentScholarship = catchAsync(async (req: Request, res: Respo
     });
 });
 
-// Reconcile a student's fee state — soft-delete orphan accommodation demands
-// (e.g. HOSTEL_REGISTRATION on a NONE student) and refresh totalFee/paidFee.
-// Destructive: SUPER_ADMIN only (enforced in the service).
 export const reconcileStudentFees = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[reconcileStudentFees] by=${req.user?.userId || 'anonymous'}`);
     const { studentId } = req.params;
@@ -1069,7 +993,6 @@ export const reconcileStudentFees = catchAsync(async (req: Request, res: Respons
     });
 });
 
-// Finalize Admission (One-Shot Payment & Allocation)
 export const finalizeAdmission = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[finalizeAdmission] by=${req.user?.userId || 'anonymous'}`);
 
@@ -1096,9 +1019,6 @@ export const manualEntryAdmission = catchAsync(async (req: Request, res: Respons
     });
 });
 
-// Step 2 of the two-step admission flow: assign rollNumber + section to a
-// previously-registered student (after counseling / seat allotment). Creates
-// the StudentEnrollment row that backs roll-number-based login and billing.
 export const assignEnrollment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { rollNumber, sectionId, currentSemester, yearOfStudy, seedFeeDemands } = req.body;
@@ -1124,7 +1044,6 @@ export const assignEnrollment = catchAsync(async (req: Request, res: Response, n
     });
 });
 
-// Verify Online Payment & Finalize
 export const verifyPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[verifyPayment] by=${req.user?.userId || 'anonymous'}`);
 
@@ -1140,16 +1059,12 @@ export const verifyPayment = catchAsync(async (req: Request, res: Response, next
     });
 });
 
-// Get Admission Fee Invoice
 export const getAdmissionInvoice = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getAdmissionInvoice] by=${req.user?.userId || 'anonymous'}`);
     const { studentId } = req.params;
 
-    // Security check: if student, ensure accessing own data
     if (req.user?.role === Role.STUDENT) {
-        // ... (student ID check logic if standardized, or rely on service if we passed userId)
-        // For now, assuming standard admin/student access pattern.
-        // Assuming studentId param is expected.
+
         const userStudent = await StudentService.getStudentByUserId(req.user.userId!);
         if (userStudent && userStudent.id !== studentId) {
              throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
@@ -1167,11 +1082,6 @@ export const getAdmissionInvoice = catchAsync(async (req: Request, res: Response
     });
 });
 
-
-
-
-
-// Send Status Email (Manual Trigger)
 export const sendStatusEmail = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[sendStatusEmail] by=${req.user?.userId || 'anonymous'}`);
 
@@ -1185,7 +1095,6 @@ export const sendStatusEmail = catchAsync(async (req: Request, res: Response, ne
     });
 });
 
-// Reverse Admission Payment (Delete mistaken bank-transfer / offline payment and undo all side-effects)
 export const reverseAdmissionPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[reverseAdmissionPayment] by=${req.user?.userId || 'anonymous'}`);
 
@@ -1210,7 +1119,6 @@ export const reverseAdmissionPayment = catchAsync(async (req: Request, res: Resp
     });
 });
 
-// Get Financial Applications
 export const getFinancialApplications = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getFinancialApplications] by=${req.user?.userId || 'anonymous'}`);
     const result = await AdminStudentService.getFinancialApplications(req.query);
@@ -1223,7 +1131,6 @@ export const getFinancialApplications = catchAsync(async (req: Request, res: Res
     });
 });
 
-// Assign PRO to Student
 export const updateSeatAllotedBy = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     const { studentId, seatAllotedBy } = req.body;
     const result = await AdminStudentService.updateSeatAllotedBy(studentId, seatAllotedBy, req.user?.userId);
@@ -1266,7 +1173,7 @@ export const editPro = catchAsync(async (req: Request, res: Response, next: Next
     }
 
     if (!proNumber) {
-        // Remove PRO assignment
+
         const updatedStudent = await prisma.student.update({
             where: { id: studentId },
             data: { proId: null }
@@ -1299,10 +1206,6 @@ export const editPro = catchAsync(async (req: Request, res: Response, next: Next
         data: { studentId: updatedStudent.id, proId: updatedStudent.proId, proNumber }
     });
 });
-
-// ═══════════════════════════════════════════════════════════
-//  WAITING LIST
-// ═══════════════════════════════════════════════════════════
 
 export const addToWaitingList = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const result = await AdminStudentService.addToWaitingList(req.body, req.user!.userId);

@@ -6,10 +6,6 @@ import { sendResponse } from '../../utils/response';
 import { CancellationService, calculateFeeAdjustment } from './cancellation.service';
 import { CancellationStatus } from '@prisma/client';
 
-// ─────────────────────────────────────────────────────────────
-// POST /admin/cancellation/preview
-// Pure calculation — no DB write
-// ─────────────────────────────────────────────────────────────
 export const previewAdjustment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[previewAdjustment] by=${req.user?.userId || 'anonymous'}`);
 
@@ -32,10 +28,6 @@ export const previewAdjustment = catchAsync(async (req: Request, res: Response, 
     });
 });
 
-// ─────────────────────────────────────────────────────────────
-// POST /admin/cancellation/request
-// Saves cancellation request with computed adjustment values
-// ─────────────────────────────────────────────────────────────
 export const requestCancellation = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestCancellation] by=${req.user?.userId || 'anonymous'}`);
 
@@ -68,10 +60,6 @@ export const requestCancellation = catchAsync(async (req: Request, res: Response
     });
 });
 
-// ─────────────────────────────────────────────────────────────
-// POST /admin/cancellation/approve
-// Approve or reject a cancellation request
-// ─────────────────────────────────────────────────────────────
 export const approveCancellation = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[approveCancellation] by=${req.user?.userId || 'anonymous'}`);
 
@@ -91,10 +79,6 @@ export const approveCancellation = catchAsync(async (req: Request, res: Response
     });
 });
 
-// ─────────────────────────────────────────────────────────────
-// GET /admin/cancellation/list
-// List all cancellation requests with optional filters
-// ─────────────────────────────────────────────────────────────
 export const listCancellationRequests = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[listCancellationRequests] by=${req.user?.userId || 'anonymous'}`);
 
@@ -118,10 +102,6 @@ export const listCancellationRequests = catchAsync(async (req: Request, res: Res
     });
 });
 
-// ─────────────────────────────────────────────────────────────
-// GET /admin/cancellation/:id/invoice
-// Download cancellation receipt (presigned S3 URL)
-// ─────────────────────────────────────────────────────────────
 export const downloadCancellationInvoice = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
     logger.info(`[downloadCancellationInvoice] id=${req.params.id} by=${req.user?.userId || 'anonymous'}`);
 
@@ -136,10 +116,6 @@ export const downloadCancellationInvoice = catchAsync(async (req: Request, res: 
     });
 });
 
-// ─────────────────────────────────────────────────────────────
-// GET /admin/cancellation/:id
-// Get a single cancellation request by ID
-// ─────────────────────────────────────────────────────────────
 export const getCancellationById = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getCancellationById] id=${req.params.id} by=${req.user?.userId || 'anonymous'}`);
 

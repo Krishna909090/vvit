@@ -1,10 +1,10 @@
-// Application listing / export / details / financial-report endpoints,
-// split out of adminStudent.service.ts.
+
 
 import prisma from '../../../config/prisma';
 import { AccommodationType, PaymentStatus, PaymentComponent, LedgerTransactionType } from '@prisma/client';
 import { registerStudent } from '../../student/student.service';
 import logger from '../../../utils/logger';
+import { randomBytes } from 'crypto';
 import { AppError } from '../../../utils/AppError';
 import { MESSAGES } from '../../../constants/messages';
 import Papa from 'papaparse';
@@ -22,12 +22,7 @@ import {
 } from './_shared';
 
 export const ApplicationsService = {
-    /**
-     * Paginated student application list with deep eager-loading (admission, exam,
-     * payments, allocations, pref courses with capacity). Used by the main admin
-     * applications grid. Filters resolved by `buildApplicationFilters` (search,
-     * status, quota, exam dates, marks, fee-paid, etc.).
-     */
+
     async getAllApplications(query: any) {
         const { page = 1, limit = 10 } = query;
         const skip = (Number(page) - 1) * Number(limit);
@@ -91,9 +86,6 @@ export const ApplicationsService = {
             prisma.student.count({ where })
         ]);
 
-        // Latest waiting-list entry (ANY status) per student on this page, keyed by studentId —
-        // one batched query rather than a per-row lookup. A student who came via the waiting
-        // list stays flagged regardless of seat allotment.
         const pageStudentIds = students.map((s: any) => s.id);
         const waitingRows = pageStudentIds.length
             ? await prisma.waitingList.findMany({
@@ -106,17 +98,16 @@ export const ApplicationsService = {
         for (const w of waitingRows) if (!waitingByStudent.has(w.studentId)) waitingByStudent.set(w.studentId, w);
 
         const enhancedStudents = await Promise.all(students.map(async (student: any) => {
-            // Convert document URLs to presigned URLs
+
             const documentsWithPresignedUrls = await Promise.all(student.documents.map(async (doc: any) => ({
                 ...doc,
                 url: await convertToPresignedUrl(doc.url)
             })));
 
-            // Convert profile photo URL
             const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
             const { transportAllocations: _ta, ...studentRest } = student;
-            // Flag if the student ever came via the waiting list, regardless of seat allotment.
+
             const waitingEntry = waitingByStudent.get(student.id) ?? null;
             return {
                 ...studentRest,
@@ -144,11 +135,6 @@ export const ApplicationsService = {
         };
     },
 
-    /**
-     * Same filter set as getAllApplications but emits CSV (no pagination).
-     * Resolves verifiedBy user IDs to names so the export shows admin names,
-     * not UUIDs.
-     */
     async exportApplicationsCsv(query: any) {
         const where = await buildApplicationFilters(query);
 
@@ -167,7 +153,6 @@ export const ApplicationsService = {
             }
         });
 
-        // Collect all unique verifiedBy user IDs to resolve names
         const verifierIds = new Set<string>();
         for (const s of students) {
             for (const q of (s as any).academicQualifications || []) {
@@ -221,11 +206,6 @@ export const ApplicationsService = {
         return Papa.unparse(rows);
     },
 
-    /**
-     * Widened applications list used by the extended-search admin screen.
-     * Adds preference-name search, allottedCourseId lookup, and exam-attended
-     * filters on top of the standard buildApplicationFilters surface.
-     */
     async getApplicationsExtended(query: any) {
         const { page = 1, limit = 10, search, status, quotaType, courseType, degree, applicationId, isScholarshipEligible, gender, preference, paymentStatus } = query;
         const skip = (Number(page) - 1) * Number(limit);
@@ -233,14 +213,12 @@ export const ApplicationsService = {
         const where: any = {};
         const andConditions: any[] = [];
 
-        // Search Condition
         if (search) {
              andConditions.push({
                 applicationId: { contains: String(search), mode: 'insensitive' }
             });
         }
-        
-        // Preference Condition
+
         if (preference) {
             andConditions.push({
                 OR: [
@@ -299,7 +277,6 @@ export const ApplicationsService = {
             };
         }
 
-        // Payment Status Filter (Default: PAID)
         const pStatus = paymentStatus ? String(paymentStatus).toUpperCase() : 'PAID';
 
         if (pStatus === 'PAID') {
@@ -317,7 +294,6 @@ export const ApplicationsService = {
                 }
             };
         }
-        // IF 'ALL', do nothing
 
         const [students, total] = await prisma.$transaction([
             prisma.student.findMany({
@@ -377,13 +353,12 @@ export const ApplicationsService = {
         ]);
 
         const enhancedStudents = await Promise.all(students.map(async (student: any) => {
-            // Convert document URLs to presigned URLs
+
             const documentsWithPresignedUrls = await Promise.all(student.documents.map(async (doc: any) => ({
                 ...doc,
                 url: await convertToPresignedUrl(doc.url)
             })));
 
-            // Convert profile photo URL
             const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
             const { transportAllocations: _ta, ...studentRest } = student;
@@ -410,12 +385,6 @@ export const ApplicationsService = {
         };
     },
 
-    /**
-     * Legacy bulk-create entrypoint: takes a CSV string and runs the public
-     * `registerStudent` flow per row. Returns a list of per-row results
-     * (success / failure with error message). New flows should use the
-     * dedicated bulkImport module instead.
-     */
     async processBulkApplications(fileContent: string, currentUserId: string | undefined) {
         const { data, errors } = Papa.parse(fileContent, {
             header: true,
@@ -469,10 +438,7 @@ export const ApplicationsService = {
         }
         return results;
     },
-    /**
-     * Returns a student's uploaded documents + verification status, with
-     * presigned S3 URLs so the admin UI can render previews.
-     */
+
     async getStudentCertificates(studentId: string) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     
@@ -487,8 +453,7 @@ export const ApplicationsService = {
         if (!student) {
             throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         }
-    
-        // Convert all document URLs to presigned URLs
+
         const documentPromises = student.documents.map(async (doc: any) => {
             const presignedUrl = await convertToPresignedUrl(doc.url);
             return { key: doc.documentKey, url: presignedUrl };
@@ -500,7 +465,6 @@ export const ApplicationsService = {
             return acc;
         }, {});
 
-        // Convert profile photo and hall ticket URLs
         const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
         const hallTicketUrl = await convertToPresignedUrl(student.examDetails?.hallTicketUrl);
 
@@ -511,10 +475,6 @@ export const ApplicationsService = {
         };
     },
 
-    /**
-     * Streams every approved document for a student into a single zip buffer.
-     * Used by the "download all" button on the document-verification screen.
-     */
     async generateStudentDocumentsZip(studentId: string) {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     
@@ -541,7 +501,8 @@ export const ApplicationsService = {
             throw new AppError(MESSAGES.ERROR.NO_DOCUMENTS_FOUND, 400);
         }
     
-        const zipFileName = `${student.applicationId}_documents.zip`;
+        const uniqueSuffix = randomBytes(8).toString('hex');
+        const zipFileName = `${student.applicationId}_${uniqueSuffix}_documents.zip`;
         const tempDir = path.join(__dirname, '../../temp');
         const zipFilePath = path.join(tempDir, zipFileName);
     
@@ -568,8 +529,10 @@ export const ApplicationsService = {
                     if (doc.url) {
                         try {
                             const response = await axios.get(doc.url, { responseType: 'stream' });
-                            const ext = path.extname(doc.url) || '.pdf'; 
-                            archive.append(response.data, { name: `${doc.name}${ext}` });
+                            const ext = path.extname(doc.url) || '.pdf';
+
+                            const safeName = path.basename(doc.name);
+                            archive.append(response.data, { name: `${safeName}${ext}` });
                         } catch (err: any) {
                             logger.error(`Failed to download ${doc.name} from ${doc.url}`);
                         }
@@ -580,10 +543,6 @@ export const ApplicationsService = {
         });
     },
 
-    /**
-     * Renders the student's application form as a PDF (the same shape the
-     * student sees on signup confirmation). Used by admins as proof-of-record.
-     */
     async downloadApplication(studentId: string) {
         const student = await prisma.student.findUnique({
             where: { id: studentId },
@@ -603,10 +562,8 @@ export const ApplicationsService = {
             throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
         }
 
-        // Convert profile photo URL to presigned
         const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
-        // Prepare data for PDF
         const pdfData = {
             applicationId: student.applicationId || 'N/A',
             studentName: student.name,
@@ -644,11 +601,7 @@ export const ApplicationsService = {
         
         return await generateApplicationPDF(pdfData);
     },
-    /**
-     * Financial-only view of applications: per-student totals + fee component
-     * breakdown (application fee, tuition, admission, book bank, hostel total
-     * vs paid, transport yes/no). Used by the finance dashboard.
-     */
+
     async getFinancialApplications(query: any) {
         const { page = 1, limit = 10, search, applicationId, gender, degree, feeType, dateRange, startDate, endDate, seatAllotedBy } = query;
         const skip = (Number(page) - 1) * Number(limit);
@@ -669,7 +622,6 @@ export const ApplicationsService = {
             where.applicationId = String(applicationId);
         }
 
-        // seatAllottedAt date range filter
         if (dateRange) {
             const now = new Date();
             const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
@@ -716,7 +668,6 @@ export const ApplicationsService = {
             }
         }
 
-        // seatAllotedBy filter
         if (seatAllotedBy) {
             where.admissionDetails = {
                 ...where.admissionDetails,
@@ -724,12 +675,10 @@ export const ApplicationsService = {
             };
         }
 
-        // Gender filter
         if (gender) {
             where.gender = { equals: String(gender), mode: 'insensitive' };
         }
 
-        // Degree/Course filter — via allotted course
         if (degree) {
             where.admissionDetails = {
                 ...where.admissionDetails,
@@ -737,7 +686,6 @@ export const ApplicationsService = {
             };
         }
 
-        // Fee Statistics filter — students who have paid that fee type
         logger.info(`[getFinancialApplications] feeType=${feeType} gender=${gender} degree=${degree}`);
         if (feeType) {
             const val = String(feeType).toUpperCase();
@@ -846,9 +794,6 @@ export const ApplicationsService = {
                     .filter((d) => d.feeHead?.component && components.includes(d.feeHead.component))
                     .reduce((sum, d) => sum + (d.netAmount ?? d.amount ?? 0), 0);
 
-            // Extract fee type keyword from description:
-            // Format 1: "Admission Payment (UPI) - TUITION"    → after " - "
-            // Format 2: "Payment Received via CASH (BOOK_BANK)" → inside last "()"
             const getFeeKeyword = (desc: string | null): string => {
                 if (!desc) return '';
                 const upper = desc.toUpperCase();
@@ -864,8 +809,6 @@ export const ApplicationsService = {
                     .filter((c) => getFeeKeyword(c.description) === keyword.toUpperCase())
                     .reduce((sum, c) => sum + (c.amount ?? 0), 0);
 
-            // Description-based hostel paid (covers HOSTEL_ACCOMMODATION, HOSTEL_MESS, HOSTEL_LAUNDRY, HOSTEL_REGISTRATION).
-            // Tolerate the legacy "ACCOMODATION" misspelling in older ledger entries.
             const HOSTEL_KEYWORDS = new Set([
                 'HOSTEL_ACCOMMODATION', 'HOSTEL_ACCOMODATION',
                 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION'
@@ -874,8 +817,6 @@ export const ApplicationsService = {
                 .filter((c) => HOSTEL_KEYWORDS.has(getFeeKeyword(c.description)))
                 .reduce((sum, c) => sum + (c.amount ?? 0), 0);
 
-            // Per-student hostel total = sum of frozen StudentFeeDemand rows tagged with hostel components.
-            // Drives off the snapshot created at assign-hostel time (handles SEMWISE/YEARWISE correctly).
             const hostelComponents: PaymentComponent[] = [
                 PaymentComponent.HOSTEL_ACCOMMODATION,
                 PaymentComponent.HOSTEL_MESS,

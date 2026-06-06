@@ -3,13 +3,6 @@ import { AppError } from '../../../utils/AppError';
 import { MESSAGES } from '../../../constants/messages';
 import { convertToPresignedUrl } from '../../../utils/s3Utils';
 
-// Compute occupancy on-demand from source-of-truth tables.
-// totalRooms     = COUNT(HostelRoom) for the hostel
-// totalBeds      = SUM(HostelRoom.capacity) for the hostel
-// filledRooms    = COUNT(HostelRoom where EVERY bed has an active HostelAllocation, and the room has ≥1 bed)
-// filledBeds     = COUNT(active HostelAllocation rows in this hostel)
-// filledStudents = COUNT(StudentAdmission.hostelId = X, not CANCELLED) — students earmarked for the hostel (some may not yet have a bed)
-/** Compute live occupancy (rooms/beds/students filled vs total) for a hostel from source-of-truth tables — see the field-definition comment above. */
 export const getHostelOccupancy = async (hostelId: string, client: any = prisma) => {
     const [totalRooms, bedsAgg, filledRooms, filledBeds, filledStudents] = await Promise.all([
         client.hostelRoom.count({
@@ -23,7 +16,7 @@ export const getHostelOccupancy = async (hostelId: string, client: any = prisma)
             where: {
                 hostelId,
                 isDeleted: false,
-                // Has at least one bed AND every bed has an ACTIVE allocation (i.e. fully occupied).
+
                 beds: {
                     some: {},
                     none: { allocations: { none: { status: 'ACTIVE' } } }
@@ -49,18 +42,15 @@ export const getHostelOccupancy = async (hostelId: string, client: any = prisma)
     };
 };
 
-/** Throw 400 if the hostel has no free beds. Guard called before assigning a student to a hostel. */
 export const assertHostelHasCapacity = async (hostelId: string, client: any = prisma) => {
     const { totalBeds, filledStudents } = await getHostelOccupancy(hostelId, client);
     if (totalBeds === 0) throw new AppError('Hostel has no rooms configured', 400);
-    // Use filledStudents (earmarks) so we don't oversubscribe the hostel even
-    // before beds are allocated. Capacity check fires at assign-hostel time.
+
     if (filledStudents >= totalBeds) throw new AppError(MESSAGES.ERROR.HOSTEL_FULL, 400);
 };
 
 export const HostelService = {
-    // Hostel
-    /** Create a hostel (building). Rejects duplicate name. */
+
     async createHostel(data: any, createdBy?: string) {
         const { name, type, wardenName, floors, totalRooms, photoUrl,
                 accommodationBank, messBank, laundryBank, registrationBank } = data;
@@ -93,7 +83,6 @@ export const HostelService = {
         });
     },
 
-    /** List all non-deleted hostels with computed occupancy stats per hostel. */
     async getAllHostels() {
         const hostels = await prisma.hostel.findMany({
             where: { isDeleted: false },
@@ -122,7 +111,6 @@ export const HostelService = {
         return { hostels: enriched, totals };
     },
 
-    /** Return the distinct floor numbers present in a hostel (for the floor-picker UI). */
     async getHostelFloors(hostelId: string) {
         const hostel = await prisma.hostel.findUnique({
             where: { id: hostelId },
@@ -148,7 +136,6 @@ export const HostelService = {
         };
     },
 
-    /** Fetch a single hostel with occupancy stats. */
     async getHostelById(id: string) {
         const hostel = await prisma.hostel.findUnique({
             where: { id },
@@ -162,7 +149,6 @@ export const HostelService = {
         };
     },
 
-    /** Patch hostel fields (name/type/warden/bank accounts etc.). */
     async updateHostel(id: string, data: any) {
         const hostel = await prisma.hostel.findUnique({ where: { id } });
         if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
@@ -194,13 +180,11 @@ export const HostelService = {
         });
     },
 
-    /** Soft-delete a hostel. Blocks if students are still assigned or any ACTIVE bed allocation exists. */
     async deleteHostel(id: string) {
         const hostel = await prisma.hostel.findUnique({ where: { id } });
         if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
         if (hostel.isDeleted) throw new AppError("Hostel is already deleted", 400);
 
-        // Block if any non-cancelled student is currently assigned
         const activeStudents = await prisma.studentAdmission.count({
             where: { hostelId: id, status: { not: 'CANCELLED' } }
         });
@@ -211,7 +195,6 @@ export const HostelService = {
             );
         }
 
-        // Block if any ACTIVE bed allocation still points here
         const activeAllocations = await (prisma.hostelAllocation as any).count({
             where: { status: 'ACTIVE', bed: { room: { hostelId: id } } }
         });
@@ -228,7 +211,6 @@ export const HostelService = {
                 data: { isDeleted: true }
             });
 
-            // Soft-delete rooms in this hostel (beds are reached via room.isDeleted filter)
             await tx.hostelRoom.updateMany({
                 where: { hostelId: id },
                 data: { isDeleted: true }
@@ -238,8 +220,6 @@ export const HostelService = {
         });
     },
 
-    // Hostel Room
-    /** Create one room + auto-generate its beds (count = capacity/sharing). Rejects duplicate room number within the hostel. */
     async createHostelRoom(data: any, createdBy?: string) {
         const { hostelId, floor, number, capacity, type } = data;
 
@@ -247,12 +227,10 @@ export const HostelService = {
         if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
         if (hostel.isDeleted) throw new AppError("Cannot add rooms to a deleted hostel", 400);
 
-        // Floor must be within hostel.floors range
         if (hostel.floors !== null && hostel.floors !== undefined && Number(floor) > hostel.floors) {
             throw new AppError(`Floor ${floor} exceeds hostel's total floors (${hostel.floors})`, 400);
         }
 
-        // Check for duplicate room number in this hostel
         const existing = await prisma.hostelRoom.findFirst({
             where: { hostelId, number, isDeleted: false }
         });
@@ -260,7 +238,6 @@ export const HostelService = {
             throw new AppError(`Room "${number}" already exists in this hostel`, 409);
         }
 
-        // Check capacity not exceeded
         if (hostel.totalRooms !== null && hostel.totalRooms !== undefined) {
             const currentRoomCount = await prisma.hostelRoom.count({
                 where: { hostelId, isDeleted: false }
@@ -296,11 +273,6 @@ export const HostelService = {
         });
     },
 
-    /**
-     * Bulk create rooms by parsing a number range (e.g. A-101 → A-110).
-     * Generates one HostelRoom per number, plus beds based on capacity.
-     */
-    /** Bulk-create rooms (e.g. "floor 2, rooms 201-220, 4-sharing"). Auto-generates beds for each; skips duplicates. */
     async createHostelRoomsBulk(data: any, createdBy?: string) {
         const { hostelId, floor, roomRangeStart, roomRangeEnd, capacity, type } = data;
 
@@ -308,12 +280,10 @@ export const HostelService = {
         if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
         if (hostel.isDeleted) throw new AppError("Cannot add rooms to a deleted hostel", 400);
 
-        // Floor must be within hostel.floors range
         if (hostel.floors !== null && hostel.floors !== undefined && Number(floor) > hostel.floors) {
             throw new AppError(`Floor ${floor} exceeds hostel's total floors (${hostel.floors})`, 400);
         }
 
-        // Parse the range — extract trailing digits (validated by zod, but double-check)
         const parseRoomNumber = (s: string) => {
             const match = String(s).trim().match(/^(.*?)(\d+)$/);
             if (!match) throw new AppError(`Invalid room number "${s}". Must end with digits (e.g. A-101).`, 400);
@@ -329,7 +299,6 @@ export const HostelService = {
             roomNumbers.push(`${start.prefix}${String(n).padStart(padWidth, '0')}`);
         }
 
-        // Check total rooms wouldn't exceed hostel.totalRooms cap
         if (hostel.totalRooms !== null && hostel.totalRooms !== undefined) {
             const currentRoomCount = await prisma.hostelRoom.count({
                 where: { hostelId, isDeleted: false }
@@ -342,7 +311,6 @@ export const HostelService = {
             }
         }
 
-        // Check for any existing rooms with the same numbers in this hostel
         const existing = await prisma.hostelRoom.findMany({
             where: { hostelId, number: { in: roomNumbers }, isDeleted: false },
             select: { number: true }
@@ -355,9 +323,8 @@ export const HostelService = {
         const cap = Number(capacity);
         const roomType = type || 'AC';
 
-        // Create rooms + beds in a transaction (batched — avoids P2028 timeout for large ranges)
         const result = await prisma.$transaction(async (tx) => {
-            // 1. Bulk-insert all rooms in one statement
+
             await tx.hostelRoom.createMany({
                 data: roomNumbers.map(number => ({
                     hostelId,
@@ -369,13 +336,11 @@ export const HostelService = {
                 }))
             });
 
-            // 2. Fetch back the inserted rooms to get their generated IDs
             const createdRooms = await tx.hostelRoom.findMany({
                 where: { hostelId, number: { in: roomNumbers }, isDeleted: false },
                 orderBy: { number: 'asc' }
             });
 
-            // 3. Bulk-insert all beds in one statement
             const bedRows = createdRooms.flatMap(room =>
                 Array.from({ length: cap }, (_, i) => ({
                     roomId: room.id,
@@ -388,7 +353,7 @@ export const HostelService = {
             }
 
             return createdRooms;
-        }, { timeout: 30000 }); // Safety: 30s ceiling for very large ranges
+        }, { timeout: 30000 });
 
         return {
             createdCount: result.length,
@@ -396,7 +361,6 @@ export const HostelService = {
         };
     },
 
-    /** List rooms with optional filters (hostel/floor/roomNumber). Pass includeBeds to eager-load bed occupancy. */
     async getHostelRooms(filters?: { blockId?: string, hostelId?: string, floor?: number, includeBeds?: boolean, roomNumber?: string }) {
         const where: any = { isDeleted: false };
         if (filters?.blockId) where.blockId = filters.blockId;
@@ -406,11 +370,6 @@ export const HostelService = {
 
         const includeBeds = filters?.includeBeds === true;
 
-        // When includeBeds=true, fetch student details for each occupant.
-        // When false, fetch only enough to count (id + allocation status).
-        // HostelBed.allocations is a LIST (HostelAllocation[]); there is no singular
-        // `allocation` field. Mirror getHostelRoomById: pull only the current ACTIVE
-        // allocation (take:1, newest first) so occupancy reflects the live tenant.
         const bedInclude = includeBeds
             ? {
                 orderBy: { number: 'asc' as const },
@@ -466,7 +425,6 @@ export const HostelService = {
 
             if (!includeBeds) return base;
 
-            // Reshape beds to match the detail-view contract
             const beds = (room.beds as any[]).map(bed => {
                 const alloc = bed.allocations?.[0];
                 const isActive = alloc && alloc.status === 'ACTIVE';
@@ -487,7 +445,6 @@ export const HostelService = {
         });
     },
 
-    /** Fetch one room with per-bed occupancy: each bed shows AVAILABLE/OCCUPIED + the occupant's details (presigned photo + allotment order). */
     async getHostelRoomById(id: string) {
         const room = await prisma.hostelRoom.findUnique({
             where: { id },
@@ -529,8 +486,6 @@ export const HostelService = {
         });
         if (!room) throw new AppError("Hostel Room not found", 404);
 
-        // Shape the response: per-bed status + room-level counts.
-        // Presign occupant profilePhotoUrl + hostelAllotmentOrder PDF URL (S3 keys → 1h presigned URLs).
         const beds = await Promise.all(room.beds.map(async (bed: any) => {
             const alloc: any = bed.allocations?.[0] ?? null;
             const isActive = !!alloc;
@@ -579,7 +534,6 @@ export const HostelService = {
         };
     },
 
-    /** Patch a room. On capacity change, adds/removes beds; blocks capacity reduction if the beds being removed are ACTIVE-allocated. */
     async updateHostelRoom(id: string, data: any, updatedBy?: string) {
         const room = await prisma.hostelRoom.findUnique({
             where: { id },
@@ -592,7 +546,6 @@ export const HostelService = {
         const newNumber = data.number ?? room.number;
         const currentBedCount = room.beds.length;
 
-        // If renaming, ensure new number doesn't collide in this hostel
         if (newNumber !== room.number) {
             const dupe = await prisma.hostelRoom.findFirst({
                 where: { hostelId: room.hostelId, number: newNumber, isDeleted: false, id: { not: id } }
@@ -601,21 +554,19 @@ export const HostelService = {
         }
 
         return await prisma.$transaction(async (tx) => {
-            // 1. Update the room itself
+
             const updateData: any = { updatedBy };
             if (data.number) updateData.number = data.number;
             if (data.capacity !== undefined) updateData.capacity = newCapacity;
             if (data.type) updateData.type = data.type;
             const updatedRoom = await tx.hostelRoom.update({ where: { id }, data: updateData });
 
-            // 2. Sync beds — order by trailing-digit suffix so we always remove highest-numbered beds first
             const sortedBeds = [...room.beds].sort((a, b) => {
                 const aNum = parseInt(a.number.split('-').pop() || '0', 10);
                 const bNum = parseInt(b.number.split('-').pop() || '0', 10);
                 return aNum - bNum;
             });
 
-            // 2a. Capacity decrease — remove surplus beds (block if any are allocated)
             if (newCapacity < currentBedCount) {
                 const toRemove = sortedBeds.slice(newCapacity);
                 const toRemoveIds = toRemove.map(b => b.id);
@@ -631,7 +582,6 @@ export const HostelService = {
                 await tx.hostelBed.deleteMany({ where: { id: { in: toRemoveIds } } });
             }
 
-            // 2b. Room renamed — rename remaining beds to keep the `${roomNumber}-${i}` convention
             if (newNumber !== room.number) {
                 const remaining = newCapacity < currentBedCount
                     ? sortedBeds.slice(0, newCapacity)
@@ -644,7 +594,6 @@ export const HostelService = {
                 }
             }
 
-            // 2c. Capacity increase — append new beds
             if (newCapacity > currentBedCount) {
                 const newBeds = [];
                 for (let i = currentBedCount + 1; i <= newCapacity; i++) {
@@ -659,13 +608,11 @@ export const HostelService = {
         });
     },
 
-    /** Soft-delete a room. Blocks if any bed in it has an ACTIVE allocation — vacate students first. */
     async deleteHostelRoom(id: string) {
         const room = await prisma.hostelRoom.findUnique({ where: { id } });
         if (!room) throw new AppError("Hostel Room not found", 404);
         if (room.isDeleted) throw new AppError("Room is already deleted", 400);
 
-        // Block if any bed in this room is allocated
         const allocated = await (prisma.hostelAllocation as any).count({
             where: { bed: { roomId: id }, status: 'ACTIVE' }
         });

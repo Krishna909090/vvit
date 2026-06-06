@@ -8,8 +8,8 @@ export interface HostelCost {
     messPrice: number;
     laundryPrice: number;
     registrationFee: number;
-    semwiseSurcharge: number;  // diff between semwise and yearwise totals; 0 in YEARWISE
-    totalPrice: number;        // accommodation + mess + laundry + registration (mode-aware)
+    semwiseSurcharge: number;
+    totalPrice: number;
 }
 
 const DEFAULT_COST: HostelCost = {
@@ -61,10 +61,6 @@ const computeCost = (priceCategory: any, paymentMode: HostelPaymentMode): Hostel
     };
 };
 
-/**
- * Get hostel cost from HostelPriceCategory for a given hostel type + payment mode.
- * Single source of truth for all hostel pricing.
- */
 export const getHostelCost = async (
     hostelType: string | null | undefined,
     paymentMode: HostelPaymentMode = 'YEARWISE',
@@ -84,9 +80,6 @@ export const getHostelCost = async (
     return computeCost(priceCategory, paymentMode);
 };
 
-/**
- * Same as getHostelCost but within a transaction context.
- */
 export const getHostelCostTx = async (
     hostelType: string | null | undefined,
     tx: any,
@@ -107,10 +100,6 @@ export const getHostelCostTx = async (
     return computeCost(priceCategory, paymentMode);
 };
 
-/**
- * Get the semwise surcharge (= semwise total - yearwise total) for a hostel type.
- * Returns 0 if not configured.
- */
 export const getSemwiseSurcharge = async (hostelType: string | null | undefined): Promise<number> => {
     const cost = await getHostelCost(hostelType, 'SEMWISE');
     return cost.semwiseSurcharge;

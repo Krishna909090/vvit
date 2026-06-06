@@ -12,7 +12,6 @@ import { sendResponse } from '../../utils/response';
 import { getActiveAcademicYear } from '../../utils/studentContext';
 import { assertStudentOwns } from '../../utils/ownership';
 
-// Phase 1: Registration
 export const registerStudent = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[registerStudent] attempt by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[registerStudent] payload=${JSON.stringify(req.body)}`);
@@ -20,17 +19,15 @@ export const registerStudent = catchAsync(async (req: Request, res: Response, ne
     let userId = req.user?.role === Role.STUDENT ? (req.user?.userId || null) : null;
     const currentUserId = req.user?.userId || null;
 
-    // Counter-Based Registration: If registered by Staff/Admin, map to Student User
     if (req.user?.role !== Role.STUDENT && req.body.phone) {
         const studentPhone = req.body.phone;
-        
-        // 1. Check if user exists
+
         let studentUser = await prisma.user.findUnique({
             where: { phone: studentPhone }
         });
 
         if (!studentUser) {
-            // 2. Create User if not exists
+
             studentUser = await prisma.user.create({
                 data: {
                     phone: studentPhone,
@@ -38,7 +35,6 @@ export const registerStudent = catchAsync(async (req: Request, res: Response, ne
                 }
             });
 
-            // 3. Assign to Student Group
             const studentGroup = await prisma.group.findUnique({ where: { name: 'StudentGroup' } });
             if (studentGroup) {
                 await prisma.userGroup.create({
@@ -73,9 +69,6 @@ export const registerStudent = catchAsync(async (req: Request, res: Response, ne
     });
 });
 
-
-
-// Phase 2: Download Hall Ticket (Student)
 export const getHallTicket = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getHallTicket] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[getHallTicket] params=${JSON.stringify(req.params)}`);
@@ -83,7 +76,7 @@ export const getHallTicket = catchAsync(async (req: Request, res: Response, next
     const { studentId } = req.params;
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-    await assertStudentOwns(req, studentId); // IDOR guard
+    await assertStudentOwns(req, studentId);
 
     const hallTicketUrl = await getHallTicketService(studentId);
 
@@ -96,7 +89,6 @@ export const getHallTicket = catchAsync(async (req: Request, res: Response, next
     });
 });
 
-// Download Hall Ticket by Application ID
 export const getHallTicketByAppId = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getHallTicketByAppId] by=${req.user?.userId || 'anonymous'}`);
     const { applicationId } = req.params;
@@ -107,13 +99,14 @@ export const getHallTicketByAppId = catchAsync(async (req: Request, res: Respons
     sendResponse({ res, statusCode: 200, success: true, data });
 });
 
-// Phase 4: Branch Preference & Documents
 export const uploadDocumentsAndPreferences = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[uploadDocumentsAndPreferences] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[uploadDocumentsAndPreferences] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
 
     const { studentId } = req.params;
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+    await assertStudentOwns(req, studentId);
 
     const currentUserId = req.user?.userId || null;
     const updatedStudent = await uploadDocsService(studentId, req.body, currentUserId);
@@ -128,10 +121,6 @@ export const uploadDocumentsAndPreferences = catchAsync(async (req: Request, res
     });
 });
 
-
-
-
-
 export const reUploadDocument = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { documentKey, url } = req.body;
@@ -139,14 +128,14 @@ export const reUploadDocument = catchAsync(async (req: Request, res: Response, n
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     if (!documentKey || !url) throw new AppError('documentKey and url are required', 400);
 
+    await assertStudentOwns(req, studentId);
+
     const doc = await reUploadDocumentService(studentId, documentKey, url);
 
     logger.info(`[reUploadDocument] success studentId=${studentId} documentKey=${documentKey}`);
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.FILE_UPLOADED, data: doc });
 });
 
-// Select Exam Date and Center
-// Select Exam Date and Center (via Slot)
 export const selectExam = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[selectExam] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[selectExam] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
@@ -155,7 +144,6 @@ export const selectExam = catchAsync(async (req: Request, res: Response, next: N
     const { slotId } = req.body;
     if (!studentId || !slotId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_SLOT_ID_REQUIRED, 400);
 
-    // Use examService to book slot and generate hall ticket
     const result = await bookExamSlot(studentId, slotId);
 
     logger.info(`[selectExam] Hall ticket generated for student=${studentId}`);
@@ -168,7 +156,6 @@ export const selectExam = catchAsync(async (req: Request, res: Response, next: N
     });
 });
 
-// Request Course Change
 export const requestCourseChange = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestCourseChange] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[requestCourseChange] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
@@ -211,7 +198,7 @@ export const requestCourseChange = catchAsync(async (req: Request, res: Response
             toCourse: newCourseId,
             reason,
             status: RequestStatus.REQUESTED,
-            forwardedTo: 'SUPER_ADMIN', // Direct to Super Admin as per requirement
+            forwardedTo: 'SUPER_ADMIN',
             createdBy: req.user?.userId || null
         }
     });
@@ -231,13 +218,15 @@ export const addAcademicDetails = catchAsync(async (req: Request, res: Response,
     logger.debug && logger.debug(`[addAcademicDetails] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
 
     const { studentId } = req.params;
-    const { details } = req.body; // Expecting an array of objects
+    const { details } = req.body;
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     if (!details || !Array.isArray(details) || details.length === 0) {
         logger.warn('[addAcademicDetails] invalid details array');
         throw new AppError(MESSAGES.ERROR.DETAILS_ARRAY_REQUIRED, 400);
     }
+
+    await assertStudentOwns(req, studentId);
 
     const currentUserId = req.user?.userId || null;
     const result = await addAcademicDetailsService(studentId, details, currentUserId);
@@ -252,13 +241,10 @@ export const addAcademicDetails = catchAsync(async (req: Request, res: Response,
     });
 });
 
-// Get Student Details (Comprehensive)
-// Get Student Details (Logged-in User)
-// Get Student Details (Logged-in User or via Query Param)
 export const getStudentDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getStudentDetails] by=${req.user?.userId || 'anonymous'}`);
 
-    const userId = (req.query.userId as string) || req.user?.userId;
+    const userId = req.user?.userId;
 
     if (!userId) {
         throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
@@ -285,9 +271,10 @@ export const updatePersonalDetails = catchAsync(async (req: Request, res: Respon
     const { studentId } = req.params;
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
+    await assertStudentOwns(req, studentId);
+
     const currentUserId = req.user?.userId || null;
-    
-    // Call service with ownership verification inside
+
     const result = await updatePersonalDetailsService(studentId, req.body, currentUserId);
 
     sendResponse({
@@ -314,7 +301,6 @@ export const getApplicationSummary = catchAsync(async (req: Request, res: Respon
 
     if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
 
-    // Permission check: Owner or Admin
     if (req.user?.role === Role.STUDENT && student.userId !== req.user.userId) {
         throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 403);
     }
@@ -359,6 +345,8 @@ export const requestServiceChange = catchAsync(async (req: Request, res: Respons
     const { studentId } = req.params;
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
+    await assertStudentOwns(req, studentId);
+
     const currentUserId = req.user?.userId || null;
     const result = await changeServicePreferences(studentId, req.body, currentUserId);
 
@@ -371,7 +359,6 @@ export const requestServiceChange = catchAsync(async (req: Request, res: Respons
     });
 });
 
-
 export const updateProfilePhoto = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     const { photoUrl } = req.body;
@@ -379,7 +366,6 @@ export const updateProfilePhoto = catchAsync(async (req: Request, res: Response,
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     if (!photoUrl) throw new AppError('Photo URL is required', 400);
 
-    // Validate URL scheme — only allow https (or http for local dev)
     try {
         const parsedUrl = new URL(photoUrl);
         if (!['https:', 'http:'].includes(parsedUrl.protocol)) {
@@ -401,5 +387,4 @@ export const updateProfilePhoto = catchAsync(async (req: Request, res: Response,
         data: { url: result.url }
     });
 });
-
 

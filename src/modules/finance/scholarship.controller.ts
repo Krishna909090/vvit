@@ -7,8 +7,7 @@ import { assertStudentOwns } from '../../utils/ownership';
 
 export const createScholarshipRule = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, minPercentile, discountPercentage, totalSlots } = req.body;
-    
-    // Basic validation
+
     if (!name || minPercentile === undefined || discountPercentage === undefined || totalSlots === undefined) {
         throw new AppError("Missing required fields", 400);
     }
@@ -68,16 +67,15 @@ export const manualAllocate = catchAsync(async (req: Request, res: Response, nex
 });
 
 export const checkEligibility = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    // Handling GET request params
+
     const { studentId } = req.params;
 
     if (!studentId) {
         throw new AppError("Student ID (param) required", 400);
     }
 
-    await assertStudentOwns(req, studentId); // IDOR guard
+    await assertStudentOwns(req, studentId);
 
-    // Service now auto-fetches data from DB (Read-Only)
     const result = await ScholarshipService.checkEligibility(studentId);
     
     sendResponse({
@@ -102,7 +100,7 @@ export const verifyEligibility = catchAsync(async (req: Request, res: Response, 
 });
 
 export const allocateScholarship = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const { studentId, ruleId } = req.body; // Explicit allocation after verification
+    const { studentId, ruleId } = req.body;
     
     const result = await ScholarshipService.allocateScholarship(studentId, ruleId, req.user!.userId);
 

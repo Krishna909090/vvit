@@ -22,7 +22,6 @@ export const createPriceCategory = async (data: PriceCategoryInput, userId: stri
         throw new AppError('academicYearId is required when creating a hostel price category', 400);
     }
 
-    // Duplicate check is year-scoped: same (sharing, roomType) in a different year is allowed.
     const existing = await prisma.hostelPriceCategory.findFirst({
         where: {
             sharing: data.sharing,
@@ -60,11 +59,10 @@ export const getPriceCategoryById = async (id: string) => {
 };
 
 export const updatePriceCategory = async (id: string, data: Partial<PriceCategoryInput>, userId: string | null) => {
-    // Check existence
+
     const category = await prisma.hostelPriceCategory.findUnique({ where: { id } });
     if (!category) throw new AppError('Price category not found', 404);
 
-    // Check conflict if updating unique fields
     if ((data.sharing || data.roomType) && (data.sharing !== category.sharing || data.roomType !== category.roomType)) {
         const conflict = await prisma.hostelPriceCategory.findFirst({
             where: {

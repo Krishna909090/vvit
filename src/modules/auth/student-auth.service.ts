@@ -26,10 +26,6 @@ const generateNumericOtp = (digits: number) => {
   return crypto.randomInt(min, max + 1).toString();
 };
 
-// Resolve a rollNumber against the active academic year. Roll numbers are not
-// globally unique in the schema, so callers must treat 0-or-many matches as
-// failure (returning a generic "Invalid credentials" message to the caller —
-// never disclose which case occurred).
 const resolveStudentByRollNumber = async (rollNumberRaw: string) => {
   const rollNumber = rollNumberRaw.trim();
   if (!rollNumber) return null;
@@ -71,7 +67,7 @@ const issueJwtForUser = (userId: string, role: string | null | undefined, tokenV
   return jwt.sign(
     { userId, role: role ?? Role.STUDENT, tokenVersion },
     JWT_SECRET,
-    { expiresIn: (process.env.JWT_EXPIRY || "4h") as any }
+    { expiresIn: (process.env.NODE_ENV === 'development' ? '24h' : (process.env.JWT_EXPIRY || '4h')) as any }
   );
 };
 
@@ -87,13 +83,6 @@ const buildLoginPayload = async (userId: string) => {
   return { permissions: groupedPermissions, modules };
 };
 
-// ─────────────────────── Login ───────────────────────
-
-/**
- * Student portal login by roll number + password. Resolves the student's
- * linked User, bcrypt-compares the password, and returns a signed JWT plus
- * grouped permissions/modules for the portal sidebar.
- */
 export const studentLogin = async (rollNumber: string, password: string) => {
   logger.info(`[studentLogin] attempt roll=${rollNumber}`);
 
@@ -111,8 +100,7 @@ export const studentLogin = async (rollNumber: string, password: string) => {
   }
 
   if (!user.password) {
-    // Deliberate distinct status — first-time-set requires admin OTP or PII
-    // self-service, so leaking "uninitialized" does not enable an attack.
+
     logger.warn(`[studentLogin] reject reason=password_not_set userId=${user.id} roll=${rollNumber}`);
     throw new AppError("Password not set. Please complete first-time setup or contact admin.", 403);
   }
@@ -141,14 +129,6 @@ export const studentLogin = async (rollNumber: string, password: string) => {
   };
 };
 
-// ───────────────────── Initial setup (self-service PII) ─────────────────────
-
-/**
- * First-time student account activation: verifies the one-time setup
- * credential (roll + temp secret), then sets the student's chosen password
- * and marks the account active. Returns a JWT so the student is logged in
- * immediately after setup.
- */
 export const studentInitialSetup = async (
   rollNumber: string,
   dob: string,
@@ -163,7 +143,6 @@ export const studentInitialSetup = async (
     throw new AppError(GENERIC_INVALID_CREDENTIALS, 401);
   }
 
-  // One-shot: this endpoint is unavailable once the password has been set.
   if (student.user.password) {
     logger.warn(
       `[studentInitialSetup] reject reason=already_initialized userId=${student.user.id} roll=${rollNumber}`
@@ -178,8 +157,6 @@ export const studentInitialSetup = async (
     throw new AppError("Account is no longer active", 403);
   }
 
-  // PII rate limit: count recent failed PII attempts in UserOtp as a rough
-  // proxy. Use a dedicated type so it doesn't interfere with reset OTPs.
   const lockSince = new Date(Date.now() - INITIAL_SETUP_LOCK_HOURS * 60 * 60 * 1000);
   const recentFails = await prisma.userOtp.count({
     where: {
@@ -206,7 +183,7 @@ export const studentInitialSetup = async (
     student.aadharNumber.slice(-4) === aadhaarLast4;
 
   if (!dobMatch || !aadhaarMatch) {
-    // Record the failed attempt for lockout tracking. Single insert, atomic.
+
     await prisma.userOtp.create({
       data: {
         userId: student.user.id,
@@ -232,15 +209,13 @@ export const studentInitialSetup = async (
 
   const passwordHash = await bcrypt.hash(newPassword, PASSWORD_SALT_ROUNDS);
 
-  // Atomic first-time set: only succeeds if password is still NULL. Bumps
-  // tokenVersion so any stray pre-existing token (none expected here) is invalid.
   const result = await prisma.user.updateMany({
     where: { id: student.user.id, password: null },
     data: { password: passwordHash, tokenVersion: { increment: 1 } },
   });
 
   if (result.count !== 1) {
-    // Lost the race — someone else set the password between the check and the update.
+
     logger.warn(
       `[studentInitialSetup] reject reason=race_lost userId=${student.user.id} roll=${rollNumber}`
     );
@@ -260,13 +235,6 @@ export const studentInitialSetup = async (
   return { message: "Password set. Please log in." };
 };
 
-// ───────────────────── Admin issues forgot-password OTP ─────────────────────
-
-/**
- * Admin-triggered password reset: issues a reset OTP for a student (e.g. when
- * the student lost portal access). Encrypts + stores the OTP and dispatches it
- * to the student's registered contact.
- */
 export const adminIssueStudentResetOtp = async (
   adminUserId: string,
   rollNumber: string
@@ -291,9 +259,6 @@ export const adminIssueStudentResetOtp = async (
 
   const now = new Date();
 
-  // If a valid (unused, unexpired) OTP already exists, return it instead of
-  // generating a new one. Lets the admin re-display the same OTP if they lost it
-  // (closed the page, network glitch) without burning into the daily cap.
   const existing = await prisma.userOtp.findFirst({
     where: {
       userId: student.user.id,
@@ -309,7 +274,7 @@ export const adminIssueStudentResetOtp = async (
     try {
       otpPlain = decrypt(existing.otpEncrypted);
     } catch (e) {
-      // Encryption key rotated or row corrupted — fall through to issue a new OTP.
+
       logger.error(
         `[adminIssueStudentResetOtp] decrypt failed otpId=${existing.id} ` +
         `studentUserId=${student.user.id} — falling back to fresh issuance: ${String(e)}`
@@ -342,7 +307,6 @@ export const adminIssueStudentResetOtp = async (
     }
   }
 
-  // No usable existing OTP. Apply daily cap, then mint a new one.
   const since24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const last24hCount = await prisma.userOtp.count({
     where: {
@@ -366,8 +330,7 @@ export const adminIssueStudentResetOtp = async (
   const expiresAt = new Date(now.getTime() + RESET_OTP_TTL_HOURS * 60 * 60 * 1000);
 
   await prisma.$transaction([
-    // Invalidate any prior PASSWORD_RESET OTPs (expired, exhausted, etc.) and
-    // wipe their plaintext for forward secrecy.
+
     prisma.userOtp.updateMany({
       where: { userId: student.user.id, type: "PASSWORD_RESET", used: false },
       data: { used: true, otpEncrypted: null },
@@ -409,9 +372,6 @@ export const adminIssueStudentResetOtp = async (
   };
 };
 
-// ───────────────────── Student consumes OTP to set new password ─────────────
-
-/** Complete a student password reset: validate the OTP, set the new bcrypt-hashed password, invalidate the OTP. */
 export const studentResetPassword = async (
   rollNumber: string,
   otp: string,
@@ -450,7 +410,6 @@ export const studentResetPassword = async (
     throw new AppError("No active OTP. Please ask admin to issue a new one.", 400);
   }
 
-  // Atomic increment first so concurrent guesses can't bypass maxAttempts.
   const after = await prisma.userOtp.update({
     where: { id: userOtp.id },
     data: { attempts: { increment: 1 } },

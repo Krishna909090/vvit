@@ -1,17 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 
-/**
- * Recursively sanitize all string values in an object.
- * Strips HTML tags and common XSS vectors.
- */
 function sanitizeValue(value: any): any {
     if (typeof value === 'string') {
         return value
-            .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '') // Remove script tags
-            .replace(/<[^>]*>/g, '') // Remove all HTML tags
-            .replace(/javascript:/gi, '') // Remove javascript: protocol
-            .replace(/on\w+\s*=/gi, '') // Remove event handlers (onclick=, onerror=, etc.)
-            .replace(/data:\s*text\/html/gi, '') // Remove data:text/html
+            .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+            .replace(/<[^>]*>/g, '')
+            .replace(/javascript:/gi, '')
+            .replace(/on\w+\s*=/gi, '')
+            .replace(/data:\s*text\/html/gi, '')
             .trim();
     }
     if (Array.isArray(value)) {
@@ -20,6 +16,9 @@ function sanitizeValue(value: any): any {
     if (value && typeof value === 'object') {
         const sanitized: Record<string, any> = {};
         for (const key of Object.keys(value)) {
+            if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+                continue;
+            }
             sanitized[key] = sanitizeValue(value[key]);
         }
         return sanitized;

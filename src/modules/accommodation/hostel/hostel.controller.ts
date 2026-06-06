@@ -74,7 +74,6 @@ export const deleteHostel = catchAsync(async (req: Request, res: Response, next:
     });
 });
 
-// Hostel (Detailed)
 export const createHostelRoom = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const room = await HostelService.createHostelRoom(req.body, req.user?.userId);
     sendResponse({
@@ -97,7 +96,6 @@ export const createHostelRoomsBulk = catchAsync(async (req: Request, res: Respon
     });
 });
 
-// Hostel Room
 export const getHostelRooms = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { blockId, hostelId, floor, includeBeds, roomNumber } = req.query;
     const truthy = (v: any) => v === true || v === 'true' || v === '1';
@@ -129,12 +127,3 @@ export const deleteHostelRoom = catchAsync(async (req: Request, res: Response, n
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.HOSTEL_ROOM_DELETED });
 });
 
-
-// Update Admission Details (Accommodation & Fees)
-// This is somewhat shared between Student management and Facilities/Finance.
-// Placing in HostelController might make sense if viewed as "Accommodation Allocation" or StudentController.
-// Given it handles both Hostel and Transport logic heavily, splitting it or keeping specific functions is tricky.
-// Since it also manages Fees, it touches Finance.
-// Let's keep it here or in a dedicated "AdmissionController"?
-// For now, I'll place it in studentManagementController as it updates student admission details primarily.
-// Actually, looking at the code, it imports AccommodationType from prisma.

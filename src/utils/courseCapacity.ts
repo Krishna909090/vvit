@@ -1,13 +1,7 @@
 import { AppError } from './AppError';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Tx = any;
 
-/**
- * Verify a CourseCapacity row exists for the given (course, year). Throws otherwise.
- * Admin must explicitly set capacity via POST /admin/academic/capacity (or /bulk)
- * BEFORE any allotment / waitlist operations for that year.
- */
 const requireRow = async (tx: Tx, courseId: string, academicYearId: string) => {
   const existing = await tx.courseCapacity.findUnique({
     where: { courseId_academicYearId: { courseId, academicYearId } },
@@ -58,10 +52,6 @@ export const decrementCourseCapacity = async (
   });
 };
 
-/**
- * Atomic check-and-increment. Returns true if a seat was claimed, false if course is full.
- * Mirrors the previous raw-SQL pattern that lived on Course.filledSeats < totalSeats.
- */
 export const tryAtomicIncrementCourseCapacity = async (
   tx: Tx,
   courseId: string,

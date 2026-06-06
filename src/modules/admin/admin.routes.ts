@@ -22,7 +22,7 @@ router.use('/fee', feeRoutes);
 router.use('/general', generalRoutes);
 router.use('/hostel', hostelRoutes);
 router.use('/hostel-prices', hostelPriceRoutes);
-router.use('/student', studentRoutes); // Was studentRoutes in admin/index
+router.use('/student', studentRoutes);
 router.use('/transport', transportRoutes);
 router.use('/bulk-import', bulkImportRoutes);
 router.use('/scholarship', scholarshipRoutes);

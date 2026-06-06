@@ -4,9 +4,6 @@ import { MESSAGES } from '../../constants/messages';
 import { sendResponse } from '../../utils/response';
 import { AcademicService } from './academic.service';
 
-// --- ERP CONTROLLERS: Academics ---
-
-// School
 export const createSchool = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, code } = req.body;
     const adminId = req.user?.userId;
@@ -50,7 +47,6 @@ export const deleteSchool = catchAsync(async (req: Request, res: Response, next:
     sendResponse({ res, statusCode: 200, success: true, message: "School deleted successfully" });
 });
 
-// Department
 export const createDepartment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, code, schoolId } = req.body;
     const adminId = req.user?.userId;
@@ -95,7 +91,6 @@ export const deleteDepartment = catchAsync(async (req: Request, res: Response, n
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.DEPARTMENT_DELETED });
 });
 
-// Course
 export const createCourse = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, code, departmentId, degree, omrId } = req.body;
     const adminId = req.user?.userId;
@@ -157,7 +152,6 @@ export const getSeatStatus = catchAsync(async (req: Request, res: Response, next
     });
 });
 
-// Academic Year
 export const createAcademicYear = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { code, startDate, endDate, isActive } = req.body;
     const adminId = req.user?.userId;
@@ -194,7 +188,6 @@ export const deleteAcademicYear = catchAsync(async (req: Request, res: Response,
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.ACADEMIC_YEAR_DELETED });
 });
 
-// Batch
 export const createBatch = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, courseId, academicYearId, startDate, endDate } = req.body;
     const adminId = req.user?.userId;
@@ -241,7 +234,6 @@ export const deleteBatch = catchAsync(async (req: Request, res: Response, next: 
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.BATCH_DELETED });
 });
 
-// Section
 export const createSection = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { name, batchId } = req.body;
     const adminId = req.user?.userId;

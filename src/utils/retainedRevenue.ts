@@ -22,10 +22,6 @@ export type RecordRetainedArgs = {
 
 const EPSILON = 0.01;
 
-/**
- * Append per-category retained-revenue lines. Zero-amount lines are dropped.
- * Throws if sum(lines) !== expectedTotal (the parent row's retainedAmount).
- */
 export async function recordRetained(
     tx: any,
     args: RecordRetainedArgs,

@@ -111,8 +111,6 @@ export const createTransportStop = catchAsync(async (req: Request, res: Response
     });
 });
 
-
-// Vehicle
 export const getVehicles = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { search } = req.query as any;
     const vehicles = await TransportService.getVehicles({
@@ -143,7 +141,6 @@ export const deleteVehicle = catchAsync(async (req: Request, res: Response, next
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.VEHICLE_DELETED });
 });
 
-// Transport Stop
 export const getTransportStops = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { routeId } = req.query;
     

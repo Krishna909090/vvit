@@ -4,8 +4,7 @@ import { MESSAGES } from '../../constants/messages';
 import { AdmissionStatus } from '@prisma/client';
 
 export const AcademicService = {
-    // School
-    /** Create a school (top of the academic hierarchy: School → Department → Course). Codes unique. */
+
     async createSchool(name: string, code: string, createdBy?: string) {
         const existingSchool = await prisma.school.findFirst({
             where: {
@@ -26,7 +25,6 @@ export const AcademicService = {
         });
     },
 
-    /** List all schools. */
     async getSchools() {
         return await prisma.school.findMany({
             where: { isDeleted: false },
@@ -36,7 +34,6 @@ export const AcademicService = {
         });
     },
 
-    /** Fetch one school by id. */
     async getSchoolById(id: string) {
         const school = await prisma.school.findUnique({
             where: { id },
@@ -46,7 +43,6 @@ export const AcademicService = {
         return school;
     },
 
-    /** Patch a school's name/code. */
     async updateSchool(id: string, name: string, code: string, updatedBy?: string) {
         const school = await prisma.school.findUnique({ where: { id } });
         if (!school) throw new AppError("School not found", 404);
@@ -57,7 +53,6 @@ export const AcademicService = {
         });
     },
 
-    /** Delete a school (guards against orphaning departments). */
     async deleteSchool(id: string) {
         const school = await prisma.school.findUnique({ where: { id } });
         if (!school) throw new AppError("School not found", 404);
@@ -65,10 +60,8 @@ export const AcademicService = {
         return await prisma.school.update({ where: { id }, data: { isDeleted: true } });
     },
 
-    // Department
-    /** Create a department under an optional school. Codes unique. */
     async createDepartment(name: string, code: string, schoolId?: string, createdBy?: string) {
-        // Validate School if provided
+
         if (schoolId) {
             const school = await prisma.school.findUnique({ where: { id: schoolId } });
             if (!school) {
@@ -95,7 +88,6 @@ export const AcademicService = {
         });
     },
 
-    /** List departments with optional name/code search. */
     async getDepartments(search?: string) {
         const where: any = { isDeleted: false };
         
@@ -121,7 +113,6 @@ export const AcademicService = {
         }));
     },
 
-    /** Fetch one department by id. */
     async getDepartmentById(id: string) {
         const department = await prisma.department.findUnique({
             where: { id },
@@ -131,7 +122,6 @@ export const AcademicService = {
         return department;
     },
 
-    /** Patch a department's name/code/school. */
     async updateDepartment(id: string, name: string, code: string, schoolId?: string, updatedBy?: string) {
         const department = await prisma.department.findUnique({ where: { id } });
         if (!department) throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
@@ -142,7 +132,6 @@ export const AcademicService = {
             throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
         }
 
-        // Validate School if changing
         if (schoolId && schoolId !== department.schoolId) {
             const school = await prisma.school.findUnique({ where: { id: schoolId } });
             if (!school) throw new AppError("School not found", 404);
@@ -154,7 +143,6 @@ export const AcademicService = {
         });
     },
 
-    /** Delete a department (guards against orphaning courses). */
     async deleteDepartment(id: string) {
         const department = await prisma.department.findUnique({ where: { id } });
         if (!department) throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
@@ -162,8 +150,6 @@ export const AcademicService = {
         return await prisma.department.update({ where: { id }, data: { isDeleted: true } });
     },
 
-    // Course
-    /** Create a course under a department. Optional unique omrId for OMR scan-sheet mapping. */
     async createCourse(name: string, code: string, departmentId: string, degree?: string, createdBy?: string, omrId?: number) {
         const department = await prisma.department.findUnique({ where: { id: departmentId } });
         if (!department) {
@@ -190,9 +176,7 @@ export const AcademicService = {
         }
 
         if (omrId !== undefined && omrId !== null) {
-            // No isDeleted filter — OMR IDs are unique across ALL courses (the DB
-            // unique index spans soft-deleted rows too). A physical OMR scan-sheet
-            // ID must never be reused, even after a course is removed.
+
             const omrIdConflict = await prisma.course.findFirst({
                 where: { omrId }
             });
@@ -216,7 +200,6 @@ export const AcademicService = {
         });
     },
 
-    /** List courses, filterable by department / degree / name-code search. */
     async getCourses(departmentId?: string, degree?: string, search?: string) {
         const where: any = { isDeleted: false };
         if (departmentId) {
@@ -243,7 +226,6 @@ export const AcademicService = {
         }));
     },
 
-    /** Return the distinct degree values across all courses (for filter dropdowns). */
     async  getDegrees() {
         const result = await prisma.course.findMany({
             select: { degree: true },
@@ -252,14 +234,12 @@ export const AcademicService = {
                 degree: { not: null }
             }
         });
-        
-        // Filter out nulls and return array of strings
+
         return result
             .map(r => r.degree)
             .filter((d): d is string => d !== null);
     },
 
-    /** Fetch one course by id with its department. */
     async getCourseById(id: string) {
         const course = await prisma.course.findUnique({
             where: { id },
@@ -269,7 +249,6 @@ export const AcademicService = {
         return course;
     },
 
-    /** Patch a course's name/code/department/omrId. */
     async updateCourse(id: string, name: string, code: string, departmentId: string, updatedBy?: string, omrId?: number) {
         const course = await prisma.course.findUnique({ where: { id } });
         if (!course) throw new AppError("Course not found", 404);
@@ -283,7 +262,6 @@ export const AcademicService = {
             throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
         }
 
-        // Check for code uniqueness if code is being changed
         if (code && code !== course.code) {
            const existingCourse = await prisma.course.findFirst({
                 where: {
@@ -298,8 +276,7 @@ export const AcademicService = {
         }
 
         if (omrId !== undefined && omrId !== null && omrId !== course.omrId) {
-            // No isDeleted filter — matches the DB-level unique index, which spans
-            // soft-deleted courses. OMR scan-sheet IDs are never reused.
+
             const omrIdConflict = await prisma.course.findFirst({
                 where: { omrId, id: { not: id } }
             });
@@ -320,14 +297,6 @@ export const AcademicService = {
         });
     },
 
-    /**
-     * Soft-delete a course — guarded.
-     *
-     * Refused if any student is allotted this course (StudentAdmission.allottedCourseId).
-     * Deleting a course with allotted students would orphan their admission records
-     * and break course-scoped reports.
-     */
-    /** Soft-delete a course. Blocks if students are allotted or it has dependent records. */
     async deleteCourse(id: string, adminId?: string) {
         const course = await prisma.course.findUnique({ where: { id } });
         if (!course) throw new AppError("Course not found", 404);
@@ -350,9 +319,8 @@ export const AcademicService = {
         });
     },
 
-    /** Per-course seat status (total/filled/vacant) for a given academic year, from CourseCapacity. */
     async getSeatStatus(academicYearId?: string) {
-        // Resolve target year (default = active)
+
         const targetYear = academicYearId
             ? await prisma.academicYear.findUnique({ where: { id: academicYearId }, select: { id: true, code: true } })
             : await prisma.academicYear.findFirst({ where: { isActive: true, isDeleted: false }, select: { id: true, code: true } });
@@ -419,8 +387,6 @@ export const AcademicService = {
         return Object.values(grouped);
     },
 
-    // Academic Year
-    /** Create an academic year. If isActive, deactivates all other years in the same tx (single-active invariant). */
     async createAcademicYear(code: string, startDate: string, endDate: string, isActive: boolean, createdBy?: string) {
         const existingYear = await prisma.academicYear.findFirst({ where: { code, isDeleted: false } });
         if (existingYear) {
@@ -449,7 +415,6 @@ export const AcademicService = {
         });
     },
 
-    /** List all non-deleted academic years, newest first. */
     async getAcademicYears() {
         return await prisma.academicYear.findMany({ 
             where: { isDeleted: false },
@@ -457,7 +422,6 @@ export const AcademicService = {
         });
     },
 
-    /** Patch an academic year. When activating, deactivates other active years in the same tx to satisfy the partial-unique constraint. */
     async updateAcademicYear(id: string, data: any, updatedBy?: string) {
         const academicYear = await prisma.academicYear.findUnique({ where: { id } });
         if (!academicYear) throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_NOT_FOUND, 404);
@@ -467,9 +431,6 @@ export const AcademicService = {
         if (data.endDate) updateData.endDate = new Date(data.endDate);
         if (data.isActive !== undefined) updateData.isActive = data.isActive;
 
-        // If we're activating this year, deactivate every other active year in the same tx.
-        // The partial unique on AcademicYear(isActive) WHERE isActive=true would otherwise reject
-        // the update with a uniqueness violation.
         if (data.isActive === true) {
             return await prisma.$transaction(async (tx) => {
                 await tx.academicYear.updateMany({
@@ -486,38 +447,18 @@ export const AcademicService = {
         });
     },
 
-    /**
-     * Soft-delete an academic year — heavily guarded.
-     *
-     * An AcademicYear is referenced by ~19 tables (admissions, enrollments, fee
-     * demands, payments, ledger, corrections, pricing, capacities, marks,
-     * attendance, ...). Deleting a year that has real data would orphan all of it
-     * and corrupt every year-scoped report and metric. So this is allowed ONLY when:
-     *   - the year is not already deleted
-     *   - the year is not the active year
-     *   - the year is not locked (a locked year is a closed financial period)
-     *   - the year has ZERO student data (admissions / enrollments / demands /
-     *     payments / ledger / corrections / marks / attendance / allocations)
-     *
-     * Config-only leftovers (FeeStructure / HostelPriceCategory / TransportRouteYearlyPrice
-     * / CourseCapacity) do NOT block deletion — a year that was set up but never
-     * admitted into is safe to remove. Those rows are filtered out of every picker
-     * by the year's isDeleted flag.
-     */
-    /** Soft-delete an academic year. Heavily guarded — blocks if any of ~19 referencing tables still point at it. */
     async deleteAcademicYear(id: string, adminId?: string) {
         const academicYear = await prisma.academicYear.findUnique({ where: { id } });
         if (!academicYear) throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_NOT_FOUND, 404);
         if (academicYear.isDeleted) throw new AppError('Academic year is already deleted', 400);
 
-        // The active year is the system's current context — never deletable.
         if (academicYear.isActive) {
             throw new AppError(
                 `Cannot delete the active academic year "${academicYear.code}". Mark another year active first.`,
                 409
             );
         }
-        // A locked year is a closed financial period — its books are sealed.
+
         if (academicYear.isLocked) {
             throw new AppError(
                 `Cannot delete locked academic year "${academicYear.code}" — it is a closed financial period.`,
@@ -525,7 +466,6 @@ export const AcademicService = {
             );
         }
 
-        // Count every student-data dependent. ANY non-zero count blocks deletion.
         const [
             admissions, admissionsEntry, enrollments, demands, payments,
             ledger, corrections, marks, attendance,
@@ -577,8 +517,6 @@ export const AcademicService = {
         });
     },
 
-    // Batch — keyed by Course (cohort container)
-    /** Create a batch (a course cohort for one academic year). */
     async createBatch(
         name: string,
         courseId: string,
@@ -629,7 +567,6 @@ export const AcademicService = {
         });
     },
 
-    /** List batches, filterable by course and/or academic year. */
     async getBatches(courseId?: string, academicYearId?: string) {
         const where: any = { isDeleted: false };
         if (courseId)       where.courseId       = String(courseId);
@@ -646,12 +583,6 @@ export const AcademicService = {
 
         if (batches.length === 0) return [];
 
-        // Count DISTINCT students currently in each batch. A student gets one
-        // StudentEnrollment row per academic year (year promotion reuses the
-        // section), so counting raw rows would multi-count across years —
-        // COUNT(DISTINCT "studentId") gives the true headcount.
-        // Counts ACTIVE + DETAINED (detained students are held back but still in
-        // college); excludes SUSPENDED, DROPPED and COMPLETED.
         const batchIds = batches.map(b => b.id);
         const counts = await prisma.$queryRaw<{ batchId: string; count: bigint }[]>`
             SELECT s."batchId" AS "batchId", COUNT(DISTINCT e."studentId") AS count
@@ -669,7 +600,6 @@ export const AcademicService = {
         }));
     },
 
-    /** Fetch one batch with its sections. */
     async getBatchById(id: string) {
         const batch = await prisma.batch.findUnique({
             where: { id },
@@ -681,7 +611,6 @@ export const AcademicService = {
         return batch;
     },
 
-    /** Patch a batch (name / course / year). */
     async updateBatch(
         id: string,
         name: string,
@@ -713,18 +642,11 @@ export const AcademicService = {
         });
     },
 
-    /**
-     * Soft-delete a batch — refused if any student is enrolled in one of its
-     * sections. Deleting a batch with students would orphan their enrollment
-     * records and break batch-scoped reports.
-     */
-    /** Delete a batch (guards against orphaning sections/enrollments). */
     async deleteBatch(id: string, adminId?: string) {
         const batch = await prisma.batch.findUnique({ where: { id } });
         if (!batch) throw new AppError(MESSAGES.ERROR.BATCH_NOT_FOUND, 404);
         if (batch.isDeleted) throw new AppError('Batch is already deleted', 400);
 
-        // Students attach to a batch via its sections (Section → StudentEnrollment).
         const enrolled = await prisma.studentEnrollment.count({
             where: { section: { batchId: id } },
         });
@@ -742,10 +664,8 @@ export const AcademicService = {
         });
     },
 
-    // Section
-    /** Create a section within a batch (e.g. "CSE-A"). */
     async createSection(name: string, batchId: string, createdBy?: string) {
-        // Validate Batch Exists
+
         const batch = await prisma.batch.findUnique({ where: { id: batchId } });
         if (!batch) {
             throw new AppError("Batch not found", 404);
@@ -768,7 +688,6 @@ export const AcademicService = {
         });
     },
 
-    /** List sections, optionally narrowed to one batch. */
     async getSections(batchId?: string) {
         const where: any = { isDeleted: false };
         if (batchId) where.batchId = String(batchId);
@@ -785,7 +704,6 @@ export const AcademicService = {
         });
     },
 
-    /** Fetch one section with its batch. */
     async getSectionById(id: string) {
         const section = await prisma.section.findUnique({
             where: { id },
@@ -801,7 +719,6 @@ export const AcademicService = {
         return section;
     },
 
-    /** Patch a section (name / batch). */
     async updateSection(id: string, name: string, batchId: string, updatedBy?: string) {
         const section = await prisma.section.findUnique({ where: { id } });
         if (!section) throw new AppError(MESSAGES.ERROR.SECTION_NOT_FOUND, 404);
@@ -813,7 +730,6 @@ export const AcademicService = {
              throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
         }
 
-        // Validate Batch if changing
         if (batchId && batchId !== section.batchId) {
              const batch = await prisma.batch.findUnique({ where: { id: batchId } });
              if (!batch) throw new AppError("Batch not found", 404);
@@ -829,11 +745,6 @@ export const AcademicService = {
         });
     },
 
-    /**
-     * Soft-delete a section — refused if any student is enrolled in it.
-     * Deleting a section with students would orphan their enrollment records.
-     */
-    /** Delete a section (guards against orphaning enrollments). */
     async deleteSection(id: string, adminId?: string) {
         const section = await prisma.section.findUnique({ where: { id } });
         if (!section) throw new AppError(MESSAGES.ERROR.SECTION_NOT_FOUND, 404);

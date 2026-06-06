@@ -1,9 +1,6 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
 
-// ─────────────────────────────── GROUPS ───────────────────────────────
-
-/** Create a new RBAC group. Rejects duplicates by either name or type. */
 export const createGroup = async (data: { name: string; type: string }) => {
   const existingName = await prisma.group.findUnique({ where: { name: data.name } });
   if (existingName) {
@@ -16,7 +13,6 @@ export const createGroup = async (data: { name: string; type: string }) => {
   return prisma.group.create({ data });
 };
 
-/** List every group with user + role counts and the role list flattened from the join table. */
 export const getGroups = async () => {
   const groups = await prisma.group.findMany({
     include: {
@@ -35,7 +31,6 @@ export const getGroups = async () => {
   }));
 };
 
-/** Patch a group's name/type. Re-validates uniqueness only if name actually changes. */
 export const updateGroup = async (groupId: string, data: { name?: string; type?: string }) => {
   const existing = await prisma.group.findUnique({ where: { id: groupId } });
   if (!existing) {
@@ -55,7 +50,6 @@ export const updateGroup = async (groupId: string, data: { name?: string; type?:
   });
 };
 
-/** Delete a group. Implementation handles cleanup of UserGroup + GroupRole join rows. */
 export const deleteGroup = async (groupId: string) => {
   const existing = await prisma.group.findUnique({ 
     where: { id: groupId },
@@ -96,9 +90,8 @@ export const deleteGroup = async (groupId: string) => {
   return prisma.group.delete({ where: { id: groupId } });
 };
 
-/** Replace a group's role assignments with the supplied roleIds (full-set semantics). */
 export const assignRolesToGroup = async (groupId: string, roleIds: string[]) => {
-  // Check for existing assignments
+
   const existingAssignments = await prisma.groupRole.findMany({
     where: {
       groupId,
@@ -116,9 +109,8 @@ export const assignRolesToGroup = async (groupId: string, roleIds: string[]) => 
   return prisma.groupRole.createMany({ data });
 };
 
-/** Replace a group's user membership with the supplied userIds (full-set semantics). */
 export const assignUsersToGroup = async (groupId: string, userIds: string[]) => {
-  // Check for existing assignments
+
   const existingAssignments = await prisma.userGroup.findMany({
     where: {
       groupId,
@@ -136,10 +128,6 @@ export const assignUsersToGroup = async (groupId: string, userIds: string[]) => 
   return prisma.userGroup.createMany({ data });
 };
 
-// --- ROLES ---
-// ─────────────────────────────── ROLES ───────────────────────────────
-
-/** Create a new role. Names are unique. */
 export const createRole = async (data: { name: string; description?: string }) => {
   const existing = await prisma.role.findUnique({ where: { name: data.name } });
   if (existing) {
@@ -148,7 +136,6 @@ export const createRole = async (data: { name: string; description?: string }) =
   return prisma.role.create({ data });
 };
 
-/** List all roles with their permission set + member counts. */
 export const getRoles = async () => {
   const roles = await prisma.role.findMany({
     include: {
@@ -191,11 +178,8 @@ export const getRoles = async () => {
   });
 };
 
-
-
-/** Replace a role's permission set with the supplied permissionIds (full-set semantics). */
 export const assignPermissionsToRole = async (roleId: string, permissionIds: string[]) => {
-  // Check for existing assignments
+
   const existingAssignments = await prisma.rolePermission.findMany({
     where: {
       roleId,
@@ -213,7 +197,6 @@ export const assignPermissionsToRole = async (roleId: string, permissionIds: str
   return prisma.rolePermission.createMany({ data });
 };
 
-/** Patch a role's name/description. */
 export const updateRole = async (roleId: string, data: { name?: string; description?: string }) => {
   const existing = await prisma.role.findUnique({ where: { id: roleId } });
   if (!existing) {
@@ -233,7 +216,6 @@ export const updateRole = async (roleId: string, data: { name?: string; descript
   });
 };
 
-/** Delete a role + its RolePermission rows. Does not unassign users from groups using this role. */
 export const deleteRole = async (roleId: string) => {
   const existing = await prisma.role.findUnique({ where: { id: roleId } });
   if (!existing) {
@@ -242,12 +224,8 @@ export const deleteRole = async (roleId: string) => {
   return prisma.role.delete({ where: { id: roleId } });
 };
 
-// --- PERMISSIONS ---
-// ───────────────────────────── PERMISSIONS ─────────────────────────────
-
-/** Create a permission keyed by `key` (e.g. `student.read.all`) under a module. Rejects duplicate keys. */
 export const createPermission = async (data: { key: string; description?: string; moduleId: string }) => {
-  // Check if permission already exists in this module
+
   const existingInModule = await prisma.permission.findFirst({
     where: {
       key: data.key,
@@ -259,13 +237,11 @@ export const createPermission = async (data: { key: string; description?: string
     throw new AppError(`Permission with key '${data.key}' already exists in this module`, 409);
   }
 
-  // Check global uniqueness of Key (since schema enforces it)
   const existingKey = await prisma.permission.findUnique({ where: { key: data.key } });
   if (existingKey) {
      throw new AppError(`Permission with key '${data.key}' already exists in module (ID: ${existingKey.moduleId}). Keys must be globally unique.`, 409);
   }
-  
-  // Ensure module exists first
+
   const moduleExists = await prisma.module.findUnique({ where: { id: data.moduleId } });
   if (!moduleExists) {
     throw new AppError(`Module with id ${data.moduleId} not found`, 404);
@@ -273,14 +249,12 @@ export const createPermission = async (data: { key: string; description?: string
   return prisma.permission.create({ data });
 };
 
-/** List every permission with the parent module eager-loaded. */
 export const getPermissions = async () => {
   return prisma.permission.findMany({
     include: { module: true }
   });
 };
 
-/** Patch a permission (key/description/module). */
 export const updatePermission = async (permissionId: string, data: { key?: string; description?: string; moduleId?: string }) => {
   const existing = await prisma.permission.findUnique({ where: { id: permissionId } });
   if (!existing) {
@@ -307,7 +281,6 @@ export const updatePermission = async (permissionId: string, data: { key?: strin
   });
 };
 
-/** Delete a permission + its RolePermission rows. */
 export const deletePermission = async (permissionId: string) => {
   const existing = await prisma.permission.findUnique({ where: { id: permissionId } });
   if (!existing) {
@@ -316,18 +289,13 @@ export const deletePermission = async (permissionId: string) => {
   return prisma.permission.delete({ where: { id: permissionId } });
 };
 
-// --- MODULES ---
-// ─────────────────────────────── MODULES ───────────────────────────────
-
-/** Create a permission module (a logical grouping like "STUDENT", "FINANCE"). Codes are unique. */
 export const createModule = async (data: { name: string; code: string }) => {
-  // Check code uniqueness
+
   const codeExists = await prisma.module.findUnique({ where: { code: data.code } });
   if (codeExists) {
     throw new AppError(`Module with code '${data.code}' already exists`, 409);
   }
 
-  // Check name uniqueness (schema doesn't enforce it, but business logic does)
   const nameExists = await prisma.module.findFirst({ where: { name: data.name } });
   if (nameExists) {
     throw new AppError(`Module with name '${data.name}' already exists`, 409);
@@ -336,7 +304,6 @@ export const createModule = async (data: { name: string; code: string }) => {
   return prisma.module.create({ data });
 };
 
-/** List all modules. */
 export const getModules = async () => {
   return prisma.module.findMany({
     include: {
@@ -345,7 +312,6 @@ export const getModules = async () => {
   });
 };
 
-/** Patch a module (name/code). */
 export const updateModule = async (moduleId: string, data: { name?: string; code?: string }) => {
   const existing = await prisma.module.findUnique({ where: { id: moduleId } });
   if (!existing) {
@@ -372,7 +338,6 @@ export const updateModule = async (moduleId: string, data: { name?: string; code
   });
 };
 
-/** Delete a module. Blocks if permissions still reference it. */
 export const deleteModule = async (moduleId: string) => {
   const existing = await prisma.module.findUnique({ 
     where: { id: moduleId },
@@ -392,23 +357,6 @@ export const deleteModule = async (moduleId: string) => {
   });
 };
 
-// --- CORE AUTH RESOLUTION ---
-
-/**
- * Resolves all permissions for a user via:
- * User -> Groups -> Roles -> Permissions
- * + User -> PermissionOverride
- */
-// Removed UserRole import as it is no longer used here or in schema
-// import { UserRole } from '@prisma/client';
-
-// ──────────────────────── USER PERMISSION RESOLUTION ────────────────────────
-
-/**
- * Resolve the effective permission set for a user: union of direct role
- * permissions + every group's role permissions, then apply any
- * UserPermissionOverride (grant/deny). Returns deduped permission keys.
- */
 export const getUserPermissions = async (userId: string): Promise<{ permissions: string[] }> => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -442,7 +390,6 @@ export const getUserPermissions = async (userId: string): Promise<{ permissions:
 
   const perms = new Set<string>();
 
-  // 1. Collect from Groups -> Roles
   for (const ug of user.userGroups) {
     for (const gr of ug.group.roles) {
       for (const rp of gr.role.permissions) {
@@ -451,7 +398,6 @@ export const getUserPermissions = async (userId: string): Promise<{ permissions:
     }
   }
 
-  // 2. Apply Overrides
   for (const po of user.permissionOverrides) {
     if (po.type === 'GRANT') {
       perms.add(po.permission.key);
@@ -463,7 +409,6 @@ export const getUserPermissions = async (userId: string): Promise<{ permissions:
   return { permissions: Array.from(perms) };
 };
 
-/** Given a user's permission keys, return the deduped list of module codes they touch. Used for sidebar visibility. */
 export const getUserModules = async (permissionKeys: string[]): Promise<string[]> => {
   if (permissionKeys.length === 0) return [];
   

@@ -27,7 +27,7 @@ export const getEnrollmentHistoryController = async (req: Request, res: Response
         const { studentId } = req.params;
         if (!studentId) throw new AppError('studentId is required', 400);
 
-        await assertStudentOwns(req, studentId); // IDOR guard
+        await assertStudentOwns(req, studentId);
 
         const history = await getStudentEnrollmentHistory(studentId);
 
@@ -45,7 +45,7 @@ export const getYearWiseFinancialsController = async (req: Request, res: Respons
         const { studentId } = req.params;
         if (!studentId) throw new AppError('studentId is required', 400);
 
-        await assertStudentOwns(req, studentId); // IDOR guard
+        await assertStudentOwns(req, studentId);
 
         const financials = await getStudentYearWiseFinancials(studentId);
 

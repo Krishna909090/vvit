@@ -8,9 +8,8 @@ import { setContextUser } from '../utils/requestContext';
 import { isTokenBlacklisted } from '../modules/auth/auth.service';
 import prisma from '../config/prisma';
 
-// In-memory permission cache: userId -> { permissions, expiresAt }
 const permissionCache = new Map<string, { permissions: string[], expiresAt: number }>();
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 const getCachedPermissions = async (userId: string): Promise<string[]> => {
     const cached = permissionCache.get(userId);
@@ -21,7 +20,6 @@ const getCachedPermissions = async (userId: string): Promise<string[]> => {
     const { permissions } = await getUserPermissions(userId);
     permissionCache.set(userId, { permissions, expiresAt: Date.now() + CACHE_TTL_MS });
 
-    // Evict stale entries periodically (keep cache bounded)
     if (permissionCache.size > 5000) {
         const now = Date.now();
         for (const [key, val] of permissionCache) {
@@ -32,7 +30,6 @@ const getCachedPermissions = async (userId: string): Promise<string[]> => {
     return permissions;
 };
 
-// Call this when permissions change (role update, group change)
 export const invalidatePermissionCache = (userId?: string) => {
     if (userId) {
         permissionCache.delete(userId);
@@ -56,9 +53,6 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string, role: RoleType, tokenVersion?: number };
 
-        // If the token carries a tokenVersion, it must match the current value on User.
-        // Tokens issued before tokenVersion was introduced (no claim) are accepted for
-        // backward compatibility — they'll naturally rotate as users re-authenticate.
         if (typeof decoded.tokenVersion === 'number') {
             const user = await prisma.user.findUnique({
                 where: { id: decoded.userId },
@@ -113,20 +107,8 @@ export const authorizePermission = (requiredPermission: string | string[]) => {
     };
 };
 
-/**
- * Permission required to override system-computed accommodation/transport pricing
- * with a custom admin-entered amount (customPricing / customCost on the
- * assign / reassign / switch flows).
- */
 export const PRICING_OVERRIDE_PERMISSION = 'student.pricing.override';
 
-/**
- * Conditional guard for custom-pricing overrides. Call from a controller AFTER the
- * normal `authorizePermission` route guard has run. Only enforces the extra
- * permission when the admin actually supplied an override — plain config-priced
- * calls are unaffected. Throws 403 if the override is present but the user lacks
- * `student.pricing.override`.
- */
 export const assertPricingOverrideAllowed = (req: Request, hasOverride: boolean): void => {
     if (!hasOverride) return;
     const userPermissions = req.user?.permissions || [];

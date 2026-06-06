@@ -3,10 +3,6 @@ import { AppError } from '../../utils/AppError';
 import logger from '../../utils/logger';
 import { AttendanceStatus } from '@prisma/client';
 
-// ════════════════════════════════════════════════════════════════════════════
-// Helpers
-// ════════════════════════════════════════════════════════════════════════════
-
 const assertEnrollmentExists = async (studentId: string, academicYearId: string) => {
     const enrollment = await prisma.studentEnrollment.findFirst({
         where: { studentId, academicYearId },
@@ -21,8 +17,6 @@ const assertEnrollmentExists = async (studentId: string, academicYearId: string)
     }
 };
 
-// Normalize the input date to a date-only DateTime at UTC midnight, so the unique
-// constraint correctly dedups "same date" regardless of how the caller specified time.
 const normalizeDate = (input: string | Date): Date => {
     const d = typeof input === 'string' ? new Date(input) : input;
     if (isNaN(d.getTime())) throw new AppError(`Invalid date: ${input}`, 400);
@@ -30,15 +24,7 @@ const normalizeDate = (input: string | Date): Date => {
 };
 
 export const AttendanceService = {
-    // ────────────────────────────────────────────────────────────────────────
-    // Single mark
-    // ────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Mark attendance for one student × subject × date (× optional period).
-     * App-layer dedup gate because Postgres unique indexes treat NULL period
-     * as distinct — two day-level rows would otherwise both pass.
-     */
     markAttendance: async (
         data: {
             studentId:      string;
@@ -67,8 +53,6 @@ export const AttendanceService = {
 
         await assertEnrollmentExists(data.studentId, data.academicYearId);
 
-        // App-layer dedup for day-level rows (periodNumber=null). Postgres unique
-        // indexes treat NULL as distinct, so two day-level rows would otherwise pass.
         const dup = await prisma.classAttendance.findFirst({
             where: {
                 studentId:      data.studentId,
@@ -103,15 +87,6 @@ export const AttendanceService = {
         });
     },
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Bulk: one (subject, date, period) → many students. Faculty daily roll-call.
-    // ────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Bulk roll-call: one (subject, date, period) → status per student. Used by
-     * faculty taking daily attendance. Each row goes through `markAttendance`;
-     * failures are collected and returned per-row without aborting the batch.
-     */
     markClassAttendance: async (
         data: {
             subjectId:      string;
@@ -165,16 +140,6 @@ export const AttendanceService = {
         return { summary, results };
     },
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Bulk back-fill: one student → many (date, subject, period?, status) rows.
-    // Typical admin import for historical attendance.
-    // ────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Admin back-fill: one student → many (date, subject, period?, status)
-     * rows. Each row tagged `isBackfilled=true` for audit so they're
-     * distinguishable from real-time marks.
-     */
     markAttendanceBackfill: async (
         studentId: string,
         academicYearId: string,
@@ -222,11 +187,6 @@ export const AttendanceService = {
         return { summary, results };
     },
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Update / delete
-    // ────────────────────────────────────────────────────────────────────────
-
-    /** Patch a single attendance row (status / remarks / backfilled flag). */
     updateAttendance: async (
         id: string,
         data: Partial<{ status: AttendanceStatus; remarks: string; isBackfilled: boolean }>,
@@ -241,7 +201,6 @@ export const AttendanceService = {
         });
     },
 
-    /** Soft-delete an attendance row (isDeleted=true). Keeps audit history. */
     deleteAttendance: async (id: string, userId: string) => {
         const existing = await prisma.classAttendance.findUnique({ where: { id } });
         if (!existing || existing.isDeleted) throw new AppError('Attendance record not found', 404);
@@ -252,14 +211,6 @@ export const AttendanceService = {
         });
     },
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Read paths
-    // ────────────────────────────────────────────────────────────────────────
-
-    /**
-     * One student's attendance, optionally narrowed by subject / year / date
-     * range / semester. Ordered chronologically (date asc, period asc).
-     */
     getStudentAttendance: async (
         studentId: string,
         filters?: { subjectId?: string; academicYearId?: string; from?: string; to?: string; semester?: number }
@@ -283,7 +234,6 @@ export const AttendanceService = {
         });
     },
 
-    /** Class roll: every student's status for a given (subject, date, period?). */
     getClassAttendance: async (
         subjectId: string,
         date: string | Date,
@@ -307,12 +257,6 @@ export const AttendanceService = {
         });
     },
 
-    /**
-     * Per-subject attendance summary for one student: counts per status +
-     * percentage. Institution policy counts ON_DUTY and EXCUSED as "present"
-     * for the percentage calculation (alongside PRESENT and LATE).
-     * Also rolls up an overall % across all subjects in scope.
-     */
     getAttendanceStats: async (
         studentId: string,
         filters?: { subjectId?: string; academicYearId?: string; semester?: number }
@@ -340,7 +284,6 @@ export const AttendanceService = {
             bucket.total    += r._count._all;
         }
 
-        // Hydrate subject metadata for the response.
         const subjectIds = Array.from(bySubject.keys());
         const subjects = subjectIds.length > 0
             ? await prisma.subject.findMany({
@@ -362,7 +305,6 @@ export const AttendanceService = {
             };
         });
 
-        // Overall — across all subjects in scope.
         const overall = subjectStats.reduce(
             (acc, s) => {
                 acc.PRESENT += s.counts.PRESENT;
