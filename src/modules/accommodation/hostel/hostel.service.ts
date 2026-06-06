@@ -3,6 +3,14 @@ import { AppError } from '../../../utils/AppError';
 import { MESSAGES } from '../../../constants/messages';
 import { convertToPresignedUrl } from '../../../utils/s3Utils';
 
+const HOSTEL_PAYMENT_COMPONENTS = [
+    'HOSTEL',
+    'HOSTEL_ACCOMMODATION',
+    'HOSTEL_MESS',
+    'HOSTEL_LAUNDRY',
+    'HOSTEL_REGISTRATION',
+];
+
 export const getHostelOccupancy = async (hostelId: string, client: any = prisma) => {
     const [totalRooms, bedsAgg, filledRooms, filledBeds, filledStudents] = await Promise.all([
         client.hostelRoom.count({
@@ -16,7 +24,6 @@ export const getHostelOccupancy = async (hostelId: string, client: any = prisma)
             where: {
                 hostelId,
                 isDeleted: false,
-
                 beds: {
                     some: {},
                     none: { allocations: { none: { status: 'ACTIVE' } } }
@@ -26,9 +33,25 @@ export const getHostelOccupancy = async (hostelId: string, client: any = prisma)
         client.hostelAllocation.count({
             where: { status: 'ACTIVE', bed: { room: { hostelId, isDeleted: false } } }
         }),
-        client.studentAdmission.count({
-            where: { hostelId, status: { not: 'CANCELLED' } }
-        })
+        // filledStudents = only students who have paid against an active hostel demand
+        client.student.count({
+            where: {
+                admissionDetails: {
+                    hostelId,
+                    accommodationType: 'HOSTEL',
+                    status: { not: 'CANCELLED' },
+                },
+                payments: {
+                    some: {
+                        component: { in: HOSTEL_PAYMENT_COMPONENTS },
+                        status: 'SUCCESS',
+                        isDeleted: false,
+                        amount: { gt: 0 },
+                        feeDemand: { isDeleted: false },
+                    },
+                },
+            },
+        }),
     ]);
     const totalBeds = bedsAgg._sum.capacity ?? 0;
     return {
@@ -43,10 +66,10 @@ export const getHostelOccupancy = async (hostelId: string, client: any = prisma)
 };
 
 export const assertHostelHasCapacity = async (hostelId: string, client: any = prisma) => {
-    const { totalBeds, filledStudents } = await getHostelOccupancy(hostelId, client);
+    const { totalBeds, filledBeds } = await getHostelOccupancy(hostelId, client);
     if (totalBeds === 0) throw new AppError('Hostel has no rooms configured', 400);
 
-    if (filledStudents >= totalBeds) throw new AppError(MESSAGES.ERROR.HOSTEL_FULL, 400);
+    if (filledBeds >= totalBeds) throw new AppError(MESSAGES.ERROR.HOSTEL_FULL, 400);
 };
 
 export const HostelService = {
