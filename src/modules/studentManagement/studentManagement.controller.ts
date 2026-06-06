@@ -1639,13 +1639,24 @@ export const listPurgedStudents = catchAsync(async (req: Request, res: Response,
         }),
     ]);
 
+    const purgedByIds = [...new Set(logs.map(l => l.userId).filter((v): v is string => !!v))];
+    const purgedByUsers = purgedByIds.length > 0
+        ? await prisma.user.findMany({
+            where: { id: { in: purgedByIds } },
+            select: { id: true, name: true },
+        })
+        : [];
+    const purgedByMap = Object.fromEntries(purgedByUsers.map(u => [u.id, u]));
+
     const data = logs.map(log => {
         const d = (log.details ?? {}) as any;
         return {
             auditLogId:        log.id,
             studentId:         log.entityId,
             applicationId:     d.applicationId,
+            studentName:       d.studentSnapshot?.name ?? null,
             purgedBy:          log.userId,
+            purgedByName:      purgedByMap[log.userId ?? '']?.name ?? null,
             purgedAt:          log.timestamp,
             ipAddress:         log.ipAddress,
             studentSnapshot:   d.studentSnapshot,

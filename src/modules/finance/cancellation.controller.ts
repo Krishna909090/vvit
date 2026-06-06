@@ -197,27 +197,46 @@ export const listRetainedRevenue = catchAsync(async (req: Request, res: Response
         }),
     ]);
 
-    const correctionIds = corrections.map(fc => fc.id);
+    const correctionIds  = corrections.map(fc => fc.id);
+    const studentIds     = [...new Set(corrections.map(fc => fc.studentId))];
+    const createdByIds   = [...new Set(corrections.map(fc => fc.createdBy).filter((v): v is string => !!v))];
 
-    const lines = correctionIds.length > 0
-        ? await prisma.retainedRevenueLine.findMany({
-            where: { sourceId: { in: correctionIds } },
-            orderBy: { occurredAt: 'asc' },
-            select: {
-                id:             true,
-                studentId:      true,
-                category:       true,
-                sourceType:     true,
-                sourceId:       true,
-                amount:         true,
-                academicYearId: true,
-                hostelId:       true,
-                routeId:        true,
-                occurredAt:     true,
-                createdAt:      true,
-            },
-        })
-        : [];
+    const [lines, students, createdByUsers] = await Promise.all([
+        correctionIds.length > 0
+            ? prisma.retainedRevenueLine.findMany({
+                where: { sourceId: { in: correctionIds } },
+                orderBy: { occurredAt: 'asc' },
+                select: {
+                    id:             true,
+                    studentId:      true,
+                    category:       true,
+                    sourceType:     true,
+                    sourceId:       true,
+                    amount:         true,
+                    academicYearId: true,
+                    hostelId:       true,
+                    routeId:        true,
+                    occurredAt:     true,
+                    createdAt:      true,
+                },
+            })
+            : Promise.resolve([] as any[]),
+        studentIds.length > 0
+            ? prisma.student.findMany({
+                where: { id: { in: studentIds } },
+                select: { id: true, name: true, applicationId: true },
+            })
+            : Promise.resolve([] as any[]),
+        createdByIds.length > 0
+            ? prisma.user.findMany({
+                where: { id: { in: createdByIds } },
+                select: { id: true, name: true },
+            })
+            : Promise.resolve([] as any[]),
+    ]);
+
+    const studentMap   = Object.fromEntries(students.map(s => [s.id, s]));
+    const createdByMap = Object.fromEntries(createdByUsers.map(u => [u.id, u]));
 
     const linesBySourceId = lines.reduce<Record<string, typeof lines>>((acc, l) => {
         (acc[l.sourceId] ??= []).push(l);
@@ -226,7 +245,10 @@ export const listRetainedRevenue = catchAsync(async (req: Request, res: Response
 
     const data = corrections.map(fc => ({
         ...fc,
-        retainedLines: linesBySourceId[fc.id] ?? [],
+        studentName:    studentMap[fc.studentId]?.name          ?? null,
+        applicationId:  studentMap[fc.studentId]?.applicationId ?? null,
+        createdByName:  createdByMap[fc.createdBy ?? '']?.name  ?? null,
+        retainedLines:  linesBySourceId[fc.id] ?? [],
     }));
 
     sendResponse({
