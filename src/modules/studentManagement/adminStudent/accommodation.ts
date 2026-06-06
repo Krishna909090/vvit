@@ -1914,7 +1914,7 @@ export const AccommodationService = {
                         feeHeadId: transportHead.id,
                         isDeleted: false,
                     },
-                    data: { isDeleted: true, updatedBy: adminId }
+                    data: { isDeleted: true, deletedAt: new Date(), deletedBy: adminId, updatedBy: adminId }
                 });
             }
 
@@ -2056,7 +2056,7 @@ export const AccommodationService = {
                         feeHeadId: transportHead.id,
                         isDeleted: false,
                     },
-                    data: { isDeleted: true, updatedBy: adminId }
+                    data: { isDeleted: true, deletedAt: new Date(), deletedBy: adminId, updatedBy: adminId }
                 });
             }
 
@@ -2197,7 +2197,7 @@ export const AccommodationService = {
                         feeHeadId: { in: hostelHeadIds },
                         isDeleted: false,
                     },
-                    data: { isDeleted: true, updatedBy: adminId },
+                    data: { isDeleted: true, deletedAt: new Date(), deletedBy: adminId, updatedBy: adminId },
                 });
             }
 
@@ -2395,7 +2395,7 @@ export const AccommodationService = {
                         feeHeadId: transportHead.id,
                         isDeleted: false,
                     },
-                    data: { isDeleted: true, updatedBy: adminId },
+                    data: { isDeleted: true, deletedAt: new Date(), deletedBy: adminId, updatedBy: adminId },
                 });
             }
 
@@ -2600,7 +2600,7 @@ export const AccommodationService = {
                         feeHeadId: { in: hostelHeadIds },
                         isDeleted: false,
                     },
-                    data: { isDeleted: true, updatedBy: adminId },
+                    data: { isDeleted: true, deletedAt: new Date(), deletedBy: adminId, updatedBy: adminId },
                 });
             }
 
@@ -2905,7 +2905,7 @@ export const AccommodationService = {
                         feeHeadId: transportHead.id,
                         isDeleted: false,
                     },
-                    data: { isDeleted: true, updatedBy: adminId },
+                    data: { isDeleted: true, deletedAt: new Date(), deletedBy: adminId, updatedBy: adminId },
                 });
             }
 

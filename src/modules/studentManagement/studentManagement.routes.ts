@@ -38,6 +38,7 @@ import {
     getStudentWaitingList,
     allotFromWaitingList,
     removeFromWaitingList,
+    getRetainedRevenue,
     assignHostel,
     assignTransport,
     allocateBed,
@@ -251,5 +252,7 @@ router.post('/waiting-list/allot', authenticate, authorizePermission(['student.u
 router.post('/waiting-list/remove', authenticate, authorizePermission(['student.update.all']), removeFromWaitingList);
 
 router.post('/:studentId/reconcile-fees', authenticate, authorizePermission(['student.update.all']), reconcileStudentFees);
+
+router.get('/:studentId/retained-revenue', authenticate, authorizePermission(['student.read.all']), getRetainedRevenue);
 
 export default router;

@@ -8,6 +8,7 @@ import {
     listCancellationRequests,
     downloadCancellationInvoice,
     getCancellationById,
+    listRetainedRevenue,
 } from './cancellation.controller';
 import {
     previewAdjustmentSchema,
@@ -47,6 +48,13 @@ router.get(
     authenticate,
     authorizePermission(['student.read.all']),
     listCancellationRequests,
+);
+
+router.get(
+    '/retained-revenue',
+    authenticate,
+    authorizePermission(['student.read.all']),
+    listRetainedRevenue,
 );
 
 router.get(

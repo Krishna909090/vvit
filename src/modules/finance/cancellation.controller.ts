@@ -5,6 +5,7 @@ import logger from '../../utils/logger';
 import { sendResponse } from '../../utils/response';
 import { CancellationService, calculateFeeAdjustment } from './cancellation.service';
 import { CancellationStatus } from '@prisma/client';
+import prisma from '../../config/prisma';
 
 export const previewAdjustment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[previewAdjustment] by=${req.user?.userId || 'anonymous'}`);
@@ -127,5 +128,97 @@ export const getCancellationById = catchAsync(async (req: Request, res: Response
         success: true,
         message: 'Cancellation request fetched successfully',
         data: result,
+    });
+});
+
+export const listRetainedRevenue = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
+    const { category, sourceType, studentId, academicYearId, isSettled, page, limit } = req.query as Record<string, string | undefined>;
+
+    const pageNum  = Math.max(1, parseInt(page  ?? '1',  10));
+    const pageSize = Math.min(100, Math.max(1, parseInt(limit ?? '20', 10)));
+    const skip     = (pageNum - 1) * pageSize;
+
+    const correctionWhere: any = {};
+    if (studentId)      correctionWhere.studentId      = studentId;
+    if (academicYearId) correctionWhere.academicYearId = academicYearId;
+    if (isSettled !== undefined) correctionWhere.isSettled = isSettled === 'true';
+
+    if (category || sourceType) {
+        const matchingLineWhere: any = {};
+        if (studentId)  matchingLineWhere.studentId  = studentId;
+        if (category)   matchingLineWhere.category   = category;
+        if (sourceType) matchingLineWhere.sourceType = sourceType;
+
+        const matchingLines = await prisma.retainedRevenueLine.findMany({
+            where: matchingLineWhere,
+            select: { sourceId: true },
+            distinct: ['sourceId'],
+        });
+        correctionWhere.id = { in: matchingLines.map(l => l.sourceId) };
+    }
+
+    const [total, corrections] = await Promise.all([
+        prisma.feeCorrection.count({ where: correctionWhere }),
+        prisma.feeCorrection.findMany({
+            where: correctionWhere,
+            orderBy: { createdAt: 'desc' },
+            skip,
+            take: pageSize,
+            select: {
+                id:                 true,
+                studentId:          true,
+                academicYearId:     true,
+                amount:             true,
+                retainedAmount:     true,
+                retentionBreakdown: true,
+                reason:             true,
+                type:               true,
+                referenceId:        true,
+                referenceType:      true,
+                isSettled:          true,
+                settledAt:          true,
+                settledBy:          true,
+                createdAt:          true,
+                createdBy:          true,
+            },
+        }),
+    ]);
+
+    const correctionIds = corrections.map(fc => fc.id);
+
+    const lines = correctionIds.length > 0
+        ? await prisma.retainedRevenueLine.findMany({
+            where: { sourceId: { in: correctionIds } },
+            orderBy: { occurredAt: 'asc' },
+            select: {
+                id:             true,
+                studentId:      true,
+                category:       true,
+                sourceType:     true,
+                sourceId:       true,
+                amount:         true,
+                academicYearId: true,
+                hostelId:       true,
+                routeId:        true,
+                occurredAt:     true,
+                createdAt:      true,
+            },
+        })
+        : [];
+
+    const linesBySourceId = lines.reduce<Record<string, typeof lines>>((acc, l) => {
+        (acc[l.sourceId] ??= []).push(l);
+        return acc;
+    }, {});
+
+    const data = corrections.map(fc => ({
+        ...fc,
+        retainedLines: linesBySourceId[fc.id] ?? [],
+    }));
+
+    sendResponse({
+        res, statusCode: 200, success: true,
+        data,
+        pagination: { total, page: pageNum, limit: pageSize, totalPages: Math.ceil(total / pageSize) },
     });
 });

@@ -1244,3 +1244,65 @@ export const removeFromWaitingList = catchAsync(async (req: Request, res: Respon
     const result = await AdminStudentService.removeFromWaitingList(req.body, req.user!.userId);
     sendResponse({ res, statusCode: 200, success: true, message: `${result.cancelled} entries removed from waiting list`, data: result });
 });
+
+export const getRetainedRevenue = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
+    const { studentId } = req.params;
+    const { category, sourceType } = req.query as { category?: string; sourceType?: string };
+
+    const lineWhere: any = { studentId };
+    if (category)   lineWhere.category   = category;
+    if (sourceType) lineWhere.sourceType = sourceType;
+
+    const [corrections, lines] = await Promise.all([
+        prisma.feeCorrection.findMany({
+            where: { studentId },
+            orderBy: { createdAt: 'desc' },
+            select: {
+                id:                true,
+                studentId:         true,
+                academicYearId:    true,
+                amount:            true,
+                retainedAmount:    true,
+                retentionBreakdown: true,
+                reason:            true,
+                type:              true,
+                referenceId:       true,
+                referenceType:     true,
+                isSettled:         true,
+                settledAt:         true,
+                settledBy:         true,
+                createdAt:         true,
+                createdBy:         true,
+            },
+        }),
+        prisma.retainedRevenueLine.findMany({
+            where: lineWhere,
+            orderBy: { occurredAt: 'desc' },
+            select: {
+                id:             true,
+                studentId:      true,
+                category:       true,
+                sourceType:     true,
+                sourceId:       true,
+                amount:         true,
+                academicYearId: true,
+                hostelId:       true,
+                routeId:        true,
+                occurredAt:     true,
+                createdAt:      true,
+            },
+        }),
+    ]);
+
+    const linesBySourceId = lines.reduce<Record<string, typeof lines>>((acc, l) => {
+        (acc[l.sourceId] ??= []).push(l);
+        return acc;
+    }, {});
+
+    const data = corrections.map(fc => ({
+        ...fc,
+        retainedLines: linesBySourceId[fc.id] ?? [],
+    }));
+
+    sendResponse({ res, statusCode: 200, success: true, data });
+});
