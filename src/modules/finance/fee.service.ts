@@ -6,7 +6,7 @@ import logger from '../../utils/logger';
 import { convertToPresignedUrl } from '../../utils/s3Utils';
 import { getHostelCostTx } from '../../utils/hostelPricing';
 import { assertHostelHasCapacity } from '../accommodation/hostel/hostel.service';
-import { recomputeStudentTotals, assertAcademicYearWritable } from '../../utils/studentContext';
+import { recomputeStudentTotals, assertAcademicYearWritable, getStudentYearOfStudy } from '../../utils/studentContext';
 
 const APP_FEE_KEY = 'APPLICATION_FEE_AMOUNT';
 const DEFAULT_APP_FEE = '500';
@@ -941,6 +941,7 @@ export const FeeService = {
                              feeHeadId: targetDemand?.feeHeadId,
                              createdBy: adminId,
                              academicYearId: (await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } })).id,
+                             yearOfStudy: targetDemand?.yearOfStudy ?? undefined,
                              date: new Date()
                          }
                      });
@@ -1314,13 +1315,15 @@ export const FeeService = {
                     : 0;
                 const netAmount = fee.amount - scholarshipAmt;
 
+                const demandYear = fee.yearOfStudy ?? currentYear;
+
                 const demand = await tx.studentFeeDemand.create({
                     data: {
                         studentId,
                         feeStructureId: fee.id,
                         feeHeadId: fee.feeHeadId,
                         academicYearId: fee.academicYearId,
-                        yearOfStudy: fee.yearOfStudy ?? undefined,
+                        yearOfStudy: demandYear,
                         amount: fee.amount,
                         discountAmount:    scholarshipAmt,
                         scholarshipAmount: scholarshipAmt,
@@ -1342,7 +1345,8 @@ export const FeeService = {
                         referenceType: 'FEE_DEMAND',
                         feeHeadId: fee.feeHeadId,
                         createdBy: userId,
-                        academicYearId
+                        academicYearId,
+                        yearOfStudy: demandYear
                     }
                 });
 
@@ -1357,7 +1361,8 @@ export const FeeService = {
                             referenceType: 'SCHOLARSHIP',
                             feeHeadId: fee.feeHeadId,
                             createdBy: userId,
-                            academicYearId
+                            academicYearId,
+                            yearOfStudy: demandYear
                         }
                     });
                     scholarshipApplied++;
@@ -2049,7 +2054,8 @@ export const FeeService = {
 
         return prisma.$transaction(async (tx: any) => {
             let demandId: string;
-            
+            const activeYear = await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } });
+
             // 3. Update Demand or Create Ad-Hoc
             if (targetDemand) {
                 const updateData: any = {};
@@ -2074,10 +2080,6 @@ export const FeeService = {
             } else {
                 // Case: Ad-Hoc Fine where no previous demand exists
                 if (type === 'FINE') {
-                    // Year-tag the fine with the active academic year (required since the phase-3 migration).
-                    const activeYear = await tx.academicYear.findFirstOrThrow({
-                        where: { isActive: true, isDeleted: false }
-                    });
                     const newDemand = await tx.studentFeeDemand.create({
                         data: {
                             studentId,
@@ -2117,6 +2119,8 @@ export const FeeService = {
                     referenceType: type === 'FINE' ? 'FINE' : 'DISCOUNT',
                     feeHeadId: targetFeeHeadId,
                     createdBy: userId,
+                    academicYearId: activeYear.id,
+                    yearOfStudy: (targetDemand?.yearOfStudy) ?? undefined,
                     date: new Date()
                 }
             });
@@ -2257,7 +2261,9 @@ export const FeeService = {
                 if (transferAmount > 0) {
                     const oldServiceName = oldType === 'HOSTEL' ? 'Hostel' : 'Transport';
 
-                    const svcChangeYearId = (await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } })).id;
+                    const svcChangeYear = await tx.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } });
+                    const svcChangeYearId = svcChangeYear.id;
+                    const svcYearOfStudy = await getStudentYearOfStudy(studentId, tx);
                     if (newType === 'NONE') {
                         // → NONE: record the paid amount as a refundable credit
                         await tx.studentLedger.create({
@@ -2269,6 +2275,7 @@ export const FeeService = {
                                 referenceType: 'SERVICE_CHANGE',
                                 createdBy: adminId,
                                 academicYearId: svcChangeYearId,
+                                yearOfStudy: svcYearOfStudy,
                             }
                         });
                     } else {
@@ -2284,6 +2291,7 @@ export const FeeService = {
                                 referenceType: 'SERVICE_CHANGE',
                                 createdBy: adminId,
                                 academicYearId: svcChangeYearId,
+                                yearOfStudy: svcYearOfStudy,
                             }
                         });
 
@@ -2296,6 +2304,7 @@ export const FeeService = {
                                 referenceType: 'SERVICE_CHANGE',
                                 createdBy: adminId,
                                 academicYearId: svcChangeYearId,
+                                yearOfStudy: svcYearOfStudy,
                             }
                         });
                     }

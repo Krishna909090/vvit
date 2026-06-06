@@ -283,6 +283,7 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
         const activeYear = await tx.academicYear.findFirstOrThrow({
             where: { isActive: true, isDeleted: false }
         });
+        const yearOfStudy = await getStudentYearOfStudy(studentId, tx);
         const existingPending = await tx.payment.findFirst({
             where: {
                 studentId,
@@ -318,7 +319,8 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
                         providerTxId: transactionId,
                         idempotencyKey: `${transactionId}_APPLICATION_FEE`,
                         method: PaymentMethod.UPI,
-                        academicYearId: activeYear.id
+                        academicYearId: activeYear.id,
+                        yearOfStudy
                     }
                 });
                 logger.info(`[initiateApplicationFeePayment] Created fresh payment ${createdPayment.id} txnId=${transactionId}`);
@@ -335,7 +337,8 @@ export const initiateApplicationFeePayment = async (studentId: string) => {
                     providerTxId: transactionId,
                     idempotencyKey: `${transactionId}_APPLICATION_FEE`,
                     method: PaymentMethod.UPI,
-                    academicYearId: activeYear.id
+                    academicYearId: activeYear.id,
+                    yearOfStudy
                 }
             });
             logger.info(`[initiateApplicationFeePayment] Created new PENDING payment ${createdPayment.id} txnId=${transactionId}`);
@@ -884,6 +887,8 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
                 where: { id: demand.id },
                 data: { status: newStatus as any }
             });
+            // demand.yearOfStudy may be null for legacy rows; fall back to enrollment/admission
+            const resolvedYear = demand.yearOfStudy ?? await getStudentYearOfStudy(payment.studentId, db);
             // Copy feeDemandId + academicYearId + yearOfStudy onto the Payment row
             await db.payment.update({
                 where: { id: payment.id },
@@ -891,14 +896,14 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
                     feeDemandId: targetDemandId,
                     feeHeadId: resolvedFeeHeadId ?? undefined,
                     academicYearId: demand.academicYearId ?? undefined,
-                    yearOfStudy: demand.yearOfStudy ?? undefined,
+                    yearOfStudy: resolvedYear,
                 }
             });
             // Mutate in-memory so the subsequent _createPaymentLedger() picks up the year context
             payment.feeDemandId = targetDemandId;
             payment.feeHeadId = resolvedFeeHeadId;
             payment.academicYearId = demand.academicYearId ?? null;
-            payment.yearOfStudy = demand.yearOfStudy ?? null;
+            payment.yearOfStudy = resolvedYear;
         }
     }
     // Waterfall Settlement — no specific demand identified; filter by component if possible
@@ -925,19 +930,21 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
         // Use the first matching demand's year + link feeDemandId to Payment
         if (pendingDemands.length > 0) {
             const first = pendingDemands[0];
+            // first.yearOfStudy may be null for legacy rows; fall back to enrollment/admission
+            const resolvedYear = first.yearOfStudy ?? await getStudentYearOfStudy(payment.studentId, db);
             await db.payment.update({
                 where: { id: payment.id },
                 data: {
                     feeDemandId: first.id,
                     feeHeadId: resolvedFeeHeadId ?? undefined,
                     academicYearId: first.academicYearId ?? undefined,
-                    yearOfStudy: first.yearOfStudy ?? undefined,
+                    yearOfStudy: resolvedYear,
                 }
             });
             payment.feeDemandId = first.id;
             payment.feeHeadId = resolvedFeeHeadId;
             payment.academicYearId = first.academicYearId ?? null;
-            payment.yearOfStudy = first.yearOfStudy ?? null;
+            payment.yearOfStudy = resolvedYear;
         }
 
         let remaining = payment.amount;
@@ -1025,6 +1032,7 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
         const activeYear = await tx.academicYear.findFirstOrThrow({
             where: { isActive: true, isDeleted: false }
         });
+        const yearOfStudy = await getStudentYearOfStudy(studentId, tx);
 
         // Duplicate check inside transaction to prevent race conditions
         const existingPayment = await tx.payment.findFirst({
@@ -1054,7 +1062,8 @@ export const recordOfflineApplicationFeePayment = async (studentId: string, paym
                 createdBy: adminId,
                 updatedBy: adminId,
                 metadata: { remarks, mode: 'OFFLINE_ENTRY' },
-                academicYearId: activeYear.id
+                academicYearId: activeYear.id,
+                yearOfStudy
             }
         });
 
@@ -1382,9 +1391,35 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
         }
     });
 
-    // 5. Create Payment Record
-    const { feeHeadId, feeDemandId } = paymentDetails || {};
-    const yearCtx = await resolveFeeDemandContext(feeDemandId);
+    // 5. Create Payment Record — resolve feeHeadId + feeDemandId + yearOfStudy upfront
+    let { feeHeadId: callerFeeHeadId, feeDemandId: callerFeeDemandId } = paymentDetails || {};
+
+    // Auto-resolve feeHeadId if caller omitted it
+    if (!callerFeeHeadId) {
+        const feeHead = await prisma.feeHead.findFirst({
+            where: { component: paymentComponent as any, isDeleted: false },
+            select: { id: true },
+        });
+        if (feeHead) callerFeeHeadId = feeHead.id;
+    }
+
+    // Resolve feeDemandId from the matching PENDING/PARTIAL demand when caller omits it
+    if (!callerFeeDemandId && callerFeeHeadId) {
+        const demand = await prisma.studentFeeDemand.findFirst({
+            where: {
+                studentId,
+                isDeleted: false,
+                status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] },
+                OR: [{ feeHeadId: callerFeeHeadId }, { feeStructure: { feeHeadId: callerFeeHeadId } }],
+            },
+            orderBy: { dueDate: 'asc' },
+            select: { id: true },
+        });
+        if (demand) callerFeeDemandId = demand.id;
+    }
+
+    const yearCtx = await resolveFeeDemandContext(callerFeeDemandId);
+    const resolvedYearOfStudy = yearCtx.yearOfStudy ?? await getStudentYearOfStudy(studentId);
 
     const payment = await prisma.payment.create({
         data: {
@@ -1395,10 +1430,10 @@ export const payCollegeFee = async (studentId: string, data: any, _userId: strin
             providerTxId: transactionId,
             idempotencyKey: `${transactionId}_${paymentComponent}`,
             method: paymentDetails?.paymentMode === 'PHONEPE' ? PaymentMethod.UPI : PaymentMethod.CASH,
-            feeHeadId: feeHeadId || undefined,
-            feeDemandId: feeDemandId || undefined,
+            feeHeadId: callerFeeHeadId || undefined,
+            feeDemandId: callerFeeDemandId || undefined,
             academicYearId: yearCtx.academicYearId,
-            yearOfStudy: yearCtx.yearOfStudy,
+            yearOfStudy: resolvedYearOfStudy,
         } as any
     });
 
@@ -1709,23 +1744,35 @@ export const approveDiscount = async (requestId: string, approvedAmount: number,
              where: { isActive: true, isDeleted: false }
          });
 
+         // Resolve feeHeadId + yearOfStudy from the student's matching demand
+         const discountDemand = await tx.studentFeeDemand.findFirst({
+             where: {
+                 studentId: request.studentId,
+                 isDeleted: false,
+                 OR: [
+                     { feeHead: { component: component as any } },
+                     { feeHead: { name: { contains: component, mode: 'insensitive' } } },
+                 ],
+             },
+             orderBy: { createdAt: 'desc' },
+             select: { feeHeadId: true, yearOfStudy: true },
+         });
+         const discountFeeHeadId = discountDemand?.feeHeadId ?? undefined;
+         const discountYear = discountDemand?.yearOfStudy
+             ?? await getStudentYearOfStudy(request.studentId, tx);
+
          const updated = await tx.discountRequest.update({
             where: { id: requestId },
             data: {
                 status: DiscountStatus.APPROVED,
                 approvedAmount,
-                component, // Maintain legacy field if needed or ignore
+                component,
                 items: approvedItems as any,
                 remarks,
                 approvedBy: adminId,
                 approvedAt: new Date()
             } as any
          });
-
-         // Create Ledger Entry
-         // Logic to find demand is skipped here for simplicity as this is legacy approve flow,
-         // but ideally should match FeeService logic.
-         // Let's just create Ledger Entry as before.
 
          await tx.studentLedger.create({
             data: {
@@ -1737,11 +1784,12 @@ export const approveDiscount = async (requestId: string, approvedAmount: number,
                 referenceType: 'DISCOUNT',
                 createdBy: adminId,
                 academicYearId: activeYear.id,
-                // feeHeadId: ??? Find it?
+                feeHeadId: discountFeeHeadId,
+                yearOfStudy: discountYear,
                 date: new Date()
             }
          });
-         
+
          return updated;
     });
 };
@@ -2319,7 +2367,8 @@ export const processUnifiedPayment = async (data: any) => {
    
     // Resolve Component
     logger.debug(`[processUnifiedPayment] Resolving component: ${rawComponent}`);
-    const { component, feeHeadId } = await resolveComponent(rawComponent, rawFeeHeadId);
+    const { component, feeHeadId: _feeHeadId } = await resolveComponent(rawComponent, rawFeeHeadId);
+    let feeHeadId: string | null = _feeHeadId ?? null;
     logger.info(`[processUnifiedPayment] Component resolved to: ${component}, FeeHeadId=${feeHeadId || 'N/A'}`);
 
 
@@ -2377,13 +2426,49 @@ export const processUnifiedPayment = async (data: any) => {
         throw new AppError(`Fee Head ID is mandatory for ${component}`, 400);
     }
     
+    // Auto-resolve feeHeadId for hostel/transport components when caller omits it
+    if (!feeHeadId && COMPONENT_RESOLVABLE.has(component)) {
+        const feeHead = await prisma.feeHead.findFirst({
+            where: { component, isDeleted: false },
+            select: { id: true },
+        });
+        if (feeHead) feeHeadId = feeHead.id;
+    }
+
     if (feeHeadId) {
         const feeHead = await prisma.feeHead.findUnique({ where: { id: feeHeadId } });
         if (!feeHead) {
             throw new AppError(`Invalid Fee Head ID: ${feeHeadId}`, 400);
         }
     }
-    
+
+    // Resolve feeDemandId + yearOfStudy upfront so the Payment row is never null
+    // for these fields (mirrors the payMultiComponentFee path).
+    let resolvedFeeDemandId: string | undefined;
+    let resolvedYearOfStudy: number | undefined;
+    if (feeHeadId) {
+        const demand = await prisma.studentFeeDemand.findFirst({
+            where: {
+                studentId,
+                isDeleted: false,
+                status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] },
+                OR: [
+                    { feeHeadId },
+                    { feeStructure: { feeHeadId } },
+                ],
+            },
+            orderBy: { dueDate: 'asc' },
+            select: { id: true, yearOfStudy: true, academicYearId: true },
+        });
+        if (demand) {
+            resolvedFeeDemandId = demand.id;
+            resolvedYearOfStudy = demand.yearOfStudy ?? undefined;
+        }
+    }
+    if (!resolvedYearOfStudy) {
+        resolvedYearOfStudy = await getStudentYearOfStudy(studentId);
+    }
+
     // 3. Generate Transaction ID
     const providerTxId = mode === PaymentMode.OFFLINE 
         ? (referenceNumber || `CASH_${Date.now()}_${studentId.substring(0, 8)}`)
@@ -2416,6 +2501,8 @@ export const processUnifiedPayment = async (data: any) => {
                 component,
                 referenceNumber,
                 feeHeadId,
+                feeDemandId: resolvedFeeDemandId,
+                yearOfStudy: resolvedYearOfStudy,
                 providerTxId,
                 idempotencyKey,
                 collectedBy: initiatedBy,
@@ -2778,6 +2865,7 @@ export const getStudentFinancialHistory = async (
         breakdown,
         ledger: ledgers,
         payments: paymentsWithUrls,
+        feeDemands,
         feeCorrections,
         correctionSummary,
     };
