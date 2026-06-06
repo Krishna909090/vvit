@@ -426,8 +426,6 @@ function drawHostelDetailsBlock(doc: PDFKit.PDFDocument, data: HostelAllotmentDa
     { label: 'Floor',           value: data.floor !== undefined ? String(data.floor) : '—' },
     { label: 'Sharing / Type',  value: `${data.sharing}-Sharing • ${data.roomType}` },
     { label: 'Payment Mode',    value: data.paymentMode === 'SEMWISE' ? 'Two Instalment (Semwise)' : 'Single Instalment (Yearwise)' },
-    { label: 'Warden',          value: data.wardenName || '—' },
-    { label: 'Reporting Date',  value: data.reportingDate || '—' },
   ]
 
   let currentY = startY

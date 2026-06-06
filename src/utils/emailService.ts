@@ -1,6 +1,6 @@
 import axios from 'axios';
 import logger from './logger';
-import { getPaymentReceiptTemplate, PaymentEmailData, PaymentEmailType, HallTicketEmailData, getHallTicketTemplate, StatusUpdateEmailData, getStatusUpdateTemplate } from './emailTemplates';
+import { getPaymentReceiptTemplate, PaymentEmailData, PaymentEmailType, HallTicketEmailData, getHallTicketTemplate, StatusUpdateEmailData, getStatusUpdateTemplate, HostelAllotmentEmailData, getHostelAllotmentTemplate } from './emailTemplates';
 import fs from 'fs';
 import path from 'path';
 import { EmailStatus } from '@prisma/client';
@@ -603,6 +603,83 @@ export const sendScholarshipUpdateEmail = async (
         return { success: result.success };
     } catch (error: any) {
         logger.error('[EMAIL SERVICE] Send Scholarship Update Failed', error);
+        if (emailLogId) {
+            await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
+        }
+        return { success: false };
+    }
+};
+
+export const sendHostelAllotmentEmail = async (
+    recipientEmail: string,
+    data: {
+        studentName: string;
+        applicationId: string;
+        hostelName: string;
+        roomNumber: string;
+        bedNumber: string;
+        floor?: number;
+        sharing: number;
+        roomType: string;
+        paymentMode: string;
+        effectiveTotal: number;
+    },
+    pdfBuffer: Buffer
+): Promise<{ success: boolean }> => {
+    let emailLogId: string | undefined;
+
+    try {
+        const subject = `Hostel Allotment Order - ${data.applicationId}`;
+
+        const htmlContent = getHostelAllotmentTemplate(data);
+
+        const logEntry = await createEmailLog({
+            recipientEmail,
+            subject,
+            content: htmlContent,
+            templateType: 'HOSTEL_ALLOTMENT' as any,
+            metadata: {
+                studentId: data.applicationId,
+                hostelName: data.hostelName,
+                roomNumber: data.roomNumber,
+                bedNumber: data.bedNumber,
+            },
+        });
+        if (logEntry) emailLogId = logEntry.id;
+
+        const assetsDir = path.join(process.cwd(), 'src/assets');
+        let logoBase64 = '';
+        let bannerBase64 = '';
+        let studentsBase64 = '';
+
+        try {
+            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'students.jpg'))) studentsBase64 = fs.readFileSync(path.join(assetsDir, 'students.jpg')).toString('base64');
+        } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
+
+        const base64Pdf = pdfBuffer.toString('base64');
+        const attachments = [{ name: `HostelAllotmentOrder_${data.applicationId}.pdf`, mime_type: 'application/pdf', content: base64Pdf }];
+
+        const inlineImages = [];
+        if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });
+        if (bannerBase64) inlineImages.push({ name: 'collegeBuilding.jpg', mime_type: 'image/jpeg', content: bannerBase64, cid: 'banner' });
+        if (studentsBase64) inlineImages.push({ name: 'students.jpg', mime_type: 'image/jpeg', content: studentsBase64, cid: 'students' });
+
+        const result = await sendZeptoEmail(recipientEmail, subject, htmlContent, attachments, inlineImages);
+
+        if (emailLogId) {
+            await updateEmailStatus(
+                emailLogId,
+                result.success ? EmailStatus.SENT : EmailStatus.FAILED,
+                result.messageId,
+                result.error,
+            );
+        }
+
+        return { success: result.success };
+    } catch (error: any) {
+        logger.error('[EMAIL SERVICE] Send Hostel Allotment Email Failed', error);
         if (emailLogId) {
             await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
         }

@@ -1,4 +1,138 @@
 export type PaymentEmailType = 'APPLICATION_FEE' | 'ADMISSION_FEE' | 'TUITION_FEE' | 'BOOK_BANK_FEE' | 'HOSTEL_FEE' | 'TRANSPORT_FEE' | 'DEFAULT';
+
+export interface HostelAllotmentEmailData {
+    studentName: string;
+    applicationId: string;
+    hostelName: string;
+    roomNumber: string;
+    bedNumber: string;
+    floor?: number;
+    sharing: number;
+    roomType: string;
+    paymentMode: string;
+    effectiveTotal: number;
+    supportEmail?: string;
+}
+
+export const getHostelAllotmentTemplate = (data: HostelAllotmentEmailData): string => {
+    const studentName  = escapeHtml(data.studentName);
+    const applicationId = escapeHtml(data.applicationId);
+    const hostelName   = escapeHtml(data.hostelName);
+    const roomNumber   = escapeHtml(data.roomNumber);
+    const bedNumber    = escapeHtml(data.bedNumber);
+    const roomType     = escapeHtml(data.roomType);
+    const supportEmail = escapeHtml(data.supportEmail || 'admissions@vvit.edu.in');
+    const paymentModeLabel = data.paymentMode === 'SEMWISE' ? 'Two Instalment (Semwise)' : 'Single Instalment (Yearwise)';
+    const totalFormatted   = data.effectiveTotal.toLocaleString('en-IN');
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Hostel Allotment Order</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #FCFCFD; font-family: Arial, Helvetica, sans-serif; color: #6E6C78; }
+    .container { max-width: 600px; margin: 0 auto; background-color: #FCFCFD; }
+    .banner-table { width: 100%; border-collapse: collapse; border-radius: 12px 12px 0 0; overflow: hidden; }
+    .banner-bg { background-size: cover; background-position: center center; background-repeat: no-repeat; height: 220px; }
+    .logo-cell { text-align: right; vertical-align: top; padding: 20px; }
+    .content { padding: 32px 40px 10px 40px; font-size: 14px; line-height: 1.75; color: #6E6C78; }
+    .content p { margin: 0 0 14px 0; }
+    .content strong { color: #131010; }
+    .summary { margin: 10px 0 16px 18px; padding: 0; }
+    .summary li { margin-bottom: 6px; padding-left: 4px; color: #6E6C78; }
+    .signature { margin-top: 18px; }
+    .divider { border-top: 1px solid #DEDFE3; margin: 20px 0 10px; }
+    .welcome-card { background-color: #3A3334; margin: 18px 20px 0 20px; border-radius: 10px; overflow: hidden; }
+    .welcome-inner { display: flex; padding: 18px; gap: 14px; align-items: center; }
+    .welcome-text h3 { margin: 0 0 8px 0; font-size: 18px; font-weight: 700; color: #FCFCFD; }
+    .welcome-text p { margin: 0; font-size: 13px; line-height: 1.6; color: #C0BCC1; }
+    .welcome-img { width: 120px; border-radius: 6px; object-fit: cover; }
+    .cta { display: inline-block; margin-top: 12px; padding: 10px 18px; background-color: #E5776B; color: #FCFCFD !important; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 700; }
+    .watermark { text-align: center; font-size: 96px; font-weight: 800; color: #FFCC99; letter-spacing: 10px; margin: 8px 0 30px; line-height: 1; }
+    @media (max-width: 600px) {
+      .content { padding: 24px 20px 10px 20px; }
+      .welcome-inner { flex-direction: column-reverse; text-align: left; }
+      .welcome-img { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <table class="banner-table" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td class="banner-bg" background="cid:banner" style="background-image: url('cid:banner');">
+          <!--[if gte mso 9]>
+          <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:600px;height:220px;">
+            <v:fill type="tile" src="cid:banner" color="#333333" />
+            <v:textbox inset="0,0,0,0">
+          <![endif]-->
+          <div style="height: 220px;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" height="100%">
+              <tr>
+                <td class="logo-cell">
+                  <img src="cid:logo" alt="VVIT Logo" width="80" style="width:80px; height:auto;" />
+                </td>
+              </tr>
+            </table>
+          </div>
+          <!--[if gte mso 9]>
+            </v:textbox>
+          </v:rect>
+          <![endif]-->
+        </td>
+      </tr>
+    </table>
+
+    <div class="content">
+      <p><strong>Dear ${studentName},</strong></p>
+
+      <p><strong>Hostel Allotment Order</strong></p>
+
+      <p>Congratulations! Your hostel bed has been successfully allotted at <strong>Vasireddy Venkatadri International Technological University</strong>. Please find your Hostel Allotment Order attached to this email.</p>
+
+      <ul class="summary">
+        <li><strong>Student Name:</strong> ${studentName}</li>
+        <li><strong>Reference ID:</strong> ${applicationId}</li>
+        <li><strong>Hostel:</strong> ${hostelName}</li>
+        <li><strong>Room Number:</strong> ${roomNumber}</li>
+        <li><strong>Bed Number:</strong> ${bedNumber}</li>
+        ${data.floor !== undefined ? `<li><strong>Floor:</strong> ${data.floor}</li>` : ''}
+        <li><strong>Sharing / Type:</strong> ${data.sharing}-Sharing &middot; ${roomType}</li>
+        <li><strong>Payment Mode:</strong> ${paymentModeLabel}</li>
+        <li><strong>Total Payable:</strong> &#8377;${totalFormatted}</li>
+      </ul>
+
+      <p>Please report to the hostel office with a copy of this allotment order and your original identification documents.</p>
+
+      <p>For any queries, please contact us at <strong>${supportEmail}</strong>.</p>
+
+      <div class="signature">
+        <p>Yours sincerely,<br><strong>Hostel Administration Office</strong></p>
+      </div>
+
+      <div class="divider"></div>
+    </div>
+
+    <div class="welcome-card">
+      <div class="welcome-inner">
+        <div class="welcome-text">
+          <h3>Welcome to VVITU</h3>
+          <p>VVITU continues to grow as a beacon of innovation and excellence, striving to empower the next generation of engineers.</p>
+          <a href="https://vvitu.ac.in" class="cta">Visit Website</a>
+        </div>
+        <img src="cid:students" class="welcome-img" alt="Students" />
+      </div>
+    </div>
+
+    <div class="watermark">VVITU</div>
+  </div>
+</body>
+</html>
+`;
+};
 export interface PaymentEmailData {
     studentName: string;
     applicationId: string;

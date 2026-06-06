@@ -12,6 +12,7 @@ import { getOrCreateAccommodationPricing, resolveFeeDemandContext, getActiveAcad
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { ScholarshipService } from './scholarship.service';
 import { generateAllotmentOrderPDF, generateHostelAllotmentOrderPDF } from '../../utils/allotmentGenerator';
+import { sendHostelAllotmentEmail } from '../../utils/emailService';
 import { StudentDocumentStatus } from '@prisma/client';
 
 import { InvoiceService } from './invoice.service';
@@ -2080,6 +2081,23 @@ export async function generateAndSaveHostelAllotmentOrder(studentId: string) {
         const timestamp = Date.now();
         const s3Key = `student/${student.phone}/documents/HostelAllotmentOrder_${timestamp}.pdf`;
         const url = await uploadFileToS3(pdfBuffer, s3Key, 'application/pdf');
+
+        if (student.email) {
+            sendHostelAllotmentEmail(student.email, {
+                studentName: allotmentData.studentName,
+                applicationId: allotmentData.applicationId,
+                hostelName: allotmentData.hostelName,
+                roomNumber: allotmentData.roomNumber,
+                bedNumber: allotmentData.bedNumber,
+                floor: allotmentData.floor,
+                sharing: allotmentData.sharing,
+                roomType: allotmentData.roomType,
+                paymentMode: allotmentData.paymentMode,
+                effectiveTotal: allotmentData.effectiveTotal,
+            }, pdfBuffer).catch((err: any) => {
+                logger.warn(`[HostelAllotment] Email send failed for student ${studentId}: ${err?.message}`);
+            });
+        }
 
         const hostelDocYear = await getActiveAcademicYear();
         await prisma.studentDocument.upsert({

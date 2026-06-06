@@ -3,6 +3,8 @@ import { catchAsync } from '../../../utils/catchAsync';
 import { MESSAGES } from '../../../constants/messages';
 import { sendResponse } from '../../../utils/response';
 import { HostelService } from './hostel.service';
+import { AppError } from '../../../utils/AppError';
+import { generateAndSaveHostelAllotmentOrder } from '../../finance/payment.service';
 
 export const createHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const hostel = await HostelService.createHostel(req.body, req.user?.userId);
@@ -125,5 +127,37 @@ export const deleteHostelRoom = catchAsync(async (req: Request, res: Response, n
     const { id } = req.params;
     await HostelService.deleteHostelRoom(id);
     sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.HOSTEL_ROOM_DELETED });
+});
+
+export const sendHostelAllotmentEmails = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
+    const { studentIds } = req.body;
+
+    if (!Array.isArray(studentIds) || studentIds.length === 0) {
+        throw new AppError('studentIds must be a non-empty array', 400);
+    }
+
+    const results: { studentId: string; status: 'sent' | 'failed'; reason?: string }[] = [];
+
+    await Promise.all(
+        studentIds.map(async (studentId: string) => {
+            try {
+                await generateAndSaveHostelAllotmentOrder(studentId);
+                results.push({ studentId, status: 'sent' });
+            } catch (err: any) {
+                results.push({ studentId, status: 'failed', reason: err?.message ?? 'Unknown error' });
+            }
+        })
+    );
+
+    const sentCount   = results.filter(r => r.status === 'sent').length;
+    const failedCount = results.filter(r => r.status === 'failed').length;
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: `Allotment emails processed: ${sentCount} sent, ${failedCount} failed`,
+        data: { sentCount, failedCount, results },
+    });
 });
 
