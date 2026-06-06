@@ -72,21 +72,10 @@ const SCHOLARSHIP_LOCKED_STATUSES: ReadonlySet<AdmissionStatus> = new Set([
 ]);
 
 export const assertScholarshipEditableForStudent = async (
-    studentId: string,
-    adminRole?: string,
+    _studentId: string,
+    _adminRole?: string,
 ): Promise<void> => {
-    if (adminRole === Role.SUPER_ADMIN) return;
-    const admission = await prisma.studentAdmission.findUnique({
-        where: { studentId },
-        select: { status: true },
-    });
-    if (!admission) return; // no admission row yet — nothing to lock
-    if (SCHOLARSHIP_LOCKED_STATUSES.has(admission.status as AdmissionStatus)) {
-        throw new AppError(
-            `Scholarship cannot be modified after seat allotment (current status: ${admission.status}). Only SUPER_ADMIN can override.`,
-            403,
-        );
-    }
+    // Scholarship edits are unrestricted — any admin role may update at any admission stage.
 };
 
 export const AdmissionService = {
