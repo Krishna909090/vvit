@@ -2198,6 +2198,26 @@ export const AdmissionService = {
             }
         }
 
+        if (!feeDemandId && payment.feeHeadId) {
+            const demand = await prisma.studentFeeDemand.findFirst({
+                where: {
+                    studentId,
+                    isDeleted: false,
+                    status: { in: ['PENDING', 'PARTIAL'] as any },
+                    OR: [
+                        { feeHeadId: payment.feeHeadId },
+                        { feeStructure: { feeHeadId: payment.feeHeadId } },
+                    ],
+                },
+                orderBy: { dueDate: 'asc' },
+                select: { id: true },
+            });
+            if (demand) {
+                feeDemandId = demand.id;
+                logger.info(`[finalizeAdmission] Linked payment to Demand via feeHeadId: ${demand.id}`);
+            }
+        }
+
         const isOnline = !([
             PaymentMethod.CASH, 
             PaymentMethod.CHEQUE, 

@@ -429,19 +429,30 @@ export const initiateMultiComponentPayment = async (
             let feeDemandId: string | undefined;
             let yearOfStudy: number | undefined;
             if (item.feeHeadId) {
-                const demand = await tx.studentFeeDemand.findFirst({
-                    where: {
-                        studentId,
-                        isDeleted: false,
-                        status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] },
-                        OR: [
-                            { feeHeadId: item.feeHeadId },
-                            { feeStructure: { feeHeadId: item.feeHeadId } },
-                        ],
-                    },
+                const demandOR = [
+                    { feeHeadId: item.feeHeadId },
+                    { feeStructure: { feeHeadId: item.feeHeadId } },
+                ];
+
+                let demand = await tx.studentFeeDemand.findFirst({
+                    where: { studentId, isDeleted: false, status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] }, OR: demandOR },
                     orderBy: { dueDate: 'asc' },
                     select: { id: true, yearOfStudy: true, academicYearId: true },
                 });
+
+                if (!demand) {
+                    demand = await tx.studentFeeDemand.findFirst({
+                        where: { studentId, isDeleted: false, status: FeeStatus.FULL, OR: demandOR },
+                        orderBy: { dueDate: 'desc' },
+                        select: { id: true, yearOfStudy: true, academicYearId: true },
+                    });
+                    if (demand) {
+                        logger.warn(`[createPayment] No PENDING/PARTIAL demand for student=${studentId} component=${item.component} feeHeadId=${item.feeHeadId} — linking to existing FULL demand ${demand.id}`);
+                    } else {
+                        logger.warn(`[createPayment] No demand found at all for student=${studentId} component=${item.component} feeHeadId=${item.feeHeadId} — feeDemandId will be null`);
+                    }
+                }
+
                 if (demand) {
                     feeDemandId = demand.id;
                     yearOfStudy = demand.yearOfStudy ?? undefined;
@@ -735,32 +746,34 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
     }
 
     if (!targetDemandId && resolvedFeeHeadId) {
-         const matchingDemand = await db.studentFeeDemand.findFirst({
-             where: {
-                 studentId: payment.studentId,
-                 isDeleted: false,
-                 status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] },
-                 OR: [
-                      { feeHeadId: resolvedFeeHeadId },
-                      { feeStructure: { feeHeadId: resolvedFeeHeadId } }
-                 ]
-             },
-             orderBy: { dueDate: 'asc' }
-         });
-         if (matchingDemand) targetDemandId = matchingDemand.id;
+        const demandOR = [
+            { feeHeadId: resolvedFeeHeadId },
+            { feeStructure: { feeHeadId: resolvedFeeHeadId } },
+        ];
+
+        let matchingDemand = await db.studentFeeDemand.findFirst({
+            where: { studentId: payment.studentId, isDeleted: false, status: { in: [FeeStatus.PENDING, FeeStatus.PARTIAL] }, OR: demandOR },
+            orderBy: { dueDate: 'asc' },
+        });
+
+        if (!matchingDemand) {
+            matchingDemand = await db.studentFeeDemand.findFirst({
+                where: { studentId: payment.studentId, isDeleted: false, status: FeeStatus.FULL, OR: demandOR },
+                orderBy: { dueDate: 'desc' },
+            });
+            if (matchingDemand) {
+                logger.warn(`[_settleFeeDemands] No PENDING/PARTIAL demand for payment=${payment.id} component=${payment.component} — linking to FULL demand ${matchingDemand.id}`);
+            } else {
+                logger.warn(`[_settleFeeDemands] No demand found for payment=${payment.id} component=${payment.component} feeHeadId=${resolvedFeeHeadId} — feeDemandId will remain null`);
+            }
+        }
+
+        if (matchingDemand) targetDemandId = matchingDemand.id;
     }
 
     if (targetDemandId) {
         const demand = await db.studentFeeDemand.findUnique({ where: { id: targetDemandId } });
         if (demand) {
-
-            const targetAmount = demand.netAmount ?? demand.amount;
-            const newStatus = payment.amount >= targetAmount ? 'FULL' : 'PARTIAL';
-            await db.studentFeeDemand.update({
-                where: { id: demand.id },
-                data: { status: newStatus as any }
-            });
-
             const resolvedYear = demand.yearOfStudy ?? await getStudentYearOfStudy(payment.studentId, db);
 
             await db.payment.update({
@@ -777,22 +790,39 @@ const _settleFeeDemands = async (payment: any, db: any = prisma) => {
             payment.feeHeadId = resolvedFeeHeadId;
             payment.academicYearId = demand.academicYearId ?? null;
             payment.yearOfStudy = resolvedYear;
+
+            if (demand.status !== FeeStatus.FULL) {
+                const priorPaid = await db.payment.aggregate({
+                    where: { feeDemandId: targetDemandId, status: 'SUCCESS', isDeleted: false, id: { not: payment.id } },
+                    _sum: { amount: true },
+                });
+                const paid = (priorPaid._sum.amount ?? 0) + payment.amount;
+                const targetAmount = demand.netAmount ?? demand.amount;
+                const newStatus = paid >= targetAmount ? FeeStatus.FULL : FeeStatus.PARTIAL;
+                await db.studentFeeDemand.update({
+                    where: { id: demand.id },
+                    data: { status: newStatus as any },
+                });
+            }
         }
     }
 
     else {
+        if (!resolvedFeeHeadId) {
+            logger.warn(`[_settleFeeDemands] payment=${payment.id} component=${payment.component} has no feeHeadId — cannot link to a demand; skipping demand settlement to avoid cross-component sweep.`);
+            await recomputeStudentTotals(payment.studentId, db);
+            return;
+        }
+
         const demandWhere: any = {
             studentId: payment.studentId,
             isDeleted: false,
             status: FeeStatus.PENDING,
-        };
-
-        if (resolvedFeeHeadId) {
-            demandWhere.OR = [
+            OR: [
                 { feeHeadId: resolvedFeeHeadId },
                 { feeStructure: { feeHeadId: resolvedFeeHeadId } },
-            ];
-        }
+            ],
+        };
 
         const pendingDemands = await db.studentFeeDemand.findMany({
             where: demandWhere,
