@@ -3422,7 +3422,7 @@ export const AccommodationService = {
 
         await prisma.studentAdmission.update({
             where: { studentId },
-            data: { hostel: { connect: { id: hostelId } }, updatedBy: adminId } as any,
+            data: { hostel: { connect: { id: hostelId } } } as any,
         });
 
         await prisma.auditLog.create({
