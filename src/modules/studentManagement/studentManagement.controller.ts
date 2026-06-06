@@ -735,6 +735,22 @@ export const assignHostel = catchAsync(async (req: Request, res: Response, next:
     });
 });
 
+export const updateHostelId = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
+    const { studentId } = req.params;
+    const { hostelId } = req.body;
+    logger.info(`[updateHostelId] studentId=${studentId} hostelId=${hostelId} by=${req.user?.userId || 'anonymous'}`);
+
+    const result = await AdminStudentService.updateHostelId(studentId, hostelId, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Hostel ID updated successfully',
+        data: result,
+    });
+});
+
 // Get Student Certificates
 export const getStudentCertificates = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;

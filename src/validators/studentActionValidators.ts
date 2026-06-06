@@ -63,6 +63,15 @@ export const allocateBedSchema = z.object({
     }),
 });
 
+export const updateHostelIdSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid("Invalid Student ID"),
+    }),
+    body: z.object({
+        hostelId: z.string().uuid("Invalid Hostel ID"),
+    }),
+});
+
 export const bulkAllocateRoomSchema = z.object({
     body: z.object({
         roomId: z.string().uuid("Invalid Room ID"),

@@ -41,6 +41,7 @@ import {
     assignHostel,
     assignTransport,
     allocateBed,
+    updateHostelId,
     cancelHostel,
     cancelTransport,
     getAvailableBeds,
@@ -80,7 +81,7 @@ import {
     editProSchema,
     updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
-import { assignHostelSchema, assignTransportSchema, allocateBedSchema, availableBedsQuerySchema, bedAllocatedStudentsQuerySchema, cancelHostelSchema, cancelTransportSchema, hostelPaidStudentsQuerySchema, pendingHostelAllocationsQuerySchema, studentsByHostelSchema, switchHostelToTransportSchema, switchTransportToHostelSchema, transportAllocatedStudentsQuerySchema, transportPaidStudentsQuerySchema, reassignHostelSchema, reassignTransportSchema, bulkAllocateRoomSchema, reassignHostelPreviewSchema, cancelHostelPreviewSchema, cancelTransportPreviewSchema, switchHostelToTransportPreviewSchema, switchTransportToHostelPreviewSchema } from '../../validators/studentActionValidators';
+import { assignHostelSchema, assignTransportSchema, allocateBedSchema, updateHostelIdSchema, availableBedsQuerySchema, bedAllocatedStudentsQuerySchema, cancelHostelSchema, cancelTransportSchema, hostelPaidStudentsQuerySchema, pendingHostelAllocationsQuerySchema, studentsByHostelSchema, switchHostelToTransportSchema, switchTransportToHostelSchema, transportAllocatedStudentsQuerySchema, transportPaidStudentsQuerySchema, reassignHostelSchema, reassignTransportSchema, bulkAllocateRoomSchema, reassignHostelPreviewSchema, cancelHostelPreviewSchema, cancelTransportPreviewSchema, switchHostelToTransportPreviewSchema, switchTransportToHostelPreviewSchema } from '../../validators/studentActionValidators';
 
 import upload from '../../config/multer';
 import {
@@ -352,6 +353,7 @@ router.post('/:studentId/switch-transport-to-hostel/preview', authenticate, auth
  * Response: { status, data: { allocation, pricing, feeDemandsCreated, skippedComponents } }
  */
 router.post('/:studentId/allocate-bed', authenticate, authorizePermission(['student.update.all']), validateRequest(allocateBedSchema), allocateBed);
+router.patch('/:studentId/update-hostel-id', authenticate, authorizePermission(['student.update.all']), validateRequest(updateHostelIdSchema), updateHostelId);
 
 /**
  * POST /admin/student/:studentId/reassign-hostel

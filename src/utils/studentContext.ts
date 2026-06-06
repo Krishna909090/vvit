@@ -107,9 +107,11 @@ export const getStudentContext = async (studentId: string, tx?: any): Promise<St
         });
     }
 
-    // Year-of-study fallback chain: explicit enrollment value → derived from semester → 1
+    // Year-of-study fallback chain:
+    // enrollment.yearOfStudy → derived from semester → admission.entryYearOfStudy → 1
     const yearOfStudy = enrollment?.yearOfStudy
         ?? (enrollment?.currentSemester ? Math.ceil(enrollment.currentSemester / 2) : null)
+        ?? (admission as any)?.entryYearOfStudy
         ?? 1;
 
     const currentSemester = enrollment?.currentSemester ?? 1;
@@ -161,14 +163,20 @@ export const getStudentContext = async (studentId: string, tx?: any): Promise<St
  */
 export const getStudentYearOfStudy = async (studentId: string, tx?: any): Promise<number> => {
     const client = tx || prisma;
-    const enrollment = await client.studentEnrollment.findFirst({
-        where: { studentId, status: 'ACTIVE' },
-        orderBy: { createdAt: 'desc' },
-        select: { yearOfStudy: true, currentSemester: true }
-    });
-    if (!enrollment) return 1;
-    if (enrollment.yearOfStudy) return enrollment.yearOfStudy;
-    if (enrollment.currentSemester) return Math.ceil(enrollment.currentSemester / 2);
+    const [enrollment, admission] = await Promise.all([
+        client.studentEnrollment.findFirst({
+            where: { studentId, status: 'ACTIVE' },
+            orderBy: { createdAt: 'desc' },
+            select: { yearOfStudy: true, currentSemester: true }
+        }),
+        client.studentAdmission.findUnique({
+            where: { studentId },
+            select: { entryYearOfStudy: true }
+        }),
+    ]);
+    if (enrollment?.yearOfStudy) return enrollment.yearOfStudy;
+    if (enrollment?.currentSemester) return Math.ceil(enrollment.currentSemester / 2);
+    if (admission?.entryYearOfStudy) return admission.entryYearOfStudy;
     return 1;
 };
 

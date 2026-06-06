@@ -1547,17 +1547,10 @@ export const AccommodationService = {
             //    Soft-deleted rows are retained (isDeleted=true) as audit history.
             let supersededDemands = 0;
             if (hostelHeadIds.length > 0) {
-                const result = await tx.studentFeeDemand.updateMany({
+                const result = await tx.studentFeeDemand.deleteMany({
                     where: {
                         studentId,
-                        isDeleted: false,
                         feeHeadId: { in: hostelHeadIds }
-                    },
-                    data: {
-                        isDeleted: true,
-                        deletedAt: new Date(),
-                        deletedBy: adminId,
-                        remarks: `Superseded by hostel re-assignment to ${newHostelType} ${args.hostelPaymentMode}`
                     }
                 });
                 supersededDemands = result.count;
@@ -1841,18 +1834,14 @@ export const AccommodationService = {
                 }
             });
 
-            // 2. Supersede ALL active hostel demands (not just PENDING) so paid/superseded
-            //    rows can't accumulate across repeated assigns; soft-deleted rows remain as
-            //    audit history. (Re-billing is avoided because new demands net out prior pay.)
+            // 2. Hard-delete ALL existing hostel demands before creating fresh ones.
             const hostelHeadIds = [accHead?.id, messHead?.id, laundryHead?.id, regHead?.id].filter(Boolean) as string[];
             if (hostelHeadIds.length > 0) {
-                await tx.studentFeeDemand.updateMany({
+                await tx.studentFeeDemand.deleteMany({
                     where: {
                         studentId,
                         feeHeadId: { in: hostelHeadIds },
-                        isDeleted: false
-                    },
-                    data: { isDeleted: true, updatedBy: adminId }
+                    }
                 });
             }
 
@@ -1881,7 +1870,9 @@ export const AccommodationService = {
                 }
             });
 
-            // 4. Create fresh demands
+            // 4. Create fresh demands, netting out any payments already made against
+            // the superseded demands for each fee head so the student is never
+            // asked to pay twice for the same component on a re-assign.
             const dueDate = new Date();
             dueDate.setDate(dueDate.getDate() + 30);
             const demands: { feeHeadId: string; amount: number; label: string }[] = [];
@@ -1890,17 +1881,79 @@ export const AccommodationService = {
             if (laundryHead && laundryPrice > 0)   demands.push({ feeHeadId: laundryHead.id, amount: laundryPrice, label: 'laundry' });
             if (regHead && registrationFee > 0)    demands.push({ feeHeadId: regHead.id, amount: registrationFee, label: 'registration' });
 
+            // Aggregate prior successful payments per fee head so we can reduce netAmount.
+            // Two queries merged:
+            //   (a) payments that have feeHeadId set — grouped by feeHeadId
+            //   (b) payments with feeHeadId=null but matching hostel component — grouped by component
+            //       (catches pre-fix payments that were created without feeHeadId resolution)
+            const headToComponent = new Map<string, PaymentComponent>([
+                ...(accHead    ? [[accHead.id,    PaymentComponent.HOSTEL_ACCOMMODATION]] : []) as [string, PaymentComponent][],
+                ...(messHead   ? [[messHead.id,   PaymentComponent.HOSTEL_MESS]]          : []) as [string, PaymentComponent][],
+                ...(laundryHead ? [[laundryHead.id, PaymentComponent.HOSTEL_LAUNDRY]]     : []) as [string, PaymentComponent][],
+                ...(regHead    ? [[regHead.id,    PaymentComponent.HOSTEL_REGISTRATION]]  : []) as [string, PaymentComponent][],
+            ]);
+            const componentToHead = new Map<PaymentComponent, string>(
+                Array.from(headToComponent.entries()).map(([h, c]) => [c, h])
+            );
+
+            const [byHeadAgg, byComponentAgg] = await Promise.all([
+                tx.payment.groupBy({
+                    by: ['feeHeadId'],
+                    where: {
+                        studentId,
+                        status: PaymentStatus.SUCCESS,
+                        isDeleted: false,
+                        feeHeadId: { in: demands.map(d => d.feeHeadId) },
+                    },
+                    _sum: { amount: true },
+                }),
+                tx.payment.groupBy({
+                    by: ['component'],
+                    where: {
+                        studentId,
+                        status: PaymentStatus.SUCCESS,
+                        isDeleted: false,
+                        feeHeadId: null,
+                        component: { in: [
+                            PaymentComponent.HOSTEL,
+                            PaymentComponent.HOSTEL_ACCOMMODATION,
+                            PaymentComponent.HOSTEL_MESS,
+                            PaymentComponent.HOSTEL_LAUNDRY,
+                            PaymentComponent.HOSTEL_REGISTRATION,
+                        ]},
+                    },
+                    _sum: { amount: true },
+                }),
+            ]);
+
+            const priorPaidByHead = new Map<string, number>(
+                (byHeadAgg as any[]).map(r => [r.feeHeadId, r._sum.amount ?? 0])
+            );
+            // Merge component-only payments into the same map
+            for (const r of byComponentAgg as any[]) {
+                const comp = r.component as PaymentComponent;
+                // HOSTEL (legacy) counts toward accommodation
+                const resolvedComp = comp === PaymentComponent.HOSTEL ? PaymentComponent.HOSTEL_ACCOMMODATION : comp;
+                const headId = componentToHead.get(resolvedComp);
+                if (headId) {
+                    priorPaidByHead.set(headId, (priorPaidByHead.get(headId) ?? 0) + (r._sum.amount ?? 0));
+                }
+            }
+
             for (const d of demands) {
+                const alreadyPaid = priorPaidByHead.get(d.feeHeadId) ?? 0;
+                const netAmount = Math.max(0, d.amount - alreadyPaid);
+                const status = netAmount === 0 ? FeeStatus.FULL : alreadyPaid > 0 ? FeeStatus.PARTIAL : FeeStatus.PENDING;
                 await tx.studentFeeDemand.create({
                     data: {
                         studentId,
                         feeHeadId: d.feeHeadId,
                         amount: d.amount,
-                        netAmount: d.amount,
+                        netAmount,
                         academicYearId,
                         yearOfStudy: ctx.yearOfStudy,
                         dueDate,
-                        status: FeeStatus.PENDING,
+                        status,
                         remarks: `Hostel ${d.label} (${hostelType}, ${roomType}, ${isSemwise ? 'SEMWISE' : 'YEARWISE'})`,
                         createdBy: adminId
                     }
@@ -3720,6 +3773,65 @@ export const AccommodationService = {
                 pricing: { accommodationPrice, messPrice, laundryPrice, registrationFee, effectiveTotal },
                 pricingSource,
             },
+        };
+    },
+
+    async updateHostelId(
+        studentId: string,
+        hostelId: string,
+        adminId: string | undefined
+    ) {
+        const ctx = await getStudentContext(studentId);
+        assertActiveAdmission(ctx.admission, 'update hostelId');
+        const admission = ctx.admission!;
+
+        if (admission.accommodationType !== AccommodationType.HOSTEL) {
+            throw new AppError(
+                `Student accommodation type is "${admission.accommodationType}", not HOSTEL. Cannot update hostelId.`,
+                400
+            );
+        }
+
+        const isAdding = !admission.hostelId;
+
+        const { grossPaid } = await getAvailableHostelCredit(studentId);
+        if (grossPaid <= 0) {
+            throw new AppError(
+                'Student has not made any hostel payment yet. At least one payment is required before updating hostelId.',
+                400
+            );
+        }
+
+        const hostel = await prisma.hostel.findUnique({ where: { id: hostelId } }) as any;
+        if (!hostel) throw new AppError(MESSAGES.ERROR.HOSTEL_NOT_FOUND, 404);
+        if (hostel.isDeleted) throw new AppError('Cannot assign to a deleted hostel', 400);
+
+        await prisma.studentAdmission.update({
+            where: { studentId },
+            data: { hostelId, updatedBy: adminId } as any,
+        });
+
+        await prisma.auditLog.create({
+            data: {
+                userId: adminId,
+                action: isAdding ? 'HOSTEL_ID_ADDED' : 'HOSTEL_ID_UPDATED',
+                entity: 'StudentAdmission',
+                entityId: studentId,
+                details: {
+                    previousHostelId: admission.hostelId ?? null,
+                    newHostelId: hostelId,
+                    hostelName: hostel.name,
+                    grossPaid,
+                    operation: isAdding ? 'ADD' : 'UPDATE',
+                },
+            },
+        });
+
+        return {
+            hostelId,
+            hostelName: hostel.name,
+            previousHostelId: admission.hostelId ?? null,
+            operation: isAdding ? 'added' : 'updated',
         };
     },
 };

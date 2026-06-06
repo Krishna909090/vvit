@@ -328,13 +328,17 @@ export const getPaymentHistory = catchAsync(async (req: Request, res: Response, 
     }
     // If user is AGENT, ensure student belongs to them (Optional/Future scope, currently strictly blocking cross-access)
 
-    // Optional ?academicYearId=<id> filters the breakdown / payments / demands /
-    // ledger / corrections to only that year. Useful for year-end reports.
+    // Optional query params to scope results:
+    //   ?academicYearId=<uuid>  — filter to a specific academic year
+    //   ?yearOfStudy=<1|2|3|4> — filter to a specific year of study (useful after promotion)
     const academicYearId = typeof req.query.academicYearId === 'string'
         ? req.query.academicYearId
         : undefined;
+    const yearOfStudy = typeof req.query.yearOfStudy === 'string' && req.query.yearOfStudy !== ''
+        ? parseInt(req.query.yearOfStudy, 10)
+        : undefined;
 
-    const history = await getStudentFinancialHistory(studentId, { academicYearId });
+    const history = await getStudentFinancialHistory(studentId, { academicYearId, yearOfStudy });
 
     sendResponse({
         res,
