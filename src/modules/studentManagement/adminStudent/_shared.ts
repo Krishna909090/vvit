@@ -14,27 +14,38 @@ export const PHONEPE_ENV = process.env.PHONEPE_ENV === 'PROD' ? Env.PRODUCTION :
 export const FRONTEND_URL_ADMISSION = process.env.FRONTEND_URL_ADMISSION || 'http://localhost:5173';
 
 /**
- * Prisma include fragment for a preference course: pulls the active-year
- * capacity row (totalSeats / filledSeats) plus its academic year tag.
+ * Prisma include fragment for a preference course: pulls every per-year capacity
+ * row (totalSeats / filledSeats) plus its academic year tag. The caller selects the
+ * right row via {@link attachCourseCapacity} — for a lateral student that's the
+ * batch's 1st-year pool (an inactive prior year), NOT the active year. We can't
+ * filter to that year here because the batch year is per-student, not known at
+ * include-build time, so we fetch all rows (a handful per course) and pick in JS.
  */
 export const PREF_COURSE_WITH_CAPACITY = {
     include: {
         capacities: {
-            where: { academicYear: { isActive: true } },
-            take: 1,
             include: { academicYear: { select: { id: true, code: true, isActive: true } } },
         },
     },
 } as const;
 
 /**
- * Flatten the `capacities[0]` into top-level `totalSeats / filledSeats / academicYear`
- * on a pref-course object so the UI doesn't have to dig into the array.
- * Returns null/undefined unchanged.
+ * Flatten the matching capacity row into top-level `totalSeats / filledSeats /
+ * academicYear` on a pref-course object so the UI doesn't have to dig into the array.
+ *
+ * Picks the capacity for `batchAcademicYearId` when given — that's the seat pool a
+ * student is actually allotted from. For a lateral, the batch's 1st-year (an inactive
+ * prior year); for a regular student it equals the active year, so the result is
+ * unchanged. Falls back to the active-year row when no batch year is passed or the
+ * course has no capacity configured for it. Returns null/undefined unchanged.
  */
-export const attachCourseCapacity = (course: any): any => {
+export const attachCourseCapacity = (course: any, batchAcademicYearId?: string | null): any => {
     if (!course) return course;
-    const cap = course.capacities?.[0];
+    const caps: any[] = course.capacities ?? [];
+    const cap =
+        (batchAcademicYearId && caps.find(c => c.academicYearId === batchAcademicYearId)) ||
+        caps.find(c => c.academicYear?.isActive) ||
+        caps[0];
     const { capacities: _ignored, ...rest } = course;
     return {
         ...rest,

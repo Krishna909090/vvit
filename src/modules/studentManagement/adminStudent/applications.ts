@@ -126,9 +126,9 @@ export const ApplicationsService = {
                 aadharNumber: maskAadhaar(student.aadharNumber),
                 profilePhotoUrl,
                 documents: documentsWithPresignedUrls,
-                pref1Course: attachCourseCapacity(student.pref1Course),
-                pref2Course: attachCourseCapacity(student.pref2Course),
-                pref3Course: attachCourseCapacity(student.pref3Course),
+                pref1Course: attachCourseCapacity(student.pref1Course, student.admissionDetails?.batchAcademicYearId),
+                pref2Course: attachCourseCapacity(student.pref2Course, student.admissionDetails?.batchAcademicYearId),
+                pref3Course: attachCourseCapacity(student.pref3Course, student.admissionDetails?.batchAcademicYearId),
                 transportAllocation: _ta?.[0] ?? null,
             };
         }));
