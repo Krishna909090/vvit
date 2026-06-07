@@ -1532,44 +1532,48 @@ export const purgeStudentByApplicationId = catchAsync(async (req: Request, res: 
 
         // ── 8. Hard-delete all records in FK-safe order ─────────────────────
 
-        // Leaf tables (nothing points to them by studentId as a FK target)
-        counts.classAttendance             = (await tx.classAttendance.deleteMany({ where: { studentId } })).count;
-        counts.semesterMark                = (await tx.semesterMark.deleteMany({ where: { studentId } })).count;
-        counts.attendanceRecord            = (await tx.attendanceRecord.deleteMany({ where: { studentId } })).count;
-        counts.seatAllocation              = (await tx.seatAllocation.deleteMany({ where: { studentId } })).count;
-        counts.courseChangeLog             = (await tx.courseChangeLog.deleteMany({ where: { studentId } })).count;
-        counts.courseChangeRequest         = (await tx.courseChangeRequest.deleteMany({ where: { studentId } })).count;
-        counts.discountRequest             = (await tx.discountRequest.deleteMany({ where: { studentId } })).count;
-        counts.hallTicket                  = (await tx.hallTicket.deleteMany({ where: { studentId } })).count;
-        counts.fileUpload                  = (await tx.fileUpload.deleteMany({ where: { studentId } })).count;
-        counts.serviceChangeRequest        = (await tx.serviceChangeRequest.deleteMany({ where: { studentId } })).count;
-        counts.waitingList                 = (await tx.waitingList.deleteMany({ where: { studentId } })).count;
-        counts.agentCommission             = (await tx.agentCommission.deleteMany({ where: { studentId } })).count;
-        counts.retainedRevenueLine         = (await tx.retainedRevenueLine.deleteMany({ where: { studentId } })).count;
-        counts.studentLedger               = (await tx.studentLedger.deleteMany({ where: { studentId } })).count;
-        counts.studentEnrollment           = (await tx.studentEnrollment.deleteMany({ where: { studentId } })).count;
-        counts.studentDocument             = (await tx.studentDocument.deleteMany({ where: { studentId } })).count;
-        counts.hostelAllocation            = (await tx.hostelAllocation.deleteMany({ where: { studentId } })).count;
-        counts.transportAllocation         = (await tx.transportAllocation.deleteMany({ where: { studentId } })).count;
-        counts.studentAccommodationPricing = (await tx.studentAccommodationPricing.deleteMany({ where: { studentId } })).count;
-        counts.convenorAdmission           = (await tx.convenorAdmission.deleteMany({ where: { studentId } })).count;
-        counts.studentExam                 = (await tx.studentExam.deleteMany({ where: { studentId } })).count;
+        // ── Hard-delete via raw SQL to bypass the soft-delete middleware ────────
+        // The Prisma middleware converts deleteMany → updateMany(isDeleted:true)
+        // for any model with an isDeleted field, so we use $executeRaw here.
+
+        // Leaf tables (nothing FKs into them by studentId)
+        counts.classAttendance             = await tx.$executeRaw`DELETE FROM "ClassAttendance"             WHERE "studentId" = ${studentId}`;
+        counts.semesterMark                = await tx.$executeRaw`DELETE FROM "SemesterMark"                WHERE "studentId" = ${studentId}`;
+        counts.attendanceRecord            = await tx.$executeRaw`DELETE FROM "AttendanceRecord"            WHERE "studentId" = ${studentId}`;
+        counts.seatAllocation              = await tx.$executeRaw`DELETE FROM "SeatAllocation"              WHERE "studentId" = ${studentId}`;
+        counts.courseChangeLog             = await tx.$executeRaw`DELETE FROM "CourseChangeLog"             WHERE "studentId" = ${studentId}`;
+        counts.courseChangeRequest         = await tx.$executeRaw`DELETE FROM "CourseChangeRequest"         WHERE "studentId" = ${studentId}`;
+        counts.discountRequest             = await tx.$executeRaw`DELETE FROM "DiscountRequest"             WHERE "studentId" = ${studentId}`;
+        counts.hallTicket                  = await tx.$executeRaw`DELETE FROM "HallTicket"                  WHERE "studentId" = ${studentId}`;
+        counts.fileUpload                  = await tx.$executeRaw`DELETE FROM "FileUpload"                  WHERE "studentId" = ${studentId}`;
+        counts.serviceChangeRequest        = await tx.$executeRaw`DELETE FROM "ServiceChangeRequest"        WHERE "studentId" = ${studentId}`;
+        counts.waitingList                 = await tx.$executeRaw`DELETE FROM "WaitingList"                 WHERE "studentId" = ${studentId}`;
+        counts.agentCommission             = await tx.$executeRaw`DELETE FROM "AgentCommission"             WHERE "studentId" = ${studentId}`;
+        counts.retainedRevenueLine         = await tx.$executeRaw`DELETE FROM "RetainedRevenueLine"         WHERE "studentId" = ${studentId}`;
+        counts.studentLedger               = await tx.$executeRaw`DELETE FROM "StudentLedger"               WHERE "studentId" = ${studentId}`;
+        counts.studentEnrollment           = await tx.$executeRaw`DELETE FROM "StudentEnrollment"           WHERE "studentId" = ${studentId}`;
+        counts.studentDocument             = await tx.$executeRaw`DELETE FROM "StudentDocument"             WHERE "studentId" = ${studentId}`;
+        counts.hostelAllocation            = await tx.$executeRaw`DELETE FROM "HostelAllocation"            WHERE "studentId" = ${studentId}`;
+        counts.transportAllocation         = await tx.$executeRaw`DELETE FROM "TransportAllocation"         WHERE "studentId" = ${studentId}`;
+        counts.studentAccommodationPricing = await tx.$executeRaw`DELETE FROM "StudentAccommodationPricing" WHERE "studentId" = ${studentId}`;
+        counts.convenorAdmission           = await tx.$executeRaw`DELETE FROM "ConvenorAdmission"           WHERE "studentId" = ${studentId}`;
+        counts.studentExam                 = await tx.$executeRaw`DELETE FROM "StudentExam"                 WHERE "studentId" = ${studentId}`;
 
         // Payment before StudentFeeDemand (Payment.feeDemandId → StudentFeeDemand)
-        counts.payment                     = (await tx.payment.deleteMany({ where: { studentId } })).count;
-        counts.studentFeeDemand            = (await tx.studentFeeDemand.deleteMany({ where: { studentId } })).count;
+        counts.payment                     = await tx.$executeRaw`DELETE FROM "Payment"                     WHERE "studentId" = ${studentId}`;
+        counts.studentFeeDemand            = await tx.$executeRaw`DELETE FROM "StudentFeeDemand"            WHERE "studentId" = ${studentId}`;
 
-        counts.feeCorrection               = (await tx.feeCorrection.deleteMany({ where: { studentId } })).count;
+        counts.feeCorrection               = await tx.$executeRaw`DELETE FROM "FeeCorrection"               WHERE "studentId" = ${studentId}`;
 
         // StudentScholarship before AcademicQualification (qualificationId FK)
-        counts.studentScholarship          = (await tx.studentScholarship.deleteMany({ where: { studentId } })).count;
-        counts.academicQualification       = (await tx.academicQualification.deleteMany({ where: { studentId } })).count;
+        counts.studentScholarship          = await tx.$executeRaw`DELETE FROM "StudentScholarship"          WHERE "studentId" = ${studentId}`;
+        counts.academicQualification       = await tx.$executeRaw`DELETE FROM "AcademicQualification"       WHERE "studentId" = ${studentId}`;
 
-        counts.scholarshipAllocation       = (await tx.scholarshipAllocation.deleteMany({ where: { studentId } })).count;
-        counts.cancellationRequest         = (await tx.cancellationRequest.deleteMany({ where: { studentId } })).count;
-        counts.studentAdmission            = (await tx.studentAdmission.deleteMany({ where: { studentId } })).count;
+        counts.scholarshipAllocation       = await tx.$executeRaw`DELETE FROM "ScholarshipAllocation"       WHERE "studentId" = ${studentId}`;
+        counts.cancellationRequest         = await tx.$executeRaw`DELETE FROM "CancellationRequest"         WHERE "studentId" = ${studentId}`;
+        counts.studentAdmission            = await tx.$executeRaw`DELETE FROM "StudentAdmission"            WHERE "studentId" = ${studentId}`;
 
-        await tx.student.delete({ where: { id: studentId } });
+        await tx.$executeRaw`DELETE FROM "Student" WHERE "id" = ${studentId}`;
         counts.student = 1;
 
         // ── 9. User account (if linked) ─────────────────────────────────────
@@ -1595,11 +1599,11 @@ export const purgeStudentByApplicationId = catchAsync(async (req: Request, res: 
             // Preserve student's own login audit trail but unlink the deleted userId
             await tx.auditLog.updateMany({ where: { userId }, data: { userId: null } });
 
-            counts.userOtp                = (await tx.userOtp.deleteMany({ where: { userId } })).count;
-            counts.notification           = (await tx.notification.deleteMany({ where: { recipientId: userId } })).count;
-            counts.userGroup              = (await tx.userGroup.deleteMany({ where: { userId } })).count;
-            counts.userPermissionOverride = (await tx.userPermissionOverride.deleteMany({ where: { userId } })).count;
-            await tx.user.delete({ where: { id: userId } });
+            counts.userOtp                = await tx.$executeRaw`DELETE FROM "UserOtp"                 WHERE "userId" = ${userId}`;
+            counts.notification           = await tx.$executeRaw`DELETE FROM "Notification"            WHERE "recipientId" = ${userId}`;
+            counts.userGroup              = await tx.$executeRaw`DELETE FROM "UserGroup"               WHERE "userId" = ${userId}`;
+            counts.userPermissionOverride = await tx.$executeRaw`DELETE FROM "UserPermissionOverride"  WHERE "userId" = ${userId}`;
+            await tx.$executeRaw`DELETE FROM "User" WHERE "id" = ${userId}`;
             counts.user = 1;
         }
 
