@@ -2759,7 +2759,13 @@ export const AdmissionService = {
         const [requests, total] = await Promise.all([
             prisma.courseChangeRequest.findMany({
                 where,
-                include: { student: true } as any,
+                include: {
+                    student: {
+                        include: {
+                            admissionDetails: { select: { batchAcademicYearId: true, academicYearId: true } }
+                        }
+                    }
+                } as any,
                 orderBy: { createdAt: 'desc' },
                 skip,
                 take: limitNum
@@ -2769,38 +2775,49 @@ export const AdmissionService = {
 
         const courseIds = [...new Set(requests.flatMap((r: any) => [r.fromCourse, r.toCourse].filter(Boolean)))];
 
-        const activeYear = await prisma.academicYear.findFirst({
-            where: { isActive: true, isDeleted: false },
-            select: { id: true },
-        });
-
+        // Course names only — capacity is fetched per-student using their batchAcademicYearId
         const courses = await prisma.course.findMany({
             where: { id: { in: courseIds } },
-            select: {
-                id: true,
-                name: true,
-                capacities: activeYear
-                    ? { where: { academicYearId: activeYear.id }, select: { totalSeats: true, filledSeats: true } }
-                    : undefined,
-            }
+            select: { id: true, name: true }
         });
-        const courseMap = Object.fromEntries(courses.map(c => [c.id, {
-            name: c.name,
-            totalSeats:  c.capacities?.[0]?.totalSeats  ?? null,
-            filledSeats: c.capacities?.[0]?.filledSeats ?? null,
-        }]));
+        const courseNameMap = Object.fromEntries(courses.map((c: any) => [c.id, c.name]));
 
-        const data = requests.map((r: any) => {
-            const fromCourse = courseMap[r.fromCourse];
-            const toCourse = courseMap[r.toCourse];
+        // Build unique (courseId, batchAcademicYearId) pairs across all requests
+        const capacityPairs: { courseId: string; academicYearId: string }[] = [];
+        for (const r of requests as any[]) {
+            const batchAyId = r.student?.admissionDetails?.batchAcademicYearId
+                           || r.student?.admissionDetails?.academicYearId;
+            if (batchAyId) {
+                if (r.fromCourse) capacityPairs.push({ courseId: r.fromCourse, academicYearId: batchAyId });
+                if (r.toCourse)   capacityPairs.push({ courseId: r.toCourse,   academicYearId: batchAyId });
+            }
+        }
+
+        const capacityRows = capacityPairs.length > 0
+            ? await prisma.courseCapacity.findMany({
+                where: { OR: capacityPairs },
+                select: { courseId: true, academicYearId: true, totalSeats: true, filledSeats: true }
+              })
+            : [];
+
+        // Map key: "courseId:batchAcademicYearId"
+        const capacityMap = Object.fromEntries(
+            capacityRows.map((c: any) => [`${c.courseId}:${c.academicYearId}`, c])
+        );
+
+        const data = (requests as any[]).map((r: any) => {
+            const batchAyId = r.student?.admissionDetails?.batchAcademicYearId
+                           || r.student?.admissionDetails?.academicYearId;
+            const fromCap = batchAyId ? (capacityMap[`${r.fromCourse}:${batchAyId}`] ?? null) : null;
+            const toCap   = batchAyId ? (capacityMap[`${r.toCourse}:${batchAyId}`]   ?? null) : null;
             return {
                 ...r,
-                fromCourseName: fromCourse?.name || null,
-                toCourseName: toCourse?.name || null,
-                fromCourseFilledSeats: fromCourse?.filledSeats ?? null,
-                fromCourseTotalSeats: fromCourse?.totalSeats ?? null,
-                toCourseFilledSeats: toCourse?.filledSeats ?? null,
-                toCourseTotalSeats: toCourse?.totalSeats ?? null,
+                fromCourseName:       courseNameMap[r.fromCourse] ?? null,
+                toCourseName:         courseNameMap[r.toCourse]   ?? null,
+                fromCourseFilledSeats: fromCap?.filledSeats ?? null,
+                fromCourseTotalSeats:  fromCap?.totalSeats  ?? null,
+                toCourseFilledSeats:   toCap?.filledSeats   ?? null,
+                toCourseTotalSeats:    toCap?.totalSeats    ?? null,
             };
         });
 
