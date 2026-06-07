@@ -244,11 +244,15 @@ export const addAcademicDetails = catchAsync(async (req: Request, res: Response,
 export const getStudentDetails = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getStudentDetails] by=${req.user?.userId || 'anonymous'}`);
 
-    const userId = req.user?.userId;
+    const jwtUserId = req.user?.userId;
 
-    if (!userId) {
+    if (!jwtUserId) {
         throw new AppError(MESSAGES.ERROR.UNAUTHORIZED, 401);
     }
+
+    const hasReadAll = req.user?.permissions?.includes('student.read.all') ?? false;
+    const queryUserId = req.query.userId as string | undefined;
+    const userId = (hasReadAll && queryUserId) ? queryUserId : jwtUserId;
 
     const student = await getStudentByUserIdService(userId);
 
