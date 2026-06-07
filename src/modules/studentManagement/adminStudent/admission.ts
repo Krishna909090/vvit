@@ -18,6 +18,8 @@ import {
     AdmissionEntryType,
     ApplicationMode,
     QuotaType,
+    RetainedRevenueCategory,
+    RetainedRevenueSourceType,
 } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { Role } from '../../../constants/roles';
@@ -42,6 +44,7 @@ import {
     getStudentYearOfStudy,
 } from '../../../utils/studentContext';
 import { sendPaymentReceipt, sendScholarshipUpdateEmail } from '../../../utils/emailService';
+import { recordRetained } from '../../../utils/retainedRevenue';
 
 import { StandardCheckoutClient, StandardCheckoutPayRequest } from 'pg-sdk-node';
 import { InvoiceService } from '../../finance/invoice.service';
@@ -516,6 +519,10 @@ export const AdmissionService = {
 
         const oldCourse = student.admissionDetails.allottedCourse;
 
+        if (student.admissionDetails.allottedCourseId === newCourseId) {
+            throw new AppError('Student is already enrolled in this course. Choose a different course.', 400);
+        }
+
         return await prisma.courseChangeRequest.create({
             data: {
                 studentId,
@@ -560,20 +567,25 @@ export const AdmissionService = {
         }
 
         await prisma.$transaction(async (tx) => {
-            await tx.courseChangeRequest.update({
-                where: { id: requestId },
+            // Atomic status gate — prevents double-approval under concurrent requests
+            const acted = await tx.courseChangeRequest.updateMany({
+                where: { id: requestId, status: { notIn: [RequestStatus.APPROVED, RequestStatus.REJECTED] } },
                 data: updateData
             });
+            if (acted.count === 0) {
+                throw new AppError(`This request has already been actioned by another process.`, 409);
+            }
 
             if (approved) {
                 const admission = await tx.studentAdmission.findUnique({
                     where: { studentId: request.studentId },
-                    select: { academicYearId: true }
+                    select: { academicYearId: true, batchAcademicYearId: true }
                 });
                 if (!admission?.academicYearId) {
                     throw new AppError('Student admission / academic year not found', 404);
                 }
                 const ayId = admission.academicYearId;
+                const batchAyId = admission.batchAcademicYearId || ayId;
 
                 const toCourse = await tx.course.findUnique({ where: { id: request.toCourse } });
                 if (!toCourse) throw new AppError('Target course not found', 404);
@@ -581,11 +593,6 @@ export const AdmissionService = {
                 const SCHOLARSHIP_INELIGIBLE_COURSE_CODES = ['BTECH-CE', 'BTECH-EEE', 'BTECH-ME'];
                 const isScholarshipRevoked = SCHOLARSHIP_INELIGIBLE_COURSE_CODES.includes(toCourse.code || '');
                 const scholarshipRevokeReason = `Scholarship revoked: ${toCourse.code || toCourse.name} is not eligible for scholarship benefits (branch change).`;
-
-                const toCapacity = await getCourseCapacity(tx, request.toCourse, ayId);
-                if (toCapacity.filledSeats >= toCapacity.totalSeats) {
-                    throw new AppError(`Target course "${toCourse.code || toCourse.name}" is fully booked (${toCapacity.filledSeats}/${toCapacity.totalSeats}). Cannot process branch change.`, 400);
-                }
 
                 await tx.studentAdmission.update({
                     where: { studentId: request.studentId },
@@ -599,8 +606,12 @@ export const AdmissionService = {
                     });
                 }
 
-                await decrementCourseCapacity(tx, request.fromCourse, ayId);
-                await incrementCourseCapacity(tx, request.toCourse, ayId);
+                await decrementCourseCapacity(tx, request.fromCourse, batchAyId);
+                // Atomic: only increments if filledSeats < totalSeats — prevents capacity race condition
+                const seatSecured = await tryAtomicIncrementCourseCapacity(tx, request.toCourse, batchAyId);
+                if (!seatSecured) {
+                    throw new AppError(`Target course "${toCourse.code || toCourse.name}" is at full capacity. Cannot process branch change.`, 409);
+                }
 
                 if (isScholarshipRevoked) {
                     await tx.studentScholarship.updateMany({
@@ -634,7 +645,7 @@ export const AdmissionService = {
                 if (!student) return;
 
                 const studentDemands = await tx.studentFeeDemand.findMany({
-                    where: { studentId: request.studentId },
+                    where: { studentId: request.studentId, isDeleted: false },
                     include: {
                         feeHead: true,
                         payments: { where: { status: 'SUCCESS' } }
@@ -651,20 +662,21 @@ export const AdmissionService = {
 
                 const courseChangeYearOfStudy = await getStudentYearOfStudy(request.studentId, tx);
 
+                const feeStructureWhere: any = { courseId: request.toCourse, academicYearId };
+                if (courseChangeYearOfStudy) feeStructureWhere.yearOfStudy = courseChangeYearOfStudy;
+
                 const newCourseStructures = await tx.feeStructure.findMany({
-                    where: {
-                        courseId: request.toCourse,
-                        academicYearId
-                    },
+                    where: feeStructureWhere,
                     include: { feeHead: true }
                 });
 
                 const newCourseHeadIds = new Set(newCourseStructures.map(s => s.feeHeadId));
 
-                const totalPaidAcrossAll = studentDemands.reduce((sum, d) => sum + d.payments.reduce((ps, p) => ps + p.amount, 0), 0);
+                // Hoist scholarship lookup — same student regardless of which fee head we're in
+                const studentScholarship = await tx.studentScholarship.findUnique({ where: { studentId: request.studentId } });
 
                 for (const struct of newCourseStructures) {
-                    const existingDemand = studentDemands.find(d => d.feeHeadId === struct.feeHeadId);
+                    const existingDemand = studentDemands.find(d => d.feeHeadId === struct.feeHeadId && d.yearOfStudy === struct.yearOfStudy);
                     const isTuition = (struct.feeHead?.name || '').toLowerCase().includes('tuition');
 
                     if (existingDemand) {
@@ -674,7 +686,6 @@ export const AdmissionService = {
 
                         let newScholarshipAmt = 0;
                         let newDiscountTotal = existingDemand.discountAmount || 0;
-                        const studentScholarship = isTuition ? await tx.studentScholarship.findUnique({ where: { studentId: request.studentId } }) : null;
                         const scholarshipPct = (isScholarshipRevoked || !studentScholarship?.scholarshipPercentage) ? 0 : studentScholarship.scholarshipPercentage;
                         if (isTuition) {
                             const oldScholarship = existingDemand.scholarshipAmount || 0;
@@ -873,46 +884,6 @@ export const AdmissionService = {
                     }
                 }
 
-                const existingCorrections = await tx.feeCorrection.findMany({
-                    where: {
-                        studentId: request.studentId,
-                        isSettled: false,
-                        type: 'BRANCH_CHANGE_REFUND'
-                    }
-                });
-
-                if (existingCorrections.length > 0) {
-                    const settledIds = existingCorrections.map((c: any) => c.id);
-                    const settledTotal = existingCorrections.reduce((sum: number, c: any) => sum + c.amount, 0);
-
-                    await tx.feeCorrection.updateMany({
-                        where: { id: { in: settledIds } },
-                        data: {
-                            isSettled: true,
-                            settledAt: new Date(),
-                            settledBy: adminId,
-
-                            remarks: `Settled: reversed by new branch change ${request.fromCourse} → ${request.toCourse}`
-                        }
-                    });
-
-                    await tx.studentLedger.create({
-                        data: {
-                            studentId: request.studentId,
-                            type: LedgerTransactionType.DEBIT,
-                            amount: settledTotal,
-                            description: `Previous branch change corrections reversed (${existingCorrections.length} entries, total: ${settledTotal})`,
-                            referenceType: 'FEE_CORRECTION_REVERSAL',
-                            referenceId: requestId,
-                            academicYearId,
-                            yearOfStudy: courseChangeYearOfStudy,
-                            createdBy: adminId
-                        }
-                    });
-
-                    logger.info(`[approveCourseChange] Settled ${existingCorrections.length} previous corrections for student ${request.studentId}. Reversed: ${settledTotal}`);
-                }
-
                 let totalCorrectionAmount = 0;
 
                 const updatedDemands = await tx.studentFeeDemand.findMany({
@@ -924,9 +895,11 @@ export const AdmissionService = {
                 });
 
                 for (const demand of updatedDemands) {
-                    const newFee = demand.amount;
                     const currentPaid = demand.payments.reduce((sum, p) => sum + p.amount, 0);
-                    const excessPaid = currentPaid - newFee;
+                    // Compare cash paid against netAmount (gross fee minus discounts/scholarship).
+                    // Discount and scholarship are not cash — only real payments can be "overpaid".
+                    const netOwed   = demand.netAmount || demand.amount;
+                    const excessPaid = currentPaid - netOwed;
 
                     if (excessPaid > 0 && academicYearId) {
                         const headName = demand.feeHead?.name || demand.feeHeadId || 'Unknown';
@@ -936,11 +909,11 @@ export const AdmissionService = {
                                 studentId: request.studentId,
                                 academicYearId,
                                 amount: excessPaid,
-                                reason: `Branch change refund: ${headName}. Fee: ${newFee}, Paid: ${currentPaid}, Excess: ${excessPaid}`,
+                                reason: `Branch change refund: ${headName}. Net owed: ${netOwed}, Paid: ${currentPaid}, Excess: ${excessPaid}`,
                                 type: 'BRANCH_CHANGE_REFUND',
                                 referenceId: requestId,
                                 referenceType: 'COURSE_CHANGE_REQUEST',
-                                remarks: `Fee head: ${headName}, Fee: ${newFee}, Paid: ${currentPaid}, Refund: ${excessPaid}`,
+                                remarks: `Fee head: ${headName}, Net owed: ${netOwed}, Paid: ${currentPaid}, Refund: ${excessPaid}`,
                                 carryForward: true,
                                 isSettled: false,
                                 createdBy: adminId
@@ -952,7 +925,7 @@ export const AdmissionService = {
                                 studentId: request.studentId,
                                 type: LedgerTransactionType.CREDIT,
                                 amount: excessPaid,
-                                description: `Branch change refund: ${headName}. Paid ${currentPaid} against fee ${newFee}. Carry forward.`,
+                                description: `Branch change refund: ${headName}. Paid ${currentPaid} against net owed ${netOwed}. Carry forward.`,
                                 referenceType: 'FEE_CORRECTION',
                                 referenceId: requestId,
                                 feeHeadId: demand.feeHeadId,
@@ -970,7 +943,8 @@ export const AdmissionService = {
                     logger.info(`[approveCourseChange] FeeCorrections created for student ${request.studentId}. Total refund: ${totalCorrectionAmount}, carryForward: true`);
                 }
 
-                const changeFee = branchChangeFee ?? (request as any).branchChangeFee ?? 0;
+                // Prefer the value passed in this call; fall back to what was just written to updateData (not the pre-tx stale request value)
+                const changeFee = branchChangeFee ?? (updateData.branchChangeFee ?? 0);
                 if (changeFee > 0) {
                     await tx.studentLedger.create({
                         data: {
@@ -986,10 +960,22 @@ export const AdmissionService = {
                         }
                     });
 
-                    logger.info(`[approveCourseChange] Branch change fee ledger DEBIT created for student ${request.studentId}. Amount: ${changeFee}`);
+                    await recordRetained(tx, {
+                        studentId:      request.studentId,
+                        academicYearId,
+                        sourceType:     RetainedRevenueSourceType.MANUAL,
+                        sourceId:       requestId,
+                        occurredAt:     new Date(),
+                        courseId:       request.toCourse,
+                        createdBy:      adminId,
+                        lines: [{ category: RetainedRevenueCategory.COURSE_CHANGE_FEE, amount: changeFee }],
+                        expectedTotal:  changeFee,
+                    });
+
+                    logger.info(`[approveCourseChange] Branch change fee ledger DEBIT + RetainedRevenueLine created for student ${request.studentId}. Amount: ${changeFee}`);
                 }
 
-                logger.info(`[approveCourseChange] Full reconciliation for Student ${student.id} to Course ${request.toCourse}. TotalPaid: ${totalPaidAcrossAll}`);
+                logger.info(`[approveCourseChange] Full reconciliation complete for Student ${student.id} → Course ${request.toCourse}.`);
 
                 await recomputeStudentTotals(request.studentId, tx);
             }
