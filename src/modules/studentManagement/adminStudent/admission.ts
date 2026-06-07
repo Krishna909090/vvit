@@ -577,6 +577,11 @@ export const AdmissionService = {
 
                 const toCourse = await tx.course.findUnique({ where: { id: request.toCourse } });
                 if (!toCourse) throw new AppError('Target course not found', 404);
+
+                const SCHOLARSHIP_INELIGIBLE_COURSE_CODES = ['BTECH-CE', 'BTECH-EEE', 'BTECH-ME'];
+                const isScholarshipRevoked = SCHOLARSHIP_INELIGIBLE_COURSE_CODES.includes(toCourse.code || '');
+                const scholarshipRevokeReason = `Scholarship revoked: ${toCourse.code || toCourse.name} is not eligible for scholarship benefits (branch change).`;
+
                 const toCapacity = await getCourseCapacity(tx, request.toCourse, ayId);
                 if (toCapacity.filledSeats >= toCapacity.totalSeats) {
                     throw new AppError(`Target course "${toCourse.code || toCourse.name}" is fully booked (${toCapacity.filledSeats}/${toCapacity.totalSeats}). Cannot process branch change.`, 400);
@@ -596,6 +601,18 @@ export const AdmissionService = {
 
                 await decrementCourseCapacity(tx, request.fromCourse, ayId);
                 await incrementCourseCapacity(tx, request.toCourse, ayId);
+
+                if (isScholarshipRevoked) {
+                    await tx.studentScholarship.updateMany({
+                        where: { studentId: request.studentId },
+                        data: {
+                            scholarshipPercentage: 0,
+                            isEligible: 'No',
+                            remarks: scholarshipRevokeReason,
+                        }
+                    });
+                    logger.info(`[approveCourseChange] Scholarship zeroed for student ${request.studentId}: target course ${toCourse.code} is ineligible.`);
+                }
 
                 await tx.courseChangeLog.create({
                     data: {
@@ -658,12 +675,12 @@ export const AdmissionService = {
                         let newScholarshipAmt = 0;
                         let newDiscountTotal = existingDemand.discountAmount || 0;
                         const studentScholarship = isTuition ? await tx.studentScholarship.findUnique({ where: { studentId: request.studentId } }) : null;
-                        const scholarshipPct = studentScholarship?.scholarshipPercentage || 0;
+                        const scholarshipPct = (isScholarshipRevoked || !studentScholarship?.scholarshipPercentage) ? 0 : studentScholarship.scholarshipPercentage;
                         if (isTuition) {
                             const oldScholarship = existingDemand.scholarshipAmount || 0;
                             const manualDiscount = Math.max(0, (existingDemand.discountAmount || 0) - oldScholarship);
 
-                            newScholarshipAmt = (newFee * scholarshipPct) / 100;
+                            newScholarshipAmt = (newFee * scholarshipPct) / 100; // 0 when isScholarshipRevoked
                             newDiscountTotal = manualDiscount + newScholarshipAmt;
                         }
 
@@ -678,9 +695,15 @@ export const AdmissionService = {
                                 discountAmount: isTuition ? newDiscountTotal : undefined,
                                 netAmount: newNetAmount,
                                 status: pending <= 0 ? FeeStatus.FULL : (currentPaid > 0 ? FeeStatus.PARTIAL : FeeStatus.PENDING),
-                                remarks: oldFee !== newFee
-                                    ? `Course Change: Fee updated from ${oldFee} to ${newFee}`
-                                    : existingDemand.remarks
+                                remarks: (() => {
+                                    let r = oldFee !== newFee
+                                        ? `Course Change: Fee updated from ${oldFee} to ${newFee}`
+                                        : (existingDemand.remarks || '');
+                                    if (isTuition && isScholarshipRevoked) {
+                                        r = r ? `${r}; ${scholarshipRevokeReason}` : scholarshipRevokeReason;
+                                    }
+                                    return r || null;
+                                })()
                             }
                         });
 
@@ -726,6 +749,15 @@ export const AdmissionService = {
                                         data: {
                                             amount: newScholarshipAmt,
                                             description: `Scholarship adjusted during course change (${studentScholarship?.scholarshipPercentage || 0}%)`,
+                                        }
+                                    });
+                                } else if (isScholarshipRevoked) {
+                                    // Preserve the ledger entry at amount=0 for audit trail
+                                    await tx.studentLedger.update({
+                                        where: { id: existingScholarshipLedger.id },
+                                        data: {
+                                            amount: 0,
+                                            description: scholarshipRevokeReason,
                                         }
                                     });
                                 } else {
