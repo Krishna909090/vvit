@@ -1114,11 +1114,20 @@ export const AdmissionService = {
         if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
         const ALLOWED_PERSONAL_FIELDS = new Set([
-            'name', 'dateOfBirth', 'gender', 'fatherName', 'motherName', 'guardianName',
-            'address', 'city', 'state', 'pincode', 'category', 'subCategory',
+            'name', 'dateOfBirth', 'dob', 'gender', 'fatherName', 'motherName', 'guardianName',
+            'address', 'address2', 'city', 'state', 'pincode', 'country', 'category', 'subCategory',
             'religion', 'nationality', 'profilePhotoUrl',
 
             'email', 'phone', 'aadharNumber',
+
+            // Course preference + degree fields — live directly on the Student
+            // model (schema.prisma lines 241-255). Previously missing from this
+            // allowlist, so the API returned success but silently dropped any
+            // edits to degreeType / pref1 / pref2 / pref3 / address2 / country.
+            // The zod schema (adminValidators.updateStudentPersonalDetailsSchema)
+            // already accepts them, so the front end was correctly sending them
+            // but the service stripped them at the persistence step.
+            'degreeType', 'pref1', 'pref2', 'pref3',
         ]);
         const updateData: Record<string, any> = {};
         for (const key of Object.keys(data)) {
