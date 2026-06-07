@@ -590,8 +590,7 @@ export const AdmissionService = {
                 const toCourse = await tx.course.findUnique({ where: { id: request.toCourse } });
                 if (!toCourse) throw new AppError('Target course not found', 404);
 
-                const SCHOLARSHIP_INELIGIBLE_COURSE_CODES = ['BTECH-CE', 'BTECH-EEE', 'BTECH-ME'];
-                const isScholarshipRevoked = SCHOLARSHIP_INELIGIBLE_COURSE_CODES.includes(toCourse.code || '');
+                const isScholarshipRevoked = toCourse.scholarshipEligible === false;
                 const scholarshipRevokeReason = `Scholarship revoked: ${toCourse.code || toCourse.name} is not eligible for scholarship benefits (branch change).`;
 
                 await tx.studentAdmission.update({

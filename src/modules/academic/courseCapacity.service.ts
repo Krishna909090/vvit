@@ -157,7 +157,7 @@ export const CourseCapacityService = {
         const rows = await prisma.courseCapacity.findMany({
             where,
             include: {
-                course:       { select: { id: true, name: true, code: true, degree: true } },
+                course:       { select: { id: true, name: true, code: true, degree: true, scholarshipEligible: true } },
                 academicYear: { select: { id: true, code: true, isActive: true } },
             },
             orderBy: [
@@ -166,14 +166,18 @@ export const CourseCapacityService = {
             ],
         });
 
-        return rows.map((r: any) => ({ ...r, degreeType: r.course?.degree ?? null }));
+        return rows.map((r: any) => ({
+            ...r,
+            degreeType:          r.course?.degree             ?? null,
+            scholarshipEligible: r.course?.scholarshipEligible ?? true,
+        }));
     },
 
     async getOne(id: string) {
         const row = await prisma.courseCapacity.findUnique({
             where: { id },
             include: {
-                course:       { select: { id: true, name: true, code: true, degree: true } },
+                course:       { select: { id: true, name: true, code: true, degree: true, scholarshipEligible: true } },
                 academicYear: { select: { id: true, code: true, isActive: true } },
             },
         });
