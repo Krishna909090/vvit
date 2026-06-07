@@ -585,6 +585,18 @@ export const applyFeeCorrection = catchAsync(async (req: Request, res: Response,
     sendResponse({ res, statusCode: 200, success: true, message: 'Fee correction transferred to demand', data: result });
 });
 
+export const settleFeeCorrection = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { id } = req.params;
+    const { remarks } = req.body;
+    const adminId = req.user!.userId;
+
+    logger.info(`[settleFeeCorrection] correction=${id} by=${adminId}`);
+
+    const result = await FeeService.settleFeeCorrection(id, { remarks }, adminId);
+
+    sendResponse({ res, statusCode: 200, success: true, message: 'Fee correction settled', data: result });
+});
+
 export const getCancellationMetrics = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { academicYearId, from, to, referenceType } = req.query;
     const result = await FeeService.getCancellationMetrics({

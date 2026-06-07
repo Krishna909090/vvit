@@ -2250,6 +2250,70 @@ export const FeeService = {
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     },
 
+    settleFeeCorrection: async (
+        feeCorrectionId: string,
+        args: { remarks?: string },
+        adminId?: string
+    ) => {
+        if (!feeCorrectionId) throw new AppError('feeCorrectionId is required', 400);
+
+        return prisma.$transaction(async (tx) => {
+            const correction = await tx.feeCorrection.findUnique({ where: { id: feeCorrectionId } });
+            if (!correction)          throw new AppError('Fee correction not found', 404);
+            if (correction.isSettled) throw new AppError('Fee correction is already settled', 400);
+            if (correction.academicYearId) await assertAcademicYearWritable(correction.academicYearId);
+
+            const priorTransfers = await tx.payment.findMany({
+                where: {
+                    studentId: correction.studentId, status: PaymentStatus.SUCCESS, isDeleted: false,
+                    metadata: { path: ['feeCorrectionId'], equals: feeCorrectionId },
+                },
+                select: { amount: true },
+            });
+            const applied    = priorTransfers.reduce((s, p) => s + (p.amount ?? 0), 0);
+            const remaining  = Math.max(0, correction.amount - applied);
+            if (remaining > 0) {
+                throw new AppError(
+                    `Cannot settle — fee correction has ₹${remaining} remaining credit. Apply it to a demand first.`,
+                    400
+                );
+            }
+
+            await tx.feeCorrection.update({
+                where: { id: feeCorrectionId },
+                data: { isSettled: true, settledAt: new Date(), settledBy: adminId, updatedBy: adminId },
+            });
+
+            await tx.auditLog.create({
+                data: {
+                    userId:    adminId,
+                    action:    'FEE_CORRECTION_SETTLED',
+                    entity:    'FeeCorrection',
+                    entityId:  feeCorrectionId,
+                    details: {
+                        studentId:        correction.studentId,
+                        amount:           correction.amount,
+                        retainedAmount:   correction.retainedAmount,
+                        referenceType:    correction.referenceType,
+                        remarks:          args.remarks ?? null,
+                        settledManually:  true,
+                    },
+                },
+            });
+
+            await recomputeStudentTotals(correction.studentId, tx);
+
+            return {
+                feeCorrectionId,
+                isSettled:  true,
+                settledAt:  new Date(),
+                settledBy:  adminId,
+                amount:     correction.amount,
+                remarks:    args.remarks ?? null,
+            };
+        });
+    },
+
     getCancellationMetrics: async (filters: {
         academicYearId?: string;
         from?:           string;

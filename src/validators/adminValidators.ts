@@ -552,6 +552,15 @@ export const applyFeeCorrectionSchema = z.object({
     }),
 });
 
+export const settleFeeCorrectionSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Invalid fee correction ID'),
+    }),
+    body: z.object({
+        remarks: z.string().trim().max(500).optional(),
+    }),
+});
+
 export const createSubjectSchema = z.object({
     body: z.object({
         code:             z.string().min(1).max(32),

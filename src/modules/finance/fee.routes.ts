@@ -14,6 +14,7 @@ import {
     changeAccommodationType,
     getFeeCorrections,
     applyFeeCorrection,
+    settleFeeCorrection,
     getCancellationMetrics
 } from './fee.controller';
 
@@ -22,7 +23,7 @@ import {
     bulkHeadsFeeStructureSchema,
     cloneFeeStructuresSchema,
     createDiscountRequestSchema, updateDiscountRequestSchema, approveDiscountSchema, generateFeeDemandsSchema,
-    generateFeeDemandsBulkSchema, applyFeeCorrectionSchema
+    generateFeeDemandsBulkSchema, applyFeeCorrectionSchema, settleFeeCorrectionSchema
 } from '../../validators/adminValidators';
 import {
     setApplicationFeeSchema, collectFeeSchema, addStudentDiscountSchema, changeAccommodationSchema
@@ -64,7 +65,8 @@ router.get('/fee-corrections', authenticate, authorizePermission('finance.read.a
 
 router.get('/cancellation-metrics', authenticate, authorizePermission('finance.read.all'), getCancellationMetrics);
 
-router.post('/fee-corrections/:id/apply', authenticate, authorizePermission('finance.update.all'), validateRequest(applyFeeCorrectionSchema), applyFeeCorrection);
+router.post('/fee-corrections/:id/apply',  authenticate, authorizePermission('finance.update.all'), validateRequest(applyFeeCorrectionSchema),  applyFeeCorrection);
+router.post('/fee-corrections/:id/settle', authenticate, authorizePermission('finance.update.all'), validateRequest(settleFeeCorrectionSchema), settleFeeCorrection);
 
 router.put('/fee-structure/:id', authenticate, authorizePermission('finance.update.all'), updateFeeStructure);
 
