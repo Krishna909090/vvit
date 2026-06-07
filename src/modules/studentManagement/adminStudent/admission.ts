@@ -811,8 +811,20 @@ export const AdmissionService = {
                     }
                 }
 
+                const ACCOMMODATION_COMPONENTS = new Set<PaymentComponent>([
+                    PaymentComponent.HOSTEL,
+                    PaymentComponent.TRANSPORT,
+                    PaymentComponent.HOSTEL_ACCOMMODATION,
+                    PaymentComponent.HOSTEL_MESS,
+                    PaymentComponent.HOSTEL_LAUNDRY,
+                    PaymentComponent.HOSTEL_REGISTRATION,
+                ]);
+
                 for (const demand of studentDemands) {
                     if (demand.feeHeadId && !newCourseHeadIds.has(demand.feeHeadId)) {
+                        // Hostel/transport demands are not course-specific — leave them untouched
+                        if (demand.feeHead?.component && ACCOMMODATION_COMPONENTS.has(demand.feeHead.component as PaymentComponent)) continue;
+
                         const headName = demand.feeHead?.name || demand.feeHeadId;
                         const paidOnDemand = demand.payments.reduce((sum, p) => sum + p.amount, 0);
 
@@ -894,6 +906,9 @@ export const AdmissionService = {
                 });
 
                 for (const demand of updatedDemands) {
+                    // Accommodation demands are managed independently — never generate corrections here
+                    if (demand.feeHead?.component && ACCOMMODATION_COMPONENTS.has(demand.feeHead.component as PaymentComponent)) continue;
+
                     const currentPaid = demand.payments.reduce((sum, p) => sum + p.amount, 0);
                     // Compare cash paid against netAmount (gross fee minus discounts/scholarship).
                     // Discount and scholarship are not cash — only real payments can be "overpaid".
