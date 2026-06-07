@@ -1330,6 +1330,15 @@ export const purgeStudentByApplicationId = catchAsync(async (req: Request, res: 
     const studentId = student.id;
     const userId    = student.userId;
 
+    // ── 1b. Block purge if the student has any enrollment record ────────────
+    const enrollmentCount = await prisma.studentEnrollment.count({ where: { studentId } });
+    if (enrollmentCount > 0) {
+        throw new AppError(
+            `Cannot purge student ${applicationId}: student has ${enrollmentCount} enrollment record(s). Remove enrollments before purging.`,
+            409,
+        );
+    }
+
     // ── 2. Snapshot financial & identity data before anything is deleted ────
     const [payments, feeDemands, feeCorrections, ledgerEntries, admission, userRecord] = await Promise.all([
         prisma.payment.findMany({ where: { studentId } }),
