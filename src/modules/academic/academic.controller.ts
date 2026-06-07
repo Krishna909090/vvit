@@ -127,9 +127,9 @@ export const getCourseById = catchAsync(async (req: Request, res: Response, next
 
 export const updateCourse = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { name, code, departmentId, omrId } = req.body;
+    const { name, code, departmentId, omrId, scholarshipEligible } = req.body;
 
-    const updatedCourse = await AcademicService.updateCourse(id, name, code, departmentId, req.user?.userId, omrId !== undefined ? Number(omrId) : undefined);
+    const updatedCourse = await AcademicService.updateCourse(id, name, code, departmentId, req.user?.userId, omrId !== undefined ? Number(omrId) : undefined, scholarshipEligible);
     
     sendResponse({ res, statusCode: 200, success: true, message: "Course updated successfully", data: updatedCourse });
 });

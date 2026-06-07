@@ -249,7 +249,7 @@ export const AcademicService = {
         return course;
     },
 
-    async updateCourse(id: string, name: string, code: string, departmentId: string, updatedBy?: string, omrId?: number) {
+    async updateCourse(id: string, name: string, code: string, departmentId: string, updatedBy?: string, omrId?: number, scholarshipEligible?: boolean) {
         const course = await prisma.course.findUnique({ where: { id } });
         if (!course) throw new AppError("Course not found", 404);
 
@@ -257,7 +257,8 @@ export const AcademicService = {
             (name === undefined || course.name === name) &&
             (code === undefined || course.code === code) &&
             (departmentId === undefined || course.departmentId === departmentId) &&
-            (omrId === undefined || course.omrId === omrId)
+            (omrId === undefined || course.omrId === omrId) &&
+            (scholarshipEligible === undefined || course.scholarshipEligible === scholarshipEligible)
         ) {
             throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
         }
@@ -290,6 +291,7 @@ export const AcademicService = {
 
         const updateData: any = { name, code, departmentId, updatedBy };
         if (omrId !== undefined) updateData.omrId = omrId;
+        if (scholarshipEligible !== undefined) updateData.scholarshipEligible = scholarshipEligible;
 
         return await prisma.course.update({
             where: { id },
