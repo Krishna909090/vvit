@@ -1,10 +1,9 @@
-// services/examService.ts
-// Business logic for exam centers, slots, invigilator tokens, and attendance.
+
 
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
-import { AdmissionStatus, Prisma } from '@prisma/client';
+import { AdmissionStatus } from '@prisma/client';
 import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 import Papa from 'papaparse';
@@ -15,24 +14,15 @@ import { generateHallTicketPDF } from '../../utils/pdfGenerator';
 import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import { sendHallTicketEmail } from '../../utils/emailService';
 
-/* -------------------------------------------------------------------------- */
-/*                               HELPER FUNCTIONS                             */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Safely parse a string/Date into a valid Date object and throw 400 on invalid.
- */
 const parseDate = (value: string | Date, fieldName: string): Date => {
     let d: Date;
     if (value instanceof Date) {
         d = value;
     } else {
         const strVal = String(value).trim();
-        // Check if string contains timezone info (Z or +HH:mm or -HH:mm)
+
         const hasTimezone = strVal.toUpperCase().includes('Z') || /[+-]\d{1,2}:?\d{2}$/.test(strVal);
-        
-        // If it looks like a datetime string (has T or space) but no timezone, assume IST (+05:30)
-        // Heuristic: YYYY-MM-DD is 10 chars. Anything longer likely has time.
+
         if (!hasTimezone && strVal.length > 10) { 
             d = new Date(`${strVal}+05:30`);
         } else {
@@ -46,9 +36,6 @@ const parseDate = (value: string | Date, fieldName: string): Date => {
     return d;
 };
 
-/**
- * Ensure a value is a positive integer, or throw 400.
- */
 const assertPositiveInt = (value: any, fieldName: string) => {
     const num = Number(value);
     if (!Number.isInteger(num) || num <= 0) {
@@ -57,17 +44,6 @@ const assertPositiveInt = (value: any, fieldName: string) => {
     return num;
 };
 
-
-
-/**
- * Format time in UTC (HH:mm A) - e.g. "09:00 AM"
- */
-// Helper formatTimeUTC removed as we are standardizing on IST using formatTime from utils
-
-
-/**
- * Transform exam center with examSlots into a UI-friendly structure.
- */
 const transformExamCenterWithSlots = (center: any) => {
     return {
         ...center,
@@ -86,9 +62,6 @@ const transformExamCenterWithSlots = (center: any) => {
     };
 };
 
-/**
- * Transform a single exam slot into a UI-friendly structure (with center name).
- */
 const transformSlot = (slot: any) => ({
     id: slot.id,
     examCenterId: slot.examCenterId,
@@ -101,13 +74,6 @@ const transformSlot = (slot: any) => ({
     endTime: formatTime(slot.endTime),
 });
 
-/* -------------------------------------------------------------------------- */
-/*                               SERVICE METHODS                              */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Create a new exam center with optional capacity and basic duplicates check.
- */
 export const createExamCenter = async (data: any, userId?: string) => {
     const name = data.name?.trim();
     const city = data.city?.trim();
@@ -150,26 +116,11 @@ export const createExamCenter = async (data: any, userId?: string) => {
     return examCenter;
 };
 
-/**
- * Generate one or more time-bound invigilator credentials (tokens).
- */
-
-
-/**
- * Verify invigilator login token based on validity date range.
- */
-
-
-/**
- * Scan student QR code and return student details for admin/invigilator validation.
- * Does NOT mark attendance - that happens in verifyStudentAttendance.
- */
 export const markAttendanceByScan = async (qrHash: string, userId: string) => {
     if (!qrHash || !qrHash.trim()) {
         throw new AppError(MESSAGES.ERROR.QR_HASH_REQUIRED, 400);
     }
 
-    // First, decrypt the QR content (only authorized users can do this)
     let decryptedContent: string;
     try {
         decryptedContent = decrypt(qrHash);
@@ -179,21 +130,18 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
         throw new AppError('Invalid or corrupted QR code', 400);
     }
 
-    // Parse the decrypted content to extract details
-    // Expected format: s={studentId}&c={centerId}&sl={slotId}&h={hash}
     let studentId, centerId, slotId;
     try {
-        // Parse query parameters directly
+
         const params = new URLSearchParams(decryptedContent);
         studentId = params.get('s');
         centerId = params.get('c');
         slotId = params.get('sl');
-        // 'h' is random hash for uniqueness
+
     } catch (e) {
         logger.warn(`[markAttendanceByScan] Failed to parse decrypted QR content: ${decryptedContent}`);
     }
 
-    // Try finding by qrHash exact match first (security)
     const hallTicket = await prisma.hallTicket.findFirst({
         where: { qrHash },
         include: { 
@@ -217,14 +165,12 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
         throw new AppError(MESSAGES.ERROR.INVALID_QR, 400);
     }
 
-    // If we successfully parsed, we can double check consistency
     if (studentId && hallTicket.studentId !== studentId) {
          throw new AppError(MESSAGES.ERROR.INVALID_QR + ' (Student Mismatch)', 400);
     }
 
     const student = hallTicket.student;
 
-    // Validate if the student is actually assigned to this center/slot
     if (centerId && slotId) {
         if (student.examDetails?.examSlotId !== slotId) {
              throw new AppError('Student is not assigned to this slot', 400);
@@ -234,15 +180,13 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
         }
     }
 
-    // Date validation (can be skipped for testing)
     const skipDateValidation = process.env.SKIP_DATE_VALIDATION === 'true';
     
     if (!skipDateValidation) {
         if (student.examDetails?.testDate) {
             const today = new Date();
             const examDate = new Date(student.examDetails.testDate);
-            
-            // Reset times to compare just dates
+
             const todayStr = today.toISOString().split('T')[0];
             const examDateStr = examDate.toISOString().split('T')[0];
 
@@ -263,7 +207,6 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
         logger.warn(`[markAttendanceByScan] Date validation skipped for testing (user=${userId})`);
     }
 
-    // Check if already verified
     const existingRecord = await prisma.attendanceRecord.findFirst({
         where: {
             studentId: student.id,
@@ -275,11 +218,9 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
         throw new AppError('Attendance already verified for this student', 400);
     }
 
-    // Create unverified attendance record (or update if exists)
     const attendanceRecord = await prisma.attendanceRecord.upsert({
         where: {
-            // We need a unique constraint or use findFirst + create/update
-            // For now, let's just create a new record each scan
+
             id: 'dummy-will-create-new'
         },
         create: {
@@ -294,7 +235,7 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
             invigilatorId: userId,
         }
     }).catch(async () => {
-        // If upsert fails (no matching id), just create
+
         return await prisma.attendanceRecord.create({
             data: {
                 studentId: student.id,
@@ -307,8 +248,7 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
     });
 
     logger.info(`QR scanned for student=${student.id} by user=${userId}, awaiting verification`);
-    
-    // Return student details for validation
+
     return {
         attendanceRecordId: attendanceRecord.id,
         student: {
@@ -332,16 +272,11 @@ export const markAttendanceByScan = async (qrHash: string, userId: string) => {
     };
 };
 
-/**
- * Verify and mark student attendance after admin/invigilator validation.
- * Includes strict validations to prevent human error.
- */
 export const verifyStudentAttendance = async (attendanceRecordId: string, userId: string) => {
     if (!attendanceRecordId || !attendanceRecordId.trim()) {
         throw new AppError('Attendance record ID is required', 400);
     }
 
-    // Find the attendance record with full student details including exam slot
     const attendanceRecord = await prisma.attendanceRecord.findUnique({
         where: { id: attendanceRecordId },
         include: {
@@ -366,29 +301,24 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
         throw new AppError('Attendance record not found', 404);
     }
 
-    // Verify the user matches (only the person who scanned can verify)
     if (attendanceRecord.invigilatorId !== userId) {
         throw new AppError('Unauthorized: You can only verify records you scanned', 403);
     }
 
-    // Check if already verified
     if (attendanceRecord.verified) {
         throw new AppError('Attendance already verified', 400);
     }
 
     const student = attendanceRecord.student;
 
-    // STRICT VALIDATION 1: Check if exam already attended
     if (student.examDetails?.examAttended) {
         throw new AppError(MESSAGES.ERROR.ATTENDANCE_ALREADY_MARKED, 400);
     }
 
-    // STRICT VALIDATION 2: Verify student has a valid exam slot assigned
     if (!student.examDetails?.examSlotId) {
         throw new AppError('Student does not have an exam slot assigned', 400);
     }
 
-    // STRICT VALIDATION 3: Verify student admission status is eligible
     const validStatuses: AdmissionStatus[] = [
         AdmissionStatus.ENTRANCE_FEE_PAID,
         AdmissionStatus.EXAM_SCHEDULED
@@ -401,8 +331,6 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
         );
     }
 
-
-    // STRICT VALIDATION 4: Date validation - Exam must be TODAY (unless explicitly skipped for testing)
     const skipDateValidation = process.env.SKIP_DATE_VALIDATION === 'true';
     
     if (!skipDateValidation) {
@@ -410,8 +338,7 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
         const todayStr = today.toISOString().split('T')[0];
         
         let examDateStr: string | null = null;
-        
-        // Check testDate first, then fall back to examSlot.date
+
         if (student.examDetails.testDate) {
             const examDate = new Date(student.examDetails.testDate);
             examDateStr = examDate.toISOString().split('T')[0];
@@ -434,11 +361,9 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
         logger.warn(`[verifyStudentAttendance] Date validation skipped for testing (user=${userId})`);
     }
 
-    // STRICT VALIDATION 5: Verify exam slot is still valid and booking is enabled
     if (student.examDetails.examSlot) {
         const examSlot = student.examDetails.examSlot;
-        
-        // Check if slot exists and is not deleted
+
         const currentSlot = await prisma.examSlot.findUnique({
             where: { id: examSlot.id }
         });
@@ -452,12 +377,10 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
         }
     }
 
-    // STRICT VALIDATION 6: Check scan time validity (attendance record should not be too old)
     const scanTime = new Date(attendanceRecord.scannedAt ?? new Date());
     const now = new Date();
     const hoursSinceScan = (now.getTime() - scanTime.getTime()) / (1000 * 60 * 60);
-    
-    // If scan was more than 24 hours ago, reject verification
+
     if (hoursSinceScan > 24) {
         throw new AppError(
             `Cannot verify: QR code was scanned ${Math.floor(hoursSinceScan)} hours ago. Please scan again.`,
@@ -465,7 +388,6 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
         );
     }
 
-    // All validations passed - Mark attendance as verified and update student records
     await prisma.$transaction([
         prisma.attendanceRecord.update({
             where: { id: attendanceRecordId },
@@ -502,31 +424,24 @@ export const verifyStudentAttendance = async (attendanceRecordId: string, userId
     };
 };
 
-
-/**
- * Mark student attendance manually by admin using Student ID.
- */
 export const markAttendanceManually = async (studentId: string, attended: boolean, adminId: string | undefined) => {
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     if (typeof attended !== 'boolean') throw new AppError(MESSAGES.ERROR.ATTENDED_BOOLEAN, 400);
 
-    // If already in that state, maybe return success but here we just update.
-    
     await prisma.$transaction([
         prisma.studentExam.update({
             where: { studentId },
             data: {
                 examAttended: attended,
-                // updatedBy: adminId - Field not in schema
+
             }
         }),
         prisma.studentAdmission.update({
             where: { studentId },
             data: {
-                // If attended true -> EXAM_ATTENDED
-                // If attended false (unmark) -> Back to HALL_TICKET_GENERATED (assuming)
+
                 status: attended ? AdmissionStatus.EXAM_ATTENDED : AdmissionStatus.EXAM_SCHEDULED,
-                // updatedBy: adminId - Field not in schema
+
             }
         })
     ]);
@@ -534,9 +449,6 @@ export const markAttendanceManually = async (studentId: string, attended: boolea
     logger.info(`[markAttendanceManually] Attendance marked for ${studentId}: ${attended} by ${adminId}`);
 };
 
-/**
- * Update exam score for a single student.
- */
 export const updateStudentExamScore = async (studentId: string, score: number, cutoff: number, adminId: string | undefined) => {
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
     if (score === undefined || cutoff === undefined) {
@@ -554,23 +466,20 @@ export const updateStudentExamScore = async (studentId: string, score: number, c
             }
         });
 
-        // Fetch user application Id to use as hall ticket number
         const student = await tx.student.findUnique({
              where: { id: studentId },
              select: { applicationId: true }
         });
 
-        // Store in AcademicQualification as requested
-        // Required fields: level, board, yearOfPassing
         await tx.academicQualification.create({
             data: {
                 studentId,
                 level: 'VVITAT',
                 gpaOrMarks: score.toString(),
-                board: 'VVIT', // Defaulting as it's required
-                yearOfPassing: new Date().getFullYear().toString(), // Defaulting as it's required
-                hallTicketNumber: student?.applicationId || 'UNKNOWN', // Using Application ID as Hall Ticket Number
-                percentage: Number(score), // Also storing as float for potential querying
+                board: 'VVIT',
+                yearOfPassing: new Date().getFullYear().toString(),
+                hallTicketNumber: student?.applicationId || 'UNKNOWN',
+                percentage: Number(score),
                 createdBy: adminId,
                 updatedBy: adminId
             }
@@ -584,7 +493,7 @@ export const updateStudentExamScore = async (studentId: string, score: number, c
         } else {
              await tx.studentAdmission.update({
                 where: { studentId },
-                data: { status: AdmissionStatus.EXAM_NOT_QUALIFIED } // Blocks progress
+                data: { status: AdmissionStatus.EXAM_NOT_QUALIFIED }
             });
         }
     });
@@ -593,9 +502,6 @@ export const updateStudentExamScore = async (studentId: string, score: number, c
     return { score: Number(score), isQualified };
 };
 
-/**
- * Create a new exam slot in a given center, respecting center capacity.
- */
 export const createExamSlot = async (data: any, userId?: string) => {
     const { examCenterId } = data;
 
@@ -618,18 +524,11 @@ export const createExamSlot = async (data: any, userId?: string) => {
         );
     }
 
-    // Check for Time Overlaps
-    // We fetch all slots for this center on this date to check overlap
-    // Note: 'date' comparison depends on how it's stored (midnight UTC?). 
-    // To be safe, we check slots where `date` is arguably the same day, 
-    // OR just rely on startTime/endTime overlap if those contain full date info.
-    
-    // Assuming startTime/endTime are full DateTime objects:
     const potentialOverlaps = await prisma.examSlot.findMany({
         where: {
             examCenterId,
             isDeleted: false,
-            // Optimization: Only check slots that might overlap in time
+
              startTime: {
                 lt: endTime 
             },
@@ -682,8 +581,7 @@ export const createExamSlot = async (data: any, userId?: string) => {
         }
     });
     logger.info(`Exam slot created: ${slot.id} at ${slot.examCenterId}`);
-    
-    // Return formatted slot data with IST times
+
     return {
         id: slot.id,
         examCenterId: slot.examCenterId,
@@ -699,17 +597,12 @@ export const createExamSlot = async (data: any, userId?: string) => {
     };
 };
 
-
-
-/**
- * Get all future and booking-enabled slots that are not full.
- */
 export const getAvailableSlots = async () => {
-    // 1. Fetch available slots (future date, booking enabled, not deleted)
+
     const slots = await prisma.examSlot.findMany({
         where: {
             date: {
-                gte: new Date(new Date().setHours(0, 0, 0, 0)), // Include today's slots
+                gte: new Date(new Date().setHours(0, 0, 0, 0)),
             },
             isBookingEnabled: true,
             isDeleted: false,
@@ -726,10 +619,8 @@ export const getAvailableSlots = async () => {
         ],
     });
 
-    // 2. Filter out full slots
     const availableSlots = slots.filter((slot: any) => slot.filled < slot.capacity);
 
-    // 3. Group by Exam Center
     const centerMap = new Map();
     availableSlots.forEach((slot: any) => {
         const centerId = slot.examCenterId;
@@ -762,9 +653,6 @@ export const getAvailableSlots = async () => {
     return result;
 };
 
-/**
- * Book an exam slot for a student, generate hall ticket, and update status.
- */
 export const bookExamSlot = async (studentId: string, slotId: string, userId?: string) => {
     if (!studentId || !slotId) {
         throw new AppError(MESSAGES.ERROR.STUDENT_ID_SLOT_ID_REQUIRED, 400);
@@ -775,7 +663,6 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         include: { admissionDetails: true },
     });
     if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
-
 
     const existingExam = await prisma.studentExam.findUnique({
         where: { studentId },
@@ -799,7 +686,6 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             throw new AppError(MESSAGES.ERROR.SLOT_FULL, 400);
         }
 
-        // Check if exam has already started (use startTime, not date)
         const now = new Date();
         const skipDateValidation = process.env.SKIP_DATE_VALIDATION === 'true';
         
@@ -811,7 +697,6 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
                 );
             }
 
-            // Check if exam is within 24 hours (Booking cut-off)
             const oneDayInMs = 24 * 60 * 60 * 1000;
             if (slot.startTime.getTime() - now.getTime() < oneDayInMs) {
                 throw new AppError(
@@ -830,15 +715,10 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         });
 
         const uniqueHash = uuidv4();
-        // Generate QR Content with just the query parameters
-        // Format: s={studentId}&c={centerId}&sl={slotId}&h={randomHash}
-        const plainContent = `s=${studentId}&c=${slot.examCenterId}&sl=${slotId}&h=${uniqueHash}`;
-        
-        // Encrypt the content so only authorized invigilators can decrypt it
-        const encryptedContent = encrypt(plainContent);
 
-        // NOTE: We do NOT generate/upload PDF here to avoid Transaction Timeout (P2028).
-        // S3 uploads can be slow. We will do it AFTER this transaction commits.
+        const plainContent = `s=${studentId}&c=${slot.examCenterId}&sl=${slotId}&h=${uniqueHash}`;
+
+        const encryptedContent = encrypt(plainContent);
 
         await tx.studentExam.upsert({
             where: { studentId },
@@ -855,7 +735,6 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             }
         });
 
-        // Don't downgrade status if already at a higher stage
         const protectedStatuses: AdmissionStatus[] = [
             AdmissionStatus.SEAT_ALLOTTED,
             AdmissionStatus.ADMISSION_CONFIRMED,
@@ -865,6 +744,9 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         const currentAdmission = await tx.studentAdmission.findUnique({ where: { studentId } });
         const shouldUpdateStatus = !currentAdmission || !protectedStatuses.includes(currentAdmission.status as AdmissionStatus);
 
+        const examYear = await tx.academicYear.findFirstOrThrow({
+            where: { isActive: true, isDeleted: false }
+        });
         await tx.studentAdmission.upsert({
             where: { studentId },
             update: {
@@ -872,11 +754,11 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             },
             create: {
                 studentId,
+                academicYearId: examYear.id,
                 status: AdmissionStatus.EXAM_SCHEDULED,
             }
         });
 
-        // Reuse existing hall ticket record if one exists (prevents duplicates on rebook/retry)
         const existingHallTicket = await tx.hallTicket.findFirst({
             where: { studentId },
             orderBy: { generatedAt: 'desc' }
@@ -894,6 +776,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             : await tx.hallTicket.create({
                 data: {
                     studentId,
+                    academicYearId: examYear.id,
                     qrHash: encryptedContent,
                     url: null,
                     createdBy: userId,
@@ -908,24 +791,19 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         };
     });
 
-    // --- NON-TRANSACTIONAL PHASE (Heavy Lifting) ---
-    // Now that slot is secured, we generate the PDF and upload it.
-    // If this fails, the user still has the slot booked, but might need to retry "Get Hall Ticket" to generate it.
-
     let qrCodeImage = '';
     let hallTicketUrl: string | null = null;
     
     try {
         const qrCodeBuffer = await QRCode.toBuffer(result.encryptedContent);
         qrCodeImage = `data:image/png;base64,${qrCodeBuffer.toString('base64')}`;
-        
-        // Generate presigned URL for profile photo if it's an S3 URL
+
         let profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl, 300) || '';
 
         const pdfBuffer = await generateHallTicketPDF({
             studentName: student.name || '',
             applicationId: student.applicationId || '',
-            rollNumber: student.applicationId || '', // Using appId as roll no for now
+            rollNumber: student.applicationId || '',
             fatherName: student.fatherName || '',
             motherName: student.motherName || '',
             examCenterName: result.slot.examCenter.name || '',
@@ -935,31 +813,27 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
             endTime: formatTime(result.slot.endTime) || '',
             profilePhotoUrl: profilePhotoUrl,
             qrCodeBuffer: qrCodeBuffer,
-            session: 'Entrance Exam 2026', // Static or dynamic based on config
+            session: 'Entrance Exam 2026',
             program: student.degreeType || 'B.Tech'
         });
         
         const key = `students/${studentId}/hall_tickets/${slotId}_${Date.now()}.pdf`;
         const rawS3Url = await uploadFileToS3(pdfBuffer, key, 'application/pdf');
 
-        // Update the Hall Ticket record with the URL
-        // Update the Hall Ticket record with the URL
         if (rawS3Url) {
             await prisma.hallTicket.update({
                 where: { id: result.hallTicketId },
                 data: { url: rawS3Url }
             });
 
-            // Generate presigned URL for the response
             try {
-                hallTicketUrl = await getPresignedUrl(key, 3600); // 1 hour validity
+                hallTicketUrl = await getPresignedUrl(key, 3600);
             } catch (err) {
                 logger.warn(`Failed to generate presigned URL after upload: ${err}`);
-                hallTicketUrl = rawS3Url; // Fallback
+                hallTicketUrl = rawS3Url;
             }
         }
-        
-        // Send Hall Ticket Email
+
         if (student.email) {
             try {
                 await sendHallTicketEmail(
@@ -977,21 +851,20 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
                  logger.info(`[bookExamSlot] Hall Ticket email sent to ${student.email}`);
             } catch (emailErr) {
                 logger.error(`[bookExamSlot] Failed to send Hall Ticket email: ${emailErr}`);
-                // Non-blocking
+
             }
         }
 
     } catch (e) {
-// ... existing code ...
+
         logger.error(`[bookExamSlot] Failed to generate/upload PDF for student ${studentId}. Slot is booked but ticket missing URL. Error: ${e}`);
-        // We do NOT throw here, so the booking remains valid. 
-        // The user can later "download hall ticket" which should handle generation on the fly if missing.
+
     }
 
     logger.info(`Exam slot booked: student=${studentId} slot=${slotId}`);
     
     return {
-        // Student Info
+
         studentId,
         name: student.name,
         firstName: student.name.split(' ')[0],
@@ -1000,8 +873,7 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         email: student.email,
         profilePhotoUrl: student.profilePhotoUrl,
         applicationId: student.applicationId,
-        
-        // Exam Slot Info
+
         slotId,
         examCenter: result.slot.examCenter.name,
         examCenterAddress: result.slot.examCenter.address,
@@ -1010,18 +882,14 @@ export const bookExamSlot = async (studentId: string, slotId: string, userId?: s
         examDay: new Date(result.slot.date).toLocaleDateString('en-US', { weekday: 'long' }),
         startTime: formatTime(result.slot.startTime),
         endTime: formatTime(result.slot.endTime),
-        
-        // Hall Ticket Info
+
         hallTicketNumber: result.hallTicketId,
         qrCodeImage,
         qrHash: result.encryptedContent,
-        hallTicketUrl // Can be null if upload failed
+        hallTicketUrl
     };
 };
 
-/**
- * Enable or disable booking for a slot.
- */
 export const toggleSlotBooking = async (
     slotId: string,
     isBookingEnabled: boolean,
@@ -1044,9 +912,6 @@ export const toggleSlotBooking = async (
     return updatedSlot;
 };
 
-/**
- * Fetch all exam centers with their slots formatted for UI.
- */
 export const getExamCenters = async () => {
     logger.info('[getExamCenters] Fetching all exam centers');
     const centers = await prisma.examCenter.findMany({
@@ -1062,9 +927,6 @@ export const getExamCenters = async () => {
     return centers.map(transformExamCenterWithSlots);
 };
 
-/**
- * Update an existing exam center with audit.
- */
 export const updateExamCenter = async (id: string, data: any, userId?: string) => {
     logger.info(`[updateExamCenter] Updating center id=${id}`);
     const center = await prisma.examCenter.findUnique({ where: { id } });
@@ -1081,9 +943,6 @@ export const updateExamCenter = async (id: string, data: any, userId?: string) =
     return updatedCenter;
 };
 
-/**
- * Delete an exam center (assuming no FK constraints prevent it).
- */
 export const deleteExamCenter = async (id: string) => {
     logger.info(`[deleteExamCenter] Deleting center id=${id}`);
     const center = await prisma.examCenter.findUnique({ where: { id } });
@@ -1100,9 +959,6 @@ export const deleteExamCenter = async (id: string) => {
     return result;
 };
 
-/**
- * Fetch all exam slots for admin with their center info.
- */
 export const getExamSlots = async () => {
     logger.info('[getExamSlots] Fetching all exam slots');
     const slots = await prisma.examSlot.findMany({
@@ -1119,9 +975,6 @@ export const getExamSlots = async () => {
     return slots.map(transformSlot);
 };
 
-/**
- * Fetch all slots for a particular exam center.
- */
 export const getExamSlotsByCenter = async (centerId: string) => {
     logger.info(`[getExamSlotsByCenter] Fetching slots for center=${centerId}`);
     const center = await prisma.examCenter.findUnique({
@@ -1145,9 +998,6 @@ export const getExamSlotsByCenter = async (centerId: string) => {
     return transformExamCenterWithSlots(center);
 };
 
-/**
- * Fetch a single exam slot with its center info.
- */
 export const getExamSlot = async (id: string) => {
     const slot = await prisma.examSlot.findUnique({
         where: { id },
@@ -1160,9 +1010,6 @@ export const getExamSlot = async (id: string) => {
     return slot;
 };
 
-/**
- * Update an exam slot, ensuring capacity constraints and audits.
- */
 export const updateExamSlot = async (id: string, data: any, userId?: string) => {
     const slot = await prisma.examSlot.findUnique({ where: { id } });
     if (!slot) throw new AppError(MESSAGES.ERROR.SLOT_NOT_FOUND, 404);
@@ -1208,9 +1055,6 @@ export const updateExamSlot = async (id: string, data: any, userId?: string) => 
     return updatedSlot;
 };
 
-/**
- * Delete an exam slot only if no students are booked.
- */
 export const deleteExamSlot = async (id: string) => {
     logger.info(`[deleteExamSlot] Deleting slot id=${id}`);
     const slot = await prisma.examSlot.findUnique({ where: { id } });
@@ -1234,9 +1078,6 @@ export const deleteExamSlot = async (id: string) => {
     return result;
 };
 
-/**
- * Process bulk exam results from CSV content.
- */
 export const processBulkResults = async (fileContent: string, cutoff: number) => {
     const { data, errors } = Papa.parse(fileContent, { header: true, skipEmptyLines: true });
 
@@ -1244,20 +1085,16 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
 
     const results = [];
     const rows = data as any[];
-    
-    // Extract all applicationIds
+
     const applicationIds = rows.map((row: any) => row.applicationId).filter(Boolean);
-    
-    // Batch fetch all students at once
+
     const students = await prisma.student.findMany({
         where: { applicationId: { in: applicationIds } },
         select: { id: true, applicationId: true }
     });
-    
-    // Create a map for quick lookup
+
     const studentMap = new Map(students.map(s => [s.applicationId, s.id]));
-    
-    // Prepare batch updates
+
     const updatePromises = [];
     
     for (const row of rows) {
@@ -1267,8 +1104,7 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
             
             if (studentId) {
                 const isQualified = Number(score) >= Number(cutoff);
-                
-                // Add to batch update promises
+
                 updatePromises.push(
                     prisma.studentExam.update({
                         where: { studentId },
@@ -1283,8 +1119,7 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
             results.push({ applicationId: row.applicationId, status: 'Failed', message: err.message });
         }
     }
-    
-    // Execute all updates in parallel (in batches of 50 to avoid overwhelming DB)
+
     const BATCH_SIZE = 50;
     for (let i = 0; i < updatePromises.length; i += BATCH_SIZE) {
         const batch = updatePromises.slice(i, i + BATCH_SIZE);
@@ -1297,11 +1132,6 @@ export const processBulkResults = async (fileContent: string, cutoff: number) =>
     return results;
 };
 
-/**
- * Process bulk exam results from JSON array.
- * Accepts: [{ applicationId, score }]
- * Uses upsert so it works even if studentExam doesn't exist yet (e.g. offline students).
- */
 export const processBulkResultsJSON = async (records: { applicationId: string; score: number; status: string }[]) => {
     const results: any[] = [];
 
@@ -1314,7 +1144,6 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
 
     const studentMap = new Map(students.map(s => [s.applicationId, s.id]));
 
-    // Pre-fetch exam records to check attendance
     const studentIds = students.map(s => s.id);
     const examRecords = await prisma.studentExam.findMany({
         where: { studentId: { in: studentIds } },
@@ -1333,7 +1162,6 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
             continue;
         }
 
-        // Only allow score update for students who attended the exam
         if (!examMap.get(studentId)) {
             results.push({ ...row, result: 'Failed', message: 'Student has not attended the exam' });
             continue;
@@ -1356,13 +1184,12 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
         updatePromises.push(
             (async () => {
                 try {
-                    // Update exam score and qualification
+
                     await prisma.studentExam.update({
                         where: { studentId },
                         data: { examScore: numScore, isQualified }
                     });
 
-                    // Create/update VVITAT academic qualification record
                     const existingVvitat = await prisma.academicQualification.findFirst({
                         where: { studentId, level: 'VVITAT' }
                     });
@@ -1401,7 +1228,6 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
         );
     }
 
-    // Execute in batches of 50
     const BATCH_SIZE = 50;
     for (let i = 0; i < updatePromises.length; i += BATCH_SIZE) {
         const batch = updatePromises.slice(i, i + BATCH_SIZE);
@@ -1414,16 +1240,9 @@ export const processBulkResultsJSON = async (records: { applicationId: string; s
     return results;
 };
 
-/**
- * Get students by admission status with progression chain.
- * If status is HALL_TICKET_GENERATED, returns students with HALL_TICKET_GENERATED, TEST_FEE_PAID, and REGISTERED.
- * If status is TEST_FEE_PAID, returns students with TEST_FEE_PAID and REGISTERED.
- * If status is REGISTERED, returns only REGISTERED students.
- */
 export const getStudentsByAdmissionStatus = async (status: AdmissionStatus) => {
     logger.info(`[getStudentsByAdmissionStatus] Fetching students for status=${status}`);
-    
-    // Define the progression chain
+
     const statusChain: AdmissionStatus[] = [];
     
     switch (status) {
@@ -1479,7 +1298,7 @@ export const getStudentsByAdmissionStatus = async (status: AdmissionStatus) => {
             );
             break;
         default:
-            // For REGISTERED or any other status, return only that status
+
             statusChain.push(status);
     }
     
@@ -1540,9 +1359,6 @@ export const getStudentsByAdmissionStatus = async (status: AdmissionStatus) => {
     };
 };
 
-/**
- * Get hall ticket details with generated QR code for a student.
- */
 export const getHallTicketDetails = async (studentId: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
@@ -1583,16 +1399,14 @@ export const getHallTicketDetails = async (studentId: string) => {
         }
     }
 
-    // Convert hall ticket URL to presigned URL
     let hallTicketDownloadUrl = await convertToPresignedUrl(hallTicket.url);
-    
-    // Convert profile photo URL to presigned URL
+
     const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
     const slot = student.examDetails.examSlot;
 
     return {
-        // Student Info
+
         studentId,
         name: student.name,
         firstName: student.name.split(' ')[0],
@@ -1601,8 +1415,7 @@ export const getHallTicketDetails = async (studentId: string) => {
         email: student.email,
         profilePhotoUrl,
         applicationId: student.applicationId,
-        
-        // Exam Slot Info
+
         slotId: slot.id,
         examCenter: slot.examCenter.name,
         examCenterAddress: slot.examCenter.address,
@@ -1611,8 +1424,7 @@ export const getHallTicketDetails = async (studentId: string) => {
         examDay: new Date(slot.date).toLocaleDateString('en-US', { weekday: 'long' }),
         startTime: formatTime(slot.startTime),
         endTime: formatTime(slot.endTime),
-        
-        // Hall Ticket Info
+
         hallTicketNumber: hallTicket.id,
         qrCodeImage,
         qrHash: hallTicket.qrHash,
@@ -1620,16 +1432,11 @@ export const getHallTicketDetails = async (studentId: string) => {
     };
 };
 
-/**
- * Manually scan student by Application ID and return details for validation.
- * Similar to markAttendanceByScan but uses manual input.
- */
 export const markAttendanceByApplicationId = async (applicationId: string, userId: string) => {
     if (!applicationId || !applicationId.trim()) {
         throw new AppError('Application ID is required', 400);
     }
 
-    // Find student by applicationId
     const student = await prisma.student.findUnique({
         where: { applicationId },
         include: {
@@ -1649,12 +1456,10 @@ export const markAttendanceByApplicationId = async (applicationId: string, userI
         throw new AppError('Student not found with this Application ID', 404);
     }
 
-    // Validate if student has exam details
     if (!student.examDetails || !student.examDetails.examSlot) {
          throw new AppError('Student does not have an assigned exam slot', 400);
     }
 
-    // Date validation
     const skipDateValidation = process.env.SKIP_DATE_VALIDATION === 'true';
     
     if (!skipDateValidation) {
@@ -1682,7 +1487,6 @@ export const markAttendanceByApplicationId = async (applicationId: string, userI
         logger.warn(`[markAttendanceByApplicationId] Date validation skipped for testing (user=${userId})`);
     }
 
-    // Check if already verified
     const existingRecord = await prisma.attendanceRecord.findFirst({
         where: {
             studentId: student.id,
@@ -1694,8 +1498,6 @@ export const markAttendanceByApplicationId = async (applicationId: string, userI
         throw new AppError('Attendance already verified for this student', 400);
     }
 
-    // Create unverified attendance record (or update if exists)
-    // For manual scan, we can reuse the same logic
     const attendanceRecord = await prisma.attendanceRecord.create({
         data: {
             studentId: student.id,
@@ -1707,8 +1509,7 @@ export const markAttendanceByApplicationId = async (applicationId: string, userI
     });
 
     logger.info(`Manual ApplicationId scan for student=${student.id} by user=${userId}`);
-    
-    // Return student details for validation (Must match markAttendanceByScan return structure)
+
     return {
         attendanceRecordId: attendanceRecord.id,
         student: {

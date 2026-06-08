@@ -2,7 +2,6 @@ import winston from 'winston';
 import DailyRotateFile from 'winston-daily-rotate-file';
 import { getCorrelationId, getContext } from './requestContext';
 
-// Human-readable format for local console
 const consoleFormat = winston.format.combine(
     winston.format.colorize(),
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
@@ -15,7 +14,6 @@ const consoleFormat = winston.format.combine(
     })
 );
 
-// JSON format for CloudWatch — one log entry per line, fully queryable via Insights
 const cloudWatchFormat = winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
@@ -39,11 +37,11 @@ const cloudWatchFormat = winston.format.combine(
 
 const logger = winston.createLogger({
     transports: [
-        // Console — colourised plain text for local dev
+
         new winston.transports.Console({
             format: consoleFormat
         }),
-        // File (→ CloudWatch agent) — one JSON object per line
+
         new DailyRotateFile({
             filename: 'logs/erp/application-%DATE%.log',
             datePattern: 'YYYY-MM-DD',
@@ -52,7 +50,7 @@ const logger = winston.createLogger({
             maxFiles: '14d',
             format: cloudWatchFormat
         }),
-        // Separate error-only file for quick error triage
+
         new DailyRotateFile({
             filename: 'logs/erp/error-%DATE%.log',
             datePattern: 'YYYY-MM-DD',
@@ -65,13 +63,6 @@ const logger = winston.createLogger({
     ],
 });
 
-/**
- * Structured logger helper for module-specific logging.
- * Usage:
- *   const log = createModuleLogger('PAYMENT');
- *   log.info('INITIATE', 'Student=xyz amount=50000');
- *   log.error('FAILED', 'PhonePe timeout', { txnId: 'TXN_123' });
- */
 export const createModuleLogger = (moduleName: string) => ({
     info: (action: string, message: string, meta?: Record<string, any>) => {
         logger.info(message, { module: moduleName, action, ...meta });

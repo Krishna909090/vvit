@@ -2,24 +2,14 @@
 import { getDatabaseSecret } from '../../config/awsConfig';
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
-import { AppError } from '../../utils/AppError';
 import axios from 'axios';
 
-// BSNL OTP API
 const BSNL_SECRET_NAME = 'BsnlToken';
 const BSNL_API_URL = 'https://bulksms.bsnl.in:5010/api/Send_SMS';
 
-/**
- * Sends OTP via BSNL SMS API.
- * 
- * @param phone - Recipient phone number
- * @param otp - One Time Password
- * @param expiry - Expiry time in minutes (default "10")
- * @returns boolean - true if sent successfully, false otherwise
- */
 export const sendBsnlOtp = async (phone: string, otp: string, expiry: string = "10") => {
     try {
-        // 1. Fetch Token from AWS Secrets Manager
+
         let token: string | undefined;
         try {
             const secretData = await getDatabaseSecret(BSNL_SECRET_NAME);
@@ -40,7 +30,6 @@ export const sendBsnlOtp = async (phone: string, otp: string, expiry: string = "
             return false;
         }
 
-        // 2. Fetch Configuration from DB
         const configKeys = ['SMS_HEADER', 'SMS_ENTITY_ID', 'SMS_CONTENT_TEMPLATE_ID'];
         const configs = await prisma.configuration.findMany({
           where: {
@@ -58,14 +47,12 @@ export const sendBsnlOtp = async (phone: string, otp: string, expiry: string = "
           return acc;
         }, {} as Record<string, string>);
 
-        // Validate required configurations
         const missingConfigs = configKeys.filter(key => !configMap[key]);
         if (missingConfigs.length > 0) {
-            logger.error(`Missing SMS configurations: ${missingConfigs.join(', ')}`); // Log matches exactly what user saw
+            logger.error(`Missing SMS configurations: ${missingConfigs.join(', ')}`);
             return false;
         }
 
-        // 3. Construct Payload
         const payload = {
           "Header": configMap['SMS_HEADER'],
           "Target": phone,
@@ -81,7 +68,6 @@ export const sendBsnlOtp = async (phone: string, otp: string, expiry: string = "
           ]
         };
 
-        // 4. Send API Request
         logger.info(`[BSNL SMS] Sending OTP to ${phone}`);
         const response = await axios.post(BSNL_API_URL, payload, {
           headers: {
@@ -102,19 +88,16 @@ export const sendBsnlOtp = async (phone: string, otp: string, expiry: string = "
     }
 };
 
-// Mock Aadhar Verification API
 export const verifyAadhar = async (aadharNumber: string) => {
-    // In real implementation this would call UIDAI; here we mock and return boolean.
+
     logger.info(`[Mock Aadhar] Verifying ${aadharNumber}`);
 
-    // Simulate valid if length is 12
     if (aadharNumber.length !== 12) {
         return false;
     }
     return true;
 };
 
-// ZeptoMail (Zoho) Email API
 export const sendZeptoEmail = async (email: string, subject: string, content: string) => {
     logger.info(`[ZeptoMail] Sending email to ${email}`);
     try {

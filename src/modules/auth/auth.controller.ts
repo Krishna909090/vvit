@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import * as authService from './auth.service';
 import logger from '../../utils/logger';
@@ -10,9 +10,6 @@ import { sendResponse } from '../../utils/response';
 import { maskPhone, maskEmail } from '../../utils/mask';
 import { invalidatePermissionCache } from '../../middleware/rbac.middleware';
 
-
-// Controller: Validates request data, triggers OTP verification, and sends auth response.
-// Controller: Handles OTP send request from client and delegates to AuthService.
 export const sendOtp = catchAsync(async (req: Request, res: Response) => {
   const { phone, email } = req.body;
 
@@ -31,10 +28,7 @@ export const sendOtp = catchAsync(async (req: Request, res: Response) => {
     `[sendOtp] success: phone=${maskPhone(phone)}, email=${maskEmail(email)}`
   );
 
-  // Security: Do not expose OTP in response unless in DEV environment
-  if (process.env.NODE_ENV !== 'dev' && process.env.NODE_ENV !== 'development') {
-      delete (result as any).otp;
-  }
+  if (process.env.NODE_ENV !== 'development') delete (result as any).otp;
 
   sendResponse({
     res,
@@ -44,9 +38,6 @@ export const sendOtp = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
-
-
-// Controller: Validates request data, triggers OTP verification, and sends auth response.
 export const verifyOtp = catchAsync(async (req: Request, res: Response) => {
   logger.info('[verifyOtp] attempt');
 
@@ -91,7 +82,7 @@ export const login = catchAsync(async (req: Request, res: Response) => {
 
 export const generateAadhaarOtp = catchAsync(async (req: Request, res: Response) => {
   const { id_number } = req.body;
-  logger.info(`[generateAadhaarOtp] request for id_number=${id_number}`);
+  logger.info(`[generateAadhaarOtp] request for id_number=[REDACTED]`);
 
   const result = await authService.generateAadhaarOtp(id_number);
 
@@ -123,13 +114,13 @@ export const logout = catchAsync(async (req: Request, res: Response) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) throw new AppError('No token provided', 400);
 
-    // Decode to get expiry time (don't verify — might be expired already)
     const decoded = jwt.decode(token) as { exp?: number, userId?: string };
-    const expiresAt = decoded?.exp ? decoded.exp * 1000 : Date.now() + 4 * 60 * 60 * 1000;
+    const maxExp = Math.floor(Date.now() / 1000) + 86400;
+    const clampedExp = decoded?.exp && decoded.exp > maxExp ? maxExp : decoded?.exp;
+    const expiresAt = clampedExp ? clampedExp * 1000 : Date.now() + 4 * 60 * 60 * 1000;
 
     authService.blacklistToken(token, expiresAt);
 
-    // Clear permission cache for this user
     if (decoded?.userId) {
         invalidatePermissionCache(decoded.userId);
     }

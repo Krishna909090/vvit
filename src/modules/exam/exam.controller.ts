@@ -1,11 +1,9 @@
-// controllers/examController.ts
-// Express controllers for related APIs, using services for business logic.
+
 
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../../config/prisma';
 import * as examService from './exam.service';
 import logger from '../../utils/logger';
-import jwt from 'jsonwebtoken';
 import { AdmissionStatus } from '@prisma/client';
 import { Role } from '../../constants/roles';
 import { catchAsync } from '../../utils/catchAsync';
@@ -14,18 +12,6 @@ import { sendResponse } from '../../utils/response';
 import { MESSAGES } from '../../constants/messages';
 import fs from 'fs';
 
-// JWT_SECRET is validated on startup by envValidator - no fallback needed
-const JWT_SECRET = process.env.JWT_SECRET!;
-
-/* -------------------------------------------------------------------------- */
-/*                               CONTROLLER APIS                              */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Controller: Create a new exam center.
- * Route: POST /exam/centers
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const createExamCenter = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[createExamCenter] request by=${req.user?.userId || 'anonymous'}`);
@@ -43,13 +29,6 @@ export const createExamCenter = catchAsync(
     }
 );
 
-
-
-/**
- * Controller: Scan QR code and return student details for validation.
- * Route: POST /exam/attendance/scan
- * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR
- */
 export const scanAttendance = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         const userId = req.user?.userId;
@@ -65,7 +44,6 @@ export const scanAttendance = catchAsync(
         try {
             const result = await examService.markAttendanceByScan(qrHash, userId);
 
-            // Audit log successful scan
             const { logAttendanceOperation, AuditAction } = await import('../../utils/auditLogger');
             await logAttendanceOperation(
                 AuditAction.ATTENDANCE_SCANNED,
@@ -89,7 +67,7 @@ export const scanAttendance = catchAsync(
                 data: result,
             });
         } catch (error: any) {
-            // Audit log failed scan
+
             const { logSecurityEvent, AuditAction } = await import('../../utils/auditLogger');
             await logSecurityEvent(
                 AuditAction.SUSPICIOUS_ACTIVITY,
@@ -101,11 +79,6 @@ export const scanAttendance = catchAsync(
     }
 );
 
-/**
- * Controller: Manual scan by Application ID and return student details for validation.
- * Route: POST /exam/attendance/manual-scan
- * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR
- */
 export const manualScan = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         const userId = req.user?.userId;
@@ -121,7 +94,6 @@ export const manualScan = catchAsync(
         try {
             const result = await examService.markAttendanceByApplicationId(applicationId, userId);
 
-            // Audit log successful scan
             const { logAttendanceOperation, AuditAction } = await import('../../utils/auditLogger');
             await logAttendanceOperation(
                 AuditAction.ATTENDANCE_SCANNED,
@@ -146,7 +118,7 @@ export const manualScan = catchAsync(
                 data: result,
             });
         } catch (error: any) {
-            // Audit log failed scan
+
             const { logSecurityEvent, AuditAction } = await import('../../utils/auditLogger');
             await logSecurityEvent(
                 AuditAction.SUSPICIOUS_ACTIVITY,
@@ -158,11 +130,6 @@ export const manualScan = catchAsync(
     }
 );
 
-/**
- * Controller: Verify and mark student attendance after validation.
- * Route: POST /exam/attendance/verify
- * Roles: ADMIN, SUPER_ADMIN, INVIGILATOR
- */
 export const verifyAttendance = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         const userId = req.user?.userId;
@@ -178,7 +145,6 @@ export const verifyAttendance = catchAsync(
         try {
             const result = await examService.verifyStudentAttendance(attendanceRecordId, userId);
 
-            // Audit log successful verification
             const { logAttendanceOperation, AuditAction } = await import('../../utils/auditLogger');
             await logAttendanceOperation(
                 AuditAction.ATTENDANCE_VERIFIED,
@@ -203,7 +169,7 @@ export const verifyAttendance = catchAsync(
                 data: result,
             });
         } catch (error: any) {
-            // Audit log failed verification
+
             const { logSecurityEvent, AuditAction } = await import('../../utils/auditLogger');
             await logSecurityEvent(
                 AuditAction.ATTENDANCE_REJECTED,
@@ -215,12 +181,6 @@ export const verifyAttendance = catchAsync(
     }
 );
 
-
-/**
- * Controller: Create a new exam slot for a center.
- * Route: POST /exam/slots
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const createExamSlot = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[createExamSlot] by=${req.user?.userId || 'anonymous'}`);
@@ -237,11 +197,6 @@ export const createExamSlot = catchAsync(
     }
 );
 
-/**
- * Controller: Get available exam slots (future & booking-enabled & not full).
- * Route: GET /exam/slots/available
- * Roles: typically STUDENT
- */
 export const getAvailableSlots = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[getAvailableSlots] by=${req.user?.userId || 'anonymous'}`);
@@ -255,19 +210,12 @@ export const getAvailableSlots = catchAsync(
     }
 );
 
-/**
- * Controller: Book an exam slot for a specific student.
- * Route: POST /book-slot
- * Body: { slotId, studentId? }
- * Roles: STUDENT (or ADMIN)
- */
 export const bookExamSlot = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[bookExamSlot] by=${req.user?.userId || 'anonymous'}`);
         const { slotId, studentId: bodyStudentId } = req.body;
         let studentId = bodyStudentId;
 
-        // If no studentId provided, try to find from logged in user (Student Role)
         if (!studentId && req.user?.role === Role.STUDENT) {
             const student = await prisma.student.findUnique({
                  where: { userId: req.user.userId }
@@ -287,11 +235,6 @@ export const bookExamSlot = catchAsync(
     }
 );
 
-/**
- * Controller: Toggle booking status (enable/disable) for an exam slot.
- * Route: PATCH /exam/slots/:slotId/booking
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const toggleSlotBooking = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[toggleSlotBooking] by=${req.user?.userId || 'anonymous'}`);
@@ -313,11 +256,6 @@ export const toggleSlotBooking = catchAsync(
     }
 );
 
-/**
- * Controller: Fetch all exam centers (with slots).
- * Route: GET /exam/centers
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const getExamCenters = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[getExamCenters] by=${req.user?.userId || 'anonymous'}`);
@@ -332,11 +270,6 @@ export const getExamCenters = catchAsync(
     }
 );
 
-/**
- * Controller: Update an exam center.
- * Route: PUT /exam/centers/:id
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const updateExamCenter = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[updateExamCenter] by=${req.user?.userId || 'anonymous'}`);
@@ -352,11 +285,6 @@ export const updateExamCenter = catchAsync(
     }
 );
 
-/**
- * Controller: Delete an exam center.
- * Route: DELETE /exam/centers/:id
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const deleteExamCenter = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[deleteExamCenter] by=${req.user?.userId || 'anonymous'}`);
@@ -371,11 +299,6 @@ export const deleteExamCenter = catchAsync(
     }
 );
 
-/**
- * Controller: Fetch all exam slots (for admin management UI).
- * Route: GET /exam/slots
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const getExamSlots = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[getExamSlots] by=${req.user?.userId || 'anonymous'}`);
@@ -390,11 +313,6 @@ export const getExamSlots = catchAsync(
     }
 );
 
-/**
- * Controller: Fetch slots for a particular center.
- * Route: GET /exam/centers/:centerId/slots
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const getExamSlotsByCenter = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[getExamSlotsByCenter] by=${req.user?.userId || 'anonymous'}`);
@@ -410,11 +328,6 @@ export const getExamSlotsByCenter = catchAsync(
     }
 );
 
-/**
- * Controller: Fetch a single exam slot.
- * Route: GET /exam/slots/:id
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const getExamSlot = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[getExamSlot] by=${req.user?.userId || 'anonymous'}`);
@@ -430,11 +343,6 @@ export const getExamSlot = catchAsync(
     }
 );
 
-/**
- * Controller: Update a slot's timing/capacity/status.
- * Route: PUT /exam/slots/:id
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const updateExamSlot = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[updateExamSlot] by=${req.user?.userId || 'anonymous'}`);
@@ -450,11 +358,6 @@ export const updateExamSlot = catchAsync(
     }
 );
 
-/**
- * Controller: Delete an exam slot (only if not booked).
- * Route: DELETE /exam/slots/:id
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const deleteExamSlot = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[deleteExamSlot] by=${req.user?.userId || 'anonymous'}`);
@@ -469,17 +372,11 @@ export const deleteExamSlot = catchAsync(
     }
 );
 
-/**
- * Controller: Get students by admission status.
- * Route: GET /exam/students/status/:status
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const getStudentsByStatus = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[getStudentsByStatus] by=${req.user?.userId || 'anonymous'}`);
         const { status } = req.params;
-        
-        // Validate status enum
+
         if (!Object.values(AdmissionStatus).includes(status as any)) {
             throw new AppError(`Invalid status. Allowed: ${Object.values(AdmissionStatus).join(', ')}`, 400);
         }
@@ -495,19 +392,13 @@ export const getStudentsByStatus = catchAsync(
     }
 );
 
-/**
- * Controller: Get hall ticket details with QR code.
- * Route: GET /exam/hall-ticket/:studentId
- * Roles: STUDENT, ADMIN, SUPER_ADMIN
- */
 export const getHallTicketDetails = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[getHallTicketDetails] by=${req.user?.userId || 'anonymous'}`);
         const { studentId } = req.params;
 
-        // Security check: Students can only view their own hall ticket
         if (req.user?.role === Role.STUDENT) {
-            // Find student profile to verify ID
+
             const student = await prisma.student.findUnique({
                 where: { userId: req.user.userId }
             });
@@ -528,11 +419,6 @@ export const getHallTicketDetails = catchAsync(
     }
 );
 
-/**
- * Controller: Mark exam attendance manually (Admin Override/Backup).
- * Route: POST /exam/mark-attendance
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const markAttendance = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[markAttendance] by=${req.user?.userId || 'anonymous'}`);
     logger.debug && logger.debug(`[markAttendance] payload=${JSON.stringify(req.body)}`);
@@ -549,11 +435,6 @@ export const markAttendance = catchAsync(async (req: Request, res: Response, nex
     });
 });
 
-/**
- * Controller: Update Exam Score for a student.
- * Route: POST /exam/update-score
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const updateExamScore = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateExamScore] by=${req.user?.userId || 'anonymous'}`);
     
@@ -570,11 +451,6 @@ export const updateExamScore = catchAsync(async (req: Request, res: Response, ne
     });
 });
 
-/**
- * Controller: Bulk Upload Exam Results (CSV).
- * Route: POST /exam/upload-results
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const uploadBulkResults = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     if (!req.file) throw new AppError(MESSAGES.ERROR.NO_FILE_UPLOADED, 400);
     const { cutoff } = req.body;
@@ -583,8 +459,7 @@ export const uploadBulkResults = catchAsync(async (req: Request, res: Response, 
     
     try {
         const results = await examService.processBulkResults(fileContent, cutoff);
-        
-        // Calculate summary
+
         const successCount = results.filter((r: any) => r.status === 'Success').length;
         const failedCount = results.filter((r: any) => r.status === 'Failed').length;
         const failedRecords = results.filter((r: any) => r.status === 'Failed');
@@ -609,10 +484,6 @@ export const uploadBulkResults = catchAsync(async (req: Request, res: Response, 
     }
 });
 
-/**
- * Controller: Bulk Upload Exam Results (JSON array).
- * Route: POST /exam/results/bulk-json
- */
 export const uploadBulkResultsJSON = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const records = req.body?.records;
 

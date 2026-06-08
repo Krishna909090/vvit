@@ -22,7 +22,7 @@ export interface ApplicationSummaryData {
   pref3?: string;
   profilePhotoUrl?: string;
   qualifications: {
-    level: string; // e.g. SSC, INTERMEDIATE
+    level: string;
     institution: string;
     board: string;
     yearOfPassing: string;
@@ -54,19 +54,16 @@ export const generateApplicationSummaryPDF = async (data: ApplicationSummaryData
       doc.on('end', () => resolve(Buffer.concat(buffers)));
       doc.on('error', reject);
 
-      // --- Header ---
       drawHeader(doc, profilePhotoBuffer);
       
-      const startY = 90; // Moved up
+      const startY = 90;
       let currentY = startY;
 
-      // --- Title ---
       doc.font('Helvetica-Bold').fontSize(16).fillColor('#C0392B')
          .text('ADMISSION APPLICATION SUMMARY', 0, currentY, { align: 'center' });
       
       currentY += 30;
 
-      // --- Personal Details ---
       doc.font('Helvetica-Bold').fontSize(12).fillColor('#34495e').text('Personal Details', 40, currentY);
       currentY += 15;
 
@@ -85,7 +82,6 @@ export const generateApplicationSummaryPDF = async (data: ApplicationSummaryData
       currentY = drawKeyValueTable(doc, currentY, personalRows);
       currentY += 20;
 
-      // --- Course Preferences ---
       doc.font('Helvetica-Bold').fontSize(12).fillColor('#34495e').text('Course Preferences', 40, currentY);
       currentY += 15;
 
@@ -99,16 +95,13 @@ export const generateApplicationSummaryPDF = async (data: ApplicationSummaryData
       currentY = drawKeyValueTable(doc, currentY, prefRows);
       currentY += 20;
 
-      // --- Qualifications ---
       doc.font('Helvetica-Bold').fontSize(12).fillColor('#34495e').text('Academic Qualifications', 40, currentY);
       currentY += 15;
 
-      // Table Header
       drawTable(doc, currentY, headers, data.qualifications);
 
-      // --- Footer ---
       doc.page.margins.bottom = 0;
-      doc.text('', 0, 750); // Move to bottom
+      doc.text('', 0, 750);
       doc.font('Helvetica').fontSize(8).fillColor('#7f8c8d')
          .text('This is a system generated summary.', 0, 780, { align: 'center', width: doc.page.width });
 
@@ -133,46 +126,37 @@ function drawKeyValueTable(doc: PDFKit.PDFDocument, startY: number, rows: {key: 
     const col1X = 45;
     const col2X = 200;
     const cellPadding = 5;
-    const valueWidth = 340; // Width available for Value column
+    const valueWidth = 340;
     
-    doc.font('Helvetica').fontSize(10); // Set font for measurement
+    doc.font('Helvetica').fontSize(10);
 
     rows.forEach((row, i) => {
-        // Measure height of value text
+
         const valueHeight = doc.heightOfString(row.value, { width: valueWidth });
-        // Use at least 20, but more if text wraps, plus padding
-        // If key is ADDRESS, force extra spacing if needed, but dynamic height is better
+
         let rowHeight = Math.max(20, valueHeight + (cellPadding * 2));
-        
-        // Specific tweak: if the Key is 'Address', ensure minimum 3 lines height (~45-60px) if user requested "3 line space" visually, 
-        // OR just let dynamic height handle it if the address IS long. 
-        // The user asked "at least 3 line space because address is bigger". 
+
         if (row.key === 'Address') {
            rowHeight = Math.max(rowHeight, 60); 
         }
 
-        // Draw Background
         if (i % 2 === 0) {
             doc.fillColor('#f9f9f9').rect(40, y, 520, rowHeight).fill();
         }
-        doc.fillColor('#000'); // Reset to black
+        doc.fillColor('#000');
 
-        // Draw Key
         doc.font('Helvetica-Bold').text(row.key, col1X, y + cellPadding);
 
-        // Draw Value (Multiline supported with width)
         doc.font('Helvetica').text(row.value, col2X, y + cellPadding, {
             width: valueWidth,
             align: 'left'
         });
         
         y += rowHeight;
-        
-        // Draw bottom border for this row
+
         doc.strokeColor('#e0e0e0').moveTo(40, y).lineTo(560, y).stroke();
     });
 
-    // Outer Border for the whole table
     doc.rect(40, startY, 520, y - startY).strokeColor('#ccc').stroke();
 
     return y;
@@ -180,8 +164,7 @@ function drawKeyValueTable(doc: PDFKit.PDFDocument, startY: number, rows: {key: 
 
 function drawTable(doc: PDFKit.PDFDocument, startY: number, headers: any[], rows: any[]) {
     let y = startY;
-    
-    // Draw Header
+
     doc.fillColor('#f2f2f2').rect(40, y, 520, 20).fill();
     doc.fillColor('#000').font('Helvetica-Bold').fontSize(9);
     
@@ -192,11 +175,10 @@ function drawTable(doc: PDFKit.PDFDocument, startY: number, headers: any[], rows
     });
 
     y += 20;
-    
-    // Draw Rows
+
     doc.font('Helvetica').fontSize(9);
     rows.forEach((row, i) => {
-        // Striping
+
         if (i % 2 === 1) doc.fillColor('#f9f9f9').rect(40, y, 520, 20).fill();
         doc.fillColor('#000');
 
@@ -211,30 +193,26 @@ function drawTable(doc: PDFKit.PDFDocument, startY: number, headers: any[], rows
         y += 20;
     });
 
-    // Border
     doc.rect(40, startY, 520, y - startY).strokeColor('#ccc').stroke();
 }
 
 function drawHeader(doc: PDFKit.PDFDocument, photoBuffer: Buffer | null = null) {
   const logoPath = path.join(process.cwd(), 'src/assets/logo.png');
 
-  // University name
   doc.font('Helvetica-Bold').fontSize(14).fillColor('#C0392B')
     .text('VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY', 0, 30, { 
         align: 'center',
         width: doc.page.width 
     });
 
-  // Address
   doc.font('Helvetica').fontSize(9).fillColor('#555')
     .text('Uppalapadu Road, Nambur, Pedakakani Mandal, Guntur, Andhra Pradesh – 522508', 0, 50, { align: 'center' });
 
   if (fs.existsSync(logoPath)) {
-    // Moved Logo Down
+
     doc.image(logoPath, 40, 55, { width: 60 });
   }
 
-  // Profile Photo
   if (photoBuffer) {
       try {
           doc.image(photoBuffer, doc.page.width - 40 - 100, 30, { 
@@ -244,7 +222,7 @@ function drawHeader(doc: PDFKit.PDFDocument, photoBuffer: Buffer | null = null) 
               align: 'center',
               valign: 'center'
           });
-          // Draw Border around photo
+
           doc.rect(doc.page.width - 40 - 100, 30, 100, 100).strokeColor('#ccc').stroke();
       } catch (e) {
           console.error('Error drawing profile photo', e);

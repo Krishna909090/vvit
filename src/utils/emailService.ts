@@ -1,18 +1,13 @@
 import axios from 'axios';
 import logger from './logger';
-import { getPaymentReceiptTemplate, PaymentEmailData, PaymentEmailType, HallTicketEmailData, getHallTicketTemplate, StatusUpdateEmailData, getStatusUpdateTemplate } from './emailTemplates';
+import { getPaymentReceiptTemplate, PaymentEmailData, PaymentEmailType, HallTicketEmailData, getHallTicketTemplate, StatusUpdateEmailData, getStatusUpdateTemplate, HostelAllotmentEmailData, getHostelAllotmentTemplate } from './emailTemplates';
 import fs from 'fs';
 import path from 'path';
 import { EmailStatus } from '@prisma/client';
-import { createEmailLog, updateEmailStatus, getEmailLogById } from '../modules/system/emailLog.service';
+import { createEmailLog, updateEmailStatus, getEmailLogById } from '../modules/system/emailLog/emailLog.service';
 import { generateInvoicePDF, InvoiceData } from './invoiceGenerator';
 import { uploadFileToS3 } from './s3Utils';
 
-// ... (existing helper function and interface code)
-
-/**
- * Send Hall Ticket Email
- */
 export const sendHallTicketEmail = async (
     recipientEmail: string,
     data: HallTicketEmailData,
@@ -26,7 +21,6 @@ export const sendHallTicketEmail = async (
         const htmlContent = getHallTicketTemplate(data);
         const subject = `Hall Ticket - ${data.applicationId} - VVITU Entrance Exam`;
 
-        // Create Log Entry
         const logEntry = await createEmailLog({
             recipientEmail,
             subject,
@@ -40,7 +34,6 @@ export const sendHallTicketEmail = async (
         });
         if (logEntry) emailLogId = logEntry.id;
 
-        // Prepare Images
         const assetsDir = path.join(process.cwd(), 'src/assets');
         let logoBase64 = '';
         let bannerBase64 = '';
@@ -83,8 +76,6 @@ export const sendHallTicketEmail = async (
     }
 };
 
-
-// Old Type wrapper for compatibility if needed, but we will use PaymentEmailData generally
 interface EmailData extends PaymentEmailData {
     invoiceNumber:string;
     items?: { description: string; amount: number }[];
@@ -99,6 +90,13 @@ interface EmailData extends PaymentEmailData {
     skipInvoiceAttachment?: boolean;
 }
 
+const escapeHtml = (s: string) =>
+    String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
 // Environment variables
 const ZEPTO_API_URL = process.env.ZEPTO_API_URL || 'https://api.zeptomail.in/v1.1/email';
 const ZEPTO_API_KEY = process.env.ZEPTO_API_KEY;
@@ -111,8 +109,7 @@ const ZEPTO_FROM_NAME = process.env.ZEPTO_FROM_NAME || '';
 const sendZeptoEmail = async (toEmail: string, subject: string, htmlContent: string, attachments?: any[], inlineImages?: any[]) => {
     if (!ZEPTO_API_KEY) {
         logger.error('[EMAIL SERVICE] Missing ZEPTO_API_KEY. Cannot send email.');
-        // For development, we return true to not block the flow even if email fails due to missing key
-        return { success: true, error: 'Missing ZEPTO_API_KEY (Simulated Success)' };
+        return { success: false, error: 'Missing ZEPTO_API_KEY' };
     }
 
     try {
@@ -320,7 +317,6 @@ export const retryEmail = async (logId: string) => {
         
         return sendPaymentReceipt(log.recipientEmail, emailData);
     }
-    
 
     return { success: false, message: 'Unsupported template type or missing data' };
 };
@@ -395,7 +391,7 @@ export const sendCancellationReceipt = async (
     </table>
 
     <div class="content">
-      <p><strong>Dear ${data.studentName},</strong></p>
+      <p><strong>Dear ${escapeHtml(data.studentName)},</strong></p>
 
       <p><strong>Seat Cancellation Processed</strong></p>
 
@@ -404,10 +400,10 @@ export const sendCancellationReceipt = async (
       <p>Please find the cancellation receipt attached to this email for your records.</p>
 
       <ul class="summary">
-        <li><strong>Student Name:</strong> ${data.studentName}</li>
-        <li><strong>Reference ID:</strong> ${data.applicationId}</li>
-        <li><strong>Cancellation Type:</strong> ${conditionLabel}</li>
-        <li><strong>Date:</strong> ${formattedDate}</li>
+        <li><strong>Student Name:</strong> ${escapeHtml(data.studentName)}</li>
+        <li><strong>Reference ID:</strong> ${escapeHtml(data.applicationId)}</li>
+        <li><strong>Cancellation Type:</strong> ${escapeHtml(conditionLabel)}</li>
+        <li><strong>Date:</strong> ${escapeHtml(formattedDate)}</li>
         <li><strong>Amount:</strong> ₹${data.amount}</li>
       </ul>
 
@@ -537,22 +533,22 @@ export const sendScholarshipUpdateEmail = async (
     </table>
 
     <div class="content">
-      <p><strong>Dear ${data.studentName},</strong></p>
+      <p><strong>Dear ${escapeHtml(data.studentName)},</strong></p>
 
       <p><strong>Scholarship Percentage Updated</strong></p>
 
       <p>We would like to inform you that your scholarship percentage at <strong>Vasireddy Venkatadri International Technological University</strong> has been revised.</p>
 
       <ul class="summary">
-        <li><strong>Student Name:</strong> ${data.studentName}</li>
-        <li><strong>Reference ID:</strong> ${data.applicationId}</li>
+        <li><strong>Student Name:</strong> ${escapeHtml(data.studentName)}</li>
+        <li><strong>Reference ID:</strong> ${escapeHtml(data.applicationId)}</li>
         <li><strong>Previous Scholarship:</strong> ${data.oldPercentage}%</li>
         <li><strong>Updated Scholarship:</strong> ${data.newPercentage}%</li>
       </ul>
 
       <p>Your fee demands have been updated to reflect this change. Please check the student portal for the revised fee details.</p>
 
-      <p>For any queries, please contact us at <strong>${supportEmail}</strong>.</p>
+      <p>For any queries, please contact us at <strong>${escapeHtml(supportEmail)}</strong>.</p>
 
       <div class="signature">
         <p>Yours sincerely,<br><strong>Admissions Office</strong></p>
@@ -607,6 +603,83 @@ export const sendScholarshipUpdateEmail = async (
         return { success: result.success };
     } catch (error: any) {
         logger.error('[EMAIL SERVICE] Send Scholarship Update Failed', error);
+        if (emailLogId) {
+            await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
+        }
+        return { success: false };
+    }
+};
+
+export const sendHostelAllotmentEmail = async (
+    recipientEmail: string,
+    data: {
+        studentName: string;
+        applicationId: string;
+        hostelName: string;
+        roomNumber: string;
+        bedNumber: string;
+        floor?: number;
+        sharing: number;
+        roomType: string;
+        paymentMode: string;
+        effectiveTotal: number;
+    },
+    pdfBuffer: Buffer
+): Promise<{ success: boolean }> => {
+    let emailLogId: string | undefined;
+
+    try {
+        const subject = `Hostel Allotment Order - ${data.applicationId}`;
+
+        const htmlContent = getHostelAllotmentTemplate(data);
+
+        const logEntry = await createEmailLog({
+            recipientEmail,
+            subject,
+            content: htmlContent,
+            templateType: 'HOSTEL_ALLOTMENT' as any,
+            metadata: {
+                studentId: data.applicationId,
+                hostelName: data.hostelName,
+                roomNumber: data.roomNumber,
+                bedNumber: data.bedNumber,
+            },
+        });
+        if (logEntry) emailLogId = logEntry.id;
+
+        const assetsDir = path.join(process.cwd(), 'src/assets');
+        let logoBase64 = '';
+        let bannerBase64 = '';
+        let studentsBase64 = '';
+
+        try {
+            if (fs.existsSync(path.join(assetsDir, 'logo.png'))) logoBase64 = fs.readFileSync(path.join(assetsDir, 'logo.png')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'collegeBuilding.jpg'))) bannerBase64 = fs.readFileSync(path.join(assetsDir, 'collegeBuilding.jpg')).toString('base64');
+            if (fs.existsSync(path.join(assetsDir, 'students.jpg'))) studentsBase64 = fs.readFileSync(path.join(assetsDir, 'students.jpg')).toString('base64');
+        } catch (err) { logger.error('[EMAIL SERVICE] Failed to read image assets', err); }
+
+        const base64Pdf = pdfBuffer.toString('base64');
+        const attachments = [{ name: `HostelAllotmentOrder_${data.applicationId}.pdf`, mime_type: 'application/pdf', content: base64Pdf }];
+
+        const inlineImages = [];
+        if (logoBase64) inlineImages.push({ name: 'logo.png', mime_type: 'image/png', content: logoBase64, cid: 'logo' });
+        if (bannerBase64) inlineImages.push({ name: 'collegeBuilding.jpg', mime_type: 'image/jpeg', content: bannerBase64, cid: 'banner' });
+        if (studentsBase64) inlineImages.push({ name: 'students.jpg', mime_type: 'image/jpeg', content: studentsBase64, cid: 'students' });
+
+        const result = await sendZeptoEmail(recipientEmail, subject, htmlContent, attachments, inlineImages);
+
+        if (emailLogId) {
+            await updateEmailStatus(
+                emailLogId,
+                result.success ? EmailStatus.SENT : EmailStatus.FAILED,
+                result.messageId,
+                result.error,
+            );
+        }
+
+        return { success: result.success };
+    } catch (error: any) {
+        logger.error('[EMAIL SERVICE] Send Hostel Allotment Email Failed', error);
         if (emailLogId) {
             await updateEmailStatus(emailLogId, EmailStatus.FAILED, undefined, { message: error.message });
         }

@@ -3,8 +3,6 @@ import path from 'path'
 import axios from 'axios'
 import fs from 'fs'
 
-/* ================= INTERFACES ================= */
-
 export interface AllotmentData {
   applicationId: string
   studentName: string
@@ -21,8 +19,6 @@ export interface AllotmentData {
   tuitionFee?: number
 }
 
-/* ================= HELPERS ================= */
-
 async function fetchImage(url: string): Promise<Buffer | null> {
   try {
     const res = await axios.get(url, { responseType: 'arraybuffer' })
@@ -32,8 +28,6 @@ async function fetchImage(url: string): Promise<Buffer | null> {
     return null
   }
 }
-
-/* ================= MAIN ================= */
 
 export const generateAllotmentOrderPDF = async (
   data: AllotmentData
@@ -47,23 +41,16 @@ export const generateAllotmentOrderPDF = async (
       doc.on('end', () => resolve(Buffer.concat(buffers)))
       doc.on('error', reject)
 
-      // 1. Header (Logo Top Center, Address)
       drawHeader(doc)
       drawBigWatermark(doc)
 
-      // 2. Title Section
       drawTitle(doc)
 
-      // 3. Student Details (Left) and Profile Photo (Right)
-      //    We must draw Photo FIRST or calculate height to ensure text flows correctly?
-      //    Actually we can draw them independently at fixed/calculated Y.
       const detailsEndY = await drawStudentDetailsSection(doc, data);
-      
-      // 4. Fee Table (Below details)
+
       doc.y = detailsEndY + 10;
       drawFeeTable(doc, data)
 
-      // 5. Instructions
       drawUniversityInstructions(doc)
 
       drawFooter(doc)
@@ -75,10 +62,6 @@ export const generateAllotmentOrderPDF = async (
   })
 }
 
-// ... (existing code)
-
-/* ================= FOOTER ================= */
-
 function drawFooter(doc: PDFKit.PDFDocument) {
   const footerText = 'For any queries please contact admission office contact details: 8341098336, 8179488336, 7702943336.';
   
@@ -89,7 +72,7 @@ function drawFooter(doc: PDFKit.PDFDocument) {
     .text(
       footerText,
       40,
-      doc.page.height - 60, // Position at bottom
+      doc.page.height - 60,
       { width: 515, align: 'center' }
     )
 }
@@ -97,35 +80,30 @@ function drawFooter(doc: PDFKit.PDFDocument) {
 function drawHeader(doc: PDFKit.PDFDocument) {
   const startY = 15;
   const logoPath = path.join(process.cwd(), 'src/assets/logo.png')
-  
-  // 1. LOGO: Top Center
-  // Assuming square logo approx 60x60
+
   if (fs.existsSync(logoPath)) {
     const logoSize = 60;
     const logoX = (doc.page.width - logoSize) / 2;
     doc.image(logoPath, logoX, startY, { width: logoSize })
-    
-    // Move Y below logo
+
     doc.y = startY + logoSize + 10;
   } else {
     doc.y = startY;
   }
 
-  // 2. COLLEGE NAME: Centered, Red/Orange
   doc
     .font('Helvetica-Bold')
     .fontSize(16) 
-    .fillColor('#E74C3C') // Red/Orange color
+    .fillColor('#E74C3C')
     .text(
       'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
-      0, // Left
+      0,
       doc.y,
       { width: doc.page.width, align: 'center' } 
     )
   
   doc.moveDown(0.3);
 
-  // 3. ADDRESS: Centered, Black, Smaller
   doc
     .font('Helvetica')
     .fontSize(10)
@@ -137,7 +115,6 @@ function drawHeader(doc: PDFKit.PDFDocument) {
 
   doc.moveDown(0.5);
 
-  // 4. Separator Line (Dashed)
   const lineY = doc.y;
   doc.save();
   doc.strokeColor('#BDC3C7').dash(4, { space: 2 }).lineWidth(1)
@@ -146,8 +123,6 @@ function drawHeader(doc: PDFKit.PDFDocument) {
 
   doc.moveDown(0.5);
 }
-
-/* ================= TITLE ================= */
 
 function drawTitle(doc: PDFKit.PDFDocument) {
   doc
@@ -165,15 +140,12 @@ function drawTitle(doc: PDFKit.PDFDocument) {
   doc.moveDown(0.5) 
 }
 
-/* ================= STUDENT DETAILS & PHOTO ================= */
-
 async function drawStudentDetailsSection(doc: PDFKit.PDFDocument, data: AllotmentData): Promise<number> {
   const startY = doc.y;
   const colLabelX = 60;
   const colValueX = 200;
   const lineHeight = 20;
 
-  // Student Details Fields
   const fields = [
     { label: 'Candidate Name', value: data.studentName },
     { label: 'Application ID', value: data.applicationId },
@@ -183,16 +155,15 @@ async function drawStudentDetailsSection(doc: PDFKit.PDFDocument, data: Allotmen
     { label: 'State', value: data.state },
   ];
 
-  // Draw Text
   doc.font('Helvetica').fontSize(10).fillColor('#000000');
   
   fields.forEach((field, index) => {
     const y = startY + (index * lineHeight);
-    // Label
+
     doc.text(field.label, colLabelX, y);
-    // Colon
+
     doc.text(':', colValueX - 10, y);
-    // Value (Bold?) Image shows bold name? No, regular mostly, Name might be bold.
+
     if (index === 0) doc.font('Helvetica-Bold');
     doc.text(field.value, colValueX, y);
     if (index === 0) doc.font('Helvetica');
@@ -200,26 +171,23 @@ async function drawStudentDetailsSection(doc: PDFKit.PDFDocument, data: Allotmen
 
   const textEndY = startY + (fields.length * lineHeight);
 
-  // Draw Profile Photo (Right Side)
-  // Aligned with top of text approx.
   if (data.profilePhotoUrl) {
     try {
         const photoBuffer = await fetchImage(data.profilePhotoUrl);
         if (photoBuffer) {
             const photoWidth = 100;
-            const photoHeight = 120; // Portrait aspect ratio?
-            const photoX = 420; // Right side
+            const photoHeight = 120;
+            const photoX = 420;
             const photoY = startY; 
             
             doc.save();
-            // Clip rounded rectangle?
+
             doc.roundedRect(photoX, photoY, photoWidth, photoHeight, 8).clip();
             doc.image(photoBuffer, photoX, photoY, { fit: [photoWidth, photoHeight] });
             doc.restore();
-            // Border
+
             doc.roundedRect(photoX, photoY, photoWidth, photoHeight, 8).strokeColor('#000').lineWidth(1).stroke();
-            
-            // Adjust end Y if photo is taller than text
+
             return Math.max(textEndY, photoY + photoHeight);
         }
     } catch (e) {
@@ -230,16 +198,13 @@ async function drawStudentDetailsSection(doc: PDFKit.PDFDocument, data: Allotmen
   return textEndY;
 }
 
-/* ================= FEE TABLE ================= */
-
 function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
   const startY = doc.y;
   const tableX = 50;
-  const tableWidth = 495; // 515? 
-  // Image shows table slightly inset?
+  const tableWidth = 495;
+
   const rowHeight = 30;
   const col1W = 250; 
-  // Col 2 is the rest
 
   const rows = [
     { label: 'Allotted Branch', value: data.allottedCourse, highlight: false },
@@ -252,28 +217,21 @@ function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
 
   let currentY = startY;
 
-  // Draw border rect for whole table
-  // Can draw row by row
-  
-  rows.forEach((row, i) => {
-    // Background for Highlight
+  rows.forEach((row) => {
+
     if (row.highlight) {
-      doc.rect(tableX, currentY, tableWidth, rowHeight).fill('#FEF5E7'); // Light orange/beige
-      doc.fillColor('#000'); // Reset fill to black for text
+      doc.rect(tableX, currentY, tableWidth, rowHeight).fill('#FEF5E7');
+      doc.fillColor('#000');
     }
 
-    // Border Rect
-    doc.rect(tableX, currentY, tableWidth, rowHeight).strokeColor('#E5E7E9').stroke(); // Light grey border
+    doc.rect(tableX, currentY, tableWidth, rowHeight).strokeColor('#E5E7E9').stroke();
 
-    // Text Vertical Center
     const textY = currentY + 10;
 
-    // Label
-    doc.font('Helvetica').fillColor('#5D6D7E') // Greyish label
+    doc.font('Helvetica').fillColor('#5D6D7E')
     doc.text(row.label, tableX + 20, textY);
 
-    // Value
-    doc.font('Helvetica-Bold').fillColor('#000000') // Black bold value
+    doc.font('Helvetica-Bold').fillColor('#000000')
     doc.text(row.value, tableX + col1W, textY);
 
     currentY += rowHeight;
@@ -282,15 +240,8 @@ function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
   doc.y = currentY + 10;
 }
 
-
-/* ================= UNIVERSITY INSTRUCTIONS (Bottom Box) ================= */
-
 function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
   const startY = doc.y;
-  
-  // If we are too low, add page? 
-  // But requirement is single page.
-  // We should be around Y=500. Page height is ~840. Space is ample.
 
   const boxPadding = 10;
   const contentStartY = startY + boxPadding;
@@ -326,10 +277,9 @@ function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
     let bullet = '';
     let content = text;
     let indent = 0;
-    
-    // Check for Main Point (e.g. "1. ")
+
     const mainMatch = text.match(/^(\d+\.)\s+(.*)/);
-    // Check for Sub Point (e.g. "   • ")
+
     const subMatch = text.match(/^\s+(•)\s+(.*)/);
 
     const currentY = doc.y;
@@ -339,18 +289,17 @@ function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
       content = mainMatch[2];
       indent = 15;
       
-      doc.text(bullet, startX, currentY); // Draw Bullet
-      doc.text(content, startX + indent, currentY, { width: fullWidth - indent, align: 'left', lineGap: 1 }); // Draw Text with Indent
+      doc.text(bullet, startX, currentY);
+      doc.text(content, startX + indent, currentY, { width: fullWidth - indent, align: 'left', lineGap: 1 });
     } else if (subMatch) {
       bullet = '•'; 
       content = subMatch[2];
-      indent = 30; // Indent further
+      indent = 30;
       
-      doc.text(bullet, startX + 15, currentY); // Draw Bullet Indented
+      doc.text(bullet, startX + 15, currentY);
       doc.text(content, startX + indent, currentY, { width: fullWidth - indent, align: 'left', lineGap: 1 });
     } else {
-      // Fallback for lines without bullets (e.g. continuations if any, though not expected in current data)
-      // Or "   Such requests..."
+
       if (text.trim().startsWith('Such requests')) {
          indent = 15;
          doc.text(text.trim(), startX + indent, doc.y, { width: fullWidth - indent, align: 'left', lineGap: 1 });
@@ -363,14 +312,11 @@ function drawUniversityInstructions(doc: PDFKit.PDFDocument) {
   });
   
   const endY = doc.y + boxPadding;
-  
-  // Draw Box
+
   doc.rect(50, startY, 495, endY - startY).strokeColor('#000000').stroke();
   
   doc.y = endY + 10;
 }
-
-/* ================= BIG WATERMARK ================= */
 
 function drawBigWatermark(doc: PDFKit.PDFDocument) {
   const logoPath = path.join(process.cwd(), 'src/assets/logo.png')
@@ -385,4 +331,180 @@ function drawBigWatermark(doc: PDFKit.PDFDocument) {
 
   doc.image(logoPath, x, y, { width: size })
   doc.restore()
+}
+
+export interface HostelAllotmentData {
+  applicationId: string
+  studentName: string
+  fatherName: string
+  motherName: string
+  gender: string
+  state: string
+
+  hostelName: string
+  hostelType: string
+  roomNumber: string
+  bedNumber: string
+  floor?: number
+  sharing: number
+  roomType: string
+  paymentMode: 'YEARWISE' | 'SEMWISE'
+  wardenName?: string
+
+  accommodationPrice: number
+  messPrice: number
+  laundryPrice: number
+  registrationFee: number
+  effectiveTotal: number
+
+  profilePhotoUrl?: string
+  reportingDate?: string
+}
+
+export const generateHostelAllotmentOrderPDF = async (
+  data: HostelAllotmentData
+): Promise<Buffer> => {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 40 })
+      const buffers: Buffer[] = []
+      doc.on('data', buffers.push.bind(buffers))
+      doc.on('end', () => resolve(Buffer.concat(buffers)))
+      doc.on('error', reject)
+
+      drawHeader(doc)
+      drawBigWatermark(doc)
+      drawHostelTitle(doc)
+
+      const detailsEndY = await drawStudentDetailsSection(doc, {
+        applicationId: data.applicationId,
+        studentName: data.studentName,
+        fatherName: data.fatherName,
+        motherName: data.motherName,
+        gender: data.gender,
+        state: data.state,
+        allottedCollege: '',
+        allottedCourse: '',
+        profilePhotoUrl: data.profilePhotoUrl,
+      } as AllotmentData)
+
+      doc.y = detailsEndY + 10
+      drawHostelDetailsBlock(doc, data)
+      drawHostelFeeTable(doc, data)
+      drawHostelInstructions(doc)
+      drawFooter(doc)
+
+      doc.end()
+    } catch (err) {
+      reject(err)
+    }
+  })
+}
+
+function drawHostelTitle(doc: PDFKit.PDFDocument) {
+  doc
+    .font('Helvetica-Bold').fontSize(14).fillColor('#1C2833')
+    .text('HOSTEL ALLOTMENT ORDER', 0, doc.y, { align: 'center', width: doc.page.width, underline: true })
+
+  doc.moveDown(0.3)
+    .fontSize(10).fillColor('#566573')
+    .text('(Academic Year 2026–2027)', { align: 'center', width: doc.page.width })
+
+  doc.moveDown(0.5)
+}
+
+function drawHostelDetailsBlock(doc: PDFKit.PDFDocument, data: HostelAllotmentData) {
+  const startY = doc.y
+  const tableX = 50
+  const tableWidth = 495
+  const rowHeight = 26
+
+  const rows = [
+    { label: 'Hostel',          value: `${data.hostelName} (${data.hostelType})` },
+    { label: 'Room Number',     value: data.roomNumber },
+    { label: 'Bed Number',      value: data.bedNumber },
+    { label: 'Floor',           value: data.floor !== undefined ? String(data.floor) : '—' },
+    { label: 'Sharing / Type',  value: `${data.sharing}-Sharing • ${data.roomType}` },
+    { label: 'Payment Mode',    value: data.paymentMode === 'SEMWISE' ? 'Two Instalment (Semwise)' : 'Single Instalment (Yearwise)' },
+  ]
+
+  let currentY = startY
+  rows.forEach((row) => {
+    doc.rect(tableX, currentY, tableWidth, rowHeight).strokeColor('#E5E7E9').stroke()
+    const textY = currentY + 8
+    doc.font('Helvetica').fontSize(10).fillColor('#5D6D7E').text(row.label, tableX + 15, textY)
+    doc.font('Helvetica-Bold').fillColor('#000000').text(row.value, tableX + 200, textY)
+    currentY += rowHeight
+  })
+
+  doc.y = currentY + 10
+}
+
+function drawHostelFeeTable(doc: PDFKit.PDFDocument, data: HostelAllotmentData) {
+  const startY = doc.y
+  const tableX = 50
+  const tableWidth = 495
+  const rowHeight = 26
+
+  const fmt = (n: number) => `INR ${(n || 0).toLocaleString('en-IN')}`
+
+  const rows = [
+    { label: 'Accommodation', value: fmt(data.accommodationPrice), highlight: false },
+    { label: 'Mess',          value: fmt(data.messPrice),          highlight: false },
+    { label: 'Laundry',       value: fmt(data.laundryPrice),       highlight: false },
+    { label: 'Registration',  value: fmt(data.registrationFee),    highlight: false },
+    { label: 'Total Payable', value: fmt(data.effectiveTotal),     highlight: true },
+  ]
+
+  let currentY = startY
+  rows.forEach((row) => {
+    if (row.highlight) {
+      doc.rect(tableX, currentY, tableWidth, rowHeight).fill('#FEF5E7')
+      doc.fillColor('#000000')
+    }
+    doc.rect(tableX, currentY, tableWidth, rowHeight).strokeColor('#E5E7E9').stroke()
+    const textY = currentY + 8
+    doc.font('Helvetica').fontSize(10).fillColor('#5D6D7E').text(row.label, tableX + 15, textY)
+    doc.font('Helvetica-Bold').fillColor('#000000').text(row.value, tableX + 280, textY)
+    currentY += rowHeight
+  })
+
+  doc.y = currentY + 10
+}
+
+function drawHostelInstructions(doc: PDFKit.PDFDocument) {
+  const startY = doc.y
+  const boxPadding = 10
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#000000')
+    .text('Important Conditions of Hostel Allotment', 50 + boxPadding, startY + boxPadding, { underline: true })
+
+  doc.moveDown(0.5)
+  doc.font('Helvetica').fontSize(8).fillColor('#000')
+
+  const items = [
+    '1. The allotted bed is for the student named above only. Sub-letting or swapping with another student without written approval is strictly prohibited.',
+    '2. Hostel fees shown above are payable per the chosen payment mode. Late payment may incur penalties as per university norms.',
+    '3. Re-assignment to a different hostel/room/bed is allowed only on written request and at the discretion of the Hostel Warden / Director — Admissions.',
+    '4. Damage to hostel property will be billed to the student. Deposits (if applicable) may be withheld for outstanding charges.',
+    '5. Students must comply with the Hostel Code of Conduct, including curfew timings, attendance during inspections, and visitor policies.',
+    '6. Vacating the hostel mid-year requires approval and may result in pro-rated refunds as per the cancellation policy.',
+  ]
+
+  items.forEach((text) => {
+    const startX = 50 + boxPadding
+    const fullWidth = 495 - (boxPadding * 2)
+    const mainMatch = text.match(/^(\d+\.)\s+(.*)/)
+    const currentY = doc.y
+    if (mainMatch) {
+      doc.text(mainMatch[1], startX, currentY)
+      doc.text(mainMatch[2], startX + 15, currentY, { width: fullWidth - 15, align: 'left', lineGap: 1 })
+    } else {
+      doc.text(text, startX, currentY, { width: fullWidth, align: 'left', lineGap: 1 })
+    }
+    doc.y += 3
+  })
+
+  const endY = doc.y + boxPadding
+  doc.rect(50, startY, 495, endY - startY).strokeColor('#000000').stroke()
+  doc.y = endY + 10
 }

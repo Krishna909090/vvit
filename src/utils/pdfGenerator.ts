@@ -10,7 +10,7 @@ interface HallTicketData {
     fatherName?: string;
     motherName?: string;
     examCenterName: string;
-    examCenterAddress?: string; // Added field
+    examCenterAddress?: string;
     examDate: string;
     startTime: string;
     endTime: string;
@@ -35,51 +35,39 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
                 reject(err);
             });
 
-            // --- Constants ---
-            const pageWidth = 595.28; // A4 width in points
-            const contentWidth = 555.28; // With 20px margin
+            const pageWidth = 595.28;
+            const contentWidth = 555.28;
             const startX = 20;
-            let currentY = 25; // Brought up from 45
+            let currentY = 25;
 
-            // --- 1. Outer Border (Page Container) ---
-            doc.rect(startX, currentY, contentWidth, 750).stroke(); // Full page border
+            doc.rect(startX, currentY, contentWidth, 750).stroke();
 
-            currentY += 15; // Internal Padding
+            currentY += 15;
 
-            // --- 2. Header ---
-            // Logo
-            // --- 2. Header ---
-            
-            // University Header - Centered at top
             doc
                 .font('Helvetica-Bold')
-                .fontSize(11) // Smaller font for long name
+                .fontSize(11)
                 .fillColor('#C0392B')
                 .text('VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY', 0, currentY, { align: 'center', width: pageWidth });
 
-            // Logo
             const logoPath = path.join(process.cwd(), 'src/assets/logo.png');
             const logoWidth = 55;
-            const logoY = currentY + 10; // Align logo with header text top
+            const logoY = currentY + 10;
 
             try {
-                // Logo top-left
+
                 doc.image(logoPath, startX + 10, logoY, { width: logoWidth }); 
             } catch (logoErr) {
                 logger.warn('Logo file not found, skipping logo render.');
                 doc.fontSize(10).text('VVITU', startX + 10, logoY);
             }
 
-            // Adjust Y to clear the header area
-            // Reduced gap to bring title closer (1 line gap approx)
             currentY += 40;  
 
-            // Hall Ticket Title
             doc.font('Helvetica-Bold').fontSize(14).text('Hall Ticket – Entrance Examination', 0, currentY, { align: 'center' });
             
             currentY += 30;
 
-            // --- 3. Strip (Session | Program) ---
             doc.rect(startX + 2, currentY, contentWidth - 4, 25).fill('#3a3a3a');
             doc.fillColor('white').fontSize(10);
             
@@ -89,36 +77,28 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
             doc.text(sessionText, startX + 10, currentY + 7);
             doc.text(programText, startX + contentWidth - 10 - doc.widthOfString(programText), currentY + 7);
 
-            // Reset color
             doc.fillColor('black');
             currentY += 35;
 
-            // --- 4. Student Info + Photo/QR ---
             const infoStartX = startX + 10;
             const infoStartY = currentY;
-            
-            // Layout: Info (Left) | QR (Middle-Right) | Photo (Right)
-            // Info takes ~300px
-            // QR starts at ~330
-            // Photo starts at ~450
-            
+
             const qrX = startX + 330;
             const photoX = startX + 440;
             
             doc.fontSize(11).font('Helvetica');
 
-            // Left: Text Details
             const labelX = infoStartX;
             const valueX = infoStartX + 120;
             const rowHeight = 20;
 
-            const maxValueWidth = qrX - valueX - 10; // Leave 10px gap before QR
+            const maxValueWidth = qrX - valueX - 10;
 
             const drawField = (label: string, value: string, y: number): number => {
                 doc.font('Helvetica-Bold').text(label, labelX, y);
                 const textHeight = doc.heightOfString(`:  ${value}`, { width: maxValueWidth });
                 doc.font('Helvetica').text(`:  ${value}`, valueX, y, { width: maxValueWidth });
-                return Math.max(rowHeight, textHeight + 4); // Return actual height used
+                return Math.max(rowHeight, textHeight + 4);
             };
 
             currentY += drawField('Application ID', data.applicationId, currentY);
@@ -128,23 +108,18 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
             currentY += drawField('Name', data.studentName, currentY);
             currentY += drawField('Father\'s Name', data.fatherName || 'N/A', currentY);
             drawField('Mother\'s Name', data.motherName || 'N/A', currentY);
-            
-            // Side-by-Side: QR & Photo
-            
-            // QR Code
+
             doc.image(data.qrCodeBuffer, qrX, infoStartY, { width: 100, height: 100 });
-            
-            // Photo
+
             const photoHeight = 120;
             const photoWidth = 100;
-            // No vertical offset, same Y as fields/QR
-            
+
             if (data.profilePhotoUrl) {
                 try {
                      const response = await axios.get(data.profilePhotoUrl, { responseType: 'arraybuffer' });
                      const img = Buffer.from(response.data);
                      doc.image(img, photoX, infoStartY, { width: photoWidth, height: photoHeight, fit: [photoWidth, photoHeight] });
-                     doc.rect(photoX, infoStartY, photoWidth, photoHeight).stroke(); // Border for photo
+                     doc.rect(photoX, infoStartY, photoWidth, photoHeight).stroke();
                 } catch (e) {
                     logger.warn(`Failed to fetch profile photo for PDF: ${e}`);
                     doc.rect(photoX, infoStartY, photoWidth, photoHeight).stroke();
@@ -155,39 +130,31 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
                  doc.text('Photo', photoX + 30, infoStartY + 50);
             }
 
-            // Adjust Y to below the photo/QR section for safety
-            // Photo is 120 high, row starts at infoStartY
-            // Fields might be fewer (5 fields * 20 = 100px)
             const contentHeight = Math.max(120, (currentY - infoStartY)); 
             currentY = infoStartY + contentHeight + 20;
 
-            // --- 5. Meta Info (Download Time, IP) ---
             doc.rect(startX + 2, currentY, contentWidth - 4, 25).stroke();
             doc.fontSize(9).font('Helvetica');
             const downloadTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
             
             doc.text(`Downloaded On: ${downloadTime}`, startX + 10, currentY + 8);
-            // doc.text(`IP Address: ${data.ip || 'N/A'}`, startX + contentWidth / 2, currentY + 8); // IP not passed yet
 
             currentY += 35;
 
-            // --- 6. Exam Center ---
             doc.rect(startX + 2, currentY, contentWidth - 4, 40).stroke();
             doc.font('Helvetica-Bold').fontSize(11).text('Exam Center:', startX + 10, currentY + 12);
             doc.font('Helvetica').text(`${data.examCenterName} - ${data.examCenterAddress || 'See address below'}`, startX + 90, currentY + 12);
             
             currentY += 50;
 
-            // --- 7. Subject Table ---
             const col1 = startX + 2;
             const col2 = startX + 120;
             const col3 = startX + 350;
             const tableWidth = contentWidth - 4;
-            
-            // Header
+
             doc.rect(col1, currentY, tableWidth, 20).fill('#f0f0f0');
             doc.fillColor('black').font('Helvetica-Bold').fontSize(10);
-            doc.rect(col1, currentY, tableWidth, 20).stroke(); // Border
+            doc.rect(col1, currentY, tableWidth, 20).stroke();
             
             doc.text('Subject Code', col1 + 5, currentY + 6);
             doc.text('Subject Name', col2 + 5, currentY + 6);
@@ -195,7 +162,6 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
 
             currentY += 20;
 
-            // Row 1 (Entrance Exam)
             doc.font('Helvetica').fontSize(10);
             doc.rect(col1, currentY, tableWidth, 20).stroke();
             
@@ -205,7 +171,6 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
 
             currentY += 30;
 
-            // --- 8. Instructions ---
             doc.font('Helvetica-Bold').fontSize(11).text('Important Instructions', startX + 10, currentY);
             currentY += 15;
             doc.font('Helvetica').fontSize(10);
@@ -223,9 +188,8 @@ export const generateHallTicketPDF = async (data: HallTicketData): Promise<Buffe
                 currentY += 14;
             });
 
-            // --- 9. Footer Disclaimer ---
             currentY += 20;
-            doc.moveTo(startX, currentY).lineTo(startX + contentWidth, currentY).stroke(); // Line
+            doc.moveTo(startX, currentY).lineTo(startX + contentWidth, currentY).stroke();
             currentY += 10;
             doc.fontSize(9).font('Helvetica-Oblique').text(
                 'VVIT University is not responsible for any inadvertent error in this hall ticket. This is a computer generated document.', 

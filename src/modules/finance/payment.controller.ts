@@ -14,9 +14,9 @@ import {
     checkPaymentStatus as checkPaymentStatusService,
     getStudentFinancialHistory,
     getStudentFinancialFlow,
+    getStudentCompleteHistory,
     initiateTokenPayment,
     recordOfflineApplicationFeePayment,
-    processUnifiedPayment,
     initiateMultiComponentPayment,
     getAllSuccessPayments,
     getPaymentCreators,
@@ -70,22 +70,20 @@ export const exportSuccessPaymentsCsvController = catchAsync(async (req: Request
 export const payMultiComponentFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const currentUserId = req.user?.userId || 'anonymous';
     logger.info(`[payMultiComponentFee] START - by=${currentUserId}`);
-    const { studentId, components, paymentMethod, remarks, referenceNumber, mode } = req.body;
+    const { studentId, components, paymentMethod, remarks, referenceNumber, mode, yearOfStudy } = req.body;
     logger.debug(`[payMultiComponentFee] Request body: ${JSON.stringify({ studentId, componentsCount: components?.length, paymentMethod, mode, hasReferenceNumber: !!referenceNumber })}`);
-    
+
     if (!studentId || !components || !Array.isArray(components) || components.length === 0) {
         logger.error(`[payMultiComponentFee] Validation failed - Missing required fields`);
         throw new AppError("Student ID and components array are required", 400);
     }
     logger.info(`[payMultiComponentFee] Processing ${components.length} components for student: ${studentId}`);
-    
-    // Authorization: User ID should match student's User ID unless Admin (handled by RBAC usually but check logic)
+
     const currentUserIdForAuth = req.user?.userId || undefined;
 
-    const result = await initiateMultiComponentPayment(studentId, components, currentUserIdForAuth, paymentMethod, remarks, referenceNumber, mode);
+    const result = await initiateMultiComponentPayment(studentId, components, currentUserIdForAuth, paymentMethod, remarks, referenceNumber, mode, yearOfStudy);
     logger.info(`[payMultiComponentFee] SUCCESS - Result: ${JSON.stringify({ success: result.success, paymentIds: result.paymentIds?.length, transactionId: result.transactionId })}`);
 
-    
     sendResponse({
         res,
         statusCode: 200,
@@ -95,17 +93,16 @@ export const payMultiComponentFee = catchAsync(async (req: Request, res: Respons
     });
 });
 
-// Phase 1: Pay Test Fee
 export const payTestFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[payTestFee] by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[payTestFee] params=${JSON.stringify(req.params)}`);
+    res.setHeader('Warning', `299 - "Deprecated: use POST /finance/pay-component { component: 'APPLICATION_FEE', mode: 'ONLINE' }"`);
+    logger.warn(`[payTestFee] DEPRECATED endpoint hit by=${req.user?.userId || 'anonymous'} — migrate FE to /pay-component`);
+    logger.debug(`[payTestFee] params=${JSON.stringify(req.params)}`);
 
     let { studentId } = req.params;
     if (!studentId && req.body.studentId) {
         studentId = req.body.studentId;
     }
-    
-    // Self-service fallback
+
     if (!studentId && req.user?.role === 'STUDENT') {
         const { getStudentByUserId } = await import('../student/student.service');
         const s = await getStudentByUserId(req.user.userId);
@@ -134,15 +131,15 @@ export const payTokenFee = catchAsync(async (req: Request, res: Response, next: 
     if (!studentId && req.body.studentId) studentId = req.body.studentId;
 
     if (!studentId && req.user?.role === 'STUDENT') {
-         const { getStudentByUserId } = await import('../student/student.service');
-         const s = await getStudentByUserId(req.user.userId);
-         if (s) studentId = s.id;
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user.userId);
+        if (s) studentId = s.id;
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
     const result = await initiateTokenPayment(studentId, req.body);
-    
+
     sendResponse({
         res,
         statusCode: 200,
@@ -152,17 +149,15 @@ export const payTokenFee = catchAsync(async (req: Request, res: Response, next: 
     });
 });
 
-// Phase 6: Final Fee Payment
 export const payCollegeFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[payCollegeFee] by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[payCollegeFee] params=${JSON.stringify(req.params)}`);
+    logger.debug(`[payCollegeFee] params=${JSON.stringify(req.params)}`);
 
     let { studentId } = req.params;
     if (!studentId && req.body.studentId) {
         studentId = req.body.studentId;
     }
-    
-    // Self-service fallback
+
     if (!studentId && req.user?.role === 'STUDENT') {
         const { getStudentByUserId } = await import('../student/student.service');
         const s = await getStudentByUserId(req.user.userId);
@@ -184,13 +179,11 @@ export const payCollegeFee = catchAsync(async (req: Request, res: Response, next
     });
 });
 
-// Fee Reduction Request
 export const requestDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[requestDiscount] by=${req.user?.userId || 'anonymous'}`);
-    logger.debug && logger.debug(`[requestDiscount] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
+    logger.debug(`[requestDiscount] params=${JSON.stringify(req.params)} payload=${JSON.stringify(req.body)}`);
 
-
-    const { studentId,reason, documentUrl, amount } = req.body;
+    const { studentId, reason, documentUrl, amount } = req.body;
     if (!studentId || !reason) throw new AppError(MESSAGES.ERROR.STUDENT_REASON_REQUIRED, 400);
 
     const currentUserId = req.user?.userId || null;
@@ -209,11 +202,11 @@ export const requestDiscount = catchAsync(async (req: Request, res: Response, ne
 export const approveDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { requestId } = req.params;
     const { approvedAmount, component, remarks } = req.body;
-    
+
     if (!approvedAmount || !component) throw new AppError("Approved Amount and Component are required", 400);
 
     const result = await approveDiscountService(requestId, approvedAmount, component, req.user!.userId, remarks);
-    
+
     sendResponse({
         res,
         statusCode: 200,
@@ -225,10 +218,10 @@ export const approveDiscount = catchAsync(async (req: Request, res: Response, ne
 
 export const rejectDiscount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { requestId } = req.params;
-    const { remarks } = req.body; 
-    
+    const { remarks } = req.body;
+
     const result = await rejectDiscountService(requestId, remarks, req.user!.userId);
-    
+
     sendResponse({
         res,
         statusCode: 200,
@@ -238,13 +231,29 @@ export const rejectDiscount = catchAsync(async (req: Request, res: Response, nex
     });
 });
 
+const assertStudentOwns = async (req: Request, studentId: string) => {
+    if (req.user?.role === 'STUDENT') {
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user.userId);
+        if (!s || s.id !== studentId) {
+            logger.warn(`[Security] Student ${req.user?.userId} attempted to access financial data of ${studentId}`);
+            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
+    }
+};
+
 export const getInvoice = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getInvoice] params=${JSON.stringify(req.params)}`);
     const { paymentId } = req.params;
     if (!paymentId) throw new AppError("Payment ID is required", 400);
 
+    const { default: prisma } = await import('../../config/prisma');
+    const pay = await prisma.payment.findUnique({ where: { id: paymentId }, select: { studentId: true } });
+    if (!pay) throw new AppError("Payment not found", 404);
+    await assertStudentOwns(req, pay.studentId);
+
     const url = await getInvoiceUrl(paymentId);
-    
+
     sendResponse({
         res,
         statusCode: 200,
@@ -259,8 +268,15 @@ export const checkPaymentStatus = catchAsync(async (req: Request, res: Response,
     const { txnId } = req.params;
     if (!txnId) throw new AppError("Transaction ID is required", 400);
 
+    const { default: prisma } = await import('../../config/prisma');
+    const pay = await prisma.payment.findFirst({
+        where: { OR: [{ providerTxId: txnId }, { merchantOrderId: txnId }] },
+        select: { studentId: true },
+    });
+    if (pay) await assertStudentOwns(req, pay.studentId);
+
     const status = await checkPaymentStatusService(txnId);
-    
+
     sendResponse({
         res,
         statusCode: 200,
@@ -272,29 +288,25 @@ export const checkPaymentStatus = catchAsync(async (req: Request, res: Response,
 
 export const getPaymentHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     let { studentId } = req.params;
-    
-    // Self-service fallback
+
     if (!studentId && req.user?.role === 'STUDENT') {
-         const { getStudentByUserId } = await import('../student/student.service');
-         const s = await getStudentByUserId(req.user.userId);
-         if (s) studentId = s.id;
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user.userId);
+        if (s) studentId = s.id;
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
 
-    // SECURITY: Authorization Check
-    // If user is STUDENT, ensure they are requesting their own data
-    if (req.user?.role === 'STUDENT') {
-        const { getStudentByUserId } = await import('../student/student.service');
-        const s = await getStudentByUserId(req.user.userId);
-        if (!s || s.id !== studentId) {
-            logger.warn(`[Security] Student ${req.user.userId} attempted to access history of ${studentId}`);
-            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
-        }
-    }
-    // If user is AGENT, ensure student belongs to them (Optional/Future scope, currently strictly blocking cross-access)
+    await assertStudentOwns(req, studentId);
 
-    const history = await getStudentFinancialHistory(studentId);
+    const academicYearId = typeof req.query.academicYearId === 'string'
+        ? req.query.academicYearId
+        : undefined;
+    const yearOfStudy = typeof req.query.yearOfStudy === 'string' && req.query.yearOfStudy !== ''
+        ? parseInt(req.query.yearOfStudy, 10)
+        : undefined;
+
+    const history = await getStudentFinancialHistory(studentId, { academicYearId, yearOfStudy });
 
     sendResponse({
         res,
@@ -307,14 +319,16 @@ export const getPaymentHistory = catchAsync(async (req: Request, res: Response, 
 
 export const getFinancialSummary = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     let { studentId } = req.params;
-    
+
     if (!studentId && req.user?.role === 'STUDENT') {
-         const { getStudentByUserId } = await import('../student/student.service');
-         const s = await getStudentByUserId(req.user.userId);
-         if (s) studentId = s.id;
+        const { getStudentByUserId } = await import('../student/student.service');
+        const s = await getStudentByUserId(req.user.userId);
+        if (s) studentId = s.id;
     }
 
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
+
+    await assertStudentOwns(req, studentId);
 
     const { getStudentFinancialSummary } = await import('./payment.service');
     const summary = await getStudentFinancialSummary(studentId);
@@ -329,7 +343,8 @@ export const getFinancialSummary = catchAsync(async (req: Request, res: Response
 });
 
 export const payOfflineApplicationFee = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[payOfflineApplicationFee] by=${req.user?.userId || 'anonymous'}`);
+    res.setHeader('Warning', `299 - "Deprecated: use POST /finance/pay-component { component: 'APPLICATION_FEE', mode: 'OFFLINE' }"`);
+    logger.warn(`[payOfflineApplicationFee] DEPRECATED endpoint hit by=${req.user?.userId || 'anonymous'} — migrate FE to /pay-component`);
     const { studentId, paymentMethod, transactionId, remarks, referenceNumber } = req.body;
 
     if (!studentId || !paymentMethod) throw new AppError("Student ID and Payment Method are required", 400);
@@ -346,18 +361,18 @@ export const payOfflineApplicationFee = catchAsync(async (req: Request, res: Res
 });
 
 export const initiateAdminPayment = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    logger.info(`[initiateAdminPayment] by=${req.user?.userId}`);
+    res.setHeader('Warning', `299 - "Deprecated: use POST /finance/pay-component"`);
+    logger.warn(`[initiateAdminPayment] DEPRECATED endpoint hit by=${req.user?.userId} — migrate FE to /pay-component`);
     const { studentId, amount, component, feeHeadId, remarks } = req.body;
 
     if (!studentId || !amount || !component) throw new AppError(MESSAGES.ERROR.ALL_FIELDS_REQUIRED, 400);
 
-    // Use unified processor
     const result = await import('./payment.service').then(s => s.processUnifiedPayment({
         studentId,
         amount: Number(amount),
         component,
-        mode: 'ONLINE', // Admin initiated online payment
-        method: 'UPI',  // Default to UPI/Online
+        mode: 'ONLINE',
+        method: 'UPI',
         feeHeadId,
         remarks,
         initiatedBy: req.user!.userId
@@ -376,40 +391,32 @@ export const payFeeComponent = catchAsync(async (req: Request, res: Response, ne
     const currentUserId = req.user?.userId || 'anonymous';
     const currentUserRole = req.user?.role || 'UNKNOWN';
     logger.info(`[payFeeComponent] START - by=${currentUserId}, role=${currentUserRole}`);
-    
+
     const { studentId, amount, component, mode } = req.body;
     logger.debug(`[payFeeComponent] Request: StudentId=${studentId}, Amount=${amount}, Component=${component}, Mode=${mode}`);
 
-    // 1. Basic Validation
     if (!studentId || !amount || !component) {
         logger.error(`[payFeeComponent] Validation failed - Missing required fields`);
         throw new AppError("Student ID, Amount, and Component are required", 400);
     }
     logger.info(`[payFeeComponent] Validated - Processing ₹${amount} for ${component}`);
 
-    // 2. Security: Authorization & Mode Restrictions
     if (req.user?.role === 'STUDENT') {
         logger.debug(`[payFeeComponent] Student role detected - Verifying authorization`);
         const { getStudentByUserId } = await import('../student/student.service');
         const s = await getStudentByUserId(req.user.userId);
-        
-        // Ensure paying for self
         if (!s || s.id !== studentId) {
             logger.warn(`[payFeeComponent] SECURITY ALERT - Student ${req.user.userId} attempted to pay for ${studentId}`);
             throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
         }
         logger.info(`[payFeeComponent] Authorization verified - Student paying for self`);
-
-        // Students cannot initiate OFFLINE payments directly via API (usually Admin recorded)
         if (mode === 'OFFLINE') {
-             logger.warn(`[payFeeComponent] SECURITY ALERT - Student attempted OFFLINE payment`);
-             throw new AppError("Students cannot record OFFLINE payments. Please contact admin.", 403);
+            logger.warn(`[payFeeComponent] SECURITY ALERT - Student attempted OFFLINE payment`);
+            throw new AppError("Students cannot record OFFLINE payments. Please contact admin.", 403);
         }
     }
-    
-    logger.info(`[payFeeComponent] Calling processUnifiedPayment service`);
 
-    
+    logger.info(`[payFeeComponent] Calling processUnifiedPayment service`);
     const result = await import('./payment.service').then(s => s.processUnifiedPayment({
         ...req.body,
         initiatedBy: req.user?.userId || null
@@ -436,6 +443,8 @@ export const getFinancialFlow = catchAsync(async (req: Request, res: Response, n
 
     if (!studentId) throw new AppError('Student ID is required', 400);
 
+    await assertStudentOwns(req, studentId);
+
     const flow = await getStudentFinancialFlow(studentId);
 
     sendResponse({
@@ -444,5 +453,30 @@ export const getFinancialFlow = catchAsync(async (req: Request, res: Response, n
         success: true,
         message: 'Financial flow retrieved successfully',
         data: flow
+    });
+});
+
+export const getCompleteHistory = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    let { studentId } = req.params;
+
+    if (!studentId && req.user?.role === 'STUDENT') {
+        const { getStudentByUserId } = await import('../student/student.service');
+        const student = await getStudentByUserId(req.user.userId);
+        if (!student) throw new AppError('Student not found', 404);
+        studentId = student.id;
+    }
+
+    if (!studentId) throw new AppError('Student ID is required', 400);
+
+    await assertStudentOwns(req, studentId);
+
+    const history = await getStudentCompleteHistory(studentId);
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: 'Complete student history retrieved successfully',
+        data: history
     });
 });

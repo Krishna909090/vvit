@@ -1,11 +1,11 @@
 import { z } from 'zod';
-import { AccommodationType, HostelType, PaymentMethod, HostelPaymentMode } from '@prisma/client';
+import { AccommodationType, HostelType, PaymentMethod, HostelPaymentMode, AdmissionEntryType, PaymentComponent, QuotaType, SubjectExamType, SemesterMarkStatus, AttendanceStatus } from '@prisma/client';
 import { Role } from '../constants/roles';
 
 export const enableExamSchema = z.object({
     body: z.object({
         studentIds: z.array(z.string().uuid()),
-        testDate: z.string().datetime().or(z.date()), // Accept ISO string or Date object
+        testDate: z.string().datetime().or(z.date()),
         testCenter: z.string().min(1, "Test center is required"),
     }),
 });
@@ -21,7 +21,9 @@ export const verifyAndAllotSeatSchema = z.object({
     body: z.object({
         studentId: z.string().uuid(),
         approved: z.boolean(),
-        allottedCourseId: z.string().uuid().optional(), // Required if approved is true, but we can refine this
+        allottedCourseId: z.string().uuid().optional(),
+
+        scholarshipPercentage: z.number().min(0).max(100).optional(),
     }).refine((data) => !data.approved || (data.approved && data.allottedCourseId), {
         message: "Allotted course ID is required when approved is true",
         path: ["allottedCourseId"],
@@ -61,7 +63,7 @@ export const createDiscountRequestSchema = z.object({
         reason: z.string().min(1, "Reason is required"),
         documentUrl: z.string().url("Invalid URL").optional(),
         referredBy: z.string().optional(),
-        // New optional flag to bypass duplicate‑request check
+
         forceCreate: z.boolean().optional(),
         items: z.array(z.object({
             feeHeadId: z.string().optional().nullable(),
@@ -80,7 +82,7 @@ export const approveDiscountSchema = z.object({
             approvedAmount: z.number().min(0)
         })).optional(),
         remarks: z.string().optional(),
-        // New optional flag to bypass conflict check
+
         forceApprove: z.boolean().optional(),
     }),
 });
@@ -124,6 +126,8 @@ export const updateExamScoreSchema = z.object({
     }),
 });
 
+const timeRegex = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
 export const createTransportRouteSchema = z.object({
     body: z.object({
         name: z.string().min(1, "Route name is required"),
@@ -132,6 +136,8 @@ export const createTransportRouteSchema = z.object({
         busNumber: z.string().min(1, "Bus number is required"),
         capacity: z.number().int().min(1, "Capacity must be at least 1"),
         vehicleId: z.string().uuid().optional().nullable(),
+        pickupTime: z.string().regex(timeRegex, "pickupTime must be HH:MM (24-hour)").optional().nullable(),
+        dropTime: z.string().regex(timeRegex, "dropTime must be HH:MM (24-hour)").optional().nullable(),
     }),
 });
 
@@ -186,10 +192,10 @@ export const getAllApplicationsSchema = z.object({
         certificateStatus: z.string().optional(),
         qualificationLevel: z.string().optional(),
         qualificationBoard: z.string().optional(),
-        marks10thMin: z.string().optional(),
-        marks10thMax: z.string().optional(),
-        marks12thMin: z.string().optional(),
-        marks12thMax: z.string().optional(),
+        marks10thMin: z.coerce.number().optional(),
+        marks10thMax: z.coerce.number().optional(),
+        marks12thMin: z.coerce.number().optional(),
+        marks12thMax: z.coerce.number().optional(),
         certificatesApproved: z.string().optional(),
         seatStatus: z.string().optional(),
         scholarship: z.string().optional(),
@@ -234,8 +240,6 @@ export const studentIdParamSchema = z.object({
     }),
 });
 
-const AllowedRoles = ["ADMIN", "SUPER_ADMIN", "STAFF", "INVIGILATOR", "VERIFICATION_OFFICER"] as const;
-
 export const addAdminSchema = z.object({
   body: z.object({
     phone: z
@@ -278,18 +282,6 @@ export const getAgentCommissionsSchema = z.object({
     }),
 });
 
-export const createSpecializationSchema = z.object({
-    body: z.object({
-        code: z.string().min(1, "code is required"),
-        name: z.string().min(1, "name is required"),
-        courseId: z.string().uuid("This refers to Course ID"),
-        totalSeats: z.number().int().min(1, "Total seats must be at least 1"),
-    }),
-});
-
-// ERP Schemas
-
-// Academics
 export const createSchoolSchema = z.object({
     body: z.object({
         name: z.string().min(1, "Name is required"),
@@ -311,7 +303,6 @@ export const createCourseSchema = z.object({
         code: z.string().min(1, "Code is required"),
         departmentId: z.string().uuid("Invalid Department ID"),
         degree: z.string().optional(),
-        totalSeats: z.number().int().min(0).optional(),
         omrId: z.number().int().optional(),
     }),
 });
@@ -319,7 +310,8 @@ export const createCourseSchema = z.object({
 export const createBatchSchema = z.object({
     body: z.object({
         name: z.string().min(1),
-        specializationId: z.string().uuid(),
+        courseId: z.string().uuid('Invalid Course ID'),
+        academicYearId: z.string().uuid('Invalid Academic Year ID'),
         startDate: z.coerce.date(),
         endDate: z.coerce.date(),
     }),
@@ -332,7 +324,6 @@ export const createSectionSchema = z.object({
     }),
 });
 
-// Hostel
 export const createHostelBlockSchema = z.object({
     body: z.object({
         hostelId: z.string().uuid(),
@@ -351,13 +342,13 @@ export const createHostelRoomSchema = z.object({
     }),
 });
 
-// Transport
 export const createVehicleSchema = z.object({
     body: z.object({
         number: z.string().min(1),
         capacity: z.number().int().positive(),
         driverName: z.string().min(1),
         driverPhone: z.string().min(10),
+        photoUrl: z.string().url("photoUrl must be a valid URL").optional().nullable(),
     }),
 });
 
@@ -366,25 +357,42 @@ export const createTransportStopSchema = z.object({
         routeId: z.string().uuid(),
         name: z.string().min(1),
         sequence: z.number().int().min(1),
-        pickupTime: z.string().datetime().or(z.date()),
-        dropTime: z.string().datetime().or(z.date()),
     }),
 });
 
-// Finance
 export const createAcademicYearSchema = z.object({
     body: z.object({
         code: z.string().min(1, "Code is required"),
         startDate: z.string().datetime().or(z.date()),
         endDate: z.string().datetime().or(z.date()),
         isActive: z.boolean().optional(),
-    }),
+    }).refine(
+        (d) => new Date(d.endDate) > new Date(d.startDate),
+        { message: "endDate must be after startDate", path: ["endDate"] }
+    ),
 });
+
+const PAYMENT_COMPONENT_ENUM = [
+    'APPLICATION_FEE', 'TUITION', 'HOSTEL', 'TRANSPORT', 'OTHER',
+    'SCHOLARSHIP_TOKEN', 'BOOK_BANK', 'ADMISSION', 'SKILL_DEVELOPMENT',
+    'HOSTEL_ACCOMMODATION', 'HOSTEL_MESS', 'HOSTEL_LAUNDRY', 'HOSTEL_REGISTRATION',
+    'COURSE_CHANGE_FEE'
+] as const;
 
 export const createFeeHeadSchema = z.object({
     body: z.object({
         name: z.string().min(1),
         description: z.string().optional(),
+        component: z.string().transform(v => v.toUpperCase()).pipe(z.enum(PAYMENT_COMPONENT_ENUM)).optional(),
+    }),
+});
+
+export const updateFeeHeadSchema = z.object({
+    params: z.object({ id: z.string().uuid() }),
+    body: z.object({
+        name: z.string().min(1).optional(),
+        description: z.string().optional(),
+        component: z.string().transform(v => v.toUpperCase()).pipe(z.enum(PAYMENT_COMPONENT_ENUM)).optional(),
     }),
 });
 
@@ -394,11 +402,11 @@ export const createFeeStructureSchema = z.object({
         feeHeadId: z.string().uuid(),
         amount: z.number().positive(),
         academicYearId: z.string().uuid(),
+        entryAcademicYearId: z.string().uuid().optional(),
+        entryType: z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
+        instituteCode: z.enum(['MGMT', 'VVITU', 'VVITPU']).optional(),
         quotaType: z.string().optional(),
-        courseType: z.string().optional(),
-        degreeId: z.string().uuid().optional(),
         yearOfStudy: z.number().int().min(1).max(10).optional(),
-        dueDate: z.string().datetime().or(z.date()).optional(),
     }),
 });
 
@@ -409,10 +417,71 @@ export const createBulkFeeStructureSchema = z.object({
         amount: z.number().positive(),
         academicYearId: z.string().uuid(),
         quotaType: z.string().optional(),
-        courseType: z.string().optional(),
         yearOfStudy: z.number().int().min(1).max(10).optional(),
-        dueDate: z.string().datetime().or(z.date()).optional(),
     }),
+});
+
+export const bulkHeadsFeeStructureSchema = z.object({
+    body: z.object({
+        courseId:            z.string().uuid('Invalid Course ID'),
+        academicYearId:      z.string().uuid('Invalid Academic Year ID'),
+        entryAcademicYearId: z.string().uuid('Invalid Entry Academic Year ID').optional(),
+        entryType:           z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
+        instituteCode:       z.enum(['MGMT', 'VVITU', 'VVITPU']).optional(),
+        quotaType:           z.enum(['MANAGEMENT', 'CONVENOR']).optional(),
+        yearOfStudy:         z.number().int().min(1).max(10).optional(),
+        feeHeads: z.array(z.object({
+            feeHeadId: z.string().uuid('Invalid Fee Head ID'),
+            amount:    z.number().positive('amount must be > 0')
+                                  .finite('amount must be finite')
+                                  .max(100_000_000, 'amount exceeds reasonable limit (₹10 crore)'),
+        }))
+        .min(1,   'feeHeads must contain at least one entry')
+        .max(50,  'feeHeads cannot exceed 50 entries per call'),
+    })
+
+    .refine(
+        b => !(b.entryType === 'LATERAL' && (b.yearOfStudy ?? 2) < 2),
+        { message: 'LATERAL entry requires yearOfStudy >= 2', path: ['yearOfStudy'] },
+    )
+
+    .refine(
+        b => new Set(b.feeHeads.map(h => h.feeHeadId)).size === b.feeHeads.length,
+        { message: 'Duplicate feeHeadId(s) in array — each fee head can appear only once', path: ['feeHeads'] },
+    )
+
+    .refine(
+        b => !b.entryAcademicYearId || b.entryAcademicYearId === b.academicYearId,
+        { message: 'entryAcademicYearId should equal academicYearId (fee cohort = entry year)', path: ['entryAcademicYearId'] },
+    ),
+});
+
+export const assignEnrollmentSchema = z.object({
+    params: z.object({
+        studentId: z.string().uuid('Invalid student ID'),
+    }),
+    body: z.object({
+        rollNumber: z.string().trim().min(1, 'Roll number is required'),
+        sectionId: z.string().uuid('Invalid section ID'),
+        currentSemester: z.number().int().min(1).max(20).optional(),
+        yearOfStudy: z.number().int().min(1).max(10).optional(),
+        seedFeeDemands: z.boolean().optional().default(true),
+    }),
+});
+
+export const cloneFeeStructuresSchema = z.object({
+    body: z.object({
+        sourceAcademicYearId: z.string().uuid('Invalid source academic year ID'),
+        targetAcademicYearId: z.string().uuid('Invalid target academic year ID'),
+        multiplier: z.number().positive().max(10).optional().default(1.0),
+        courseIds: z.array(z.string().uuid('Invalid course ID')).optional(),
+        entryAcademicYearId: z.string().uuid('Invalid entry academic year ID').optional(),
+        entryType: z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
+        instituteCode: z.enum(['MGMT', 'VVITU', 'VVITPU']).optional(),
+    }).refine(
+        d => d.sourceAcademicYearId !== d.targetAcademicYearId,
+        { message: 'Source and target academic years must differ', path: ['targetAcademicYearId'] }
+    ),
 });
 
 export const updateStaffUserSchema = z.object({
@@ -437,6 +506,31 @@ export const generateFeeDemandsSchema = z.object({
         studentId: z.string().uuid(),
         courseId: z.string().uuid(),
         academicYearId: z.string().uuid(),
+
+        deleteExisting:       z.boolean().optional(),
+        allowLegacyFallback:  z.boolean().optional(),
+        requireEnrollment:    z.boolean().optional(),
+        dueDateFallbackDays:  z.number().int().min(0).max(365).optional(),
+    }),
+});
+
+export const generateFeeDemandsBulkSchema = z.object({
+    body: z.object({
+        academicYearId: z.string().uuid(),
+        filters: z.object({
+            courseIds:            z.array(z.string().uuid()).optional(),
+            entryTypes:           z.array(z.nativeEnum(AdmissionEntryType)).optional(),
+            instituteCodes:       z.array(z.string()).optional(),
+            entryAcademicYearIds: z.array(z.string().uuid()).optional(),
+            quotaTypes:           z.array(z.nativeEnum(QuotaType)).optional(),
+            studentIds:           z.array(z.string().uuid()).optional(),
+        }).optional(),
+        runOptions: z.object({
+            allowLegacyFallback:  z.boolean().optional(),
+            requireEnrollment:    z.boolean().optional(),
+            deleteExisting:       z.boolean().optional(),
+            dueDateFallbackDays:  z.number().int().min(0).max(365).optional(),
+        }).optional(),
     }),
 });
 
@@ -445,6 +539,157 @@ export const setEligibleScholarshipSchema = z.object({
         studentId: z.string().uuid(),
         ruleId: z.string().uuid(),
     }),
+});
+
+export const applyFeeCorrectionSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Invalid fee correction ID'),
+    }),
+    body: z.object({
+        feeDemandId: z.string().uuid('Invalid fee demand ID'),
+        amount:      z.number().positive('amount must be greater than 0'),
+        remarks:     z.string().trim().max(500).optional(),
+    }),
+});
+
+export const settleFeeCorrectionSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Invalid fee correction ID'),
+    }),
+    body: z.object({
+        remarks: z.string().trim().max(500).optional(),
+    }),
+});
+
+export const createSubjectSchema = z.object({
+    body: z.object({
+        code:             z.string().min(1).max(32),
+        name:             z.string().min(1),
+        courseId:         z.string().uuid(),
+        semester:         z.number().int().min(1).max(12),
+        credits:          z.number().min(0).max(20).optional(),
+        examType:         z.nativeEnum(SubjectExamType).optional(),
+        maxInternalMarks: z.number().min(0).max(1000).nullable().optional(),
+        maxExternalMarks: z.number().min(0).max(1000).nullable().optional(),
+        maxTotalMarks:    z.number().min(0).max(1000).nullable().optional(),
+        isElective:       z.boolean().optional(),
+    }),
+});
+
+export const updateSubjectSchema = z.object({
+    body: z.object({
+        code:             z.string().min(1).max(32).optional(),
+        name:             z.string().min(1).optional(),
+        credits:          z.number().min(0).max(20).optional(),
+        examType:         z.nativeEnum(SubjectExamType).optional(),
+        maxInternalMarks: z.number().min(0).max(1000).nullable().optional(),
+        maxExternalMarks: z.number().min(0).max(1000).nullable().optional(),
+        maxTotalMarks:    z.number().min(0).max(1000).nullable().optional(),
+        isElective:       z.boolean().optional(),
+    }).refine(
+        (d) => Object.keys(d).length > 0,
+        { message: 'At least one field must be provided' }
+    ),
+});
+
+const semesterMarkRowSchema = z.object({
+    subjectId:       z.string().uuid(),
+    internalMarks:   z.number().min(0).nullable().optional(),
+    externalMarks:   z.number().min(0).nullable().optional(),
+    totalMarks:      z.number().min(0).nullable().optional(),
+    grade:           z.string().max(8).nullable().optional(),
+    gradePoints:     z.number().min(0).max(10).nullable().optional(),
+    status:          z.nativeEnum(SemesterMarkStatus).optional(),
+    attemptNumber:   z.number().int().min(1).max(20).optional(),
+    isSupplementary: z.boolean().optional(),
+    remarks:         z.string().max(500).optional(),
+    isBackfilled:    z.boolean().optional(),
+});
+
+export const recordMarkSchema = z.object({
+    body: semesterMarkRowSchema.extend({
+        studentId:      z.string().uuid(),
+        academicYearId: z.string().uuid(),
+    }),
+});
+
+export const recordMarksBulkSchema = z.object({
+    body: z.object({
+        studentId:      z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        marks:          z.array(semesterMarkRowSchema).min(1).max(100),
+    }),
+});
+
+export const updateMarkSchema = z.object({
+    body: z.object({
+        internalMarks:   z.number().min(0).nullable().optional(),
+        externalMarks:   z.number().min(0).nullable().optional(),
+        totalMarks:      z.number().min(0).nullable().optional(),
+        grade:           z.string().max(8).nullable().optional(),
+        gradePoints:     z.number().min(0).max(10).nullable().optional(),
+        status:          z.nativeEnum(SemesterMarkStatus).optional(),
+        remarks:         z.string().max(500).optional(),
+        isBackfilled:    z.boolean().optional(),
+    }).refine(
+        (d) => Object.keys(d).length > 0,
+        { message: 'At least one field must be provided' }
+    ),
+});
+
+const dateInputSchema = z.union([z.string().datetime(), z.string().regex(/^\d{4}-\d{2}-\d{2}/), z.date()]);
+
+export const markAttendanceSchemaV2 = z.object({
+    body: z.object({
+        studentId:      z.string().uuid(),
+        subjectId:      z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        date:           dateInputSchema,
+        periodNumber:   z.number().int().min(1).max(20).nullable().optional(),
+        status:         z.nativeEnum(AttendanceStatus),
+        remarks:        z.string().max(500).optional(),
+        isBackfilled:   z.boolean().optional(),
+    }),
+});
+
+export const markClassAttendanceSchema = z.object({
+    body: z.object({
+        subjectId:      z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        date:           dateInputSchema,
+        periodNumber:   z.number().int().min(1).max(20).nullable().optional(),
+        isBackfilled:   z.boolean().optional(),
+        rows: z.array(z.object({
+            studentId: z.string().uuid(),
+            status:    z.nativeEnum(AttendanceStatus),
+            remarks:   z.string().max(500).optional(),
+        })).min(1).max(500),
+    }),
+});
+
+export const markAttendanceBackfillSchema = z.object({
+    body: z.object({
+        studentId:      z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        rows: z.array(z.object({
+            subjectId:    z.string().uuid(),
+            date:         dateInputSchema,
+            periodNumber: z.number().int().min(1).max(20).nullable().optional(),
+            status:       z.nativeEnum(AttendanceStatus),
+            remarks:      z.string().max(500).optional(),
+        })).min(1).max(500),
+    }),
+});
+
+export const updateAttendanceSchema = z.object({
+    body: z.object({
+        status:       z.nativeEnum(AttendanceStatus).optional(),
+        remarks:      z.string().max(500).optional(),
+        isBackfilled: z.boolean().optional(),
+    }).refine(
+        (d) => Object.keys(d).length > 0,
+        { message: 'At least one field must be provided' }
+    ),
 });
 
 export const submitVerificationSchema = z.object({
@@ -505,7 +750,6 @@ export const updateAcademicQualificationSchema = z.object({
     }),
 });
 
-
 export const deleteAcademicQualificationSchema = z.object({
     params: z.object({
         id: z.string().uuid("Invalid Qualification ID"),
@@ -534,15 +778,94 @@ export const finalizeAdmissionSchema = z.object({
             hostelType: z.nativeEnum(HostelType).optional(),
             hostelPaymentMode: z.nativeEnum(HostelPaymentMode).optional(),
         }).refine((data) => {
-            if (data.type === AccommodationType.HOSTEL) return !!data.hostelId;
+            if (data.type === AccommodationType.HOSTEL) {
+
+                return !!data.hostelType && !!data.hostelPaymentMode;
+            }
             if (data.type === AccommodationType.TRANSPORT) return !!data.transportRouteId;
             return true;
         }, {
-            message: "Hostel ID or Transport Route ID is required based on allocation type",
+            message: "For HOSTEL: hostelType (SHARING_*) and hostelPaymentMode are required. For TRANSPORT: transportRouteId is required.",
         }).optional(),
         course: z.object({
             allottedCourseId: z.string().uuid(),
         }),
+
+        batchAcademicYearId: z.string().uuid().optional(),
+    }),
+});
+
+export const manualEntryAdmissionSchema = z.object({
+    body: z.object({
+
+        student: z.object({
+            name:          z.string().trim().min(1),
+            fatherName:    z.string().trim().min(1),
+            motherName:    z.string().trim().min(1),
+            gender:        z.string().trim().min(1),
+            dob:           z.string().datetime().or(z.date()),
+            phone:         z.string().trim().min(10).max(15),
+            email:         z.string().email().optional(),
+            aadharNumber:  z.string().trim().min(1),
+            category:      z.string().trim().min(1),
+            country:       z.string().trim().min(1),
+            address:       z.string().trim().min(1),
+            address2:      z.string().trim().optional(),
+            city:          z.string().trim().min(1),
+            state:         z.string().trim().min(1),
+            pincode:       z.string().trim().min(1),
+            profilePhotoUrl: z.string().url().optional(),
+            quotaType:     z.nativeEnum(QuotaType),
+        }),
+
+        course: z.object({
+            allottedCourseId: z.string().uuid('Invalid Course ID'),
+        }),
+
+        entry: z.object({
+            type:           z.nativeEnum(AdmissionEntryType).default(AdmissionEntryType.REGULAR),
+            yearOfStudy:    z.number().int().min(1).max(10).default(1),
+            academicYearId: z.string().uuid('Invalid Academic Year ID'),
+            currentSemester: z.number().int().min(1).max(20).optional(),
+            reason:         z.string().trim().max(500).optional(),
+            isBackdated:    z.boolean().default(false),
+            instituteCode:  z.enum(['VVITU', 'VVITPU']).optional(),
+        }).refine(
+            e => e.type !== AdmissionEntryType.LATERAL || e.yearOfStudy >= 2,
+            { message: 'LATERAL entry requires yearOfStudy >= 2', path: ['yearOfStudy'] }
+        ),
+
+        enrollment: z.object({
+            sectionId:  z.string().uuid('Invalid Section ID'),
+            rollNumber: z.string().trim().min(1),
+        }),
+
+        scholarship: z.object({
+            ruleId:     z.string().uuid().optional(),
+
+            percentage: z.number().min(0).max(100),
+        }).optional(),
+
+        accommodation: z.object({
+            type:              z.nativeEnum(AccommodationType).default(AccommodationType.NONE),
+            hostelId:          z.string().uuid().optional(),
+            hostelType:        z.nativeEnum(HostelType).optional(),
+            hostelPaymentMode: z.nativeEnum(HostelPaymentMode).optional(),
+            transportRouteId:  z.string().uuid().optional(),
+        }).refine(a => {
+            if (a.type === AccommodationType.HOSTEL)    return !!a.hostelType && !!a.hostelPaymentMode && !!a.hostelId;
+            if (a.type === AccommodationType.TRANSPORT) return !!a.transportRouteId;
+            return true;
+        }, { message: 'HOSTEL needs hostelId+hostelType+hostelPaymentMode; TRANSPORT needs transportRouteId' }).optional(),
+
+        priorPayment: z.object({
+            amount:          z.number().positive(),
+            method:          z.nativeEnum(PaymentMethod),
+            component:       z.nativeEnum(PaymentComponent),
+            referenceNumber: z.string().trim().optional(),
+            date:            z.string().datetime().or(z.date()).optional(),
+            feeHeadId:       z.string().uuid().optional(),
+        }).optional(),
     }),
 });
 
@@ -556,7 +879,7 @@ export const assignRoleGroupSchema = z.object({
     body: z.object({
         userId: z.string().uuid("Invalid User ID"),
         role: z.string().optional(),
-        // Refine for stricter strings if needed, but assuming any valid string for now
+
         groupIds: z.array(z.string().uuid("Invalid Group ID")).optional(),
     }).refine((data: any) => data.role !== undefined || data.groupIds !== undefined, {
         message: "Either role or groupIds must be provided",
@@ -602,3 +925,41 @@ export const updateSeatAllotedBySchema = z.object({
         seatAllotedBy: z.string().uuid('Invalid seatAllotedBy UUID').nullable().optional(),
     }),
 });
+
+export const createCourseCapacitySchema = z.object({
+    body: z.object({
+        courseId:       z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        totalSeats:     z.number().int().min(0),
+        filledSeats:    z.number().int().min(0).optional(),
+    }),
+});
+
+export const upsertCourseCapacitySchema = z.object({
+    body: z.object({
+        courseId:       z.string().uuid(),
+        academicYearId: z.string().uuid(),
+        totalSeats:     z.number().int().min(0),
+    }),
+});
+
+export const bulkUpsertCourseCapacitySchema = z.object({
+    body: z.object({
+        academicYearId: z.string().uuid(),
+        rows: z.array(z.object({
+            courseId:   z.string().uuid(),
+            totalSeats: z.number().int().min(0),
+        })).min(1, 'rows must contain at least one entry'),
+    }),
+});
+
+export const updateCourseCapacitySchema = z.object({
+    params: z.object({ id: z.string().uuid() }),
+    body: z.object({
+        totalSeats:  z.number().int().min(0).optional(),
+        filledSeats: z.number().int().min(0).optional(),
+    }).refine(b => b.totalSeats !== undefined || b.filledSeats !== undefined, {
+        message: 'At least one of totalSeats or filledSeats is required',
+    }),
+});
+

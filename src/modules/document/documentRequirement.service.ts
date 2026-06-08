@@ -1,14 +1,9 @@
-// services/documentRequirementService.ts
-// Business logic for managing document requirements based on qualifications/degree types
+
 
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
-import { MESSAGES } from '../../constants/messages';
 
-/**
- * Get all document requirements with optional filtering by degreeType
- */
 export const getDocumentRequirements = async (degreeType?: string) => {
     logger.info(`[getDocumentRequirements] Fetching document requirements${degreeType ? ` for degreeType=${degreeType}` : ''}`);
     
@@ -29,9 +24,6 @@ export const getDocumentRequirements = async (degreeType?: string) => {
     return requirements;
 };
 
-/**
- * Get a single document requirement by ID
- */
 export const getDocumentRequirementById = async (id: string) => {
     if (!id) throw new AppError('Requirement ID is required', 400);
 
@@ -46,9 +38,6 @@ export const getDocumentRequirementById = async (id: string) => {
     return requirement;
 };
 
-/**
- * Create a new document requirement
- */
 export const createDocumentRequirement = async (data: any, userId?: string) => {
     const { degreeType, documentName, documentKey, isRequired } = data;
     
@@ -63,8 +52,7 @@ export const createDocumentRequirement = async (data: any, userId?: string) => {
     if (!documentKey || !documentKey.trim()) {
         throw new AppError('Document key is required', 400);
     }
-    
-    // Check if already exists
+
     const existing = await prisma.documentRequirement.findFirst({
         where: {
             degreeType: degreeType.trim(),
@@ -94,9 +82,6 @@ export const createDocumentRequirement = async (data: any, userId?: string) => {
     return requirement;
 };
 
-/**
- * Update an existing document requirement
- */
 export const updateDocumentRequirement = async (id: string, data: any, userId?: string) => {
     if (!id) {
         throw new AppError('Document requirement ID is required', 400);
@@ -128,10 +113,7 @@ export const updateDocumentRequirement = async (id: string, data: any, userId?: 
     if (data.isRequired !== undefined) {
         updateData.isRequired = Boolean(data.isRequired);
     }
-    
-    // Note: degreeType and documentKey cannot be updated as they form unique constraint
-    // If needed, delete and create new one
-    
+
     const updated = await prisma.documentRequirement.update({
         where: { id },
         data: updateData
@@ -141,9 +123,6 @@ export const updateDocumentRequirement = async (id: string, data: any, userId?: 
     return updated;
 };
 
-/**
- * Delete a document requirement (soft delete)
- */
 export const deleteDocumentRequirement = async (id: string) => {
     if (!id) {
         throw new AppError('Document requirement ID is required', 400);
@@ -172,9 +151,6 @@ export const deleteDocumentRequirement = async (id: string) => {
     return deleted;
 };
 
-/**
- * Get document requirements for a specific student based on their degree type
- */
 export const getStudentDocumentRequirements = async (studentId: string) => {
     if (!studentId) {
         throw new AppError('Student ID is required', 400);

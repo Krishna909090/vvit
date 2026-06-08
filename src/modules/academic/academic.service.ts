@@ -4,7 +4,7 @@ import { MESSAGES } from '../../constants/messages';
 import { AdmissionStatus } from '@prisma/client';
 
 export const AcademicService = {
-    // School
+
     async createSchool(name: string, code: string, createdBy?: string) {
         const existingSchool = await prisma.school.findFirst({
             where: {
@@ -60,9 +60,8 @@ export const AcademicService = {
         return await prisma.school.update({ where: { id }, data: { isDeleted: true } });
     },
 
-    // Department
     async createDepartment(name: string, code: string, schoolId?: string, createdBy?: string) {
-        // Validate School if provided
+
         if (schoolId) {
             const school = await prisma.school.findUnique({ where: { id: schoolId } });
             if (!school) {
@@ -133,7 +132,6 @@ export const AcademicService = {
             throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
         }
 
-        // Validate School if changing
         if (schoolId && schoolId !== department.schoolId) {
             const school = await prisma.school.findUnique({ where: { id: schoolId } });
             if (!school) throw new AppError("School not found", 404);
@@ -152,8 +150,7 @@ export const AcademicService = {
         return await prisma.department.update({ where: { id }, data: { isDeleted: true } });
     },
 
-    // Course
-    async createCourse(name: string, code: string, departmentId: string, degree?: string, totalSeats?: number, createdBy?: string, omrId?: number) {
+    async createCourse(name: string, code: string, departmentId: string, degree?: string, createdBy?: string, omrId?: number) {
         const department = await prisma.department.findUnique({ where: { id: departmentId } });
         if (!department) {
             throw new AppError(MESSAGES.ERROR.DEPARTMENT_NOT_FOUND, 404);
@@ -179,11 +176,15 @@ export const AcademicService = {
         }
 
         if (omrId !== undefined && omrId !== null) {
+
             const omrIdConflict = await prisma.course.findFirst({
-                where: { omrId, isDeleted: false }
+                where: { omrId }
             });
             if (omrIdConflict) {
-                throw new AppError("A course with this OMR ID already exists", 409);
+                throw new AppError(
+                    `OMR ID ${omrId} is already assigned to course "${omrIdConflict.name}"`,
+                    409
+                );
             }
         }
 
@@ -193,7 +194,6 @@ export const AcademicService = {
                 code,
                 departmentId,
                 degree,
-                totalSeats: totalSeats !== undefined ? Number(totalSeats) : 0,
                 omrId,
                 createdBy
             }
@@ -217,7 +217,7 @@ export const AcademicService = {
 
         const courses = await prisma.course.findMany({
             where,
-            include: { department: true, specializations: true }
+            include: { department: true }
         });
         return courses.map((c: any) => ({
             ...c,
@@ -226,7 +226,7 @@ export const AcademicService = {
         }));
     },
 
-    async getDegrees() {
+    async  getDegrees() {
         const result = await prisma.course.findMany({
             select: { degree: true },
             distinct: ['degree'],
@@ -234,8 +234,7 @@ export const AcademicService = {
                 degree: { not: null }
             }
         });
-        
-        // Filter out nulls and return array of strings
+
         return result
             .map(r => r.degree)
             .filter((d): d is string => d !== null);
@@ -244,13 +243,13 @@ export const AcademicService = {
     async getCourseById(id: string) {
         const course = await prisma.course.findUnique({
             where: { id },
-            include: { department: true, specializations: true }
+            include: { department: true }
         });
         if (!course) throw new AppError("Course not found", 404);
         return course;
     },
 
-    async updateCourse(id: string, name: string, code: string, departmentId: string, totalSeats: number | undefined, updatedBy?: string, omrId?: number) {
+    async updateCourse(id: string, name: string, code: string, departmentId: string, updatedBy?: string, omrId?: number, scholarshipEligible?: boolean) {
         const course = await prisma.course.findUnique({ where: { id } });
         if (!course) throw new AppError("Course not found", 404);
 
@@ -258,13 +257,12 @@ export const AcademicService = {
             (name === undefined || course.name === name) &&
             (code === undefined || course.code === code) &&
             (departmentId === undefined || course.departmentId === departmentId) &&
-            (totalSeats === undefined || course.totalSeats === totalSeats) &&
-            (omrId === undefined || course.omrId === omrId)
+            (omrId === undefined || course.omrId === omrId) &&
+            (scholarshipEligible === undefined || course.scholarshipEligible === scholarshipEligible)
         ) {
             throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
         }
 
-        // Check for code uniqueness if code is being changed
         if (code && code !== course.code) {
            const existingCourse = await prisma.course.findFirst({
                 where: {
@@ -279,17 +277,21 @@ export const AcademicService = {
         }
 
         if (omrId !== undefined && omrId !== null && omrId !== course.omrId) {
+
             const omrIdConflict = await prisma.course.findFirst({
-                where: { omrId, id: { not: id }, isDeleted: false }
+                where: { omrId, id: { not: id } }
             });
             if (omrIdConflict) {
-                throw new AppError("A course with this OMR ID already exists", 409);
+                throw new AppError(
+                    `OMR ID ${omrId} is already assigned to course "${omrIdConflict.name}"`,
+                    409
+                );
             }
         }
 
         const updateData: any = { name, code, departmentId, updatedBy };
-        if (totalSeats !== undefined) updateData.totalSeats = totalSeats;
         if (omrId !== undefined) updateData.omrId = omrId;
+        if (scholarshipEligible !== undefined) updateData.scholarshipEligible = scholarshipEligible;
 
         return await prisma.course.update({
             where: { id },
@@ -297,158 +299,89 @@ export const AcademicService = {
         });
     },
 
-    async deleteCourse(id: string) {
+    async deleteCourse(id: string, adminId?: string) {
         const course = await prisma.course.findUnique({ where: { id } });
         if (!course) throw new AppError("Course not found", 404);
+        if (course.isDeleted) throw new AppError("Course is already deleted", 400);
 
-        return await prisma.course.update({ where: { id }, data: { isDeleted: true } });
-    },
-
-    // Specialization
-    async createSpecialization(code: string, name: string, totalSeats: number, courseId: string, createdBy?: string) {
-        if (!code || !name || !totalSeats || !courseId) throw new AppError(MESSAGES.ERROR.CODE_NAME_SEATS_REQUIRED, 400);
-
-        const course = await prisma.course.findUnique({ where: { id: courseId } });
-        if (!course) {
-            throw new AppError("Course (Specialization Parent) not found", 404);
+        const allotted = await prisma.studentAdmission.count({
+            where: { allottedCourseId: id },
+        });
+        if (allotted > 0) {
+            throw new AppError(
+                `Cannot delete course "${course.name}" — ${allotted} student(s) are allotted to it. ` +
+                `Reassign them to another course first.`,
+                409
+            );
         }
 
-        const existingSpecialization = await prisma.specialization.findFirst({ where: { code, isDeleted: false } });
-        if (existingSpecialization) {
-            throw new AppError("Specialization code exists", 409);
-        }
-
-        return await prisma.specialization.create({
-            data: {
-                code,
-                name,
-                courseId,
-                totalSeats: Number(totalSeats),
-                filledSeats: 0,
-                createdBy
-            }
-        });
-    },
-
-    async getSpecializations() {
-        const specs = await prisma.specialization.findMany({
-            where: { isDeleted: false },
-            include: { course: true }
-        });
-        return specs.map(s => ({
-            ...s,
-            courseName: s.course.name,
-            course: undefined
-        }));
-    },
-
-    async getSpecializationById(id: string) {
-        const specialization = await prisma.specialization.findUnique({
+        return await prisma.course.update({
             where: { id },
-            include: { course: { include: { department: true } } }
-        });
-        if (!specialization) throw new AppError("Specialization not found", 404);
-        return specialization;
-    },
-
-    async updateSpecialization(id: string, code: string, name: string, totalSeats: number, updatedBy?: string) {
-        const specialization = await prisma.specialization.findUnique({ where: { id } });
-        if (!specialization) throw new AppError("Specialization not found", 404);
-
-        const newCode = code !== undefined ? code : specialization.code;
-        const newName = name !== undefined ? name : specialization.name;
-        const newTotalSeats = totalSeats !== undefined ? Number(totalSeats) : specialization.totalSeats;
-
-        if (
-            specialization.code === newCode && 
-            specialization.name === newName && 
-            specialization.totalSeats === newTotalSeats
-        ) {
-            throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
-        }
-
-        return await prisma.specialization.update({
-            where: { id },
-            data: { 
-                code: newCode, 
-                name: newName, 
-                totalSeats: newTotalSeats, 
-                updatedBy 
-            }
+            data: { isDeleted: true, updatedBy: adminId },
         });
     },
 
-    async deleteSpecialization(id: string) {
-        const specialization = await prisma.specialization.findUnique({ where: { id } });
-        if (!specialization) throw new AppError("Specialization not found", 404);
+    async getSeatStatus(academicYearId?: string) {
 
-        return await prisma.specialization.update({ where: { id }, data: { isDeleted: true } });
-    },
+        const targetYear = academicYearId
+            ? await prisma.academicYear.findUnique({ where: { id: academicYearId }, select: { id: true, code: true } })
+            : await prisma.academicYear.findFirst({ where: { isActive: true, isDeleted: false }, select: { id: true, code: true } });
+        if (!targetYear) throw new AppError('No active academic year found', 404);
 
-    async getSeatStatus() {
-        const specializations = await prisma.specialization.findMany({
-            where: { isDeleted: false },
+        const capacities = await prisma.courseCapacity.findMany({
+            where: { academicYearId: targetYear.id },
             include: {
-                course: {
-                    include: { department: true }
-                }
+                course: { include: { department: true } },
             },
-            orderBy: {
-                course: {
-                    name: 'asc'
-                }
-            }
         });
 
-        const statusPromises = specializations.map(async (spec) => {
+        const statusPromises = capacities.map(async (cap) => {
             const actualCount = await prisma.studentAdmission.count({
                 where: {
-                    allottedCourseId: spec.courseId, // Approximate: Count all students in the course as we don't track specialization-level seats in StudentAdmission anymore
+                    allottedCourseId: cap.courseId,
+                    academicYearId:   cap.academicYearId,
                     status: {
                         in: [
-                            AdmissionStatus.SEAT_ALLOTTED, 
-                            AdmissionStatus.ADMISSION_CONFIRMED, 
-                            AdmissionStatus.ENROLLED
-                        ]
-                    }
-                }
+                            AdmissionStatus.SEAT_ALLOTTED,
+                            AdmissionStatus.ADMISSION_CONFIRMED,
+                            AdmissionStatus.ENROLLED,
+                        ],
+                    },
+                },
             });
-
             return {
-                id: spec.id,
-                code: spec.code,
-                name: spec.name,
-                courseName: spec.course.name,
-                departmentName: spec.course.department.name,
-                totalSeats: spec.totalSeats,
-                filledSeats: spec.filledSeats, // Count from Specialization table cache
-                availableSeats: spec.totalSeats - (spec.filledSeats ?? 0),
-                actualFilledCount: actualCount, // Count from StudentAdmission table (Truth)
-                isSync: spec.filledSeats === actualCount, // Verification
-                discrepancy: (spec.filledSeats ?? 0) - actualCount
+                courseId:       cap.courseId,
+                courseName:     cap.course.name,
+                courseCode:     cap.course.code,
+                departmentName: cap.course.department.name,
+                academicYear:   targetYear.code,
+                totalSeats:     cap.totalSeats,
+                filledSeats:    cap.filledSeats,
+                availableSeats: Math.max(0, cap.totalSeats - cap.filledSeats),
+                actualFilledCount: actualCount,
+                isSync:         cap.filledSeats === actualCount,
+                discrepancy:    cap.filledSeats - actualCount,
             };
         });
 
-        const results = await Promise.all(statusPromises);
-        
-        // Group by Course for cleaner output
-        const grouped = results.reduce((acc: any, curr) => {
-            const courseKey = `${curr.courseName} (${curr.departmentName})`;
-            if (!acc[courseKey]) {
-                acc[courseKey] = {
-                    course: curr.courseName,
-                    department: curr.departmentName,
-                    specializations: []
+        const rows = await Promise.all(statusPromises);
+
+        const grouped = rows.reduce((acc: any, r) => {
+            const key = `${r.courseName} (${r.departmentName})`;
+            if (!acc[key]) {
+                acc[key] = {
+                    course:     r.courseName,
+                    department: r.departmentName,
+                    academicYear: r.academicYear,
+                    capacity:   [],
                 };
             }
-            acc[courseKey].specializations.push({
-                specialization: curr.name,
-                code: curr.code,
-                totalSeats: curr.totalSeats,
-                filled: curr.filledSeats,
-                available: curr.availableSeats,
-                actualFilled: curr.actualFilledCount, // The "deducting correctly" check
-                isSync: curr.isSync
+            acc[key].capacity.push({
+                totalSeats:    r.totalSeats,
+                filled:        r.filledSeats,
+                available:     r.availableSeats,
+                actualFilled:  r.actualFilledCount,
+                isSync:        r.isSync,
             });
             return acc;
         }, {});
@@ -456,21 +389,31 @@ export const AcademicService = {
         return Object.values(grouped);
     },
 
-    // Academic Year
     async createAcademicYear(code: string, startDate: string, endDate: string, isActive: boolean, createdBy?: string) {
         const existingYear = await prisma.academicYear.findFirst({ where: { code, isDeleted: false } });
         if (existingYear) {
             throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_EXISTS, 409);
         }
 
-        return await prisma.academicYear.create({
-            data: {
-                code,
-                startDate: new Date(startDate),
-                endDate: new Date(endDate),
-                isActive: isActive !== undefined ? isActive : true,
-                createdBy
+        const shouldActivate = isActive !== undefined ? isActive : true;
+
+        return await prisma.$transaction(async (tx) => {
+            if (shouldActivate) {
+                await tx.academicYear.updateMany({
+                    where: { isActive: true },
+                    data: { isActive: false }
+                });
             }
+
+            return tx.academicYear.create({
+                data: {
+                    code,
+                    startDate: new Date(startDate),
+                    endDate: new Date(endDate),
+                    isActive: shouldActivate,
+                    createdBy
+                }
+            });
         });
     },
 
@@ -490,31 +433,122 @@ export const AcademicService = {
         if (data.endDate) updateData.endDate = new Date(data.endDate);
         if (data.isActive !== undefined) updateData.isActive = data.isActive;
 
+        if (data.isActive === true) {
+            return await prisma.$transaction(async (tx) => {
+                await tx.academicYear.updateMany({
+                    where: { isActive: true, id: { not: id } },
+                    data: { isActive: false, updatedBy }
+                });
+                return tx.academicYear.update({ where: { id }, data: updateData });
+            });
+        }
+
         return await prisma.academicYear.update({
             where: { id },
             data: updateData
         });
     },
 
-    async deleteAcademicYear(id: string) {
+    async deleteAcademicYear(id: string, adminId?: string) {
         const academicYear = await prisma.academicYear.findUnique({ where: { id } });
         if (!academicYear) throw new AppError(MESSAGES.ERROR.ACADEMIC_YEAR_NOT_FOUND, 404);
+        if (academicYear.isDeleted) throw new AppError('Academic year is already deleted', 400);
 
-        return await prisma.academicYear.update({ where: { id }, data: { isDeleted: true } });
+        if (academicYear.isActive) {
+            throw new AppError(
+                `Cannot delete the active academic year "${academicYear.code}". Mark another year active first.`,
+                409
+            );
+        }
+
+        if (academicYear.isLocked) {
+            throw new AppError(
+                `Cannot delete locked academic year "${academicYear.code}" — it is a closed financial period.`,
+                423
+            );
+        }
+
+        const [
+            admissions, admissionsEntry, enrollments, demands, payments,
+            ledger, corrections, marks, attendance,
+            hostelAllocations, transportAllocations, scholarships, studentDocuments,
+        ] = await Promise.all([
+            prisma.studentAdmission.count({ where: { academicYearId: id } }),
+            prisma.studentAdmission.count({ where: { entryAcademicYearId: id } }),
+            prisma.studentEnrollment.count({ where: { academicYearId: id } }),
+            prisma.studentFeeDemand.count({ where: { academicYearId: id } }),
+            prisma.payment.count({ where: { academicYearId: id } }),
+            prisma.studentLedger.count({ where: { academicYearId: id } }),
+            (prisma as any).feeCorrection.count({ where: { academicYearId: id } }),
+            (prisma as any).semesterMark.count({ where: { academicYearId: id } }),
+            (prisma as any).classAttendance.count({ where: { academicYearId: id } }),
+            (prisma as any).hostelAllocation.count({ where: { academicYearId: id } }),
+            (prisma as any).transportAllocation.count({ where: { academicYearId: id } }),
+            (prisma as any).studentScholarship.count({ where: { academicYearId: id } }),
+            (prisma as any).studentDocument.count({ where: { academicYearId: id } }),
+        ]);
+
+        const blockers: string[] = [];
+        if (admissions)           blockers.push(`${admissions} admission(s)`);
+        if (admissionsEntry)      blockers.push(`${admissionsEntry} entry-year admission(s)`);
+        if (enrollments)          blockers.push(`${enrollments} enrollment(s)`);
+        if (demands)              blockers.push(`${demands} fee demand(s)`);
+        if (payments)             blockers.push(`${payments} payment(s)`);
+        if (ledger)               blockers.push(`${ledger} ledger entr(ies)`);
+        if (corrections)          blockers.push(`${corrections} fee correction(s)`);
+        if (marks)                blockers.push(`${marks} semester mark(s)`);
+        if (attendance)           blockers.push(`${attendance} attendance record(s)`);
+        if (hostelAllocations)    blockers.push(`${hostelAllocations} hostel allocation(s)`);
+        if (transportAllocations) blockers.push(`${transportAllocations} transport allocation(s)`);
+        if (scholarships)         blockers.push(`${scholarships} scholarship(s)`);
+        if (studentDocuments)     blockers.push(`${studentDocuments} student document(s)`);
+
+        if (blockers.length > 0) {
+            throw new AppError(
+                `Cannot delete academic year "${academicYear.code}" — it has real data: ` +
+                blockers.join(', ') + '. Deleting would orphan these records and corrupt ' +
+                'year-scoped reports, payments and metrics. If the year is over, ' +
+                'lock it (isLocked=true) instead of deleting.',
+                409
+            );
+        }
+
+        return await prisma.academicYear.update({
+            where: { id },
+            data: { isDeleted: true, updatedBy: adminId },
+        });
     },
 
-    // Batch
-    async createBatch(name: string, specializationId: string, startDate: string, endDate: string, createdBy?: string) {
-        // Validate Specialization Exists
-        const specialization = await prisma.specialization.findUnique({ where: { id: specializationId } });
-        if (!specialization) {
-            throw new AppError("Specialization not found", 404);
+    async createBatch(
+        name: string,
+        courseId: string,
+        academicYearId: string,
+        startDate: string,
+        endDate: string,
+        createdBy?: string,
+    ) {
+        if (!courseId) {
+            throw new AppError("courseId is required", 400);
+        }
+        if (!academicYearId) {
+            throw new AppError("academicYearId is required", 400);
+        }
+
+        const [course, academicYear] = await Promise.all([
+            prisma.course.findUnique({ where: { id: courseId } }),
+            prisma.academicYear.findUnique({ where: { id: academicYearId } }),
+        ]);
+        if (!course || course.isDeleted) {
+            throw new AppError("Course not found", 404);
+        }
+        if (!academicYear || academicYear.isDeleted) {
+            throw new AppError("Academic year not found", 404);
         }
 
         const existingBatch = await prisma.batch.findFirst({
             where: {
                 name: { equals: name, mode: 'insensitive' },
-                specializationId,
+                courseId,
                 isDeleted: false
             }
         });
@@ -526,8 +560,8 @@ export const AcademicService = {
         return await prisma.batch.create({
             data: {
                 name,
-                specializationId,
-                courseId: specialization.courseId,
+                courseId,
+                academicYearId,
                 startDate: new Date(startDate),
                 endDate: new Date(endDate),
                 createdBy
@@ -535,33 +569,74 @@ export const AcademicService = {
         });
     },
 
-    async getBatches(specializationId?: string) {
+    async getBatches(courseId?: string, academicYearId?: string) {
         const where: any = { isDeleted: false };
-        if (specializationId) where.specializationId = String(specializationId);
+        if (courseId)       where.courseId       = String(courseId);
+        if (academicYearId) where.academicYearId = String(academicYearId);
 
-        return await prisma.batch.findMany({
+        const batches = await prisma.batch.findMany({
             where,
-            include: { specialization: true },
+            include: {
+                course:       { select: { id: true, code: true, name: true, degree: true } },
+                academicYear: { select: { id: true, code: true } },
+            },
             orderBy: { startDate: 'desc' }
         });
+
+        if (batches.length === 0) return [];
+
+        const batchIds = batches.map(b => b.id);
+        const counts = await prisma.$queryRaw<{ batchId: string; count: bigint }[]>`
+            SELECT s."batchId" AS "batchId", COUNT(DISTINCT e."studentId") AS count
+              FROM "StudentEnrollment" e
+              JOIN "Section" s ON s.id = e."sectionId"
+             WHERE s."batchId" = ANY(${batchIds})
+               AND e."status" IN ('ACTIVE', 'DETAINED')
+             GROUP BY s."batchId"
+        `;
+        const countMap = new Map(counts.map(c => [c.batchId, Number(c.count)]));
+
+        return batches.map(b => ({
+            ...b,
+            studentCount: countMap.get(b.id) ?? 0,
+        }));
     },
 
     async getBatchById(id: string) {
         const batch = await prisma.batch.findUnique({
             where: { id },
-            include: { specialization: true }
+            include: {
+                course: { select: { id: true, code: true, name: true, degree: true } },
+            },
         });
         if (!batch) throw new AppError(MESSAGES.ERROR.BATCH_NOT_FOUND, 404);
         return batch;
     },
 
-    async updateBatch(id: string, name: string, specializationId: string, startDate: string, endDate: string, updatedBy?: string) {
+    async updateBatch(
+        id: string,
+        name: string,
+        courseId: string | undefined,
+        academicYearId: string | undefined,
+        startDate: string,
+        endDate: string,
+        updatedBy?: string,
+    ) {
         const batch = await prisma.batch.findUnique({ where: { id } });
         if (!batch) throw new AppError(MESSAGES.ERROR.BATCH_NOT_FOUND, 404);
 
-        const data: any = { name, specializationId, updatedBy };
+        const data: any = { name, updatedBy };
+        if (courseId)  data.courseId  = courseId;
         if (startDate) data.startDate = new Date(startDate);
-        if (endDate) data.endDate = new Date(endDate);
+        if (endDate)   data.endDate   = new Date(endDate);
+
+        if (academicYearId) {
+            const academicYear = await prisma.academicYear.findUnique({ where: { id: academicYearId } });
+            if (!academicYear || academicYear.isDeleted) {
+                throw new AppError("Academic year not found", 404);
+            }
+            data.academicYearId = academicYearId;
+        }
 
         return await prisma.batch.update({
             where: { id },
@@ -569,16 +644,30 @@ export const AcademicService = {
         });
     },
 
-    async deleteBatch(id: string) {
+    async deleteBatch(id: string, adminId?: string) {
         const batch = await prisma.batch.findUnique({ where: { id } });
         if (!batch) throw new AppError(MESSAGES.ERROR.BATCH_NOT_FOUND, 404);
+        if (batch.isDeleted) throw new AppError('Batch is already deleted', 400);
 
-        return await prisma.batch.update({ where: { id }, data: { isDeleted: true } });
+        const enrolled = await prisma.studentEnrollment.count({
+            where: { section: { batchId: id } },
+        });
+        if (enrolled > 0) {
+            throw new AppError(
+                `Cannot delete batch "${batch.name}" — ${enrolled} student enrollment(s) exist in its sections. ` +
+                `Reassign or remove those students first.`,
+                409
+            );
+        }
+
+        return await prisma.batch.update({
+            where: { id },
+            data: { isDeleted: true, updatedBy: adminId },
+        });
     },
 
-    // Section
     async createSection(name: string, batchId: string, createdBy?: string) {
-        // Validate Batch Exists
+
         const batch = await prisma.batch.findUnique({ where: { id: batchId } });
         if (!batch) {
             throw new AppError("Batch not found", 404);
@@ -607,14 +696,26 @@ export const AcademicService = {
 
         return await prisma.section.findMany({
             where,
-            include: { batch: true }
+            include: {
+                batch: {
+                    include: {
+                        course: { select: { id: true, code: true, name: true, degree: true } },
+                    },
+                },
+            },
         });
     },
 
     async getSectionById(id: string) {
         const section = await prisma.section.findUnique({
             where: { id },
-            include: { batch: true }
+            include: {
+                batch: {
+                    include: {
+                        course: { select: { id: true, code: true, name: true, degree: true } },
+                    },
+                },
+            },
         });
         if (!section) throw new AppError(MESSAGES.ERROR.SECTION_NOT_FOUND, 404);
         return section;
@@ -631,7 +732,6 @@ export const AcademicService = {
              throw new AppError(MESSAGES.ERROR.NO_CHANGES_DETECTED, 400);
         }
 
-        // Validate Batch if changing
         if (batchId && batchId !== section.batchId) {
              const batch = await prisma.batch.findUnique({ where: { id: batchId } });
              if (!batch) throw new AppError("Batch not found", 404);
@@ -647,10 +747,23 @@ export const AcademicService = {
         });
     },
 
-    async deleteSection(id: string) {
+    async deleteSection(id: string, adminId?: string) {
         const section = await prisma.section.findUnique({ where: { id } });
         if (!section) throw new AppError(MESSAGES.ERROR.SECTION_NOT_FOUND, 404);
+        if (section.isDeleted) throw new AppError('Section is already deleted', 400);
 
-        return await prisma.section.update({ where: { id }, data: { isDeleted: true } });
+        const enrolled = await prisma.studentEnrollment.count({ where: { sectionId: id } });
+        if (enrolled > 0) {
+            throw new AppError(
+                `Cannot delete section "${section.name}" — ${enrolled} student enrollment(s) exist in it. ` +
+                `Reassign or remove those students first.`,
+                409
+            );
+        }
+
+        return await prisma.section.update({
+            where: { id },
+            data: { isDeleted: true, updatedBy: adminId },
+        });
     }
 };

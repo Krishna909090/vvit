@@ -22,13 +22,11 @@ export interface ApplicationData {
     fatherName: string;
     motherName: string;
     category: string;
-    
-    // Admission
+
     courseName?: string;
     quotaType?: string;
     admissionStatus?: string;
-    
-    // Academic Qualifications
+
     qualifications: Array<{
         level: string;
         institution: string;
@@ -53,11 +51,9 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
             doc.on('end', () => resolve(Buffer.concat(buffers)));
             doc.on('error', reject);
 
-            // --- 1. Header (University Branding) ---
             const logoPath = path.join(process.cwd(), 'src/assets/logo.png');
             let currentY = 40;
 
-            // University Name
             doc.font('Helvetica-Bold')
                .fontSize(14)
                .fillColor('#C0392B')
@@ -67,7 +63,6 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
             doc.fontSize(10).fillColor('#555555')
                .text('Uppalapadu Road, Nambur, Pedakakani Mandal, Guntur, Andhra Pradesh – 522508', 0, currentY, { align: 'center', width: doc.page.width });
 
-            // Logo
             if (fs.existsSync(logoPath)) {
                 doc.image(logoPath, 40, 40, { width: 70 });
             }
@@ -76,19 +71,14 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
             drawLine(doc, currentY);
             currentY += 20;
 
-            // Title
             doc.font('Helvetica-Bold').fontSize(16).fillColor('#000000')
                .text('STUDENT APPLICATION FORM', 0, currentY, { align: 'center' });
             
             currentY += 30;
 
-            // --- 2. Personal Information & Photo ---
-            const startX = 40;
             const col1X = 40;
             const col1ValueX = 160;
-            const col2X = 300; // Not using 2 columns for text, but keeping space for photo
-            
-            // Photo Position (Right side)
+
             const photoX = 420;
             const photoY = currentY;
             const photoWidth = 110;
@@ -109,7 +99,6 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
                 doc.text('Photo', photoX + 30, photoY + 60);
             }
 
-            // Personal Details (Left Side)
             doc.font('Helvetica-Bold').fontSize(12).text('Personal Details', col1X, currentY);
             currentY += 20;
             
@@ -128,24 +117,18 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
             drawField('Mother Name', data.motherName);
             drawField('Phone', data.phone);
             drawField('Email', data.email || 'N/A');
-            
-            // Allow wrapping for address
+
             const addr = `${data.address}, ${data.city}, ${data.state} - ${data.pincode}`;
             doc.font('Helvetica-Bold').fontSize(10).text('Address', col1X, currentY);
-            doc.font('Helvetica').text(`:  ${addr}`, col1ValueX, currentY, { width: 240 }); // Limit width to avoid hitting photo
-            
-            // Move Y down past the photo if text was short, or past text if it was long
-            // Address might take multiple lines, so we get Y from doc
+            doc.font('Helvetica').text(`:  ${addr}`, col1ValueX, currentY, { width: 240 });
+
             currentY = Math.max(doc.y, photoY + photoHeight) + 20;
 
-            // --- 3. Admission Details ---
             drawSectionHeader(doc, 'Admission Details', currentY);
             currentY += 25;
 
-            // Using columns for admission details
             const admCol1 = 40;
             const admCol2 = 300;
-            const admRowY = currentY;
 
             doc.font('Helvetica-Bold').text('Course Applied:', admCol1, currentY);
             doc.font('Helvetica').text(data.courseName || 'N/A', admCol1 + 100, currentY);
@@ -159,14 +142,12 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
 
             currentY += 30;
 
-            // --- 4. Academic Qualifications ---
             drawSectionHeader(doc, 'Academic Qualifications', currentY);
             currentY += 25;
 
-            // Table Header
             const tX = 40;
             const colLevel = tX;
-            const colInst = tX + 100; // Institution
+            const colInst = tX + 100;
             const colBoard = tX + 250;
             const colYear = tX + 380;
             const colScore = tX + 460;
@@ -185,7 +166,7 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
             if (data.qualifications && data.qualifications.length > 0) {
                 doc.font('Helvetica').fontSize(9);
                 data.qualifications.forEach((qual) => {
-                    // Border
+
                     doc.rect(tX, currentY, 515, 20).stroke();
                     
                     doc.text(qual.level, colLevel + 5, currentY + 6);
@@ -203,8 +184,6 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
 
             currentY += 20;
 
-           // --- 5. Documents Submitted ---
-           // Check if space remains, else add page
            if (currentY > 650) {
                doc.addPage();
                currentY = 40;
@@ -222,14 +201,12 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
                 data.documents.forEach((d) => {
                     const x = isRight ? docCol2 : docCol1;
                     const y = rowStartY;
-                    
-                    // Checkbox icon (simulated)
+
                     const isVerified = d.status === 'VERIFIED';
-                    const icon = isVerified ? '[/]' : '[ ]'; // Simple text representation or draw rect
-                    
+
                     doc.rect(x, y, 10, 10).stroke();
                     if (isVerified) {
-                        // Draw tick
+
                         doc.moveTo(x+2, y+5).lineTo(x+4, y+8).lineTo(x+8, y+2).stroke();
                     }
 
@@ -246,7 +223,6 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
             currentY += 20;
            }
 
-            // --- Footer ---
             const bottomY = doc.page.height - 50;
             const dateStr = new Date().toLocaleString('en-IN');
             
@@ -254,7 +230,6 @@ export const generateApplicationPDF = async (data: ApplicationData): Promise<Buf
                .text(`Application Generated on: ${dateStr}`, 40, bottomY);
             
             doc.text('This is a computer generated document.', 40, bottomY + 12);
-
 
             doc.end();
 
@@ -270,7 +245,7 @@ function drawLine(doc: PDFKit.PDFDocument, y: number) {
 }
 
 function drawSectionHeader(doc: PDFKit.PDFDocument, title: string, y: number) {
-    doc.rect(40, y, 515, 20).fill('#34495e'); // Dark Blue Header
+    doc.rect(40, y, 515, 20).fill('#34495e');
     doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(11).text(title.toUpperCase(), 50, y + 5);
-    doc.fillColor('#000000'); // Reset
+    doc.fillColor('#000000');
 }

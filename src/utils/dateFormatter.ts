@@ -1,12 +1,7 @@
-// src/utils/dateFormatter.ts
-/**
- * Centralized date/time formatting utilities for IST timezone
- * Optimized with cached Intl.DateTimeFormat instances for performance
- */
+
 
 const IST_TIMEZONE = 'Asia/Kolkata';
 
-// Cached formatters to avoid recreating them for every call (High Performance)
 const dateFormatter = new Intl.DateTimeFormat('en-IN', {
     day: '2-digit',
     month: '2-digit',
@@ -21,13 +16,10 @@ const timeFormatter = new Intl.DateTimeFormat('en-IN', {
     timeZone: IST_TIMEZONE,
 });
 
-/**
- * Format a date into dd-MM-yyyy string in IST.
- */
 export const formatDate = (date: Date | null | undefined): string | null => {
     if (!date) return null;
     try {
-        // format() returns "dd/MM/yyyy", handle slashes
+
         return dateFormatter.format(new Date(date)).replace(/\//g, '-');
     } catch (e) {
         return null;
@@ -35,9 +27,6 @@ export const formatDate = (date: Date | null | undefined): string | null => {
     
 };
 
-/**
- * Format a time part using 12-hour clock in IST.
- */
 export const formatTime = (date: Date | null | undefined): string | null => {
     if (!date) return null;
     try {
@@ -47,10 +36,6 @@ export const formatTime = (date: Date | null | undefined): string | null => {
     }
 };
 
-/**
- * Format a full datetime into 'dd-MM-yyyy HH:mm AM/PM' string in IST.
- * Used for timestamps like createdAt, updatedAt, verifiedAt, etc.
- */
 export const formatDateTime = (date: Date | null | undefined): string | null => {
     if (!date) return null;
     

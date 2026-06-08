@@ -5,6 +5,7 @@ import { AppError } from '../../utils/AppError';
 import { MESSAGES } from '../../constants/messages';
 import { StudentDocumentStatus, AdmissionStatus } from '@prisma/client';
 import { deleteFileFromS3, convertToPresignedUrl } from '../../utils/s3Utils';
+import { getActiveAcademicYear } from '../../utils/studentContext';
 import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
@@ -50,7 +51,6 @@ export const updateDocumentRequirement = async (id: string, data: any) => {
         throw new AppError(MESSAGES.ERROR.REQUIREMENT_NOT_FOUND, 404);
     }
 
-    // Check if there are actual changes
     const hasChanges = Object.keys(data).some(key => {
         return data[key] !== undefined && existing[key as keyof typeof existing] !== data[key];
     });
@@ -81,7 +81,15 @@ export const deleteDocumentRequirement = async (id: string) => {
     return { message: 'Requirement deleted' };
 };
 
-export const upsertStudentDocuments = async (studentId: string, documentData: any, currentUserId: string | null) => {
+export const upsertStudentDocuments = async (
+    studentId: string,
+    documentData: any,
+    currentUserId: string | null,
+    academicYearId?: string | null
+) => {
+
+    const resolvedYearId: string = academicYearId ?? (await getActiveAcademicYear()).id;
+
     const docPromises = Object.keys(documentData).map(key => {
         if (key.endsWith('Url')) {
             return prisma.studentDocument.upsert({
@@ -103,6 +111,7 @@ export const upsertStudentDocuments = async (studentId: string, documentData: an
                     documentKey: key,
                     url: documentData[key],
                     status: StudentDocumentStatus.PENDING,
+                    academicYearId: resolvedYearId,
                     createdBy: currentUserId,
                     updatedBy: currentUserId,
                     isDeleted: false
@@ -114,7 +123,6 @@ export const upsertStudentDocuments = async (studentId: string, documentData: an
 
     await Promise.all(docPromises);
 
-    // Update Admission Status
     const admission = await prisma.studentAdmission.update({
         where: { studentId },
         data: { status: AdmissionStatus.DOCUMENTS_SUBMITTED }
@@ -136,7 +144,6 @@ export const deleteStudentDocument = async (studentId: string, documentKey: stri
 
     if (!doc) throw new AppError(MESSAGES.ERROR.DOCUMENT_NOT_FOUND, 404);
 
-    // Extract S3 key from URL
     const urlParts = doc.url.split('.com/');
     if (urlParts.length < 2) {
         logger.warn(`Invalid S3 URL for document deletion: ${doc.url}`);
@@ -145,7 +152,6 @@ export const deleteStudentDocument = async (studentId: string, documentKey: stri
         await deleteFileFromS3(key);
     }
 
-    // Soft Delete
     await prisma.studentDocument.update({
         where: { id: doc.id },
         data: { isDeleted: true }
@@ -186,11 +192,13 @@ export const verifyStudentDocument = async (studentId: string, documentKey: stri
     return doc;
 };
 
-export const getStudentDocuments = async (studentId: string) => {
+export const getStudentDocuments = async (studentId: string, academicYearId?: string) => {
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         include: {
-            documents: true,
+            documents: academicYearId
+                ? { where: { academicYearId } }
+                : true,
             examDetails: true
         }
     });
@@ -199,7 +207,6 @@ export const getStudentDocuments = async (studentId: string) => {
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
-    // Convert all document URLs to presigned URLs
     const documentMapPromises = student.documents.map(async (doc: any) => {
         const presignedUrl = await convertToPresignedUrl(doc.url);
         return { key: doc.documentKey, url: presignedUrl };
@@ -211,7 +218,6 @@ export const getStudentDocuments = async (studentId: string) => {
         return acc;
     }, {});
 
-    // Convert profile photo and hall ticket URLs
     const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
     const hallTicketUrl = await convertToPresignedUrl(student.examDetails?.hallTicketUrl);
 
@@ -244,8 +250,7 @@ export const createStudentDocumentZip = async (studentId: string) => {
         { name: 'hall_ticket', url: student.examDetails?.hallTicketUrl },
         ...student.documents.map((doc: any) => ({ name: doc.documentKey, url: doc.url })),
     ];
-    
-    // Add discount doc
+
      const discountReq = await prisma.discountRequest.findFirst({ where: { studentId } });
      if (discountReq?.documentUrl) {
          documents.push({ name: 'discount_doc', url: discountReq.documentUrl });
@@ -258,7 +263,7 @@ export const createStudentDocumentZip = async (studentId: string) => {
     }
 
     const zipFileName = `${student.applicationId}_documents.zip`;
-    // Use /tmp for lambda/cloud compatibility if needed, but sticking to local structure for now
+
     const tempDir = path.join(__dirname, '../../../temp');
     if (!fs.existsSync(tempDir)) {
         fs.mkdirSync(tempDir, { recursive: true });

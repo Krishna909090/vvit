@@ -3,21 +3,18 @@ import jwt from "jsonwebtoken";
 import axios from "axios";
 import bcrypt from "bcryptjs";
 import prisma from '../../config/prisma';
-import { Role } from '../../constants/roles'; // Updated Import
+import { Role } from '../../constants/roles';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { sendBsnlOtp, sendZeptoEmail } from '../integration/integration.service';
 import { MESSAGES } from '../../constants/messages';
 import { maskPhone, maskEmail } from '../../utils/mask';
-import { getUserPermissions, getUserModules } from '../rbac/services/rbac.service';
+import { getUserPermissions, getUserModules } from '../rbac/rbac.service';
 
-// JWT_SECRET is validated on startup by envValidator - no fallback needed
 const JWT_SECRET = process.env.JWT_SECRET!;
 
-// In-memory token blacklist for logout. Tokens auto-expire so this stays bounded.
-const tokenBlacklist = new Map<string, number>(); // token → expiresAt (epoch ms)
+const tokenBlacklist = new Map<string, number>();
 
-// Clean up expired entries every 30 minutes
 setInterval(() => {
     const now = Date.now();
     for (const [token, expiresAt] of tokenBlacklist) {
@@ -37,12 +34,30 @@ const OTP_MAX_ATTEMPTS = 5;
 const STUDENT_OTP_EXPIRY_MIN = 10;
 const STAFF_OTP_EXPIRY_MIN = 5;
 
-
-// Generate 6-digit numeric OTP securely
 const generateOtp = () => crypto.randomInt(100000, 999999).toString();
 
-// Service: Verifies user identity, auto-registers student users by phone,
-// generates a hashed OTP, stores it in UserOtp, and triggers notification(s).
+const studentHasActiveEnrollment = async (userId: string): Promise<boolean> => {
+  const activeYear = await prisma.academicYear.findFirst({
+    where: { isActive: true, isDeleted: false },
+    orderBy: { startDate: "desc" },
+    select: { id: true },
+  });
+  if (!activeYear) return false;
+
+  const enrollment = await prisma.studentEnrollment.findFirst({
+    where: {
+      academicYearId: activeYear.id,
+      status: "ACTIVE",
+      student: { userId },
+    },
+    select: { id: true },
+  });
+  return !!enrollment;
+};
+
+const ENROLLED_STUDENT_OTP_BLOCK_MSG =
+  "Please use the ERP application, not the CMS platform. Log in with your roll number and password.";
+
 export const sendOtp = async (identifier: { phone?: string; email?: string }) => {
   const phone = identifier.phone?.trim();
   const email = identifier.email?.trim().toLowerCase();
@@ -66,7 +81,7 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
 
   if (!user) {
     if (phone) {
-      // 1. Create User
+
       user = await prisma.user.create({
         data: {
           phone,
@@ -74,7 +89,6 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
         },
       });
 
-      // 2. Assign to Student Group
       const studentGroup = await prisma.group.findUnique({ where: { name: 'StudentGroup' } });
       if (studentGroup) {
         await prisma.userGroup.create({
@@ -99,6 +113,15 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
       throw new AppError("Admin blocked you", 403);
     }
 
+    if (user.role === Role.STUDENT && (await studentHasActiveEnrollment(user.id))) {
+      logger.warn(
+        `[sendOtp] reject reason=enrolled_student_must_use_erp userId=${user.id} phone=${maskPhone(
+          user.phone
+        )}`
+      );
+      throw new AppError(ENROLLED_STUDENT_OTP_BLOCK_MSG, 400);
+    }
+
     logger.info(
       `[sendOtp] Existing user: id=${user.id}, role=${user.role}, phone=${maskPhone(
         user.phone
@@ -106,7 +129,7 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
     );
   }
 
-  const otp = generateOtp(); // e.g. 6-digit numeric
+  const otp = generateOtp();
   const otpHash = await bcrypt.hash(otp, OTP_SALT_ROUNDS);
 
   const expiresInMinutes =
@@ -165,14 +188,13 @@ export const sendOtp = async (identifier: { phone?: string; email?: string }) =>
     )}, email=${maskEmail(user.email)}`
   );
 
-  return { message: "OTP sent successfully", isNewUser, otp };
+  return {
+    message: "OTP sent successfully",
+    isNewUser,
+    ...(process.env.NODE_ENV === 'development' ? { otp } : {}),
+  };
 };
 
-
-
-
-// Service: Validates OTP using hashed comparison, enforces channel rules,
-// attempts + lockout, expiry, and generates access token on success.
 export const verifyOtp = async (
   identifier: { phone?: string; email?: string },
   otp: string
@@ -196,6 +218,13 @@ export const verifyOtp = async (
       )}, email=${maskEmail(identifier.email)}`
     );
     throw new AppError(MESSAGES.ERROR.INVALID_OTP_REQUEST, 400);
+  }
+
+  if (user.role === Role.STUDENT && (await studentHasActiveEnrollment(user.id))) {
+    logger.warn(
+      `[verifyOtp] reject reason=enrolled_student_must_use_erp userId=${user.id}`
+    );
+    throw new AppError(ENROLLED_STUDENT_OTP_BLOCK_MSG, 400);
   }
 
   const now = new Date();
@@ -275,14 +304,14 @@ export const verifyOtp = async (
     where: { id: userOtp.id },
     data: {
       used: true,
-      attempts: { increment: 1 }, // also increment on success
+      attempts: { increment: 1 },
     },
   });
 
   const token = jwt.sign(
     { userId: user.id, role: user.role },
     JWT_SECRET,
-    { expiresIn: (process.env.JWT_EXPIRY || "4h") as any }
+    { expiresIn: (process.env.NODE_ENV === 'development' ? '24h' : (process.env.JWT_EXPIRY || '4h')) as any }
   );
 
   logger.info(
@@ -291,12 +320,9 @@ export const verifyOtp = async (
     )}, email=${maskEmail(user.email)}`
   );
 
-  // Fetch Permissions and Modules
   const { permissions } = await getUserPermissions(user.id);
   const modules = await getUserModules(permissions);
 
-  // Group permissions by module
-  // Group permissions by module
   const groupedPermissions = permissions.reduce((acc: any, p: string) => {
     const key = p.split('.')[0];
     if (!acc[key]) acc[key] = [];
@@ -314,7 +340,6 @@ export const verifyOtp = async (
   };
 };
 
-// Service: Password Login for Staff/Admins
 export const login = async (identifier: { phone?: string; email?: string }, password: string) => {
   let user = null;
   if (identifier.phone) {
@@ -327,7 +352,6 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
 
   if (user.isDeleted) throw new AppError("Admin blocked you", 403);
 
-  // Students use OTP
   if (user?.role === Role.STUDENT) throw new AppError("Students must login via OTP", 400);
 
   if (!user.password) throw new AppError("Password login not enabled for this user", 400);
@@ -338,17 +362,14 @@ export const login = async (identifier: { phone?: string; email?: string }, pass
   const token = jwt.sign(
     { userId: user.id, role: user.role },
     JWT_SECRET,
-    { expiresIn: (process.env.JWT_EXPIRY || "4h") as any }
+    { expiresIn: (process.env.NODE_ENV === 'development' ? '24h' : (process.env.JWT_EXPIRY || '4h')) as any }
   );
 
   logger.info(`[login] Password login success: userId=${user.id}`);
 
-  // Fetch Permissions and Modules
   const { permissions } = await getUserPermissions(user.id);
   const modules = await getUserModules(permissions);
 
-  // Group permissions by module
-  // Group permissions by module
   const groupedPermissions = permissions.reduce((acc: any, p: string) => {
     const key = p.split('.')[0];
     if (!acc[key]) acc[key] = [];
@@ -431,6 +452,4 @@ export const submitAadhaarOtp = async (requestId: string | number, otp: string) 
     );
   }
 };
-
-
 

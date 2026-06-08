@@ -1,0 +1,163 @@
+import { Request, Response, NextFunction } from 'express';
+import { catchAsync } from '../../../utils/catchAsync';
+import { MESSAGES } from '../../../constants/messages';
+import { sendResponse } from '../../../utils/response';
+import { HostelService } from './hostel.service';
+import { AppError } from '../../../utils/AppError';
+import { generateAndSaveHostelAllotmentOrder } from '../../finance/payment.service';
+
+export const createHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const hostel = await HostelService.createHostel(req.body, req.user?.userId);
+
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: MESSAGES.SUCCESS.HOSTEL_CREATED,
+        data: hostel
+    });
+});
+
+export const getHostels = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const hostels = await HostelService.getAllHostels();
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.HOSTELS_FETCHED,
+        data: hostels
+    });
+});
+
+export const getHostelFloors = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { hostelId } = req.params;
+    const data = await HostelService.getHostelFloors(hostelId);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        data
+    });
+});
+
+export const getHostelById = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { id } = req.params;
+    const hostel = await HostelService.getHostelById(id);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        data: hostel
+    });
+});
+
+export const updateHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { hostelId } = req.params;
+    const updateData = req.body;
+
+    const hostel = await HostelService.updateHostel(hostelId, updateData);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.HOSTEL_UPDATED,
+        data: hostel
+    });
+});
+
+export const deleteHostel = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { hostelId } = req.params;
+    await HostelService.deleteHostel(hostelId);
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: MESSAGES.SUCCESS.HOSTEL_DELETED || 'Hostel deleted successfully'
+    });
+});
+
+export const createHostelRoom = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const room = await HostelService.createHostelRoom(req.body, req.user?.userId);
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: MESSAGES.SUCCESS.HOSTEL_ROOM_BEDS_CREATED,
+        data: room
+    });
+});
+
+export const createHostelRoomsBulk = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const result = await HostelService.createHostelRoomsBulk(req.body, req.user?.userId);
+    sendResponse({
+        res,
+        statusCode: 201,
+        success: true,
+        message: `Created ${result.createdCount} rooms successfully`,
+        data: result
+    });
+});
+
+export const getHostelRooms = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { blockId, hostelId, floor, includeBeds, roomNumber } = req.query;
+    const truthy = (v: any) => v === true || v === 'true' || v === '1';
+    const rooms = await HostelService.getHostelRooms({
+        blockId: blockId as string,
+        hostelId: hostelId as string,
+        floor: floor !== undefined ? Number(floor) : undefined,
+        includeBeds: truthy(includeBeds),
+        roomNumber: roomNumber ? String(roomNumber).trim() : undefined,
+    });
+    sendResponse({ res, statusCode: 200, success: true, data: rooms });
+});
+
+export const getHostelRoomById = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { id } = req.params;
+    const room = await HostelService.getHostelRoomById(id);
+    sendResponse({ res, statusCode: 200, success: true, data: room });
+});
+
+export const updateHostelRoom = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { id } = req.params;
+    const updatedRoom = await HostelService.updateHostelRoom(id, req.body, req.user?.userId);
+    sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.HOSTEL_ROOM_UPDATED, data: updatedRoom });
+});
+
+export const deleteHostelRoom = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { id } = req.params;
+    await HostelService.deleteHostelRoom(id);
+    sendResponse({ res, statusCode: 200, success: true, message: MESSAGES.SUCCESS.HOSTEL_ROOM_DELETED });
+});
+
+export const sendHostelAllotmentEmails = catchAsync(async (req: Request, res: Response, _next: NextFunction) => {
+    const { studentIds } = req.body;
+
+    if (!Array.isArray(studentIds) || studentIds.length === 0) {
+        throw new AppError('studentIds must be a non-empty array', 400);
+    }
+
+    const results: { studentId: string; status: 'sent' | 'failed'; reason?: string }[] = [];
+
+    await Promise.all(
+        studentIds.map(async (studentId: string) => {
+            try {
+                await generateAndSaveHostelAllotmentOrder(studentId);
+                results.push({ studentId, status: 'sent' });
+            } catch (err: any) {
+                results.push({ studentId, status: 'failed', reason: err?.message ?? 'Unknown error' });
+            }
+        })
+    );
+
+    const sentCount   = results.filter(r => r.status === 'sent').length;
+    const failedCount = results.filter(r => r.status === 'failed').length;
+
+    sendResponse({
+        res,
+        statusCode: 200,
+        success: true,
+        message: `Allotment emails processed: ${sentCount} sent, ${failedCount} failed`,
+        data: { sentCount, failedCount, results },
+    });
+});
+

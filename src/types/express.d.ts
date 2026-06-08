@@ -6,7 +6,7 @@ declare global {
             user?: {
                 userId: string;
                 role: RoleType;
-                permissions?: string[]; // Optional for now until full RBAC rollout
+                permissions?: string[];
             };
         }
     }

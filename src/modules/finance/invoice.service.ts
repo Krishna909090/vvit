@@ -6,11 +6,8 @@ import { sendEntranceFeeReceipt } from '../../utils/emailService';
 import { PaymentStatus, PaymentComponent } from '@prisma/client';
 
 export const InvoiceService = {
-    /**
-     * Generates an invoice for a successful payment, uploads it, updates the record, and sends and email.
-     * Can be called idempotently (checks if invoiceUrl already exists? Maybe override if requested).
-     */
-    async generateInvoiceForPayment(paymentId: string, forceRegenerate = false) {
+
+    async generateInvoiceForPayment(paymentId: string, _forceRegenerate = false) {
         logger.info(`[InvoiceService] Generating invoice for payment: ${paymentId}`);
         
         const payment = await prisma.payment.findUnique({
@@ -26,13 +23,8 @@ export const InvoiceService = {
              logger.warn(`[InvoiceService] Payment ${paymentId} is not SUCCESS (Status: ${payment.status}). Proceeding with caution.`);
         }
 
-        // --- NEW: Bundle Detection Logic ---
-        // Find siblings sharing the same Transaction ID or Reference Number to generate a Unified Invoice
         let allPayments = [payment];
-        
-        // Conditions to look for siblings:
-        // 1. Has providerTxId (Online or verified Offline)
-        // 2. OR Has referenceNumber (Offline) in a way that groups them
+
         const groupingId = payment.providerTxId || (payment.method !== 'ONLINE' ? payment.referenceNumber : null);
         
         if (groupingId) {
@@ -44,7 +36,7 @@ export const InvoiceService = {
                      ],
                      id: { not: paymentId },
                      status: PaymentStatus.SUCCESS, 
-                     studentId: payment.studentId // Safety check
+                     studentId: payment.studentId
                  },
                  include: { feeHead: true }
              });
@@ -54,16 +46,11 @@ export const InvoiceService = {
              }
         }
 
-        const primaryPayment = allPayments[0]; // Use first as primary for metadata (dates, student, etc)
+        const primaryPayment = allPayments[0];
 
         const year = new Date().getFullYear();
         const applicationNumber = primaryPayment.student.applicationId || primaryPayment.studentId.substring(0,8).toUpperCase();
 
-        // --- RECEIPT NUMBER (global per category per year) ---
-        // Categories:
-        //   ADMISSION group: TUITION, ADMISSION, BOOK_BANK, APPLICATION_FEE, COURSE_CHANGE_FEE, SCHOLARSHIP_TOKEN → VVITU/YEAR/001
-        //   HOSTEL group:    HOSTEL, HOSTEL_ACCOMMODATION, TRANSPORT → SET/YEAR/001
-        //   MESS group:      HOSTEL_MESS → LLP/SET/YEAR/001
         const admissionComponents = [
             PaymentComponent.TUITION, PaymentComponent.ADMISSION, PaymentComponent.BOOK_BANK,
             PaymentComponent.APPLICATION_FEE, PaymentComponent.COURSE_CHANGE_FEE, PaymentComponent.SCHOLARSHIP_TOKEN,
@@ -89,7 +76,6 @@ export const InvoiceService = {
             receiptCategory = 'ADMISSION';
         }
 
-        // Count prior receipts in same category for this year to get next serial
         const yearStart = new Date(year, 0, 1);
         const yearEnd = new Date(year, 11, 31, 23, 59, 59, 999);
 
@@ -97,40 +83,13 @@ export const InvoiceService = {
             : receiptCategory === 'HOSTEL' ? hostelComponents
             : admissionComponents;
 
-        const priorReceiptsInCategory = await prisma.payment.count({
-            where: {
-                status: PaymentStatus.SUCCESS,
-                component: { in: componentList },
-                createdAt: { gte: yearStart, lte: yearEnd },
-                id: { not: primaryPayment.id }
-            }
-        });
-        const receiptSerial = (priorReceiptsInCategory + 1).toString().padStart(3, '0');
-        const receiptNumber = `${receiptPrefix}/${year}/${receiptSerial}`;
-
-        // Invoice number (per student): PREFIX/YEAR/APP_ID/SERIAL
-        const priorStudentPayments = await prisma.payment.count({
-            where: {
-                studentId: primaryPayment.studentId,
-                status: PaymentStatus.SUCCESS,
-                createdAt: { lt: primaryPayment.createdAt || new Date() }
-            }
-        });
-        const invoiceSerial = (priorStudentPayments + 1).toString().padStart(3, '0');
-        const invoiceNumber = `${receiptPrefix}/${year}/${applicationNumber}/${invoiceSerial}`;
-
-        // Real TX ID (Internal)
         const internalTxId = primaryPayment.providerTxId || primaryPayment.id;
 
-        // UTR / Reference ID (External)
         let realTransactionId = primaryPayment.referenceNumber || 'N/A';
-        
-        // Check Metadata for Gateway Response ID (PhonePe)
 
-        // Check Metadata for Gateway Response ID (PhonePe)
         const metadata: any = primaryPayment.metadata;
         if (metadata) {
-            // Priority 1: Direct UTR from Rail (User Request Format)
+
             if (metadata?.paymentDetails?.[0]?.splitInstruments?.[0]?.rail?.utr) {
                 realTransactionId = metadata.paymentDetails[0].splitInstruments[0].rail.utr;
             } else if (metadata?.data?.paymentDetails?.[0]?.splitInstruments?.[0]?.rail?.utr) {
@@ -140,13 +99,13 @@ export const InvoiceService = {
             } else if (metadata?.data?.paymentDetails?.[0]?.rail?.utr) {
                  realTransactionId = metadata.data.paymentDetails[0].rail.utr;
             }
-            // Priority 2: Provider Reference ID
+
             else if (metadata?.providerReferenceId) {
                 realTransactionId = metadata.providerReferenceId;
             } else if (metadata?.data?.providerReferenceId) {
                 realTransactionId = metadata.data.providerReferenceId;
             } 
-            // Priority 3: Transaction ID from Details
+
             else if (metadata?.paymentDetails?.[0]?.transactionId) {
                 realTransactionId = metadata.paymentDetails[0].transactionId;
             } else if (metadata?.data?.paymentDetails?.[0]?.transactionId) {
@@ -156,12 +115,10 @@ export const InvoiceService = {
             }
         }
 
-        // Determine Description & Items
         let description = 'Fee Payment';
         let invoiceItems: { description: string, amount: number }[] = [];
         let totalAmount = 0;
 
-        // Helper to get description for a payment row
         const getPaymentDescription = (p: any) => {
              if (p.feeHead) return p.feeHead.name;
              
@@ -174,12 +131,12 @@ export const InvoiceService = {
              if (c === PaymentComponent.HOSTEL_MESS) return 'Mess Fee';
              if (c === PaymentComponent.TRANSPORT) return 'Transport Fee';
              if (c === PaymentComponent.BOOK_BANK) return 'Book Bank Fee';
-             // Fallback
+
              return c ? c.replace(/_/g, ' ') : 'Fee Component';
         };
 
         if (allPayments.length > 1) {
-             // Multi-Row Bundle
+
              description = `Consolidated Payment (${allPayments.length} items)`;
              invoiceItems = allPayments.map(p => ({
                  description: getPaymentDescription(p),
@@ -187,8 +144,7 @@ export const InvoiceService = {
              }));
              totalAmount = allPayments.reduce((sum, p) => sum + p.amount, 0);
         } else {
-             // Single Row Logic (Backward Compatibility)
-             // Check if it's a "MULTI_COMPONENT" row with metadata items (Legacy support)
+
              const component = primaryPayment.component;
              description = getPaymentDescription(primaryPayment);
              
@@ -209,7 +165,7 @@ export const InvoiceService = {
                      };
                  });
                  description = 'Multiple Fee Payment';
-                 totalAmount = primaryPayment.amount; // Already summed in single row
+                 totalAmount = primaryPayment.amount;
             } else {
                  invoiceItems = [{
                      description: description,
@@ -219,7 +175,6 @@ export const InvoiceService = {
             }
         }
 
-        // Resolve counter name if payment was created by non-student
         let counterName: string | undefined;
         const creatorId = primaryPayment.collectedBy || primaryPayment.createdBy;
         if (creatorId) {
@@ -229,12 +184,91 @@ export const InvoiceService = {
             }
         }
 
-        // Prepare Data
         const courseName = primaryPayment.student.admissionDetails?.allottedCourse?.name || undefined;
 
+        let academicYearLabel = 'Academic Year 2026–2027';
+        if (primaryPayment.academicYearId) {
+            try {
+                const ayRecord = await prisma.academicYear.findUnique({
+                    where: { id: primaryPayment.academicYearId },
+                    select: { code: true }
+                });
+                if (ayRecord?.code) {
+                    academicYearLabel = `Academic Year ${ayRecord.code}`;
+                }
+            } catch (err) {
+                logger.warn(`[InvoiceService] Could not resolve academicYear for id=${primaryPayment.academicYearId}; using fallback label.`, err);
+            }
+        }
+
+        const { receiptNumber, invoiceNumber, invoiceUrl } = await prisma.$transaction(async (tx) => {
+
+            const priorReceiptsInCategory = await tx.payment.count({
+                where: {
+                    status: PaymentStatus.SUCCESS,
+                    component: { in: componentList },
+                    createdAt: { gte: yearStart, lte: yearEnd },
+                    id: { not: primaryPayment.id }
+                }
+            });
+            const receiptSerial = (priorReceiptsInCategory + 1).toString().padStart(3, '0');
+            const txReceiptNumber = `${receiptPrefix}/${year}/${receiptSerial}`;
+
+            const priorStudentPayments = await tx.payment.count({
+                where: {
+                    studentId: primaryPayment.studentId,
+                    status: PaymentStatus.SUCCESS,
+                    createdAt: { lt: primaryPayment.createdAt || new Date() }
+                }
+            });
+            const invoiceSerial = (priorStudentPayments + 1).toString().padStart(3, '0');
+            const txInvoiceNumber = `${receiptPrefix}/${year}/${applicationNumber}/${invoiceSerial}`;
+
+            const sanitizedTxIdInner = realTransactionId.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            const s3KeyInner = `student/${applicationNumber}/invoices/${sanitizedTxIdInner}.pdf`;
+
+            const txInvoiceData: any = {
+                receiptNumber: txReceiptNumber,
+                invoiceNumber: txInvoiceNumber,
+                date: primaryPayment.createdAt || new Date(),
+                studentName: primaryPayment.student.name,
+                studentId: primaryPayment.student.applicationId || primaryPayment.studentId,
+                applicationId: primaryPayment.student.applicationId || primaryPayment.studentId,
+                courseName,
+                paymentMethod: (primaryPayment.method === 'NEFT_RTGS') ? 'Bank Transfer' : (primaryPayment.method || 'ONLINE'),
+                transactionId: internalTxId,
+                referenceId: realTransactionId,
+                amount: totalAmount,
+                description: description,
+                items: invoiceItems,
+                academicYear: academicYearLabel,
+                counterName,
+                address: {
+                    line1: (primaryPayment.student as any).addressLine1 || (primaryPayment.student as any).address || '',
+                    line2: (primaryPayment.student as any).addressLine2 || (primaryPayment.student as any).address2 || '',
+                    city: primaryPayment.student.city || '',
+                    state: primaryPayment.student.state || '',
+                    pincode: primaryPayment.student.pincode || ''
+                }
+            };
+
+            const invoiceBuffer = await generateInvoicePDF(txInvoiceData);
+            const txInvoiceUrl = await uploadFileToS3(invoiceBuffer, s3KeyInner, 'application/pdf');
+
+            logger.info(`[InvoiceService] Valid URL generated: ${txInvoiceUrl}. Updating ${allPayments.length} payment records.`);
+
+            const paymentIds = allPayments.map(p => p.id);
+            await tx.payment.updateMany({
+                where: { id: { in: paymentIds } },
+                data: { invoiceUrl: txInvoiceUrl }
+            });
+
+            return { receiptNumber: txReceiptNumber, invoiceNumber: txInvoiceNumber, invoiceUrl: txInvoiceUrl };
+        });
+
         const invoiceData: any = {
-            receiptNumber: receiptNumber,
-            invoiceNumber: invoiceNumber,
+            receiptNumber,
+            invoiceNumber,
             date: primaryPayment.createdAt || new Date(),
             studentName: primaryPayment.student.name,
             studentId: primaryPayment.student.applicationId || primaryPayment.studentId,
@@ -246,7 +280,7 @@ export const InvoiceService = {
             amount: totalAmount,
             description: description,
             items: invoiceItems,
-            academicYear: 'Academic Year 2026–2027',
+            academicYear: academicYearLabel,
             counterName,
             address: {
                 line1: (primaryPayment.student as any).addressLine1 || (primaryPayment.student as any).address || '',
@@ -257,32 +291,8 @@ export const InvoiceService = {
             }
         };
 
-        // Generate PDF
-        const invoiceBuffer = await generateInvoicePDF(invoiceData);
-        
-        // Upload S3
-        // Key format: student/APPID/invoices/TXID.pdf to match existing pattern
-        const sanitizedTxId = realTransactionId.replace(/[^a-zA-Z0-9_\-]/g, '_');
-        const s3Key = `student/${applicationNumber}/invoices/${sanitizedTxId}.pdf`;
-        const invoiceUrl = await uploadFileToS3(invoiceBuffer, s3Key, 'application/pdf');
-        
-        logger.info(`[InvoiceService] Valid URL generated: ${invoiceUrl}. Updating ${allPayments.length} payment records.`);
-
-        // Update ALL involved records
-        const paymentIds = allPayments.map(p => p.id);
-        await prisma.payment.updateMany({
-            where: { id: { in: paymentIds } },
-            data: {
-                invoiceUrl: invoiceUrl
-            }
-        });
-
-        // Send Email
-        // Detect Template
-        // Send Email
-        // Detect Template & Type
         if (payment.component === PaymentComponent.APPLICATION_FEE) {
-            // Fetch detailed student data for Application Summary
+
             const fullStudentRef = await prisma.student.findUnique({
                 where: { id: payment.studentId },
                 include: {
@@ -308,14 +318,13 @@ export const InvoiceService = {
                     email: fullStudentRef.email || '',
                     address: `${fullStudentRef.address}, ${fullStudentRef.city}, ${fullStudentRef.state} - ${fullStudentRef.pincode}`,
                     degreeType: fullStudentRef.degreeType || '',
-                    courseType: fullStudentRef.courseType || '',
                     pref1: fullStudentRef.pref1Course?.name,
                     pref2: fullStudentRef.pref2Course?.name,
                     pref3: fullStudentRef.pref3Course?.name,
                     profilePhotoUrl: fullStudentRef.profilePhotoUrl || undefined,
                     qualifications: fullStudentRef.academicQualifications.map(q => ({
                         level: q.level || '',
-                        institution: (q as any).institution || '', // Cast to any if strictly checking but likely 'institution'
+                        institution: (q as any).institution || '',
                         board: q.board || '',
                         yearOfPassing: q.yearOfPassing?.toString() || '',
                         percentage: q.percentage?.toString() || ''
@@ -339,21 +348,21 @@ export const InvoiceService = {
                 additionalAttachments
             });
         } else {
-            // Determine specific payment type for email template
+
             let pType: any = 'DEFAULT';
             if (payment.component === PaymentComponent.SCHOLARSHIP_TOKEN) pType = 'ADMISSION_FEE';
             else if (payment.component === PaymentComponent.TUITION) pType = 'TUITION_FEE';
-            else if (payment.component === PaymentComponent.HOSTEL || payment.component === PaymentComponent.HOSTEL_ACCOMMODATION || payment.component === PaymentComponent.HOSTEL_MESS) pType = 'HOSTEL_FEE';
+            else if (
+                payment.component === PaymentComponent.HOSTEL
+                || payment.component === PaymentComponent.HOSTEL_ACCOMMODATION
+                || payment.component === PaymentComponent.HOSTEL_MESS
+                || payment.component === PaymentComponent.HOSTEL_LAUNDRY
+                || payment.component === PaymentComponent.HOSTEL_REGISTRATION
+            ) pType = 'HOSTEL_FEE';
             else if (payment.component === PaymentComponent.TRANSPORT) pType = 'TRANSPORT_FEE';
             else if (payment.component === PaymentComponent.BOOK_BANK) pType = 'BOOK_BANK_FEE';
-            else if (payment.component === 'MULTI_COMPONENT' || payment.component === 'OTHER') {
-                 // Try to be smart about 'Other' if description is clear, otherwise Default
-                 if (description.includes('Hostel')) pType = 'HOSTEL_FEE';
-                 else if (description.includes('Transport')) pType = 'TRANSPORT_FEE';
-                 else pType = 'DEFAULT';
-            }
+            else pType = 'DEFAULT';
 
-            // For admission-related payments, attach Allotment Order instead of Invoice
             const admissionComponents = [PaymentComponent.SCHOLARSHIP_TOKEN, PaymentComponent.TUITION];
             const isAdmissionPayment = pType === 'ADMISSION_FEE' || pType === 'TUITION_FEE' || allPayments.some(p => admissionComponents.includes(p.component));
             const allotmentAttachments = [];
@@ -373,7 +382,7 @@ export const InvoiceService = {
                     logger.info(`[InvoiceService] Allotment Order lookup result: ${allotmentDoc ? `found (url=${allotmentDoc.url ? 'YES' : 'NULL'})` : 'NOT FOUND'}`);
 
                     if (allotmentDoc?.url) {
-                        // Extract S3 key from the full URL
+
                         const s3Key = allotmentDoc.url.split('.amazonaws.com/')[1] || allotmentDoc.url;
                         const pdfBuffer = await downloadFileFromS3(decodeURIComponent(s3Key));
                         const pdfBase64 = pdfBuffer.toString('base64');

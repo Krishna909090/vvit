@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { promoteStudents, getStudentEnrollmentHistory, getStudentYearWiseFinancials } from './yearPromotion.service';
 import { AppError } from '../../utils/AppError';
+import { assertStudentOwns } from '../../utils/ownership';
 
 export const promoteStudentsController = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -26,6 +27,8 @@ export const getEnrollmentHistoryController = async (req: Request, res: Response
         const { studentId } = req.params;
         if (!studentId) throw new AppError('studentId is required', 400);
 
+        await assertStudentOwns(req, studentId);
+
         const history = await getStudentEnrollmentHistory(studentId);
 
         res.status(200).json({
@@ -41,6 +44,8 @@ export const getYearWiseFinancialsController = async (req: Request, res: Respons
     try {
         const { studentId } = req.params;
         if (!studentId) throw new AppError('studentId is required', 400);
+
+        await assertStudentOwns(req, studentId);
 
         const financials = await getStudentYearWiseFinancials(studentId);
 

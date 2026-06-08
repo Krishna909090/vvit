@@ -19,10 +19,10 @@ model User {
   updatedBy           String?
   isDeleted           Boolean?                 @default(false)
   password            String?
+  tokenVersion        Int                      @default(0)
   agentCommissions    AgentCommission[]
   auditLogs           AuditLog[]
   notifications       Notification[]
-  agentStudents       Student[]                @relation("AgentStudents")
   studentProfile      Student?                 @relation("StudentUser")
   userGroups          UserGroup[]
   otps                UserOtp[]
@@ -31,19 +31,20 @@ model User {
 }
 
 model UserOtp {
-  id          String    @id @default(dbgenerated("gen_random_uuid()"))
-  userId      String
-  type        String
-  otpHash     String
-  expiresAt   DateTime
-  attempts    Int       @default(0)
-  maxAttempts Int       @default(5)
-  used        Boolean?  @default(false)
-  createdAt   DateTime? @default(now())
-  updatedAt   DateTime  @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  user        User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id           String    @id @default(dbgenerated("gen_random_uuid()"))
+  userId       String
+  type         String
+  otpHash      String
+  otpEncrypted String?
+  expiresAt    DateTime
+  attempts     Int       @default(0)
+  maxAttempts  Int       @default(5)
+  used         Boolean?  @default(false)
+  createdAt    DateTime? @default(now())
+  updatedAt    DateTime  @updatedAt
+  createdBy    String?
+  updatedBy    String?
+  user         User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([userId])
   @@index([userId, type, used])
@@ -86,33 +87,58 @@ model Course {
   updatedBy        String?
   isDeleted        Boolean?           @default(false)
   degree           String?
-  omrId            Int?
-  filledSeats      Int?               @default(0)
-  totalSeats       Int?               @default(0)
-  department       Department         @relation(fields: [departmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // OMR ID = physical OMR scan-sheet identifier. Unique across all courses.
+  // Nullable: courses without OMR scanning don't need one — Postgres allows
+  // multiple NULLs under a unique index, so unset courses never collide.
+  omrId                Int?               @unique
+  scholarshipEligible  Boolean?           @default(true)
+  department           Department         @relation(fields: [departmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeStructures    FeeStructure[]
-  specializations  Specialization[]
   studentsPref1    Student[]          @relation("Pref1")
   studentsPref2    Student[]          @relation("Pref2")
   studentsPref3    Student[]          @relation("Pref3")
   allottedStudents StudentAdmission[] @relation("AllottedCourse")
   waitingList      WaitingList[]
+  capacities       CourseCapacity[]
+  batches          Batch[]
+  subjects         Subject[]
+}
+
+model CourseCapacity {
+  id              String        @id @default(dbgenerated("gen_random_uuid()"))
+  courseId        String
+  academicYearId  String
+  totalSeats      Int
+  filledSeats     Int           @default(0)
+  createdAt       DateTime?     @default(now())
+  updatedAt       DateTime      @updatedAt
+  createdBy       String?
+  updatedBy       String?
+  course          Course        @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear    AcademicYear  @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([courseId, academicYearId])
+  @@index([academicYearId])
 }
 
 model Batch {
-  id               String         @id @default(dbgenerated("gen_random_uuid()"))
+  id               String     @id @default(dbgenerated("gen_random_uuid()"))
   name             String
   startDate        DateTime
   endDate          DateTime
   courseId         String
-  specializationId String
-  createdAt        DateTime?      @default(now())
-  updatedAt        DateTime       @updatedAt
+  // The academic year the batch (cohort) was admitted in — its entry year.
+  academicYearId   String
+  createdAt        DateTime?  @default(now())
+  updatedAt        DateTime   @updatedAt
   createdBy        String?
   updatedBy        String?
-  isDeleted        Boolean?       @default(false)
-  specialization   Specialization @relation(fields: [specializationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  isDeleted        Boolean?   @default(false)
+  course           Course        @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear     AcademicYear  @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections         Section[]
+
+  @@index([academicYearId])
 }
 
 model Section {
@@ -141,12 +167,38 @@ model AcademicYear {
   updatedBy         String?
   isDeleted         Boolean?            @default(false)
   feeStructures     FeeStructure[]
-  studentAdmissions StudentAdmission[]
+  feeStructuresAsEntry    FeeStructure[]       @relation("FeeStructureEntryYear")
+  studentAdmissions       StudentAdmission[]   @relation("AdmissionCurrentYear")
+  studentAdmissionsEntry  StudentAdmission[]   @relation("AdmissionEntryYear")
+  studentAdmissionsCohort StudentAdmission[]   @relation("AdmissionFeeCohortYear")
+  studentAdmissionsBatch  StudentAdmission[]   @relation("AdmissionBatchYear")
   enrollments       StudentEnrollment[]
   studentFeeDemands StudentFeeDemand[]
   payments          Payment[]
   ledgerEntries     StudentLedger[]
   feeCorrections    FeeCorrection[]
+  retainedRevenueLines      RetainedRevenueLine[]
+  hostelPriceCategories     HostelPriceCategory[]
+  transportYearlyPrices     TransportRouteYearlyPrice[]
+  courseCapacities          CourseCapacity[]
+  semesterMarks             SemesterMark[]
+  classAttendance           ClassAttendance[]
+  studentDocuments          StudentDocument[]
+  studentScholarships       StudentScholarship[]
+  hostelAllocations         HostelAllocation[]
+  transportAllocations      TransportAllocation[]
+  batches                   Batch[]
+  waitingLists              WaitingList[]
+  seatAllocations           SeatAllocation[]
+  scholarshipAllocations    ScholarshipAllocation[]
+  courseChangeLogs          CourseChangeLog[]
+  courseChangeRequests      CourseChangeRequest[]
+  discountRequests          DiscountRequest[]
+  hallTickets               HallTicket[]
+  cancellationRequests      CancellationRequest[]
+  serviceChangeRequests     ServiceChangeRequest[]
+  agentCommissions          AgentCommission[]
+  scholarshipRules          ScholarshipRule[]
 }
 
 model StudentEnrollment {
@@ -167,6 +219,7 @@ model StudentEnrollment {
   student         Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([studentId, academicYearId])
+  @@unique([academicYearId, rollNumber], map: "StudentEnrollment_year_roll_unique")
   @@index([studentId])
   @@index([academicYearId])
   @@index([status])
@@ -191,7 +244,6 @@ model Student {
   state                     String
   pincode                   String
   profilePhotoUrl           String?
-  documentFolderPath        String?
   source                    AdmissionSource?        @default(WEBSITE)
   quotaType                 QuotaType?              @default(MANAGEMENT)
   applicationMode           ApplicationMode?        @default(ONLINE)
@@ -201,14 +253,7 @@ model Student {
   pref2                     String?
   pref3                     String?
   userId                    String?                 @unique
-  agentId                   String?
-  eligibleScholarshipRuleId String?
   degreeType                String?
-  courseType                String?
-  scholarshipRemarks        String?
-  scholarshipVerified       Boolean?                @default(false)
-  scholarshipVerifiedAt     DateTime?
-  scholarshipVerifiedBy     String?
   createdAt                 DateTime?               @default(now())
   updatedAt                 DateTime                @updatedAt
   createdBy                 String?
@@ -223,13 +268,11 @@ model Student {
   discountRequests          DiscountRequest[]
   fileUploads               FileUpload[]
   hallTickets               HallTicket[]
-  hostelAllocation          HostelAllocation?
+  hostelAllocations         HostelAllocation[]
   payments                  Payment[]
   scholarshipAllocation     ScholarshipAllocation?
   seatAllocations           SeatAllocation[]
   serviceChangeRequests     ServiceChangeRequest[]
-  agent                     User?                   @relation("AgentStudents", fields: [agentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  eligibleScholarshipRule   ScholarshipRule?        @relation(fields: [eligibleScholarshipRuleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   pref1Course               Course?                 @relation("Pref1", fields: [pref1], references: [id], onDelete: NoAction, onUpdate: NoAction)
   pref2Course               Course?                 @relation("Pref2", fields: [pref2], references: [id], onDelete: NoAction, onUpdate: NoAction)
   pref3Course               Course?                 @relation("Pref3", fields: [pref3], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -241,12 +284,15 @@ model Student {
   feeDemands                StudentFeeDemand[]
   ledgerEntries             StudentLedger[]
   studentScholarship        StudentScholarship?
-  transportAllocation       TransportAllocation?
+  transportAllocations      TransportAllocation[]
   waitingListEntries        WaitingList[]
   feeCorrections            FeeCorrection[]
+  retainedRevenueLines      RetainedRevenueLine[]
+  accommodationPricing      StudentAccommodationPricing[]
+  semesterMarks             SemesterMark[]
+  classAttendance           ClassAttendance[]
 
   proId                     String?
-  proCommissionAmount       Float?                  @default(0)
   pro                       PRO?                    @relation(fields: [proId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([phone])
@@ -309,7 +355,6 @@ model StudentAdmission {
   id                String             @id @default(dbgenerated("gen_random_uuid()"))
   studentId         String             @unique
   status            AdmissionStatus?   @default(REGISTERED)
-  qualificationMode QualificationMode?
   totalFee          Float?             @default(0)
   paidFee           Float?             @default(0)
   feeStatus         FeeStatus?         @default(PENDING)
@@ -324,12 +369,31 @@ model StudentAdmission {
   createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
   hostelPaymentMode HostelPaymentMode? @default(YEARWISE)
-  academicYearId    String?
-  academicYear      AcademicYear?      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYearId    String
+
+  // Lateral / back-dated admission tracking. Frozen at admission time —
+  // unlike `academicYearId` (which advances on year promotion), these stay
+  // immutable for cohort reporting (e.g., "lateral-entry batch of 2025-26").
+  entryType                AdmissionEntryType? @default(REGULAR)
+  entryYearOfStudy         Int?                @default(1) // year-of-study at admission moment
+  entryAcademicYearId      String?                          // academicYear at admission moment
+  feeCohortAcademicYearId  String?                          // which cohort's fee schedule applies (for FRESH = entryAcademicYearId; for LATERAL = the batch they slot into)
+  batchAcademicYearId      String?                          // the academic year the student's BATCH started 1st year. For REGULAR = academicYearId; for LATERAL = (yearOfStudy-1) years earlier. Drives the shared course-seat pool.
+  instituteCode            String?                          // 'MGMT' (default for most batches) / 'VVITU' / 'VVITPU' (2025-26 batch only) — picks which institute's fee schedule applies
+  entryReason              String?                          // free-text: e.g. "Diploma → BTech 2nd year"
+  isBackdated              Boolean?            @default(false) // admin-flagged for back-entry
+
+  academicYear             AcademicYear       @relation("AdmissionCurrentYear", fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  entryAcademicYear        AcademicYear?      @relation("AdmissionEntryYear",   fields: [entryAcademicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeCohortAcademicYear    AcademicYear?      @relation("AdmissionFeeCohortYear", fields: [feeCohortAcademicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  batchAcademicYear        AcademicYear?      @relation("AdmissionBatchYear", fields: [batchAcademicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   allottedCourse    Course?            @relation("AllottedCourse", fields: [allottedCourseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   hostel            Hostel?            @relation(fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student           Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   transportRoute    TransportRoute?    @relation(fields: [transportRouteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([entryType])
+  @@index([entryAcademicYearId])
 }
 
 model StudentDocument {
@@ -340,100 +404,129 @@ model StudentDocument {
   status      StudentDocumentStatus? @default(PENDING)
   remarks     String?
   verifiedBy  String?
+  academicYearId String
   isDeleted   Boolean?               @default(false)
   createdAt   DateTime?              @default(now())
   updatedAt   DateTime               @updatedAt
   createdBy   String?
   updatedBy   String?
   student     Student                @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear AcademicYear          @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([studentId, documentKey])
-}
-
-model Specialization {
-  id          String    @id @default(dbgenerated("gen_random_uuid()"))
-  code        String?
-  name        String
-  courseId    String
-  totalSeats  Int
-  filledSeats Int?      @default(0)
-  createdAt   DateTime? @default(now())
-  updatedAt   DateTime  @updatedAt
-  createdBy   String?
-  updatedBy   String?
-  isDeleted   Boolean?  @default(false)
-  batches     Batch[]
-  course      Course    @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([academicYearId])
 }
 
 model Hostel {
-  id                String             @id @default(dbgenerated("gen_random_uuid()"))
-  name              String
-  type              String?
-  wardenName        String?
-  capacity          Int
-  filled            Int?               @default(0)
-  blockName         String?
-  roomNumber        String?
-  isDeleted         Boolean?           @default(false)
-  cost              Float?             @default(0)
-  createdAt         DateTime?          @default(now())
-  updatedAt         DateTime           @updatedAt
-  createdBy         String?
-  updatedBy         String?
-  accommodationCost Float?             @default(0)
-  messCost          Float?             @default(0)
-  blocks            HostelBlock[]
-  studentAdmissions StudentAdmission[]
-}
-
-model HostelBlock {
-  id        String       @id @default(dbgenerated("gen_random_uuid()"))
-  hostelId  String
-  name      String
-  type      String
-  createdAt DateTime?    @default(now())
-  updatedAt DateTime     @updatedAt
-  createdBy String?
-  updatedBy String?
-  isDeleted Boolean?     @default(false)
-  hostel    Hostel       @relation(fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  rooms     HostelRoom[]
+  id                  String             @id @default(dbgenerated("gen_random_uuid()"))
+  name                String
+  type                String?
+  wardenName          String?
+  floors              Int?
+  totalRooms          Int?
+  photoUrl            String?
+  // Bank routing — different hostels can route fees to different bank accounts
+  accommodationBank   String?            // 'TRUST' | 'LLP'
+  messBank            String?            @default("LLP")
+  laundryBank         String?
+  registrationBank    String?
+  isDeleted           Boolean?           @default(false)
+  createdAt           DateTime?          @default(now())
+  updatedAt           DateTime           @updatedAt
+  createdBy           String?
+  updatedBy           String?
+  rooms               HostelRoom[]       @relation("HostelRooms")
+  studentAdmissions   StudentAdmission[]
 }
 
 model HostelRoom {
-  id                String      @id @default(dbgenerated("gen_random_uuid()"))
-  blockId           String
+  id                String       @id @default(dbgenerated("gen_random_uuid()"))
+  hostelId          String
+  floor             Int
   number            String
   capacity          Int
   type              String
-  cost              Float?      @default(0)
-  createdAt         DateTime?   @default(now())
-  updatedAt         DateTime    @updatedAt
+  isDeleted         Boolean?     @default(false)
+  createdAt         DateTime?    @default(now())
+  updatedAt         DateTime     @updatedAt
   createdBy         String?
   updatedBy         String?
-  isDeleted         Boolean?    @default(false)
-  accommodationCost Float?      @default(0)
-  messCost          Float?      @default(0)
   beds              HostelBed[]
-  block             HostelBlock @relation(fields: [blockId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  hostel            Hostel       @relation("HostelRooms", fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model HostelPriceCategory {
   id                 String         @id @default(dbgenerated("gen_random_uuid()"))
   sharing            Int
   roomType           HostelRoomType
-  price              Float
-  createdAt          DateTime?      @default(now())
-  updatedAt          DateTime       @updatedAt
-  createdBy          String?
-  updatedBy          String?
-  metadata           Json?
-  accommodationPrice Float?         @default(0)
-  messPrice          Float?         @default(0)
-  semwiseSurcharge   Float?         @default(0)
 
-  @@unique([sharing, roomType])
+  // Year-aware pricing — each row is isolated to one academic year.
+  academicYearId     String
+  academicYear       AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  // Yearwise (Single Instalment) prices
+  accommodationYearwise Float?      @default(0)
+  messYearwise          Float?      @default(0)
+  laundryYearwise       Float?      @default(0)
+
+  // Semwise (Two Instalment) prices — total amount paid across both instalments
+  accommodationSemwise  Float?      @default(0)
+  messSemwise           Float?      @default(0)
+  laundrySemwise        Float?      @default(0)
+
+  // One-time, non-refundable
+  registrationFee       Float?      @default(0)
+
+  // Free-form for future extensions (e.g. promotional discounts)
+  metadata              Json?
+
+  isActive              Boolean?    @default(true)
+  createdAt             DateTime?   @default(now())
+  updatedAt             DateTime    @updatedAt
+  createdBy             String?
+  updatedBy             String?
+
+  @@unique([sharing, roomType, academicYearId])
+  @@index([academicYearId])
+}
+
+// Per-student frozen pricing snapshot — captures what THIS student owes,
+// independent of future config changes. Created when admin assigns hostel.
+model StudentAccommodationPricing {
+  id                    String        @id @default(dbgenerated("gen_random_uuid()"))
+  studentId             String
+  academicYearId        String
+
+  sharing               Int
+  roomType              String
+  paymentMode           String        // 'YEARWISE' | 'SEMWISE'
+  hostelId              String?
+
+  accommodationPrice    Float
+  messPrice             Float
+  laundryPrice          Float?        @default(0)
+  registrationFee       Float
+
+  adjustmentAmount      Float?        @default(0)
+  adjustmentReason      String?
+  effectiveTotal        Float
+
+  pricingSource         String?       // 'CONFIG' | 'CUSTOM' | 'AUTO_BACKFILL'
+  // Supersede semantics: at most one row per studentId may have isActive=true
+  // (enforced by a partial unique index in migration SQL). Old rows are kept
+  // with isActive=false + supersededAt for audit/refund history.
+  isActive              Boolean       @default(true)
+  supersededAt          DateTime?
+  createdBy             String?
+  updatedBy             String?
+  createdAt             DateTime?     @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  student               Student       @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([studentId])
+  @@index([studentId, isActive])
+  @@index([hostelId])
 }
 
 model HostelBed {
@@ -445,23 +538,30 @@ model HostelBed {
   updatedAt  DateTime          @updatedAt
   createdBy  String?
   updatedBy  String?
-  allocation HostelAllocation?
-  room       HostelRoom        @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  allocations HostelAllocation[]
+  room        HostelRoom        @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model HostelAllocation {
   id        String                  @id @default(dbgenerated("gen_random_uuid()"))
-  studentId String                  @unique
-  bedId     String                  @unique
+  studentId String
+  bedId     String
   startDate DateTime
   endDate   DateTime?
   status    HostelAllocationStatus? @default(ACTIVE)
+  academicYearId String
   createdAt DateTime?               @default(now())
   updatedAt DateTime                @updatedAt
   createdBy String?
   updatedBy String?
   bed       HostelBed               @relation(fields: [bedId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student   Student                 @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear AcademicYear         @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentId, academicYearId])
+  @@index([academicYearId])
+  @@index([bedId])
+  @@index([studentId, status])
 }
 
 model Vehicle {
@@ -470,6 +570,7 @@ model Vehicle {
   capacity    Int
   driverName  String
   driverPhone String
+  photoUrl    String?
   isDeleted   Boolean?         @default(false)
   createdAt   DateTime?        @default(now())
   updatedAt   DateTime         @updatedAt
@@ -481,12 +582,17 @@ model Vehicle {
 model TransportRoute {
   id                String                @id @default(dbgenerated("gen_random_uuid()"))
   name              String
+  // `cost` is the *default* price used when no year-specific override exists in
+  // TransportRouteYearlyPrice. Existing single-cost workflows keep working;
+  // year-specific pricing is layered on top via the related model below.
   cost              Float
   city              String?
   busNumber         String?
   capacity          Int?                  @default(0)
   filled            Int?                  @default(0)
   vehicleId         String?
+  pickupTime        String?               // HH:MM (24-hour). Time-only — no date.
+  dropTime          String?               // HH:MM (24-hour). Time-only — no date.
   isDeleted         Boolean?              @default(false)
   createdAt         DateTime?             @default(now())
   updatedAt         DateTime              @updatedAt
@@ -496,6 +602,28 @@ model TransportRoute {
   allocations       TransportAllocation[]
   vehicle           Vehicle?              @relation(fields: [vehicleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   stops             TransportStop[]
+  yearlyPrices      TransportRouteYearlyPrice[]
+}
+
+// Per-year cost override for a TransportRoute. Reader resolves cost as:
+//   yearlyPrice(routeId, currentYearId)?.cost ?? route.cost
+// So back-dated / lateral students into a past year get the price that was
+// effective in that year, while current students continue to use route.cost.
+model TransportRouteYearlyPrice {
+  id              String         @id @default(dbgenerated("gen_random_uuid()"))
+  routeId         String
+  academicYearId  String
+  cost            Float
+  createdAt       DateTime?      @default(now())
+  updatedAt       DateTime       @updatedAt
+  createdBy       String?
+  updatedBy       String?
+
+  route           TransportRoute @relation(fields: [routeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear    AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([routeId, academicYearId])
+  @@index([academicYearId])
 }
 
 model TransportStop {
@@ -503,8 +631,6 @@ model TransportStop {
   routeId     String
   name        String
   sequence    Int
-  pickupTime  DateTime
-  dropTime    DateTime
   isDeleted   Boolean?              @default(false)
   createdAt   DateTime?             @default(now())
   updatedAt   DateTime              @updatedAt
@@ -516,12 +642,13 @@ model TransportStop {
 
 model TransportAllocation {
   id        String                     @id @default(dbgenerated("gen_random_uuid()"))
-  studentId String                     @unique
+  studentId String
   routeId   String
   stopId    String
   startDate DateTime
   endDate   DateTime?
   status    TransportAllocationStatus? @default(ACTIVE)
+  academicYearId String
   createdAt DateTime?                  @default(now())
   updatedAt DateTime                   @updatedAt
   createdBy String?
@@ -529,12 +656,20 @@ model TransportAllocation {
   route     TransportRoute             @relation(fields: [routeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   stop      TransportStop              @relation(fields: [stopId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student   Student                    @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear AcademicYear            @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentId, academicYearId])
+  @@index([academicYearId])
+  @@index([studentId, status])
 }
 
 model FeeHead {
   id                String             @id @default(dbgenerated("gen_random_uuid()"))
   name              String
   description       String?
+  // Explicit link to the PaymentComponent enum — kills name-keyword matching across the codebase.
+  // Optional for backward compat with legacy heads (fall back to name keywords until backfill).
+  component         PaymentComponent?
   isDeleted         Boolean?           @default(false)
   createdAt         DateTime?          @default(now())
   updatedAt         DateTime           @updatedAt
@@ -546,26 +681,29 @@ model FeeHead {
 }
 
 model FeeStructure {
-  id             String             @id @default(dbgenerated("gen_random_uuid()"))
-  courseId       String
-  feeHeadId      String
-  amount         Float
-  currency       String?            @default("INR")
-  academicYearId String
-  quotaType      QuotaType?
-  courseType     String?
-  dueDate        DateTime?
-  yearOfStudy    Int?
-  degreeId       String?
-  isDeleted      Boolean?           @default(false)
-  createdAt      DateTime?          @default(now())
-  updatedAt      DateTime           @updatedAt
-  createdBy      String?
-  updatedBy      String?
-  academicYear   AcademicYear       @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  course         Course             @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  feeHead        FeeHead            @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  demands        StudentFeeDemand[]
+  id                  String              @id @default(dbgenerated("gen_random_uuid()"))
+  courseId            String
+  feeHeadId           String
+  amount              Float
+  currency            String?             @default("INR")
+  academicYearId      String
+  entryAcademicYearId String?
+  entryType           AdmissionEntryType?
+  instituteCode       String?
+  quotaType           QuotaType?
+  yearOfStudy         Int?
+  isDeleted           Boolean?            @default(false)
+  createdAt           DateTime?           @default(now())
+  updatedAt           DateTime            @updatedAt
+  createdBy           String?
+  updatedBy           String?
+  academicYear        AcademicYear        @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  entryAcademicYear   AcademicYear?       @relation("FeeStructureEntryYear", fields: [entryAcademicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course              Course              @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feeHead             FeeHead             @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  demands             StudentFeeDemand[]
+
+  @@index([courseId, academicYearId, entryAcademicYearId, entryType, instituteCode, quotaType, yearOfStudy], map: "FeeStructure_resolution_idx")
 }
 
 model StudentFeeDemand {
@@ -584,14 +722,14 @@ model StudentFeeDemand {
   remarks           String?
   netAmount         Float?
   scholarshipAmount Float         @default(0)
-  academicYearId    String?
+  academicYearId    String
   feeHeadId         String?
   yearOfStudy       Int?
   isDeleted         Boolean?      @default(false)
   deletedAt         DateTime?
   deletedBy         String?
   payments          Payment[]
-  academicYear      AcademicYear? @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear      AcademicYear  @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeHead           FeeHead?      @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeStructure      FeeStructure? @relation(fields: [feeStructureId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student           Student       @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -608,6 +746,10 @@ model Payment {
   status          PaymentStatus?    @default(PENDING)
   mode            PaymentMode?      @default(ONLINE)
   method_legacy   String?
+  /// De-duplication key set at Payment.create. Unique at DB level so concurrent webhooks
+  /// or accidental double-submits fail with P2002 instead of creating phantom rows.
+  /// Convention: providerTxId for online, referenceNumber for offline non-CASH, fallback to id.
+  idempotencyKey  String?           @unique
   providerTxId    String?
   merchantOrderId String?
   signature       String?
@@ -626,13 +768,13 @@ model Payment {
   updatedBy       String?
   method          PaymentMethod?
   feeHeadId       String?
-  academicYearId  String?
+  academicYearId  String
   yearOfStudy     Int?
   isDeleted       Boolean?          @default(false)
   deletedAt       DateTime?
   deletedBy       String?
   feeDemand       StudentFeeDemand? @relation(fields: [feeDemandId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  academicYear    AcademicYear?     @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear    AcademicYear      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeHead         FeeHead?          @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student         Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -646,22 +788,27 @@ model Payment {
 }
 
 model CourseChangeLog {
-  id         String    @id @default(dbgenerated("gen_random_uuid()"))
-  studentId  String
-  oldCourse  String
-  newCourse  String
-  oldDegree  String?
-  newDegree  String?
-  approvedBy String
-  date       DateTime? @default(now())
-  createdBy  String?
-  updatedBy  String?
-  student    Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id             String    @id @default(dbgenerated("gen_random_uuid()"))
+  studentId      String
+  academicYearId String
+  oldCourse      String
+  newCourse      String
+  oldDegree      String?
+  newDegree      String?
+  approvedBy     String
+  date           DateTime? @default(now())
+  createdBy      String?
+  updatedBy      String?
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([academicYearId])
 }
 
 model DiscountRequest {
   id              String          @id @default(dbgenerated("gen_random_uuid()"))
   studentId       String
+  academicYearId  String
   reason          String
   documentUrl     String?
   status          DiscountStatus? @default(REQUESTED)
@@ -677,6 +824,9 @@ model DiscountRequest {
   updatedBy       String?
   items           Json?
   student         Student         @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear    AcademicYear    @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([academicYearId])
 }
 
 model SystemSetting {
@@ -738,7 +888,11 @@ model CancellationRequest {
   // Timestamps
   approvedAt       DateTime?
   rejectedAt       DateTime?
+  academicYearId   String
   student          Student                    @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear     AcademicYear               @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([academicYearId])
 }
 
 model FileUpload {
@@ -804,17 +958,20 @@ model ExamSlot {
 }
 
 model HallTicket {
-  id          String    @id @default(dbgenerated("gen_random_uuid()"))
-  studentId   String
-  fileId      String?
-  url         String?
-  qrHash      String?
-  generatedAt DateTime? @default(now())
-  createdBy   String?
-  updatedBy   String?
-  student     Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id             String       @id @default(dbgenerated("gen_random_uuid()"))
+  studentId      String
+  academicYearId String
+  fileId         String?
+  url            String?
+  qrHash         String?
+  generatedAt    DateTime?    @default(now())
+  createdBy      String?
+  updatedBy      String?
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([studentId])
+  @@index([academicYearId])
 }
 
 model InvigilatorCredential {
@@ -844,21 +1001,26 @@ model AttendanceRecord {
 }
 
 model SeatAllocation {
-  id          String    @id @default(dbgenerated("gen_random_uuid()"))
-  studentId   String
-  oldCourse   String?
-  newCourse   String?
-  allocatedBy String?
-  allocatedAt DateTime? @default(now())
-  notes       String?
-  createdBy   String?
-  updatedBy   String?
-  student     Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id             String       @id @default(dbgenerated("gen_random_uuid()"))
+  studentId      String
+  academicYearId String
+  oldCourse      String?
+  newCourse      String?
+  allocatedBy    String?
+  allocatedAt    DateTime?    @default(now())
+  notes          String?
+  createdBy      String?
+  updatedBy      String?
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([academicYearId])
 }
 
 model CourseChangeRequest {
   id                      String         @id @default(dbgenerated("gen_random_uuid()"))
   studentId               String
+  academicYearId          String
   fromCourse              String
   toCourse                String
   fromDegree              String?
@@ -875,6 +1037,9 @@ model CourseChangeRequest {
   createdBy               String?
   updatedBy               String?
   student                 Student        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear            AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([academicYearId])
 }
 
 model FeeCorrection {
@@ -882,6 +1047,12 @@ model FeeCorrection {
   studentId             String
   academicYearId        String
   amount                Float
+  // Amount the college keeps on the cancel/switch that produced this row. `amount` is
+  // the refund; `retainedAmount` is the retained counterpart.
+  retainedAmount        Float?         @default(0)
+  // Denormalized snapshot of retainedAmount split by category. RetainedRevenueLine is
+  // the authoritative ledger; this column is kept for single-row inspection.
+  retentionBreakdown    Json?
   reason                String
   type                  FeeCorrectionType
   referenceId           String?
@@ -905,18 +1076,48 @@ model FeeCorrection {
   @@index([carryForward, isSettled])
 }
 
+// One row per (source row, category) of retained revenue. `sourceType` + `sourceId`
+// point back to the originating row (FeeCorrection, Payment, etc.).
+model RetainedRevenueLine {
+  id              String                    @id @default(dbgenerated("gen_random_uuid()"))
+  studentId       String
+  academicYearId  String
+  category        RetainedRevenueCategory
+  amount          Float
+  sourceType      RetainedRevenueSourceType
+  sourceId        String
+  courseId        String?
+  hostelId        String?
+  routeId         String?
+  occurredAt      DateTime
+  createdAt       DateTime?                 @default(now())
+  createdBy       String?
+
+  student         Student                   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear    AcademicYear              @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([category, occurredAt])
+  @@index([academicYearId, category])
+  @@index([studentId])
+  @@index([sourceType, sourceId])
+}
+
 model AgentCommission {
   id        String                 @id @default(dbgenerated("gen_random_uuid()"))
-  agentId   String
-  studentId String
-  amount    Float
-  component String
-  status    AgentCommissionStatus? @default(PENDING)
-  createdAt DateTime?              @default(now())
-  createdBy String?
-  updatedBy String?
-  agent     User                   @relation(fields: [agentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  student   Student                @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  agentId        String
+  studentId      String
+  academicYearId String
+  amount         Float
+  component      String
+  status         AgentCommissionStatus? @default(PENDING)
+  createdAt      DateTime?              @default(now())
+  createdBy      String?
+  updatedBy      String?
+  agent          User                   @relation(fields: [agentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student        Student                @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear   AcademicYear           @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([academicYearId])
 }
 
 model Notification {
@@ -962,6 +1163,7 @@ model DocumentRequirement {
 model ScholarshipRule {
   id                 String                  @id @default(dbgenerated("gen_random_uuid()"))
   name               String
+  academicYearId     String
   minPercentile      Float
   discountPercentage Float
   totalSlots         Int
@@ -971,7 +1173,9 @@ model ScholarshipRule {
   createdAt          DateTime?               @default(now())
   updatedAt          DateTime                @updatedAt
   allocations        ScholarshipAllocation[]
-  eligibleStudents   Student[]
+  academicYear       AcademicYear            @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([academicYearId])
 }
 
 model QualificationRequirement {
@@ -1108,8 +1312,15 @@ model StudentScholarship {
   updatedAt             DateTime               @updatedAt
   degreeType            String?
   isEligible            String?
+  // Optional year tag. NULL = program-wide / legacy scholarship (current behavior).
+  // NOTE: `studentId` is still @unique — one scholarship row per student. To support
+  // true per-year scholarships, drop `@unique` here and add @@unique([studentId,
+  academicYearId        String
   qualification         AcademicQualification? @relation(fields: [qualificationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student               Student                @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear          AcademicYear           @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([academicYearId])
 }
 
 model EmailLog {
@@ -1130,17 +1341,21 @@ model EmailLog {
 }
 
 model ScholarshipAllocation {
-  id         String            @id @default(dbgenerated("gen_random_uuid()"))
-  studentId  String            @unique
-  ruleId     String
-  status     ScholarshipStatus @default(RESERVED)
-  expiresAt  DateTime?
-  reservedAt DateTime?
-  lockedAt   DateTime?
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
-  rule       ScholarshipRule   @relation(fields: [ruleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  student    Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id             String            @id @default(dbgenerated("gen_random_uuid()"))
+  studentId      String            @unique
+  academicYearId String
+  ruleId         String
+  status         ScholarshipStatus @default(RESERVED)
+  expiresAt      DateTime?
+  reservedAt     DateTime?
+  lockedAt       DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  rule           ScholarshipRule   @relation(fields: [ruleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student        Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear   AcademicYear      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([academicYearId])
 }
 
 model StudentLedger {
@@ -1156,12 +1371,12 @@ model StudentLedger {
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
   feeHeadId       String?
-  academicYearId  String?
+  academicYearId  String
   yearOfStudy     Int?
   isDeleted       Boolean?              @default(false)
   deletedAt       DateTime?
   deletedBy       String?
-  academicYear    AcademicYear?         @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear    AcademicYear          @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student         Student               @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([studentId])
@@ -1180,39 +1395,61 @@ model Configuration {
 }
 
 model ServiceChangeRequest {
-  id         String             @id @default(dbgenerated("gen_random_uuid()"))
-  studentId  String
-  type       ServiceRequestType
-  fromValue  String?
-  toValue    String
-  reason     String?
-  status     RequestStatus      @default(REQUESTED)
-  remarks    String?
-  approvedBy String?
-  createdAt  DateTime           @default(now())
-  updatedAt  DateTime           @updatedAt
-  student    Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id             String             @id @default(dbgenerated("gen_random_uuid()"))
+  studentId      String
+  academicYearId String
+  type           ServiceRequestType
+  fromValue      String?
+  toValue        String
+  reason         String?
+  status         RequestStatus      @default(REQUESTED)
+  remarks        String?
+  approvedBy     String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  student        Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear   AcademicYear       @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([academicYearId])
 }
 
 model WaitingList {
-  id         String            @id @default(dbgenerated("gen_random_uuid()"))
-  studentId  String
-  courseId   String
-  priority   Int               @default(0)
-  status     WaitingListStatus @default(WAITING)
-  remarks    String?
-  allottedAt DateTime?
-  allottedBy String?
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
-  createdBy  String?
-  updatedBy  String?
-  student    Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  course     Course            @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id             String            @id @default(dbgenerated("gen_random_uuid()"))
+  studentId      String
+  courseId       String
+  academicYearId String
+  priority       Int               @default(0)
+  // Fixed waiting-list token assigned at join time as MAX(waitingNumber)+1
+  // within the (courseId, academicYearId) queue. Stable for life — it does NOT
+  // shift when entries ahead are allotted/cancelled (live rank is computed
+  // separately in getWaitingList). Gaps are expected after allot/cancel.
+  waitingNumber  Int               @default(0)
+  // Quota the student is queued under. Drives list ordering: MANAGEMENT is
+  // ranked by total amount paid (desc), POLICE/GENERAL by waitingNumber (rank).
+  // Required at the API layer; default GENERAL only backfills pre-existing rows.
+  category       WaitingListCategory @default(GENERAL)
+  status         WaitingListStatus @default(WAITING)
+  remarks        String?
+  allottedAt     DateTime?
+  allottedBy     String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  createdBy      String?
+  updatedBy      String?
+  student        Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course         Course            @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear   AcademicYear      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([studentId, courseId])
+  // NOTE: no unique on (studentId, courseId, academicYearId) — that would count
+  // CANCELLED rows and block a student from re-joining a course they withdrew
+  // from. "One active course per student per year" is enforced in
+  // addToWaitingList (checks for an existing WAITING entry).
+  // One number per course-queue per year (safety net for the atomic MAX+1).
+  @@unique([courseId, academicYearId, waitingNumber])
   @@index([studentId])
   @@index([courseId, status])
+  @@index([courseId, status, category])
+  @@index([academicYearId])
 }
 
 enum AdmissionStatus {
@@ -1232,16 +1469,18 @@ enum AdmissionStatus {
   EXAM_NOT_QUALIFIED
 }
 
-enum QualificationMode {
-  EXAM
-  DIRECT
+enum AdmissionEntryType {
+  REGULAR    // joined at year 1 (default for new admissions; previously FRESH)
+  LATERAL    // joined at year >= 2 via lateral entry scheme
+  TRANSFER   // transferred mid-program from another institution
 }
 
 enum EnrollmentStatus {
-  ACTIVE
-  SUSPENDED
-  DROPPED
-  COMPLETED
+  ACTIVE      // normally progressing
+  SUSPENDED   // disciplinary suspension
+  DETAINED    // academically held back (attendance shortage / backlogs) — repeats the year, still in college
+  DROPPED     // left / dropped out of college
+  COMPLETED   // finished the program
 }
 
 enum AdmissionSource {
@@ -1277,6 +1516,8 @@ enum PaymentComponent {
   SKILL_DEVELOPMENT
   HOSTEL_ACCOMMODATION
   HOSTEL_MESS
+  HOSTEL_LAUNDRY
+  HOSTEL_REGISTRATION
   COURSE_CHANGE_FEE
 }
 
@@ -1287,8 +1528,11 @@ enum AccommodationType {
 }
 
 enum HostelType {
+  SHARING_2
   SHARING_4
+  SHARING_6
   SHARING_8
+  SHARING_10
 }
 
 enum DiscountStatus {
@@ -1335,6 +1579,12 @@ enum WaitingListStatus {
   ALLOTTED
   CANCELLED
   EXPIRED
+}
+
+enum WaitingListCategory {
+  MANAGEMENT
+  POLICE
+  GENERAL
 }
 
 enum StudentDocumentStatus {
@@ -1429,6 +1679,26 @@ enum FeeCorrectionType {
   CARRY_FORWARD
 }
 
+enum RetainedRevenueCategory {
+  SEAT_CANCELLATION_FEE
+  COURSE_CHANGE_FEE
+  HOSTEL_CANCELLATION_FEE
+  HOSTEL_ACCOMMODATION_USAGE
+  HOSTEL_MESS_USAGE
+  HOSTEL_LAUNDRY_USAGE
+  HOSTEL_REGISTRATION_RETAINED
+  TRANSPORT_CANCELLATION_FEE
+  TRANSPORT_USAGE
+  LATE_FEE
+  OTHER
+}
+
+enum RetainedRevenueSourceType {
+  FEE_CORRECTION
+  PAYMENT
+  MANUAL
+}
+
 enum EmailStatus {
   PENDING
   SENT
@@ -1475,4 +1745,125 @@ model PRO {
 
   user     User?     @relation("ProUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students Student[]
+}
+
+// Subject — curriculum unit offered by (Course, Semester).
+// One row per subject in the course catalog.
+model Subject {
+  id                String           @id @default(dbgenerated("gen_random_uuid()"))
+  code              String
+  name              String
+  courseId          String
+  semester          Int
+  credits           Float            @default(0)
+  examType          SubjectExamType  @default(THEORY)
+  maxInternalMarks  Float?           @default(30)
+  maxExternalMarks  Float?           @default(70)
+  maxTotalMarks     Float?           @default(100)
+  isElective        Boolean          @default(false)
+  isDeleted         Boolean?         @default(false)
+  createdAt         DateTime?        @default(now())
+  updatedAt         DateTime         @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  course            Course           @relation(fields: [courseId],         references: [id], onDelete: NoAction, onUpdate: NoAction)
+  marks             SemesterMark[]
+  classAttendance   ClassAttendance[]
+
+  @@unique([courseId, semester, code])
+  @@index([courseId, semester])
+}
+
+// SemesterMark — student's marks for a (subject, academicYear, attempt).
+// attemptNumber: 1=regular, 2..=supplementary/reval (new row per attempt, history preserved).
+// status=PENDING allowed with grade=null (subject exists, marks not yet entered).
+// Non-PENDING statuses require a grade string (admin-entered; service does not auto-compute).
+// isBackfilled=true flags retroactive entries for audit reports.
+model SemesterMark {
+  id                String              @id @default(dbgenerated("gen_random_uuid()"))
+  studentId         String
+  subjectId         String
+  academicYearId    String
+  semester          Int
+  internalMarks     Float?
+  externalMarks     Float?
+  totalMarks        Float?
+  grade             String?
+  gradePoints       Float?
+  status            SemesterMarkStatus  @default(PENDING)
+  attemptNumber     Int                 @default(1)
+  isSupplementary   Boolean             @default(false)
+  remarks           String?
+  isBackfilled      Boolean?            @default(false)
+  isDeleted         Boolean?            @default(false)
+  createdAt         DateTime?           @default(now())
+  updatedAt         DateTime            @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  student           Student             @relation(fields: [studentId],      references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subject           Subject             @relation(fields: [subjectId],      references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear      AcademicYear        @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentId, subjectId, academicYearId, attemptNumber], name: "SemesterMark_unique_per_attempt")
+  @@index([studentId, semester])
+  @@index([studentId, academicYearId])
+  @@index([academicYearId, semester])
+  @@index([subjectId, academicYearId])
+}
+
+enum SubjectExamType {
+  THEORY
+  PRACTICAL
+  PROJECT
+  INTERNSHIP
+  SEMINAR
+}
+
+enum SemesterMarkStatus {
+  PENDING
+  PASS
+  FAIL
+  ABSENT
+  WITHHELD
+  PROMOTED
+}
+
+// ClassAttendance — one row per (student, subject, date, period?). When periodNumber
+// is null, the row represents day-level attendance (one row per day). When set,
+// represents period-/hour-level attendance (multiple rows per day per subject).
+// Mirrors the marks design: same back-fill safeguards, same enrollment gate.
+model ClassAttendance {
+  id              String           @id @default(dbgenerated("gen_random_uuid()"))
+  studentId       String
+  subjectId       String
+  academicYearId  String
+  semester        Int
+  date            DateTime         // class date — store at midnight UTC for date-only semantics
+  periodNumber    Int?             // null = day-level row; non-null = period-/hour-level
+  status          AttendanceStatus
+  remarks         String?
+  markedBy        String?          // userId of the marker (faculty/admin)
+  isBackfilled    Boolean?         @default(false)
+  isDeleted       Boolean?         @default(false)
+  createdAt       DateTime?        @default(now())
+  updatedAt       DateTime         @updatedAt
+  createdBy       String?
+  updatedBy       String?
+  student         Student          @relation(fields: [studentId],      references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subject         Subject          @relation(fields: [subjectId],      references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear    AcademicYear     @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentId, subjectId, date, periodNumber], name: "ClassAttendance_unique_slot")
+  @@index([studentId, date])
+  @@index([subjectId, date])
+  @@index([academicYearId, semester, date])
+  @@index([studentId, subjectId, academicYearId])
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+  ON_DUTY      // OD — institutional events, sports, etc. — counted as present in some calculations
 }

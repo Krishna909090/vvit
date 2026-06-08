@@ -88,10 +88,6 @@ export const addInvigilator = catchAsync(async (req: Request, res: Response, nex
     });
 });
 
-/**
- * Get all staff users (excluding students)
- * Returns users with roles: SUPER_ADMIN, ADMIN, AGENT, INVIGILATOR, STAFF
- */
 export const getStaffUsers = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getStaffUsers] by=${req.user?.userId || 'anonymous'}`);
     
@@ -111,9 +107,6 @@ export const getStaffUsers = catchAsync(async (req: Request, res: Response, next
     });
 });
 
-/**
- * Update staff user details
- */
 export const updateStaffUser = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[updateStaffUser] by=${req.user?.userId || 'anonymous'}`);
     
@@ -135,9 +128,6 @@ export const updateStaffUser = catchAsync(async (req: Request, res: Response, ne
     });
 });
 
-/**
- * Delete staff user
- */
 export const deleteStaffUser = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[deleteStaffUser] by=${req.user?.userId || 'anonymous'}`);
 
@@ -153,7 +143,6 @@ export const deleteStaffUser = catchAsync(async (req: Request, res: Response, ne
     });
 });
 
-// System Settings
 export const getSystemSettings = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const settings = await AdminService.getSystemSettings();
     sendResponse({ res, statusCode: 200, success: true, data: settings });
@@ -169,10 +158,9 @@ export const updateSystemSetting = catchAsync(async (req: Request, res: Response
     sendResponse({ res, statusCode: 200, success: true, message: 'Setting updated', data: setting });
 });
 
-// Agent Commission Status
 export const updateAgentCommissionStatus = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const { status } = req.body; // PENDING, APPROVED, PAID, REJECTED
+    const { status } = req.body;
 
     if (!Object.values(AgentCommissionStatus).includes(status)) {
         throw new AppError('Invalid status', 400);
@@ -185,9 +173,8 @@ export const updateAgentCommissionStatus = catchAsync(async (req: Request, res: 
 
 export const assignUserRoleAndGroups = catchAsync(async(req: Request, res: Response, next: NextFunction) => {
     const { userId, role, groupIds } = req.body;
-    
-    // We assume validator has already checked presence of either role or groupIds
-    const result = await AdminService.assignUserRoleAndGroups({ userId, role, groupIds }, req.user?.userId || 'ADMIN');
+
+    await AdminService.assignUserRoleAndGroups({ userId, role, groupIds }, req.user?.userId || 'ADMIN');
 
     sendResponse({
         res,
@@ -200,7 +187,6 @@ export const updateFullStaffDetails = catchAsync(async (req: Request, res: Respo
     const { userId } = req.params;
     const { name, email, phone, role, groupIds, isDeleted } = req.body;
 
-    // Call the NEW service method
     const updatedUser = await AdminService.updateFullStaffDetails(
         { userId, name, email, phone, role, groupIds, isDeleted },
         req.user?.userId || 'ADMIN'

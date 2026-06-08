@@ -1,32 +1,31 @@
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
-
-/**
- * Year Promotion Service
- * Handles student progression from one academic year to the next.
- */
+import { assertAcademicYearWritable } from '../../utils/studentContext';
+import { FeeService } from '../finance/fee.service';
 
 interface PromotionResult {
     total: number;
     promoted: number;
     skipped: number;
     failed: number;
+    creditsCarriedForward: number;
+    creditAmountCarriedForward: number;
+    demandsSeeded: number;
     details: { studentId: string; status: string; message?: string }[];
 }
 
-/**
- * Promote all active students from current academic year to new academic year.
- * Creates new StudentEnrollment records with incremented semester/year.
- */
 export const promoteStudents = async (
     fromAcademicYearId: string,
     toAcademicYearId: string,
-    adminId: string
+    adminId: string,
+    options: { seedFeeDemands?: boolean; carryForwardCredits?: boolean } = {}
 ): Promise<PromotionResult> => {
-    logger.info(`[YearPromotion] Starting promotion from=${fromAcademicYearId} to=${toAcademicYearId} by=${adminId}`);
+    const seedFeeDemands       = options.seedFeeDemands       ?? true;
+    const carryForwardCredits  = options.carryForwardCredits  ?? true;
 
-    // Validate academic years
+    logger.info(`[YearPromotion] Starting promotion from=${fromAcademicYearId} to=${toAcademicYearId} by=${adminId} seed=${seedFeeDemands} carry=${carryForwardCredits}`);
+
     const [fromYear, toYear] = await Promise.all([
         prisma.academicYear.findUnique({ where: { id: fromAcademicYearId } }),
         prisma.academicYear.findUnique({ where: { id: toAcademicYearId } })
@@ -36,7 +35,8 @@ export const promoteStudents = async (
     if (!toYear) throw new AppError('Target academic year not found', 404);
     if (fromAcademicYearId === toAcademicYearId) throw new AppError('Source and target academic year cannot be the same', 400);
 
-    // Get all active enrollments in the source academic year
+    await assertAcademicYearWritable(toAcademicYearId);
+
     const activeEnrollments = await prisma.studentEnrollment.findMany({
         where: {
             academicYearId: fromAcademicYearId,
@@ -54,12 +54,15 @@ export const promoteStudents = async (
         promoted: 0,
         skipped: 0,
         failed: 0,
+        creditsCarriedForward: 0,
+        creditAmountCarriedForward: 0,
+        demandsSeeded: 0,
         details: []
     };
 
     for (const enrollment of activeEnrollments) {
         try {
-            // Check if student already has enrollment in target year
+
             const existingInTarget = await prisma.studentEnrollment.findUnique({
                 where: {
                     studentId_academicYearId: {
@@ -79,10 +82,9 @@ export const promoteStudents = async (
                 continue;
             }
 
-            const newSemester = (enrollment.currentSemester || 1) + 2; // Advance by 2 semesters (1 year)
+            const newSemester = (enrollment.currentSemester || 1) + 2;
             const newYearOfStudy = Math.ceil(newSemester / 2);
 
-            // Create new enrollment for target year
             await prisma.studentEnrollment.create({
                 data: {
                     studentId: enrollment.studentId,
@@ -95,17 +97,141 @@ export const promoteStudents = async (
                 }
             });
 
-            // Mark old enrollment as completed
             await prisma.studentEnrollment.update({
                 where: { id: enrollment.id },
                 data: { status: 'COMPLETED' as any }
             });
 
+            const admission = await prisma.studentAdmission.findUnique({
+                where: { studentId: enrollment.studentId },
+                select: { id: true, allottedCourseId: true, academicYearId: true }
+            });
+            if (admission) {
+                await prisma.studentAdmission.update({
+                    where: { studentId: enrollment.studentId },
+                    data: { academicYearId: toAcademicYearId }
+                });
+            }
+
+            let seededCount = 0;
+            if (seedFeeDemands && admission?.allottedCourseId) {
+                try {
+                    const fsCount = await prisma.feeStructure.count({
+                        where: {
+                            courseId: admission.allottedCourseId,
+                            academicYearId: toAcademicYearId,
+                            isDeleted: false
+                        }
+                    });
+                    if (fsCount === 0) {
+                        logger.warn(`[YearPromotion] No FeeStructure for course=${admission.allottedCourseId} in ${toYear.code}; demands NOT seeded for student=${enrollment.studentId}. Clone fee structures first.`);
+                    } else {
+                        const seeded = await FeeService.generateFeeDemands(
+                            enrollment.studentId,
+                            admission.allottedCourseId,
+                            toAcademicYearId,
+                            adminId,
+                            false
+
+                        );
+                        seededCount = seeded?.generated ?? 0;
+                        result.demandsSeeded += seededCount;
+                    }
+                } catch (err: any) {
+                    logger.error(`[YearPromotion] generateFeeDemands failed for student=${enrollment.studentId}: ${err.message}`);
+                }
+            }
+
+            let carriedAmount = 0;
+            if (carryForwardCredits) {
+                try {
+                    const unsettled = await (prisma as any).feeCorrection.findMany({
+                        where: {
+                            studentId: enrollment.studentId,
+                            isSettled: false,
+                            carryForward: true,
+                        },
+                        orderBy: { createdAt: 'asc' }
+                    });
+                    if (unsettled.length > 0) {
+                        const totalCredit = unsettled.reduce((s: number, c: any) => s + (c.amount ?? 0), 0);
+
+                        const targets = await prisma.studentFeeDemand.findMany({
+                            where: {
+                                studentId: enrollment.studentId,
+                                academicYearId: toAcademicYearId,
+                                isDeleted: false,
+                                status: { in: ['PENDING', 'PARTIAL'] }
+                            },
+                            include: { payments: { where: { status: 'SUCCESS', isDeleted: false } } },
+                            orderBy: { amount: 'desc' }
+                        });
+
+                        let remaining = totalCredit;
+                        for (const d of targets) {
+                            if (remaining <= 0) break;
+
+                            const paidOnDemand = (d as any).payments.reduce((s: number, p: any) => s + (p.amount ?? 0), 0);
+                            const open = Math.max(0, (d.netAmount ?? d.amount) - paidOnDemand);
+                            if (open <= 0) continue;
+                            const apply = Math.min(remaining, open);
+                            const newDiscount = (d.discountAmount ?? 0) + apply;
+                            const newNet = Math.max(0, d.amount - newDiscount);
+                            await prisma.studentFeeDemand.update({
+                                where: { id: d.id },
+                                data: {
+                                    discountAmount: newDiscount,
+                                    netAmount: newNet,
+                                    status: newNet === 0 ? 'FULL' : 'PARTIAL',
+                                    remarks: (d.remarks ?? '') +
+                                        ` | Carried-forward credit applied from ${fromYear.code}: ₹${apply}`,
+                                    updatedBy: adminId,
+                                }
+                            });
+                            remaining -= apply;
+                        }
+
+                        carriedAmount = totalCredit - remaining;
+
+                        let settleBudget = carriedAmount;
+                        let settledCount = 0;
+                        for (const c of unsettled) {
+                            const amt = c.amount ?? 0;
+                            if (settleBudget + 1e-6 < amt) break;
+                            await (prisma as any).feeCorrection.update({
+                                where: { id: c.id },
+                                data: {
+                                    isSettled: true,
+                                    settledAt: new Date(),
+                                    settledBy: adminId,
+                                    carriedForwardToYearId: toAcademicYearId,
+                                    remarks: (c.remarks ?? '') +
+                                        ` | Carried forward to ${toYear.code} during year promotion`,
+                                    updatedBy: adminId,
+                                }
+                            });
+                            settleBudget -= amt;
+                            settledCount++;
+                        }
+                        result.creditsCarriedForward += settledCount;
+                        result.creditAmountCarriedForward += carriedAmount;
+
+                        if (remaining > 0) {
+                            logger.warn(`[YearPromotion] Credit ₹${remaining} could not be applied to demands for student=${enrollment.studentId} (no eligible PENDING demands). Manual refund needed.`);
+                        }
+                    }
+                } catch (err: any) {
+                    logger.error(`[YearPromotion] Carry-forward failed for student=${enrollment.studentId}: ${err.message}`);
+                }
+            }
+
             result.promoted++;
             result.details.push({
                 studentId: enrollment.studentId,
                 status: 'PROMOTED',
-                message: `Year ${enrollment.yearOfStudy || Math.ceil((enrollment.currentSemester || 1) / 2)} -> Year ${newYearOfStudy}`
+                message: `Year ${enrollment.yearOfStudy || Math.ceil((enrollment.currentSemester || 1) / 2)} -> Year ${newYearOfStudy}` +
+                    (seededCount > 0 ? `, ${seededCount} demand(s) seeded` : '') +
+                    (carriedAmount > 0 ? `, ₹${carriedAmount} credit carried forward` : '')
             });
 
         } catch (err: any) {
@@ -119,13 +245,10 @@ export const promoteStudents = async (
         }
     }
 
-    logger.info(`[YearPromotion] Complete. Promoted: ${result.promoted}, Skipped: ${result.skipped}, Failed: ${result.failed}`);
+    logger.info(`[YearPromotion] Complete. Promoted: ${result.promoted}, Skipped: ${result.skipped}, Failed: ${result.failed}, Demands seeded: ${result.demandsSeeded}, Credits carried: ${result.creditsCarriedForward} (₹${result.creditAmountCarriedForward})`);
     return result;
 };
 
-/**
- * Get enrollment history for a student across all academic years.
- */
 export const getStudentEnrollmentHistory = async (studentId: string) => {
     const enrollments = await prisma.studentEnrollment.findMany({
         where: { studentId },
@@ -148,9 +271,6 @@ export const getStudentEnrollmentHistory = async (studentId: string) => {
     }));
 };
 
-/**
- * Get financial summary for a student by academic year.
- */
 export const getStudentYearWiseFinancials = async (studentId: string) => {
     const [payments, demands, ledger] = await Promise.all([
         prisma.payment.findMany({
@@ -170,7 +290,6 @@ export const getStudentYearWiseFinancials = async (studentId: string) => {
         })
     ]);
 
-    // Group by academic year
     const yearMap = new Map<string, { year: string, demands: any[], payments: any[], ledger: any[], totalDemand: number, totalPaid: number }>();
 
     for (const d of demands) {

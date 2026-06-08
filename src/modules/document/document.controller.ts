@@ -7,13 +7,13 @@ import {
     deleteDocumentRequirement,
     deleteStudentDocument as deleteStudentDocService
 } from './document.service';
+import { getStudentByUserId } from '../student/student.service';
 import prisma from '../../config/prisma';
 import { catchAsync } from '../../utils/catchAsync';
 import { AppError } from '../../utils/AppError';
 import { sendResponse } from '../../utils/response';
 import { MESSAGES } from '../../constants/messages';
 
-// Admin: Create Requirement
 export const addRequirement = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const requirement = await createDocumentRequirement(req.body);
     sendResponse({
@@ -25,7 +25,6 @@ export const addRequirement = catchAsync(async (req: Request, res: Response, nex
     });
 });
 
-// Admin: List Requirements (Optional query param: courseType)
 export const listRequirements = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { degreeType } = req.query;
     const requirements = await getDocumentRequirements(degreeType as string);
@@ -37,7 +36,6 @@ export const listRequirements = catchAsync(async (req: Request, res: Response, n
     });
 });
 
-// Admin: Update Requirement
 export const updateRequirement = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
     const requirement = await updateDocumentRequirement(id, req.body);
@@ -50,10 +48,9 @@ export const updateRequirement = catchAsync(async (req: Request, res: Response, 
     });
 });
 
-// Admin: Delete Requirement
 export const removeRequirement = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { id } = req.params;
-    const result = await deleteDocumentRequirement(id);
+    await deleteDocumentRequirement(id);
     sendResponse({
         res,
         statusCode: 200,
@@ -62,7 +59,6 @@ export const removeRequirement = catchAsync(async (req: Request, res: Response, 
     });
 });
 
-// Student: Get Requirements for their course
 export const getMyRequirements = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const studentId = req.user?.userId;
     if (!studentId) throw new AppError(MESSAGES.ERROR.STUDENT_ID_REQUIRED, 400);
@@ -85,27 +81,21 @@ export const getMyRequirements = catchAsync(async (req: Request, res: Response, 
     });
 });
 
-/**
- * Delete a specific document for a student.
- */
 export const deleteStudentDocument = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { documentKey } = req.query; // Changed to query as typical DELETE doesn't use body often, but let's check routes. 
+    const { documentKey } = req.query;
 
-    // Route: router.delete('/:studentId/document', ...)
-    // Postman usually sends query params for DELETE or body. 
-    // The previous controller used `req.body` for documentKey.
-    // However, the route definition in `studentRoutes.ts` line 406 says:
-    //       - in: query
-    //         name: documentKey
-    
-    // So `req.query` is correct based on Swagger, but `req.body` was used in `deleteDocumentController`.
-    // I will support both to be safe or stick to query as per Swagger.
-    
     const key = (documentKey as string) || req.body.documentKey;
 
     if (!key) {
         throw new AppError(MESSAGES.ERROR.DOCUMENT_KEY_REQUIRED, 400);
+    }
+
+    if (req.user?.role === 'STUDENT') {
+        const s = await getStudentByUserId(req.user.userId);
+        if (!s || s.id !== studentId) {
+            throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
+        }
     }
 
     const result = await deleteStudentDocService(studentId, key);

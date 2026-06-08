@@ -8,22 +8,26 @@ import {
 import logger from '../../utils/logger';
 import { AppError } from '../../utils/AppError';
 import { verifyAadhar } from '../integration/integration.service';
-import { deleteFileFromS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
+import { deleteFileFromS3, convertToPresignedUrl } from '../../utils/s3Utils';
 import { MESSAGES } from '../../constants/messages';
-import { formatDate, formatTime, formatDateTime } from '../../utils/dateFormatter';
+import { formatDate, formatTime } from '../../utils/dateFormatter';
 import { maskAadhaar } from '../../utils/mask';
-export const registerStudent = async (data: any, agentId: string | null, userId: string | null, currentUserId: string | null) => {
-    // Check for duplicate registration
+import { getActiveAcademicYear } from '../../utils/studentContext';
+
+const resolveActiveYearId = async (): Promise<string> => {
+    return (await getActiveAcademicYear()).id;
+};
+
+export const registerStudent = async (data: any, userId: string | null, _currentUserId: string | null) => {
+
     const dobDate = data.dob ? new Date(data.dob) : undefined;
 
-    // Verify Aadhaar BEFORE masking
     if (data.aadharNumber) {
         const isValidAadhar = await verifyAadhar(data.aadharNumber);
         if (!isValidAadhar) {
             throw new AppError(MESSAGES.ERROR.INVALID_AADHAR, 400);
         }
 
-        // Duplicate check: last 4 digits of Aadhaar + DOB
         if (dobDate) {
             const last4 = data.aadharNumber.toString().trim().replace(/\s/g, '').slice(-4);
             const maskedPattern = `XXXX XXXX ${last4}`;
@@ -45,13 +49,12 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
             }
         }
 
-        // Mask Aadhaar for storage
         data.aadharNumber = maskAadhaar(data.aadharNumber);
     }
 
     const orConditions: any[] = [
         { email: data.email }
-        // { aadharNumber: data.aadharNumber } // Removed: Cannot check uniqueness on masked values
+
     ];
 
     if (userId) {
@@ -72,32 +75,25 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
         throw new AppError(`Student conflict: A student is already registered with this ${conflict}`, 400);
     }
 
-    const isOffline = data.isOffline || data.applicationMode === 'SEAT_BOOKING' || data.applicationMode === 'OFFLINE';
-    
-    // Determine prefix based on application mode
-    // Seat Booking and Online -> VON
-    // Offline -> VOF
     let prefix = 'VON';
-    if (data.applicationMode === 'OFFLINE' || (data.isOffline && data.applicationMode !== 'SEAT_BOOKING')) {
+    if (data.entryType === 'LATERAL') {
+        prefix = 'VLE';
+    } else if (data.applicationMode === 'OFFLINE' || (data.isOffline && data.applicationMode !== 'SEAT_BOOKING')) {
         prefix = 'VOF';
     }
 
-    // Generate unique applicationId with retry logic to handle race conditions
     let applicationId = '';
     let attempts = 0;
     const maxAttempts = 5;
 
     while (attempts < maxAttempts) {
-        // Find the last student with the same prefix to determine the next ID
-        // Note: isOffline filter removed from query to ensure we look for the last ID of that series regardless of exact offline flag status in DB
-        // (though usually they match)
+
         const lastStudent = await prisma.student.findFirst({
             where: {
                 applicationId: { startsWith: prefix }
             },
-            orderBy: { createdAt: 'desc' } // or orderBy applicationId length then value to get true max?
-            // Simple string sort might fail if lengths differ (VON9 vs VON10), but here we are jumping to 7 digits.
-            // Best to sort by createdAt to get the latest one.
+            orderBy: { createdAt: 'desc' }
+
         });
 
         let nextIdNumber = 2600001;
@@ -106,7 +102,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
             const lastNumber = parseInt(lastIdPart, 10);
             if (!isNaN(lastNumber)) {
                 nextIdNumber = lastNumber + 1;
-                // Ensure we respect the minimum starting number
+
                 if (nextIdNumber < 2600001) {
                     nextIdNumber = 2600001;
                 }
@@ -115,17 +111,15 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
 
         applicationId = `${prefix}${nextIdNumber}`;
 
-        // Check if this applicationId already exists (race condition check)
         const existingWithId = await prisma.student.findUnique({
             where: { applicationId }
         });
 
         if (!existingWithId) {
-            // ID is unique, break the loop
+
             break;
         }
 
-        // ID already exists, increment and retry
         attempts++;
         logger.warn(`[registerStudent] ApplicationId ${applicationId} already exists, retrying... (attempt ${attempts}/${maxAttempts})`);
         
@@ -136,12 +130,13 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
 
     logger.info(`[registerStudent] Generated applicationId: ${applicationId}`);
 
-    // Fetch Active Academic Year
     const activeAcademicYear = await prisma.academicYear.findFirst({
         where: { isActive: true, isDeleted: false }
     });
+    if (!activeAcademicYear) {
+        throw new AppError('No active academic year is set. Configure one before registering students.', 400);
+    }
 
-    // Handle PRO Number mapping
     let proIdToStore: string | null = null;
     const incomingPro = data.proNumber || data.pro;
     if (incomingPro) {
@@ -154,9 +149,8 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
         proIdToStore = proRecord.id;
     }
 
-    // Transaction to create Student and related tables
     const student = await prisma.$transaction(async (tx) => {
-        // Double-check uniqueness within transaction
+
         const existingInTx = await tx.student.findUnique({
             where: { applicationId }
         });
@@ -184,7 +178,6 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
                 state: data.state,
                 pincode: data.pincode,
                 profilePhotoUrl: data.profilePhotoUrl,
-                agentId,
                 isOffline: data.isOffline || data.applicationMode === 'SEAT_BOOKING' || data.applicationMode === 'OFFLINE' || false,
                 degreeType: data.degreeType,
                 applicationMode: data.applicationMode,
@@ -198,16 +191,40 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
             }
         });
 
-        // Create Admission Details
+        const entryType        = data.entryType ?? 'REGULAR';
+        const entryYearOfStudy = data.entryYearOfStudy
+            ?? (entryType === 'LATERAL' ? 2 : entryType === 'TRANSFER' ? 3 : 1);
+        const entryAcademicYearId = activeAcademicYear.id;
+        const feeCohortAcademicYearId = entryAcademicYearId;
+
+        let batchAcademicYearId = activeAcademicYear.id;
+        if (entryYearOfStudy > 1) {
+            const years = await tx.academicYear.findMany({
+                where: { isDeleted: false },
+                orderBy: { startDate: 'asc' },
+                select: { id: true },
+            });
+            const idx = years.findIndex((y: { id: string }) => y.id === activeAcademicYear.id);
+            const batchIdx = idx - (entryYearOfStudy - 1);
+            if (idx >= 0 && batchIdx >= 0) batchAcademicYearId = years[batchIdx].id;
+        }
+
+        const instituteCode = data.instituteCode ?? 'MGMT';
+
         await tx.studentAdmission.create({
             data: {
                 studentId: newStudent.id,
                 status: AdmissionStatus.REGISTERED,
-                academicYearId: activeAcademicYear?.id
+                academicYearId: activeAcademicYear.id,
+                entryType: entryType as any,
+                entryYearOfStudy,
+                entryAcademicYearId,
+                feeCohortAcademicYearId,
+                batchAcademicYearId,
+                instituteCode,
             }
         });
 
-        // Create Exam Details
         await tx.studentExam.create({
             data: {
                 studentId: newStudent.id
@@ -243,7 +260,7 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
             pref3: true,
             degreeType: true,
             userId: true,
-            applicationId: true, // Needed for logger and likely client
+            applicationId: true,
             proId: true,
             pro: true
         }
@@ -256,10 +273,6 @@ export const registerStudent = async (data: any, agentId: string | null, userId:
     logger.info(`Student registered: ${student.applicationId}`);
     return fullStudentDetails;
 };
-
-
-
-
 
 export const getHallTicket = async (studentId: string) => {
     const student = await prisma.student.findUnique({
@@ -302,7 +315,6 @@ export const getHallTicket = async (studentId: string) => {
         }
     }
 
-    // Convert URLs to presigned URLs
     const hallTicketDownloadUrl = await convertToPresignedUrl(latestHallTicket?.url);
     const photoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
 
@@ -327,10 +339,9 @@ export const getHallTicketByApplicationId = async (applicationId: string) => {
     return getHallTicket(student.id);
 };
 
-export const uploadDocumentsAndPreferences = async (studentId: string, data: any, currentUserId: string | null) => {
+export const uploadDocumentsAndPreferences = async (studentId: string, data: any, _currentUserId: string | null) => {
     const { id, applicationId, email, phone, pref1, pref2, pref3, ...documentData } = data;
 
-    // Validate student exists and check qualification status
     const student = await prisma.student.findUnique({ 
         where: { id: studentId },
         include: {
@@ -343,41 +354,6 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
-    // Check if student is qualified to upload documents
-    // Bypass checks for Seat Booking / Offline students
-    // Check if student is qualified to upload documents
-    // Bypass checks for Seat Booking / Offline students
-    // NOTE: Requirement changed - Allow upload even if not qualified/attended.
-    /*
-    if (!student.isOffline) {
-        if (!student.examDetails?.examAttended) {
-            throw new AppError('Cannot upload documents: Exam not attended yet', 400);
-        }
-
-        if (!student.examDetails?.isQualified) {
-            throw new AppError('Cannot upload documents: Student not qualified in entrance exam', 400);
-        }
-
-        // Check admission status - must be EXAM_ATTENDED or later
-        const validStatuses: AdmissionStatus[] = [
-            AdmissionStatus.EXAM_ATTENDED,
-            AdmissionStatus.EXAM_QUALIFIED,
-            AdmissionStatus.DOCUMENTS_PENDING,
-            AdmissionStatus.DOCUMENTS_SUBMITTED,
-            AdmissionStatus.SEAT_ALLOTTED,
-            AdmissionStatus.ADMISSION_CONFIRMED
-        ];
-
-        if (!student.admissionDetails || !validStatuses.includes(student.admissionDetails.status)) {
-            throw new AppError(
-                `Cannot upload documents: Current status is ${student.admissionDetails?.status || 'UNKNOWN'}. Must be EXAM_ATTENDED or later.`,
-                400
-            );
-        }
-    }
-    */
-
-    // Update Preferences
     if (pref1 || pref2 || pref3) {
         await prisma.student.update({
             where: { id: studentId },
@@ -385,9 +361,9 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
         });
     }
 
-    // Upsert Documents
+    const uploadYearId = await resolveActiveYearId();
     const docPromises = Object.keys(documentData).map(key => {
-        // Accept keys that either end in 'Url' OR start with 'DOC_' (common pattern) OR just treating all remaining string values as potential docs
+
         const value = documentData[key];
         if (typeof value === 'string' && (key.endsWith('Url') || key.startsWith('DOC_'))) {
             return prisma.studentDocument.upsert({
@@ -401,13 +377,14 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
                     url: documentData[key],
                     status: StudentDocumentStatus.PENDING,
                     remarks: null,
-                    isDeleted: false // Reactivate if it was soft deleted
+                    isDeleted: false
                 },
                 create: {
                     studentId,
                     documentKey: key,
                     url: documentData[key],
                     status: StudentDocumentStatus.PENDING,
+                    academicYearId: uploadYearId,
                     isDeleted: false
                 }
             });
@@ -417,7 +394,6 @@ export const uploadDocumentsAndPreferences = async (studentId: string, data: any
 
     await Promise.all(docPromises);
 
-    // Update Admission Status — skip if student is already at a later stage
     const protectedStatuses: AdmissionStatus[] = [
         AdmissionStatus.SEAT_ALLOTTED,
         AdmissionStatus.ADMISSION_CONFIRMED,
@@ -449,16 +425,9 @@ export const reUploadDocument = async (studentId: string, documentKey: string, u
     const doc = await prisma.studentDocument.upsert({
         where: { studentId_documentKey: { studentId, documentKey } },
         update: { url, status: StudentDocumentStatus.PENDING, remarks: null, isDeleted: false },
-        create: { studentId, documentKey, url, status: StudentDocumentStatus.PENDING, isDeleted: false }
+        create: { studentId, documentKey, url, status: StudentDocumentStatus.PENDING, academicYearId: await resolveActiveYearId(), isDeleted: false }
     });
 
-    // If rejected previously, move back to DOCUMENTS_SUBMITTED so admin can re-verify.
-    // Never downgrade a student who is already at SEAT_ALLOTTED / ADMISSION_CONFIRMED / ENROLLED.
-    const protectedStatuses: AdmissionStatus[] = [
-        AdmissionStatus.SEAT_ALLOTTED,
-        AdmissionStatus.ADMISSION_CONFIRMED,
-        AdmissionStatus.ENROLLED
-    ];
     const currentStatus = student.admissionDetails?.status as AdmissionStatus | undefined;
     if (currentStatus === AdmissionStatus.DOCUMENTS_PENDING) {
         await prisma.studentAdmission.update({
@@ -466,8 +435,6 @@ export const reUploadDocument = async (studentId: string, documentKey: string, u
             data: { status: AdmissionStatus.DOCUMENTS_SUBMITTED }
         });
     }
-    // Protected statuses (SEAT_ALLOTTED, ADMISSION_CONFIRMED, ENROLLED) and all
-    // other statuses are left unchanged.
 
     logger.info(`[reUploadDocument] student=${studentId} documentKey=${documentKey}`);
     return doc;
@@ -486,17 +453,15 @@ export const removeDocument = async (studentId: string, documentKey: string) => 
 
     if (!doc) throw new AppError(MESSAGES.ERROR.DOCUMENT_NOT_FOUND, 404);
 
-    // Extract S3 key from URL
     const urlParts = doc.url.split('.com/');
     if (urlParts.length < 2) {
-        // Just delete record if URL is invalid or local
+
         logger.warn(`Invalid S3 URL for document deletion: ${doc.url}`);
     } else {
         const key = urlParts[1];
         await deleteFileFromS3(key);
     }
 
-    // Soft Delete DB record
     await prisma.studentDocument.update({
         where: { id: doc.id },
         data: { isDeleted: true }
@@ -537,12 +502,8 @@ export const verifyDocument = async (studentId: string, documentKey: string, sta
     return doc;
 };
 
+export const addAcademicDetails = async (studentId: string, details: any[], _currentUserId: string | null) => {
 
-
-
-
-export const addAcademicDetails = async (studentId: string, details: any[], currentUserId: string | null) => {
-    // 1. Validate student exists
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         include: {
@@ -555,7 +516,6 @@ export const addAcademicDetails = async (studentId: string, details: any[], curr
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
 
-    // 2. Check duplicate levels WITHIN the submitted payload (case-insensitive)
     const incomingLevels = details.map(d => String(d.level).trim().toLowerCase());
     const seen = new Set<string>();
     for (const lvl of incomingLevels) {
@@ -565,7 +525,6 @@ export const addAcademicDetails = async (studentId: string, details: any[], curr
         seen.add(lvl);
     }
 
-    // 3. Check duplicate levels against EXISTING qualifications in DB (case-insensitive)
     const existingQualifications = await prisma.academicQualification.findMany({
         where: { studentId },
         select: { level: true }
@@ -577,7 +536,6 @@ export const addAcademicDetails = async (studentId: string, details: any[], curr
         }
     }
 
-    // Use transaction to create multiple records
     const result = await prisma.$transaction(
         details.map((detail) =>
             prisma.academicQualification.create({
@@ -634,7 +592,7 @@ export const getStudentByUserId = async (userId: string) => {
                 select: { name: true }
             },
             degreeType: true,
-            applicationId: true, // Generally useful
+            applicationId: true,
             proId: true,
             pro: true,
             examDetails: {
@@ -652,7 +610,7 @@ export const getStudentByUserId = async (userId: string) => {
                     id: true,
                     studentId: true,
                     status: true,
-                    qualificationMode: true,
+                    entryType: true,
                     allottedCourseId: true,
                     allottedCourse: {
                         select: { name: true }
@@ -674,7 +632,7 @@ export const getStudentByUserId = async (userId: string) => {
                     createdAt: true,
                     updatedAt: true
                 }
-            },
+            }, 
             documents: {
                 where: { isDeleted: false },
                 select: {
@@ -695,7 +653,6 @@ export const getStudentByUserId = async (userId: string) => {
 
     if (!student) return null;
 
-    // Convert all document URLs to presigned URLs
     const documentsWithPresignedUrls = await Promise.all(
         student.documents.map(async (doc: any) => ({
             ...doc,
@@ -703,7 +660,6 @@ export const getStudentByUserId = async (userId: string) => {
         }))
     );
 
-    // Convert profile photo and hall ticket URLs
     const profilePhotoUrl = await convertToPresignedUrl(student.profilePhotoUrl);
     const hallTicketUrl = await convertToPresignedUrl(student.examDetails?.hallTicketUrl);
 
@@ -810,9 +766,8 @@ export const searchStudents = async (query: string, page: number = 1, limit: num
     };
 };
 
-
 export const updatePersonalDetails = async (studentId: string, data: any, currentUserId: string | null) => {
-    // 1. Verify Ownership
+
     const student = await prisma.student.findUnique({
         where: { id: studentId }
     });
@@ -825,14 +780,12 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
         throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
     }
 
-    // 2. Filter forbidden fields (just in case validator missed something or direct call)
     const { phone, aadharNumber, phoneNumber, aadhar, applicationId, proNumber, pro, ...updateData } = data;
 
-    // 3. Handle PRO Number mapping
     let proIdToUpdate: string | null = null;
     const finalProNum = proNumber || pro;
     if (finalProNum) {
-        // Just verify it exists
+
         const proRecord = await prisma.pRO.findUnique({
             where: { proNumber: finalProNum }
         });
@@ -842,9 +795,8 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
         proIdToUpdate = proRecord.id;
     }
 
-    // 4. Check Email Uniqueness if changing
     if (updateData.email && updateData.email !== student.email) {
-        // Check Student table
+
         const existingStudentEmail = await prisma.student.findFirst({
             where: { 
                 email: updateData.email,
@@ -855,7 +807,6 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
             throw new AppError('Email already in use by another student', 400);
         }
 
-        // Check User table
         const existingUserEmail = await prisma.user.findFirst({
             where: { 
                 email: updateData.email,
@@ -867,7 +818,6 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
         }
     }
 
-    // 5. Update
     await prisma.$transaction(async (tx) => {
         const finalUpdateData: any = { ...updateData };
         if (proIdToUpdate) {
@@ -891,7 +841,7 @@ export const updatePersonalDetails = async (studentId: string, data: any, curren
 };
 
 export const updateProfilePhoto = async (studentId: string, newPhotoUrl: string, currentUserId: string | null) => {
-    // 1. Verify Student
+
     const student = await prisma.student.findUnique({
         where: { id: studentId }
     });
@@ -899,13 +849,11 @@ export const updateProfilePhoto = async (studentId: string, newPhotoUrl: string,
     if (!student) {
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
-    
-    // Ownership check
+
     if (currentUserId && student.userId !== currentUserId) {
          throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
     }
 
-    // 2. Delete Old Photo from S3 if exists
     if (student.profilePhotoUrl) {
         const urlParts = student.profilePhotoUrl.split('.com/');
         if (urlParts.length >= 2) {
@@ -915,12 +863,11 @@ export const updateProfilePhoto = async (studentId: string, newPhotoUrl: string,
                 logger.info(`Deleted old profile photo for student ${studentId}: ${key}`);
             } catch (err) {
                 logger.warn(`Failed to delete old profile photo from S3: ${err}`);
-                // Proceed anyway to update the record
+
             }
         }
     }
 
-    // 3. Update DB
     await prisma.student.update({
         where: { id: studentId },
         data: {
@@ -936,7 +883,6 @@ export const updateProfilePhoto = async (studentId: string, newPhotoUrl: string,
 export const changeServicePreferences = async (studentId: string, data: any, currentUserId: string | null) => {
     const { type, value, reason } = data;
 
-    // 1. Verify Student
     const student = await prisma.student.findUnique({
         where: { id: studentId },
         include: { admissionDetails: true }
@@ -945,17 +891,14 @@ export const changeServicePreferences = async (studentId: string, data: any, cur
     if (!student) {
         throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
     }
-    
-    // Ownership check (unless admin, but assuming this is student facing primarily)
+
     if (currentUserId && student.userId !== currentUserId) {
-         // Add role check if needed, strictly student for now based on flow
-         // If admin calls this service, pass null or handle upstream. 
-         // For now, strict ownership:
+
          throw new AppError(MESSAGES.ERROR.FORBIDDEN, 403);
     }
 
     if (type === 'PAYMENT_MODE') {
-        // Direct Update
+
         if (!['SEMWISE', 'YEARWISE'].includes(value)) {
             throw new AppError('Invalid payment mode. Must be SEMWISE or YEARWISE', 400);
         }
@@ -968,16 +911,14 @@ export const changeServicePreferences = async (studentId: string, data: any, cur
             }
         });
 
-
         return { success: true, message: 'Payment mode updated successfully', status: 'UPDATED' };
 
     } else if (type === 'FACILITY') {
-        // Request Based
-        // Check pending requests
+
         const pendingRequest = await prisma.serviceChangeRequest.findFirst({
             where: {
                 studentId,
-                type: 'FACILITY', // Using the enum mapped string
+                type: 'FACILITY',
                 status: 'REQUESTED'
             }
         });
@@ -986,22 +927,22 @@ export const changeServicePreferences = async (studentId: string, data: any, cur
             throw new AppError('A facility change request is already pending', 409);
         }
 
-        // Validate target value
         const targetValue = value === 'HOSTEL' ? 'HOSTEL' : (value === 'TRANSPORT' ? 'TRANSPORT' : null);
         if (!targetValue) {
              throw new AppError('Invalid facility type. Must be HOSTEL or TRANSPORT', 400);
         }
-        
-        // Check current value
+
         const currentVal = student.admissionDetails?.accommodationType || 'NONE';
         
         if (currentVal === targetValue) {
             throw new AppError(`You are already allocated to ${targetValue}`, 400);
         }
 
+        const svcReqYear = await getActiveAcademicYear();
         await prisma.serviceChangeRequest.create({
             data: {
                 studentId,
+                academicYearId: svcReqYear.id,
                 type: 'FACILITY',
                 fromValue: currentVal,
                 toValue: targetValue,

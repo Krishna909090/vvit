@@ -15,7 +15,6 @@ export const MESSAGES = {
         DISCOUNT_ALREADY_REQUESTED: 'Discount request already pending or processed',
         CANCELLATION_ALREADY_REQUESTED: 'Cancellation request already pending or processed',
 
-        // Auth
         PHONE_REQUIRED: 'Phone number is required',
         PHONE_OTP_REQUIRED: 'Phone and OTP are required',
         INVALID_OTP_REQUEST: 'Invalid OTP request',
@@ -30,7 +29,6 @@ export const MESSAGES = {
         STUDENT_LOGIN_PHONE_ONLY: 'Students must login using Phone Number',
         OTP_MAX_ATTEMPTS: 'Too many incorrect OTP attempts. Please request a new OTP.',
 
-        // Student
         INVALID_AADHAR: 'Invalid Aadhar Number (Verification Failed)',
         STUDENT_ID_REQUIRED: 'studentId is required',
         DETAILS_ARRAY_REQUIRED: 'Details array is required',
@@ -39,7 +37,6 @@ export const MESSAGES = {
         DOCUMENT_NOT_FOUND: 'Document not found',
         INVALID_DOCUMENT_URL: 'Invalid document URL format',
 
-        // Exam
         QR_HASH_REQUIRED: 'QR Hash is required',
         INVALID_QR: 'Invalid QR Code',
         ATTENDANCE_ALREADY_MARKED: 'Attendance already marked',
@@ -50,7 +47,6 @@ export const MESSAGES = {
         SLOT_ID_REQUIRED: 'Slot ID is required',
         INVALID_BOOKING_STATUS: 'Invalid booking status',
 
-        // Admin
         ATTENDED_BOOLEAN: 'attended must be a boolean',
         ALLOTTED_COURSE_REQUIRED: 'allottedCourse is required',
         STUDENT_NEWCOURSE_REASON_REQUIRED: 'studentId, newCourse and reason are required',
@@ -69,11 +65,10 @@ export const MESSAGES = {
         TRANSPORT_ROUTE_FULL: 'Transport route is full',
         CSV_PARSE_ERROR: 'Error parsing CSV',
 
-        // Upload
         NO_FILE_UPLOADED: 'No file uploaded',
         NO_FILES_UPLOADED: 'No files uploaded',
         S3_UPLOAD_FAILED: 'File upload to S3 failed (missing location/key)',
-        // ... existing errors ...
+
         DOCUMENT_KEY_STATUS_REQUIRED: 'Document key and status are required',
         DOCUMENT_KEY_REQUIRED: 'Document key is required',
         CUTOFF_REQUIRED: 'Cutoff is required',
@@ -98,7 +93,6 @@ export const MESSAGES = {
         TRANSPORT_STOP_NOT_FOUND: 'Transport Stop not found',
         REQUIREMENT_NOT_FOUND: 'Document Requirement not found',
 
-        // Conflicts
         DEPARTMENT_EXISTS: 'Department with this code or name already exists',
         PROGRAM_EXISTS: 'Program with this name already exists in this department',
         BATCH_EXISTS: 'Batch with this name already exists in this program',
@@ -128,7 +122,6 @@ export const MESSAGES = {
         CAPACITY_REDUCTION_ERROR: 'Cannot reduce capacity below filled count',
         SLOT_HAS_BOOKINGS: 'Cannot delete slot with booked students',
 
-        // Not Modified
         NO_CHANGES_DETECTED: 'No changes detected',
     },
     SUCCESS: {

@@ -15,7 +15,6 @@ async function sendTestEmail() {
         process.exit(1);
     }
 
-    // Generate sample invoice
     const sampleInvoice: InvoiceData = {
         invoiceNumber: 'VVITU/2026/SAMPLE-001/001',
         date: new Date(),

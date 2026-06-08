@@ -17,7 +17,7 @@ export const registerStudentSchema = z.object({
         city: z.string().min(1, "City is required"),
         state: z.string().min(1, "State is required"),
         pincode: z.string().regex(/^\d{6}$/, "Pincode must be exactly 6 digits"),
-        degreeType: z.string().min(1, "Degree Type is required"), // e.g., B.Tech, MBA
+        degreeType: z.string().min(1, "Degree Type is required"),
         pref1: z.string().optional(),
         pref2: z.string().optional(),
         pref3: z.string().optional(),
@@ -29,6 +29,11 @@ export const registerStudentSchema = z.object({
         isKycVerified: z.boolean().optional(),
         applicationMode: z.string().optional(),
         courseCount: z.number().int().optional(),
+
+        entryType: z.enum(['REGULAR', 'LATERAL', 'TRANSFER']).optional(),
+        entryYearOfStudy: z.number().int().min(1).max(10).optional(),
+
+        instituteCode: z.enum(['MGMT', 'VVITU', 'VVITPU']).optional(),
     }),
 });
 

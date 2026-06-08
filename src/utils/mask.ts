@@ -1,4 +1,4 @@
-// Utils: Mask phone and email values for safe logging.
+
 export const maskPhone = (phone?: string | null): string => {
   if (!phone) return "N/A";
   const trimmed = phone.toString().trim();
@@ -17,7 +17,7 @@ export const maskEmail = (email?: string | null): string => {
 
 export const maskAadhaar = (aadhaar?: string | null): string => {
     if (!aadhaar) return "N/A";
-    const trimmed = aadhaar.toString().trim().replace(/\s/g, ''); // Remove spaces
+    const trimmed = aadhaar.toString().trim().replace(/\s/g, '');
     if (trimmed.length <= 4) return "XXXX";
     return "XXXX XXXX " + trimmed.slice(-4);
 };

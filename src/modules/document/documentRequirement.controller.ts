@@ -1,18 +1,12 @@
-// controllers/documentRequirementController.ts
-// Express controllers for document requirement management APIs
+
 
 import { Request, Response, NextFunction } from 'express';
 import * as documentRequirementService from './documentRequirement.service';
 import logger from '../../utils/logger';
 import { catchAsync } from '../../utils/catchAsync';
 import { sendResponse } from '../../utils/response';
+import { assertStudentOwns } from '../../utils/ownership';
 
-/**
- * Controller: Get all document requirements (with optional degreeType filter)
- * Route: GET /document-requirements
- * Query Params: ?degreeType=UG (optional)
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const getDocumentRequirements = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         const { degreeType } = req.query;
@@ -33,9 +27,6 @@ export const getDocumentRequirements = catchAsync(
     }
 );
 
-/**
- * Controller: Get document requirement by ID
- */
 export const getDocumentRequirementById = catchAsync(async (req: Request, res: Response) => {
     const { id } = req.params;
     const requirement = await documentRequirementService.getDocumentRequirementById(id);
@@ -47,11 +38,6 @@ export const getDocumentRequirementById = catchAsync(async (req: Request, res: R
     });
 });
 
-/**
- * Controller: Create a new document requirement
- * Route: POST /document-requirements
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const createDocumentRequirement = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         logger.info(`[createDocumentRequirement] by=${req.user?.userId}`);
@@ -72,11 +58,6 @@ export const createDocumentRequirement = catchAsync(
     }
 );
 
-/**
- * Controller: Update an existing document requirement
- * Route: PUT /document-requirements/:id
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const updateDocumentRequirement = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         const { id } = req.params;
@@ -100,11 +81,6 @@ export const updateDocumentRequirement = catchAsync(
     }
 );
 
-/**
- * Controller: Delete a document requirement (soft delete)
- * Route: DELETE /document-requirements/:id
- * Roles: ADMIN, SUPER_ADMIN
- */
 export const deleteDocumentRequirement = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         const { id } = req.params;
@@ -122,17 +98,14 @@ export const deleteDocumentRequirement = catchAsync(
     }
 );
 
-/**
- * Controller: Get document requirements for a specific student
- * Route: GET /students/:studentId/document-requirements
- * Roles: ADMIN, SUPER_ADMIN, STUDENT (own data)
- */
 export const getStudentDocumentRequirements = catchAsync(
     async (req: Request, res: Response, next: NextFunction) => {
         const { studentId } = req.params;
-        
+
+        await assertStudentOwns(req, studentId);
+
         logger.info(`[getStudentDocumentRequirements] studentId=${studentId} by=${req.user?.userId}`);
-        
+
         const result = await documentRequirementService.getStudentDocumentRequirements(studentId);
         
         sendResponse({

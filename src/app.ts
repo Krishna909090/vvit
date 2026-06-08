@@ -9,57 +9,65 @@ import authRoutes from './modules/auth/auth.routes';
 import studentRoutes from './modules/student/student.routes';
 import adminRoutes from './modules/admin/admin.routes';
 import examRoutes from './modules/exam/exam.routes';
-import uploadRoutes from './modules/student/upload.routes';
+import uploadRoutes from './modules/upload/upload.routes';
 import invigilatorRoutes from './modules/exam/invigilator.routes';
 import documentRequirementRoutes from './modules/document/documentRequirement.routes';
 import healthRoutes from './modules/health/health.routes';
 import paymentRoutes from './modules/finance/payment.routes';
-import dataImportRoutes from './modules/admission/dataImport.routes';
-import verificationRoutes from './modules/admin/verification.routes';
-import academicRoutes from './modules/academic/academic.routes';
+import dataImportRoutes from './modules/admission/dataImport/dataImport.routes';
+import verificationRoutes from './modules/studentManagement/verification.routes';
 import qualificationRequirementRoutes from './modules/qualification/qualificationRequirement.routes';
-import emailLogRoutes from './modules/system/emailLog.routes';
-import logsRoutes from './modules/system/logs.routes';
-import rbacRoutes from './modules/rbac/routes/rbac.routes';
+import emailLogRoutes from './modules/system/emailLog/emailLog.routes';
+import logsRoutes from './modules/system/logs/logs.routes';
+import rbacRoutes from './modules/rbac/rbac.routes';
 import invoiceRoutes from './modules/finance/invoice.routes';
 import feeRoutes from './modules/finance/fee.routes';
-import cancellationRoutes from './modules/admin/cancellation.routes';
+import cancellationRoutes from './modules/finance/cancellation.routes';
 import proRoutes from './modules/pro/pro.routes';
 import logger from './utils/logger';
-import { globalErrorHandler } from './middlewares/errorMiddleware';
-import { generalRateLimiter } from './middlewares/rateLimitMiddleware';
-import { enhancedSecurityHeaders, additionalSecurityHeaders } from './middlewares/securityHeaders';
+import { globalErrorHandler } from './middleware/errorMiddleware';
+import { generalRateLimiter } from './middleware/rateLimitMiddleware';
+import { enhancedSecurityHeaders, additionalSecurityHeaders } from './middleware/securityHeaders';
 import { requestContextMiddleware } from './utils/requestContext';
-import { sanitizeInput } from './middlewares/sanitizeMiddleware';
+import { sanitizeInput } from './middleware/sanitizeMiddleware';
 
 const app = express();
 
-// Trust Proxy (Required for Rate Limiting behind load balancers/proxies like Nginx/AWS ALB)
 app.set('trust proxy', 1);
 
-// Security Middlewares (Order matters!)
-app.use(enhancedSecurityHeaders); // Enhanced Helmet configuration
-app.use(additionalSecurityHeaders); // Custom security headers
-app.use(requestContextMiddleware); // Attach correlation ID to every request
+app.use(enhancedSecurityHeaders);
+app.use(additionalSecurityHeaders);
+app.use(requestContextMiddleware);
+
+if (process.env.CORS_ORIGIN === '*' && process.env.NODE_ENV === 'production') {
+    logger.warn('[Security] CORS_ORIGIN is set to "*" in production. Falling back to origin: false (all cross-origin requests denied). Set CORS_ORIGIN to an explicit allow-list.');
+}
+const corsOrigin: cors.CorsOptions['origin'] =
+    (process.env.CORS_ORIGIN === '*' && process.env.NODE_ENV === 'production')
+        ? false
+        : process.env.CORS_ORIGIN === '*'
+            ? true
+            : process.env.CORS_ORIGIN
+                ? process.env.CORS_ORIGIN.split(',')
+                : false;
 app.use(cors({
-    origin: process.env.CORS_ORIGIN === '*' ? true : (process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : false), // Reject if CORS_ORIGIN not configured
+    origin: corsOrigin,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-correlation-id'],
     exposedHeaders: ['x-correlation-id'],
     credentials: true,
-    maxAge: 86400 // 24 hours
+    maxAge: 86400
 }));
-app.use(compression()); // Gzip compression
-app.use(express.json({ limit: '10kb' })); // Body limit
+app.use(compression());
+app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
-app.use(hpp()); // Prevent HTTP Parameter Pollution
+app.use(hpp());
 app.use(sanitizeInput);
 
 app.use(morgan('combined', {
     stream: { write: (message: string) => logger.info(message.trim()) }
 }));
 
-// Swagger Setup
 const swaggerOptions = {
     definition: {
         openapi: '3.0.0',
@@ -92,12 +100,13 @@ const swaggerOptions = {
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
-// Health Check Routes (No rate limiting for load balancers)
+if (process.env.NODE_ENV !== 'production') {
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+}
+
 app.use('/', healthRoutes);
 
-// Apply general rate limiter (100 req/hr) to all routes
 app.use(generalRateLimiter);
 
 app.use('/auth', authRoutes);
@@ -119,10 +128,6 @@ app.use('/admin/cancellation', cancellationRoutes);
 app.use('/finance', feeRoutes);
 app.use('/pro', proRoutes);
 
-
-
-
-// Global Error Handler
 app.use(globalErrorHandler);
 
 app.get('/', (req, res) => {
