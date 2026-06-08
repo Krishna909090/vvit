@@ -22,7 +22,6 @@ model User {
   tokenVersion        Int                      @default(0)
   agentCommissions    AgentCommission[]
   auditLogs           AuditLog[]
-  notifications       Notification[]
   studentProfile      Student?                 @relation("StudentUser")
   userGroups          UserGroup[]
   otps                UserOtp[]
@@ -190,7 +189,6 @@ model AcademicYear {
   batches                   Batch[]
   waitingLists              WaitingList[]
   seatAllocations           SeatAllocation[]
-  scholarshipAllocations    ScholarshipAllocation[]
   courseChangeLogs          CourseChangeLog[]
   courseChangeRequests      CourseChangeRequest[]
   discountRequests          DiscountRequest[]
@@ -198,7 +196,6 @@ model AcademicYear {
   cancellationRequests      CancellationRequest[]
   serviceChangeRequests     ServiceChangeRequest[]
   agentCommissions          AgentCommission[]
-  scholarshipRules          ScholarshipRule[]
 }
 
 model StudentEnrollment {
@@ -270,7 +267,6 @@ model Student {
   hallTickets               HallTicket[]
   hostelAllocations         HostelAllocation[]
   payments                  Payment[]
-  scholarshipAllocation     ScholarshipAllocation?
   seatAllocations           SeatAllocation[]
   serviceChangeRequests     ServiceChangeRequest[]
   pref1Course               Course?                 @relation("Pref1", fields: [pref1], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -912,18 +908,6 @@ model FileUpload {
   student    Student?  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
-model ExamDate {
-  id                String             @id @default(dbgenerated("gen_random_uuid()"))
-  name              String?
-  date              DateTime
-  startTime         DateTime?
-  endTime           DateTime?
-  createdAt         DateTime?          @default(now())
-  updatedAt         DateTime           @updatedAt
-  createdBy         String?
-  updatedBy         String?
-  attendanceRecords AttendanceRecord[]
-}
 
 model ExamCenter {
   id        String     @id @default(dbgenerated("gen_random_uuid()"))
@@ -961,7 +945,6 @@ model HallTicket {
   id             String       @id @default(dbgenerated("gen_random_uuid()"))
   studentId      String
   academicYearId String
-  fileId         String?
   url            String?
   qrHash         String?
   generatedAt    DateTime?    @default(now())
@@ -974,21 +957,10 @@ model HallTicket {
   @@index([academicYearId])
 }
 
-model InvigilatorCredential {
-  id         String    @id @default(dbgenerated("gen_random_uuid()"))
-  adminId    String
-  token      String
-  validFrom  DateTime
-  validUntil DateTime
-  createdAt  DateTime? @default(now())
-  createdBy  String?
-  updatedBy  String?
-}
 
 model AttendanceRecord {
   id            String    @id @default(dbgenerated("gen_random_uuid()"))
   studentId     String
-  examDateId    String?
   invigilatorId String?
   scannedAt     DateTime? @default(now())
   verified      Boolean?  @default(false)
@@ -996,7 +968,6 @@ model AttendanceRecord {
   createdAt     DateTime? @default(now())
   createdBy     String?
   updatedBy     String?
-  examDate      ExamDate? @relation(fields: [examDateId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student       Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
@@ -1120,30 +1091,7 @@ model AgentCommission {
   @@index([academicYearId])
 }
 
-model Notification {
-  id          String    @id @default(dbgenerated("gen_random_uuid()"))
-  recipientId String
-  type        String
-  title       String
-  body        String
-  link        String?
-  isRead      Boolean?  @default(false)
-  createdAt   DateTime? @default(now())
-  createdBy   String?
-  recipient   User      @relation(fields: [recipientId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-}
 
-model OfflineUploadBatch {
-  id            String                    @id @default(dbgenerated("gen_random_uuid()"))
-  agentId       String?
-  uploadedBy    String?
-  sourceFileUrl String?
-  status        OfflineUploadBatchStatus? @default(PENDING)
-  createdAt     DateTime?                 @default(now())
-  updatedAt     DateTime                  @updatedAt
-  createdBy     String?
-  updatedBy     String?
-}
 
 model DocumentRequirement {
   id           String    @id @default(dbgenerated("gen_random_uuid()"))
@@ -1160,23 +1108,6 @@ model DocumentRequirement {
   @@unique([degreeType, documentKey])
 }
 
-model ScholarshipRule {
-  id                 String                  @id @default(dbgenerated("gen_random_uuid()"))
-  name               String
-  academicYearId     String
-  minPercentile      Float
-  discountPercentage Float
-  totalSlots         Int
-  filledSlots        Int                     @default(0)
-  degreeType         String?
-  isActive           Boolean?                @default(true)
-  createdAt          DateTime?               @default(now())
-  updatedAt          DateTime                @updatedAt
-  allocations        ScholarshipAllocation[]
-  academicYear       AcademicYear            @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([academicYearId])
-}
 
 model QualificationRequirement {
   id                String    @id @default(dbgenerated("gen_random_uuid()"))
@@ -1280,13 +1211,11 @@ model AcademicQualification {
   board               String
   yearOfPassing       String
   percentage          Float?
-  docUrl              String?
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   createdBy           String?
   gpaOrMarks          String?
   hallTicketNumber    String?
-  schoolName          String?
   updatedBy           String?
   verificationStatus  String?              @default("PENDING")
   verifiedBy          String?
@@ -1340,23 +1269,6 @@ model EmailLog {
   templateType   String?
 }
 
-model ScholarshipAllocation {
-  id             String            @id @default(dbgenerated("gen_random_uuid()"))
-  studentId      String            @unique
-  academicYearId String
-  ruleId         String
-  status         ScholarshipStatus @default(RESERVED)
-  expiresAt      DateTime?
-  reservedAt     DateTime?
-  lockedAt       DateTime?
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-  rule           ScholarshipRule   @relation(fields: [ruleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  student        Student           @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  academicYear   AcademicYear      @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([academicYearId])
-}
 
 model StudentLedger {
   id            String                @id @default(dbgenerated("gen_random_uuid()"))
@@ -1610,19 +1522,7 @@ enum AgentCommissionStatus {
   REJECTED
 }
 
-enum OfflineUploadBatchStatus {
-  PENDING
-  PROCESSING
-  COMPLETED
-  FAILED
-}
 
-enum ScholarshipStatus {
-  RESERVED
-  LOCKED
-  EXPIRED
-  UTILIZED
-}
 
 enum QuotaType {
   MANAGEMENT
