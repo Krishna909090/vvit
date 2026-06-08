@@ -1599,7 +1599,6 @@ export const purgeStudentByApplicationId = catchAsync(async (req: Request, res: 
             await tx.auditLog.updateMany({ where: { userId }, data: { userId: null } });
 
             counts.userOtp                = await tx.$executeRaw`DELETE FROM "UserOtp"                 WHERE "userId" = ${userId}`;
-            counts.notification           = await tx.$executeRaw`DELETE FROM "Notification"            WHERE "recipientId" = ${userId}`;
             counts.userGroup              = await tx.$executeRaw`DELETE FROM "UserGroup"               WHERE "userId" = ${userId}`;
             counts.userPermissionOverride = await tx.$executeRaw`DELETE FROM "UserPermissionOverride"  WHERE "userId" = ${userId}`;
             await tx.$executeRaw`DELETE FROM "User" WHERE "id" = ${userId}`;
