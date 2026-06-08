@@ -20,7 +20,7 @@ const prismaClient = new PrismaClient({
 
 const auditedModels = new Set([
     'Payment', 'StudentLedger', 'StudentFeeDemand', 'StudentAdmission',
-    'ScholarshipAllocation', 'StudentScholarship', 'CancellationRequest', 'DiscountRequest'
+    'StudentScholarship', 'CancellationRequest', 'DiscountRequest'
 ]);
 
 const logAudit = (action: string, model: string, entityId: string | undefined, userId: string | undefined, details?: any) => {

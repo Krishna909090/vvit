@@ -1238,14 +1238,9 @@ export const FeeService = {
                 });
             }
             if (scholarshipApplied > 0) {
-                const alloc = await tx.scholarshipAllocation.findUnique({
-                    where: { studentId }, select: { id: true }
+                await tx.studentLedger.deleteMany({
+                    where: { studentId, referenceType: 'SCHOLARSHIP' }
                 });
-                if (alloc) {
-                    await tx.studentLedger.deleteMany({
-                        where: { studentId, referenceType: 'SCHOLARSHIP', referenceId: alloc.id }
-                    });
-                }
             }
 
             await tx.studentAdmission.upsert({
@@ -1475,30 +1470,7 @@ export const FeeService = {
         let fallbackScholarship = 0;
 
         if (baseScholarship === 0) {
-            const allocation = await prisma.scholarshipAllocation.findUnique({
-                where: { studentId },
-                include: { rule: true }
-            });
-
-            logger.info(`[getStudentFeeDetails] [Scholarship Allocation] Student=${studentId} Found=${!!allocation} Status=${allocation?.status}`);
-
-            if (allocation && (allocation.status === 'LOCKED' || allocation.status === 'RESERVED')) {
-                 const admission = await prisma.studentAdmission.findUnique({ where: { studentId } });
-
-                 let tuitionDemand = demands.find(d => {
-                    const comp = d.feeStructure?.feeHead?.component ?? d.feeHead?.component ?? null;
-                    return comp === 'TUITION';
-                 });
-
-                 if (!tuitionDemand && demands.length > 0) {
-                     tuitionDemand = demands.reduce((max, d) => d.amount > max.amount ? d : max, demands[0]);
-                     logger.debug(`[Scholarship] No TUITION-tagged FeeHead found. Used highest demand as proxy: ${tuitionDemand.amount}`);
-                 }
-
-                 const tuitionFee = tuitionDemand ? tuitionDemand.amount : (admission?.totalFee || 0);
-                 fallbackScholarship = (tuitionFee * allocation.rule.discountPercentage) / 100;
-                 scholarshipAmount = fallbackScholarship;
-            }
+            logger.info(`[getStudentFeeDetails] [Scholarship Allocation] Student=${studentId} feature removed`);
         }
 
         const totalDemand = demands.reduce((sum, d) => sum + d.amount, 0);

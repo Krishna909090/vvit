@@ -686,7 +686,7 @@ const _processComponentLogic = async (payment: any) => {
 
              const existingDemands = await prisma.studentFeeDemand.count({ where: { studentId, isDeleted: false } });
              if (existingDemands === 0) {
-                 const detailedStudent = await prisma.student.findUnique({ where: { id: studentId }, include: { admissionDetails: { include: { hostel: true, transportRoute: true } }, scholarshipAllocation: { include: { rule: true } } }});
+                 const detailedStudent = await prisma.student.findUnique({ where: { id: studentId }, include: { admissionDetails: { include: { hostel: true, transportRoute: true } } }});
                  if (detailedStudent?.admissionDetails) {
                      const ledgers: any[] = [];
                      const admission = detailedStudent.admissionDetails;
@@ -698,7 +698,6 @@ const _processComponentLogic = async (payment: any) => {
                      }
                      if (tuitionFee > 0) ledgers.push({ studentId, type: 'DEBIT', amount: tuitionFee, description: 'Tuition Fee (Annual)', referenceId: payment.id, referenceType: 'FEE_GENERATION', academicYearId: legacyAcademicYearId, yearOfStudy: ledgerYearOfStudy, date: new Date() });
                      if (admission.transportRouteId && admission.transportRoute) { ledgers.push({ studentId, type: 'DEBIT', amount: admission.transportRoute.cost, description: `Transport Fee - ${admission.transportRoute.name}`, referenceId: payment.id, referenceType: 'FEE_GENERATION', academicYearId: legacyAcademicYearId, yearOfStudy: ledgerYearOfStudy, date: new Date() }); }
-                     if (detailedStudent.scholarshipAllocation?.status === 'LOCKED' && detailedStudent.scholarshipAllocation.rule) { const rule = detailedStudent.scholarshipAllocation.rule; const discount = (tuitionFee * rule.discountPercentage) / 100; if (discount > 0) { ledgers.push({ studentId, type: 'CREDIT', amount: discount, description: `Scholarship Discount - ${rule.name} (${rule.discountPercentage}%)`, referenceId: detailedStudent.scholarshipAllocation.id, referenceType: 'SCHOLARSHIP', academicYearId: legacyAcademicYearId, yearOfStudy: ledgerYearOfStudy, date: new Date() }); } }
                      if (ledgers.length > 0) await prisma.studentLedger.createMany({ data: ledgers });
                  }
              } else {
@@ -1857,16 +1856,7 @@ export const getStudentFinancialSummary = async (studentId: string) => {
 
     summary.collegeFee.expected = baseTuition + hostelFee + transportFee;
 
-    const scholarship = await prisma.scholarshipAllocation.findUnique({
-        where: { studentId },
-        include: { rule: true }
-    });
-
     let scholarshipAmount = 0;
-    if (scholarship && scholarship.status === 'LOCKED' && scholarship.rule) {
-
-        scholarshipAmount = (baseTuition * scholarship.rule.discountPercentage) / 100;
-    }
 
     const discountLedgerEntries = await prisma.studentLedger.findMany({
         where: {
@@ -1923,7 +1913,6 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                     } 
                 },
                 convenorDetails: true,
-                scholarshipAllocation: { include: { rule: true } },
                 studentScholarship: true
             }
         });
@@ -1945,7 +1934,7 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
 
              let scholarshipDiscount = breakdown['TUITION']?.scholarshipAmount || 0;
              
-             let scholarshipPercentage = student.scholarshipAllocation?.rule?.discountPercentage || 0;
+             let scholarshipPercentage = 0;
              if (student.studentScholarship?.scholarshipPercentage) {
                 scholarshipPercentage = student.studentScholarship.scholarshipPercentage;
              }
@@ -2617,7 +2606,7 @@ export const getStudentCompleteHistory = async (studentId: string) => {
         safe(prisma.studentLedger.findMany({ where: { studentId }, orderBy: { date: 'asc' } }), [] as any[]),
         safe((prisma as any).feeCorrection.findMany({ where: { studentId }, orderBy: { createdAt: 'asc' } }), [] as any[]),
         safe(prisma.studentScholarship.findUnique({ where: { studentId } }), null as any),
-        safe((prisma as any).scholarshipAllocation.findUnique({ where: { studentId }, include: { rule: true } }), null as any),
+        Promise.resolve(null),
         safe(prisma.courseChangeLog.findMany({ where: { studentId }, orderBy: { date: 'asc' } }), [] as any[]),
         safe((prisma as any).cancellationRequest.findMany({ where: { studentId }, orderBy: { createdAt: 'asc' } }), [] as any[]),
         safe((prisma as any).hostelAllocation.findMany({ where: { studentId }, orderBy: { startDate: 'asc' } }), [] as any[]),
