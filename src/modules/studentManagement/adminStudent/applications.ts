@@ -46,7 +46,6 @@ export const ApplicationsService = {
                     examDetails: true,
                     documents: true,
                     academicQualifications: true,
-                    scholarshipAllocation: { include: { rule: true } },
                     pref1Course: PREF_COURSE_WITH_CAPACITY,
                     pref2Course: PREF_COURSE_WITH_CAPACITY,
                     pref3Course: PREF_COURSE_WITH_CAPACITY,
@@ -312,7 +311,6 @@ export const ApplicationsService = {
                     examDetails: true,
                     documents: true,
                     academicQualifications: true,
-                    scholarshipAllocation: { include: { rule: true } },
                     pref1Course: PREF_COURSE_WITH_CAPACITY,
                     pref2Course: PREF_COURSE_WITH_CAPACITY,
                     pref3Course: PREF_COURSE_WITH_CAPACITY,
@@ -587,7 +585,7 @@ export const ApplicationsService = {
             
             qualifications: student.academicQualifications.map(q => ({
                 level: q.level,
-                institution: q.schoolName || q.board,
+                institution: q.board,
                 board: q.board,
                 yearOfPassing: q.yearOfPassing,
                 percentage: q.percentage || 0

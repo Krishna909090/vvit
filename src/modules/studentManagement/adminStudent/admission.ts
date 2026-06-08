@@ -1103,11 +1103,7 @@ export const AdmissionService = {
         const student = await prisma.student.findUnique({ where: { id: studentId } });
         if (!student) throw new AppError(MESSAGES.ERROR.STUDENT_NOT_FOUND, 404);
 
-        const rule = await prisma.scholarshipRule.findUnique({ where: { id: ruleId } });
-        if (!rule) throw new AppError('Scholarship Rule not found', 404);
-        if (!rule.isActive) throw new AppError('Scholarship Rule is inactive', 400);
-
-        logger.info(`setScholarshipEligibility: eligibleScholarshipRuleId field removed from Student; no-op for student ${studentId}, rule ${ruleId}`);
+        logger.info(`setScholarshipEligibility: Scholarship feature removed — no-op for student ${studentId}, rule ${ruleId}`);
         return student;
     },
 
@@ -1238,7 +1234,6 @@ export const AdmissionService = {
                 examDetails: true,
                 documents: true,
                 academicQualifications: true,
-                scholarshipAllocation: { include: { rule: true } },
                 studentScholarship: true,
                 pref1Course: PREF_COURSE_WITH_CAPACITY,
                 pref2Course: PREF_COURSE_WITH_CAPACITY,
@@ -1339,7 +1334,6 @@ export const AdmissionService = {
                 examDetails: true,
                 documents: true,
                 academicQualifications: true,
-                scholarshipAllocation: { include: { rule: true } },
                 studentScholarship: true,
                 pref1Course: PREF_COURSE_WITH_CAPACITY,
                 pref2Course: PREF_COURSE_WITH_CAPACITY,

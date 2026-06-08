@@ -711,16 +711,6 @@ export const DashboardService = {
                             type: true
                         }
                     },
-                    scholarshipAllocation: {
-                        select: {
-                            rule: {
-                                select: {
-                                    discountPercentage: true,
-                                    name: true
-                                }
-                            }
-                        }
-                    },
                     proId: true,
                     pro: { select: { proNumber: true } },
 

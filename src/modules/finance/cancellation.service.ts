@@ -516,28 +516,6 @@ export const CancellationService = {
                     });
                 }
 
-                const allocsToExpire = await (tx.scholarshipAllocation as any).findMany({
-                    where: { studentId: request.studentId, status: { not: 'EXPIRED' } },
-                    select: { ruleId: true },
-                });
-                await (tx.scholarshipAllocation as any).updateMany({
-                    where: { studentId: request.studentId },
-                    data:  { status: 'EXPIRED' },
-                });
-                const ruleCounts = new Map<string, number>();
-                for (const a of allocsToExpire) {
-                    if (a.ruleId) ruleCounts.set(a.ruleId, (ruleCounts.get(a.ruleId) ?? 0) + 1);
-                }
-                for (const [ruleId, n] of ruleCounts) {
-                    const rule = await (tx.scholarshipRule as any).findUnique({ where: { id: ruleId }, select: { filledSlots: true } });
-                    if (rule) {
-                        await (tx.scholarshipRule as any).update({
-                            where: { id: ruleId },
-                            data:  { filledSlots: Math.max(0, (rule.filledSlots ?? 0) - n) },
-                        });
-                    }
-                }
-
                 await (tx.studentScholarship as any).updateMany({
                     where: { studentId: request.studentId },
                     data:  { isEligible: 'NO', remarks: 'Cancelled — seat cancellation' },

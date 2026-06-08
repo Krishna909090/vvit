@@ -1569,7 +1569,6 @@ export const purgeStudentByApplicationId = catchAsync(async (req: Request, res: 
         counts.studentScholarship          = await tx.$executeRaw`DELETE FROM "StudentScholarship"          WHERE "studentId" = ${studentId}`;
         counts.academicQualification       = await tx.$executeRaw`DELETE FROM "AcademicQualification"       WHERE "studentId" = ${studentId}`;
 
-        counts.scholarshipAllocation       = await tx.$executeRaw`DELETE FROM "ScholarshipAllocation"       WHERE "studentId" = ${studentId}`;
         counts.cancellationRequest         = await tx.$executeRaw`DELETE FROM "CancellationRequest"         WHERE "studentId" = ${studentId}`;
         counts.studentAdmission            = await tx.$executeRaw`DELETE FROM "StudentAdmission"            WHERE "studentId" = ${studentId}`;
 
