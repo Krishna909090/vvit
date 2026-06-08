@@ -67,7 +67,7 @@ export const assertScholarshipEditableForStudent = async (
     callerRole?: string,
 ): Promise<void> => {
 
-    if (callerRole === Role.SUPER_ADMIN) return;
+    if (callerRole !== Role.STUDENT) return;
 
     const admission = await prisma.studentAdmission.findUnique({
         where: { studentId },
@@ -587,7 +587,7 @@ export const AdmissionService = {
                 const ayId = admission.academicYearId;
                 const batchAyId = admission.batchAcademicYearId || ayId;
 
-                const toCourse = await tx.course.findUnique({ where: { id: request.toCourse } });
+                const toCourse = await tx.course.findUnique({ where: { id: request.toCourse }, select: { id: true, name: true, code: true, scholarshipEligible: true } });
                 if (!toCourse) throw new AppError('Target course not found', 404);
 
                 const isScholarshipRevoked = toCourse.scholarshipEligible === false;
