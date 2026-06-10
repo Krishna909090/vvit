@@ -1,10 +1,16 @@
 import prisma from '../../config/prisma';
 import { AdmissionStatus, PaymentStatus, PaymentComponent, StudentDocumentStatus, ApplicationMode, QuotaType, AccommodationType, Prisma } from '@prisma/client';
 
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const toIST = (d: Date) => new Date(d.getTime() + IST_OFFSET_MS);
+const istDayStart = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - IST_OFFSET_MS);
+const istDayEnd = (d: Date) => new Date(istDayStart(d).getTime() + 24 * 60 * 60 * 1000 - 1);
+
 const getDateCondition = (range?: string, startDate?: string, endDate?: string) => {
     const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const nowIST = toIST(now);
+    const todayStart = istDayStart(nowIST);
+    const todayEnd = istDayEnd(nowIST);
 
     let start: Date | undefined;
     let end: Date | undefined;
@@ -16,12 +22,9 @@ const getDateCondition = (range?: string, startDate?: string, endDate?: string) 
                 end = todayEnd;
                 break;
             case 'yesterday':
-                const yesterday = new Date(todayStart);
-                yesterday.setDate(yesterday.getDate() - 1);
+                const yesterday = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
                 start = yesterday;
-                const yesterdayEnd = new Date(yesterday);
-                yesterdayEnd.setHours(23, 59, 59, 999);
-                end = yesterdayEnd;
+                end = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1);
                 break;
             case '7d':
             case '7days':
