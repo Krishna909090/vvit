@@ -1,7 +1,7 @@
 
 
 import prisma from '../../../config/prisma';
-import { AdmissionStatus, AdmissionEntryType, WaitingListStatus, WaitingListCategory, PaymentStatus, AccommodationType, HostelType, HostelPaymentMode } from '@prisma/client';
+import { AdmissionStatus, AdmissionEntryType, WaitingListStatus, WaitingListCategory, PaymentStatus, PaymentComponent, AccommodationType, HostelType, HostelPaymentMode } from '@prisma/client';
 import { AccommodationService } from './accommodation';
 import { generateAndSaveAllotmentOrder } from '../../finance/payment.service';
 import { convertToPresignedUrl } from '../../../utils/s3Utils';
@@ -190,7 +190,7 @@ export const WaitingListService = {
             if (studentIds.length === 0 || !activeYear) return new Map<string, number>();
             const sums = await prisma.payment.groupBy({
                 by: ['studentId'],
-                where: { studentId: { in: studentIds }, status: PaymentStatus.SUCCESS, academicYearId: activeYear.id },
+                where: { studentId: { in: studentIds }, status: PaymentStatus.SUCCESS, academicYearId: activeYear.id, component: { not: PaymentComponent.APPLICATION_FEE } },
                 _sum: { amount: true },
             });
             return new Map(sums.map(s => [s.studentId, s._sum.amount ?? 0]));
@@ -344,7 +344,7 @@ export const WaitingListService = {
         const filledSeats = cap?.filledSeats ?? 0;
 
         const paid = await prisma.payment.aggregate({
-            where: { studentId: entry.studentId, status: PaymentStatus.SUCCESS, academicYearId: entry.academicYearId },
+            where: { studentId: entry.studentId, status: PaymentStatus.SUCCESS, academicYearId: entry.academicYearId, component: { not: PaymentComponent.APPLICATION_FEE } },
             _sum: { amount: true },
         });
 

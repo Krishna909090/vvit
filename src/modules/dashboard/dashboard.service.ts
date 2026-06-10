@@ -150,7 +150,6 @@ export const DashboardService = {
 
     async getAdmissionStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
-        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
 
         const [
             totalSeatAllocated,
@@ -176,43 +175,65 @@ export const DashboardService = {
                     }
                 }
             }),
-            prisma.student.count({ where: { ...whereDate, quotaType: QuotaType.MANAGEMENT } }),
-            prisma.student.count({ where: { ...whereDate, quotaType: QuotaType.CONVENOR } }),
-            prisma.student.count({ 
-            where: { 
-                ...whereDate, 
-                admissionDetails: { accommodationType: AccommodationType.HOSTEL },
-                payments: {
-                    some: {
-                        component: { in: ['HOSTEL', 'HOSTEL_ACCOMMODATION', 'HOSTEL_MESS'] },
-                        status: 'SUCCESS'
-                    }
-                }
-            } 
-        }),
-        prisma.student.count({ 
-            where: { 
-                ...whereDate, 
-                admissionDetails: { accommodationType: AccommodationType.TRANSPORT },
-                payments: {
-                    some: {
-                        component: 'TRANSPORT',
-                        status: 'SUCCESS'
-                    }
-                }
-            } 
-        }),
             prisma.student.count({
                 where: {
-                    ...whereDate,
-                    studentScholarship: { isEligible: 'YES' },
+                    quotaType: QuotaType.MANAGEMENT,
+                    admissionDetails: {
+                        allottedCourseId: { not: null },
+                        status: { not: 'CANCELLED' },
+                        ...(dateFilter ? { seatAllottedAt: dateFilter } : {})
+                    }
+                }
+            }),
+            prisma.student.count({
+                where: {
+                    quotaType: QuotaType.CONVENOR,
+                    admissionDetails: {
+                        allottedCourseId: { not: null },
+                        status: { not: 'CANCELLED' },
+                        ...(dateFilter ? { seatAllottedAt: dateFilter } : {})
+                    }
+                }
+            }),
+            prisma.student.count({
+                where: {
+                    admissionDetails: { accommodationType: AccommodationType.HOSTEL },
+                    payments: {
+                        some: {
+                            component: { in: ['HOSTEL', 'HOSTEL_ACCOMMODATION', 'HOSTEL_MESS'] as any },
+                            status: 'SUCCESS',
+                            ...(dateFilter ? { createdAt: dateFilter } : {})
+                        }
+                    }
+                }
+            }),
+            prisma.student.count({
+                where: {
+                    admissionDetails: { accommodationType: AccommodationType.TRANSPORT },
+                    payments: {
+                        some: {
+                            component: 'TRANSPORT' as any,
+                            status: 'SUCCESS',
+                            ...(dateFilter ? { createdAt: dateFilter } : {})
+                        }
+                    }
+                }
+            }),
+            prisma.student.count({
+                where: {
+                    studentScholarship: {
+                        isEligible: 'YES',
+                        ...(dateFilter ? { updatedAt: dateFilter } : {})
+                    },
                     admissionDetails: { allottedCourseId: { not: null }, status: { not: 'CANCELLED' } }
                 }
             }),
             prisma.student.count({
                 where: {
-                    ...whereDate,
-                    studentScholarship: { isEligible: 'NO' },
+                    studentScholarship: {
+                        isEligible: 'NO',
+                        ...(dateFilter ? { updatedAt: dateFilter } : {})
+                    },
                     admissionDetails: { allottedCourseId: { not: null }, status: { not: 'CANCELLED' } }
                 }
             }),
@@ -272,16 +293,14 @@ export const DashboardService = {
         degreeType?: string
     ) {
         const dateFilter = getDateCondition(range, startDate, endDate);
-        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
         const degreeWhere = degreeType ? { degreeType } : {};
-
-        const baseWhere = { ...whereDate, ...degreeWhere };
+        const scholarshipDateFilter = dateFilter ? { updatedAt: dateFilter } : {};
 
         const [totalEligible, totalNotEligible, totalApplicants, percentageGroups] = await Promise.all([
             prisma.student.count({
                 where: {
-                    ...baseWhere,
-                    studentScholarship: { isEligible: 'YES' },
+                    ...degreeWhere,
+                    studentScholarship: { isEligible: 'YES', ...scholarshipDateFilter },
                     admissionDetails: {
                         allottedCourseId: { not: null },
                         status: { not: 'CANCELLED' }
@@ -290,8 +309,8 @@ export const DashboardService = {
             }),
             prisma.student.count({
                 where: {
-                    ...baseWhere,
-                    studentScholarship: { isEligible: 'NO' },
+                    ...degreeWhere,
+                    studentScholarship: { isEligible: 'NO', ...scholarshipDateFilter },
                     admissionDetails: {
                         allottedCourseId: { not: null },
                         status: { not: 'CANCELLED' }
@@ -300,8 +319,8 @@ export const DashboardService = {
             }),
             prisma.student.count({
                 where: {
-                    ...baseWhere,
-                    studentScholarship: { isEligible: { in: ['YES', 'NO'] } },
+                    ...degreeWhere,
+                    studentScholarship: { isEligible: { in: ['YES', 'NO'] }, ...scholarshipDateFilter },
                     admissionDetails: {
                         allottedCourseId: { not: null },
                         status: { not: 'CANCELLED' }
@@ -312,6 +331,7 @@ export const DashboardService = {
                 by: ['scholarshipPercentage'],
                 where: {
                     scholarshipPercentage: { gt: 0 },
+                    ...scholarshipDateFilter,
                     ...(degreeType ? { degreeType } : {}),
                     student: {
                         admissionDetails: {
@@ -356,16 +376,15 @@ export const DashboardService = {
 
     async getVerificationStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
-        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
 
         const [totalQualificationVerified, totalDocumentsVerified] = await Promise.all([
 
             prisma.student.count({
                 where: {
-                    ...whereDate,
                     academicQualifications: {
                         some: {
-                            verificationStatus: 'APPROVED'
+                            verificationStatus: 'APPROVED',
+                            ...(dateFilter ? { updatedAt: dateFilter } : {})
                         }
                     }
                 }
@@ -373,11 +392,11 @@ export const DashboardService = {
 
             prisma.student.count({
                 where: {
-                    ...whereDate,
                     documents: {
                         some: {
                             status: StudentDocumentStatus.APPROVED,
-                            documentKey: { not: 'ALLOTMENT_ORDER' }
+                            documentKey: { not: 'ALLOTMENT_ORDER' },
+                            ...(dateFilter ? { updatedAt: dateFilter } : {})
                         }
                     }
                 }
@@ -392,7 +411,6 @@ export const DashboardService = {
 
     async getDegreeSeatAllocatedStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
-        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
 
         const activeYear = await prisma.academicYear.findFirst({
             where: { isActive: true, isDeleted: false },
@@ -404,11 +422,11 @@ export const DashboardService = {
             prisma.student.groupBy({
                 by: ['degreeType'],
                 where: {
-                    ...whereDate,
                     admissionDetails: {
                         allottedCourseId: { not: null },
                         status: { not: 'CANCELLED' },
-                        ...(activeYear ? { academicYearId: activeYear.id } : {}),
+                        ...(activeYear ? { batchAcademicYearId: activeYear.id } : {}),
+                        ...(dateFilter ? { seatAllottedAt: dateFilter } : {})
                     }
                 },
                 _count: {
@@ -450,7 +468,6 @@ export const DashboardService = {
 
     async getGenderSeatAllocatedStats(range?: string, startDate?: string, endDate?: string) {
         const dateFilter = getDateCondition(range, startDate, endDate);
-        const whereDate = dateFilter ? { createdAt: dateFilter } : {};
 
         const activeYear = await prisma.academicYear.findFirst({
             where: { isActive: true, isDeleted: false },
@@ -460,11 +477,11 @@ export const DashboardService = {
         const result = await prisma.student.groupBy({
             by: ['gender'],
             where: {
-                ...whereDate,
                 admissionDetails: {
                     allottedCourseId: { not: null },
                     status: { not: 'CANCELLED' },
-                    ...(activeYear ? { academicYearId: activeYear.id } : {}),
+                    ...(activeYear ? { batchAcademicYearId: activeYear.id } : {}),
+                    ...(dateFilter ? { seatAllottedAt: dateFilter } : {})
                 }
             },
             _count: {
@@ -838,7 +855,7 @@ export const DashboardService = {
                                     { status: null },
                                     { status: { not: 'CANCELLED' } }
                                 ],
-                                ...(activeYear ? { academicYearId: activeYear.id } : {}),
+                                ...(activeYear ? { batchAcademicYearId: activeYear.id } : {}),
                             }
                         }
                     }
