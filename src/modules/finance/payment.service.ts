@@ -1380,25 +1380,23 @@ export const getAllSuccessPayments = async (query: any) => {
 
     const dateRange = query.dateRange ? String(query.dateRange).toLowerCase() : null;
     if (dateRange && dateRange !== 'custom' && dateRange !== 'all') {
-        const now = new Date();
-        const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-        const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+        const IST_MS = 5.5 * 60 * 60 * 1000;
+        const nowIST = new Date(new Date().getTime() + IST_MS);
+        const istDayStart = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - IST_MS);
+        const todayStart = istDayStart(nowIST);
+        const DAY_MS = 24 * 60 * 60 * 1000;
         let gte: Date | undefined, lte: Date | undefined;
 
         if (dateRange === 'today') {
-            gte = startOfDay(now); lte = endOfDay(now);
+            gte = todayStart; lte = new Date(todayStart.getTime() + DAY_MS - 1);
         } else if (dateRange === 'yesterday') {
-            const y = new Date(now); y.setDate(now.getDate() - 1);
-            gte = startOfDay(y); lte = endOfDay(y);
+            gte = new Date(todayStart.getTime() - DAY_MS); lte = new Date(todayStart.getTime() - 1);
         } else if (dateRange === '7d') {
-            const d = new Date(now); d.setDate(now.getDate() - 7);
-            gte = startOfDay(d); lte = endOfDay(now);
+            gte = new Date(todayStart.getTime() - 7 * DAY_MS); lte = new Date(todayStart.getTime() + DAY_MS - 1);
         } else if (dateRange === '15d') {
-            const d = new Date(now); d.setDate(now.getDate() - 15);
-            gte = startOfDay(d); lte = endOfDay(now);
+            gte = new Date(todayStart.getTime() - 15 * DAY_MS); lte = new Date(todayStart.getTime() + DAY_MS - 1);
         } else if (dateRange === '30d') {
-            const d = new Date(now); d.setDate(now.getDate() - 30);
-            gte = startOfDay(d); lte = endOfDay(now);
+            gte = new Date(todayStart.getTime() - 30 * DAY_MS); lte = new Date(todayStart.getTime() + DAY_MS - 1);
         }
         if (gte && lte) where.createdAt = { gte, lte };
     } else if (query.startDate || query.endDate) {
