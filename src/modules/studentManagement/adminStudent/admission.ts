@@ -56,26 +56,13 @@ import {
 } from './_shared';
 import { AccommodationService } from './accommodation';
 
-const SCHOLARSHIP_LOCKED_STATUSES: ReadonlySet<AdmissionStatus> = new Set([
-    AdmissionStatus.SEAT_ALLOTTED,
-    AdmissionStatus.ADMISSION_CONFIRMED,
-    AdmissionStatus.ENROLLED,
-]);
 
 export const assertScholarshipEditableForStudent = async (
-    studentId: string,
+    _studentId: string,
     callerRole?: string,
 ): Promise<void> => {
-
-    if (callerRole !== Role.STUDENT) return;
-
-    const admission = await prisma.studentAdmission.findUnique({
-        where: { studentId },
-        select: { status: true },
-    });
-
-    if (admission && SCHOLARSHIP_LOCKED_STATUSES.has(admission.status as AdmissionStatus)) {
-        throw new AppError('Scholarship cannot be modified after seat allotment', 403);
+    if (callerRole === Role.STUDENT) {
+        throw new AppError('Scholarship cannot be modified by students', 403);
     }
 };
 
@@ -144,11 +131,11 @@ export const AdmissionService = {
                     data: { status: AdmissionStatus.CANCELLED }
                 });
 
-                if (request.student.admissionDetails?.allottedCourseId && request.student.admissionDetails.academicYearId) {
+                if (request.student.admissionDetails?.allottedCourseId && (request.student.admissionDetails.batchAcademicYearId ?? request.student.admissionDetails.academicYearId)) {
                     await decrementCourseCapacity(
                         tx,
                         request.student.admissionDetails.allottedCourseId,
-                        request.student.admissionDetails.academicYearId,
+                        request.student.admissionDetails.batchAcademicYearId ?? request.student.admissionDetails.academicYearId,
                     );
                 }
             }
@@ -185,11 +172,12 @@ export const AdmissionService = {
                     status: AdmissionStatus.SEAT_ALLOTTED,
                     allottedCourseId: allottedCourseId
                 },
-                select: { academicYearId: true }
+                select: { academicYearId: true, batchAcademicYearId: true }
             });
 
-            if (admission.academicYearId) {
-                await incrementCourseCapacity(tx, allottedCourseId, admission.academicYearId);
+            const capacityYearId = admission.batchAcademicYearId ?? admission.academicYearId;
+            if (capacityYearId) {
+                await incrementCourseCapacity(tx, allottedCourseId, capacityYearId);
             }
 
             await tx.seatAllocation.create({
@@ -2675,7 +2663,7 @@ export const AdmissionService = {
             throw new AppError('Student not found or email missing', 404);
         }
 
-        const { sendStatusUpdateEmail } = require('../../utils/emailService');
+        const { sendStatusUpdateEmail } = require('../../../utils/emailService');
 
         const emailData = {
             studentName: student.name,
@@ -2914,9 +2902,10 @@ export const AdmissionService = {
             await tx.payment.delete({ where: { id: paymentId } });
             logger.info(`[reverseAdmissionPayment] Deleted payment record ${paymentId}`);
 
-            if (allottedCourseId && admission?.academicYearId) {
-                await decrementCourseCapacity(tx, allottedCourseId, admission.academicYearId);
-                logger.info(`[reverseAdmissionPayment] Decremented CourseCapacity for course=${allottedCourseId} year=${admission.academicYearId}`);
+            const reverseCapYearId = admission?.batchAcademicYearId ?? admission?.academicYearId;
+            if (allottedCourseId && reverseCapYearId) {
+                await decrementCourseCapacity(tx, allottedCourseId, reverseCapYearId);
+                logger.info(`[reverseAdmissionPayment] Decremented CourseCapacity for course=${allottedCourseId} year=${reverseCapYearId}`);
             }
 
             if (accommodationType === AccommodationType.TRANSPORT && transportRouteId) {

@@ -346,23 +346,25 @@ export const approveDiscount = catchAsync(async (req: Request, res: Response, ne
 export const getDiscountRequests = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[getDiscountRequests] by=${req.user?.userId || 'anonymous'}`);
 
-    const { status, studentId, applicationId, degree, allottedCourseId } = req.query;
+    const { status, studentId, applicationId, degree, allottedCourseId, page, limit } = req.query;
     const filters = {
         status: status as any,
         studentId: studentId as string,
         applicationId: applicationId as string,
         degree: degree as string,
-        allottedCourseId: allottedCourseId as string
+        allottedCourseId: allottedCourseId as string,
+        page: page as string,
+        limit: limit as string
     };
 
-    const requests = await FeeService.getAllDiscountRequests(filters);
+    const result = await FeeService.getAllDiscountRequests(filters);
 
     sendResponse({
         res,
         statusCode: 200,
         success: true,
         message: "Discount requests fetched successfully",
-        data: requests
+        data: result
     });
 });
 

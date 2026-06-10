@@ -1570,6 +1570,22 @@ export const purgeStudentByApplicationId = catchAsync(async (req: Request, res: 
         counts.academicQualification       = await tx.$executeRaw`DELETE FROM "AcademicQualification"       WHERE "studentId" = ${studentId}`;
 
         counts.cancellationRequest         = await tx.$executeRaw`DELETE FROM "CancellationRequest"         WHERE "studentId" = ${studentId}`;
+
+        // Decrement CourseCapacity.filled if a course was allotted
+        const admissionRecord = await tx.studentAdmission.findUnique({
+            where: { studentId },
+            select: { allottedCourseId: true, batchAcademicYearId: true }
+        });
+        if (admissionRecord?.allottedCourseId && admissionRecord?.batchAcademicYearId) {
+            await tx.courseCapacity.updateMany({
+                where: {
+                    courseId:      admissionRecord.allottedCourseId,
+                    academicYearId: admissionRecord.batchAcademicYearId
+                },
+                data: { filledSeats: { decrement: 1 } }
+            });
+        }
+
         counts.studentAdmission            = await tx.$executeRaw`DELETE FROM "StudentAdmission"            WHERE "studentId" = ${studentId}`;
 
         await tx.$executeRaw`DELETE FROM "Student" WHERE "id" = ${studentId}`;

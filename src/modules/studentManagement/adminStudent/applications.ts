@@ -172,6 +172,9 @@ export const ApplicationsService = {
         const rows = students.map((s: any) => {
             const q10th = s.academicQualifications?.find((q: any) => q.level === '10th');
             const q12th = s.academicQualifications?.find((q: any) => q.level === '12th');
+            const appFeePayment = s.payments?.find((p: any) => p.component === PaymentComponent.APPLICATION_FEE && p.status === PaymentStatus.SUCCESS);
+            const admissionPayment = s.payments?.find((p: any) => p.component === PaymentComponent.TUITION && p.status === PaymentStatus.SUCCESS);
+            const utr = (p: any) => p?.referenceNumber || p?.providerTxId || '';
             return {
             'Application ID': s.applicationId || '',
             'Name': s.name || '',
@@ -188,7 +191,9 @@ export const ApplicationsService = {
             'Exam Date': s.examDetails?.testDate ? new Date(s.examDetails.testDate).toISOString().split('T')[0] : '',
             'Exam Score': s.examDetails?.examScore ?? '',
             'Is Qualified': s.examDetails?.isQualified ? 'Yes' : 'No',
-            'Application Fee Paid': s.payments?.some((p: any) => p.component === PaymentComponent.APPLICATION_FEE && p.status === PaymentStatus.SUCCESS) ? 'PAID' : 'UNPAID',
+            'Application Fee Paid': appFeePayment ? 'PAID' : 'UNPAID',
+            'Application Fee UTR': utr(appFeePayment),
+            'Admission Fee UTR': utr(admissionPayment),
             'Scholarship Eligible': s.studentScholarship?.isEligible || '',
             '10th Marks': q10th?.gpaOrMarks ?? '',
             '10th Board': q10th?.board || '',

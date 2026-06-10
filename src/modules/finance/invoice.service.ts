@@ -1,7 +1,7 @@
 import prisma from '../../config/prisma';
 import logger from '../../utils/logger';
 import { generateInvoicePDF } from '../../utils/invoiceGenerator';
-import { uploadFileToS3, downloadFileFromS3 } from '../../utils/s3Utils';
+import { uploadFileToS3, downloadFileFromS3, convertToPresignedUrl } from '../../utils/s3Utils';
 import { sendEntranceFeeReceipt } from '../../utils/emailService';
 import { PaymentStatus, PaymentComponent } from '@prisma/client';
 
@@ -321,7 +321,7 @@ export const InvoiceService = {
                     pref1: fullStudentRef.pref1Course?.name,
                     pref2: fullStudentRef.pref2Course?.name,
                     pref3: fullStudentRef.pref3Course?.name,
-                    profilePhotoUrl: fullStudentRef.profilePhotoUrl || undefined,
+                    profilePhotoUrl: (await convertToPresignedUrl(fullStudentRef.profilePhotoUrl)) || undefined,
                     qualifications: fullStudentRef.academicQualifications.map(q => ({
                         level: q.level || '',
                         institution: (q as any).institution || '',

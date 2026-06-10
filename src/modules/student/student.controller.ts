@@ -11,6 +11,7 @@ import { MESSAGES } from '../../constants/messages';
 import { sendResponse } from '../../utils/response';
 import { getActiveAcademicYear } from '../../utils/studentContext';
 import { assertStudentOwns } from '../../utils/ownership';
+import { convertToPresignedUrl } from '../../utils/s3Utils';
 
 export const registerStudent = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     logger.info(`[registerStudent] attempt by=${req.user?.userId || 'anonymous'}`);
@@ -325,7 +326,7 @@ export const getApplicationSummary = catchAsync(async (req: Request, res: Respon
         pref1: student.pref1Course?.name,
         pref2: student.pref2Course?.name,
         pref3: student.pref3Course?.name,
-        profilePhotoUrl: student.profilePhotoUrl || undefined,
+        profilePhotoUrl: (await convertToPresignedUrl(student.profilePhotoUrl)) || undefined,
         qualifications: student.academicQualifications.map(q => ({
             level: q.level || '',
             institution: (q as any).institution || '',

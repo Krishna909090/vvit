@@ -944,7 +944,6 @@ export const AccommodationService = {
         const ctx = await getStudentContext(studentId);
         assertActiveAdmission(ctx.admission, 'allocate bed');
         assertHostelAccommodation(ctx.admission, 'Run assign-hostel first.');
-        assertNoBedAllocated(ctx.accommodationPricing as any, 'Use re-allocation flow.');
         const admission = ctx.admission!;
         if (!ctx.accommodationPricing) {
             throw new AppError('No pricing snapshot. Run assign-hostel first.', 400);

@@ -498,8 +498,8 @@ export const CancellationService = {
                     },
                 });
 
-                if (admission?.allottedCourseId && admission.academicYearId) {
-                    await decrementCourseCapacity(tx, admission.allottedCourseId, admission.academicYearId);
+                if (admission?.allottedCourseId && (admission.batchAcademicYearId ?? admission.academicYearId)) {
+                    await decrementCourseCapacity(tx, admission.allottedCourseId, admission.batchAcademicYearId ?? admission.academicYearId);
                 }
 
                 if (admission?.hostelId) {
@@ -630,11 +630,11 @@ export const CancellationService = {
                         data:  { status: AdmissionStatus.ENROLLED },
                     });
 
-                    if (request.student.admissionDetails?.allottedCourseId && request.student.admissionDetails.academicYearId) {
+                    if (request.student.admissionDetails?.allottedCourseId && (request.student.admissionDetails.batchAcademicYearId ?? request.student.admissionDetails.academicYearId)) {
                         await incrementCourseCapacity(
                             tx,
                             request.student.admissionDetails.allottedCourseId,
-                            request.student.admissionDetails.academicYearId,
+                            request.student.admissionDetails.batchAcademicYearId ?? request.student.admissionDetails.academicYearId,
                         );
                     }
 

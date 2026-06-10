@@ -581,6 +581,21 @@ const processSinglePaymentSuccess = async (payment: any, metadata: any) => {
     return await processMultiPaymentSuccess([payment], metadata);
 };
 
+const extractPhonePeUtr = (metadata: any): string | null => {
+    if (!metadata) return null;
+    // Old PhonePe S2S v1 format: data.paymentInstrument.utr / bankTransactionId
+    const instr = metadata?.data?.paymentInstrument;
+    if (instr?.utr) return instr.utr;
+    if (instr?.bankTransactionId) return instr.bankTransactionId;
+    if (metadata?.data?.transactionId) return metadata.data.transactionId;
+    // New PhonePe webhook v2 format: paymentDetails[].utr / transactionId
+    const detail = metadata?.paymentDetails?.[0];
+    if (detail?.utr) return detail.utr;
+    if (detail?.transactionId) return detail.transactionId;
+    if (metadata?.orderId) return metadata.orderId;
+    return null;
+};
+
 const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     if (!payments || payments.length === 0) return;
     const txnId = payments[0].providerTxId;
@@ -598,11 +613,17 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
         logger.warn(`[processMultiPaymentSuccess] ${payments.length - pendingPayments.length} payment(s) not PENDING, processing remaining ${pendingPayments.length}. Ref=${payments[0].providerTxId}`);
     }
 
+    const utr = extractPhonePeUtr(metadata);
+
     let flippedCount = 0;
     await prisma.$transaction(async (tx) => {
         const statusFlip = await tx.payment.updateMany({
             where: { id: { in: pendingPayments.map((p: any) => p.id) }, status: PaymentStatus.PENDING },
-            data: { status: PaymentStatus.SUCCESS, metadata }
+            data: {
+                status: PaymentStatus.SUCCESS,
+                metadata,
+                ...(utr ? { referenceNumber: utr } : {})
+            }
         });
         flippedCount = statusFlip.count;
         if (flippedCount === 0) return;

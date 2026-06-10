@@ -636,14 +636,18 @@ export const FeeService = {
         });
     },
 
-    getAllDiscountRequests: async (filters?: { status?: DiscountStatus, studentId?: string, applicationId?: string, degree?: string, allottedCourseId?: string }) => {
+    getAllDiscountRequests: async (filters?: { status?: DiscountStatus, studentId?: string, applicationId?: string, degree?: string, allottedCourseId?: string, page?: string, limit?: string }) => {
+        const pageNum = Math.max(1, parseInt(filters?.page || '1'));
+        const limitNum = Math.max(1, Math.min(100, parseInt(filters?.limit || '10')));
+        const skip = (pageNum - 1) * limitNum;
+
         const where: any = {};
         if (filters?.status) where.status = filters.status;
         if (filters?.studentId) where.studentId = filters.studentId;
-        
+
         if (filters?.applicationId || filters?.degree || filters?.allottedCourseId) {
             where.student = {};
-            
+
             if (filters?.applicationId) {
                 where.student.applicationId = { contains: filters.applicationId, mode: 'insensitive' };
             }
@@ -657,33 +661,38 @@ export const FeeService = {
             }
         }
 
-        const requests = await prisma.discountRequest.findMany({
-            where,
-            include: {
-                student: {
-                    select: {
-                        id: true,
-                        name: true,
-                        applicationId: true,
-                        degreeType: true,
-                        phone: true,
-                        email: true,
-                        admissionDetails: {
-                            select: {
-                                accommodationType: true,
-                                allottedCourse: {
-                                    select: {
-                                        id: true,
-                                        name: true
+        const [requests, total] = await Promise.all([
+            prisma.discountRequest.findMany({
+                where,
+                include: {
+                    student: {
+                        select: {
+                            id: true,
+                            name: true,
+                            applicationId: true,
+                            degreeType: true,
+                            phone: true,
+                            email: true,
+                            admissionDetails: {
+                                select: {
+                                    accommodationType: true,
+                                    allottedCourse: {
+                                        select: {
+                                            id: true,
+                                            name: true
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-            },
-            orderBy: { createdAt: 'desc' }
-        });
+                },
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: limitNum
+            }),
+            prisma.discountRequest.count({ where })
+        ]);
 
         const userIds = [...new Set(requests.map(req => req.createdBy).filter(Boolean))] as string[];
         let usersMap = new Map();
@@ -699,7 +708,7 @@ export const FeeService = {
 
             const feeDetails = await FeeService.getStudentFeeDetails(req.studentId);
             const details = feeDetails as any;
-            
+
             return {
                 ...req,
                 documentUrl: req.documentUrl ? await convertToPresignedUrl(req.documentUrl) : null,
@@ -714,7 +723,15 @@ export const FeeService = {
             };
         }));
 
-        return enrichedRequests;
+        return {
+            data: enrichedRequests,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total,
+                totalPages: Math.ceil(total / limitNum)
+            }
+        };
     },
 
     updateDiscountRequest: async (id: string, reason: string, documentUrl: string | undefined, items: { component: string, amount: number }[], requestedAmount: number, referredBy?: string, adminId?: string) => {
