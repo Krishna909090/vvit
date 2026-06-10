@@ -56,26 +56,13 @@ import {
 } from './_shared';
 import { AccommodationService } from './accommodation';
 
-const SCHOLARSHIP_LOCKED_STATUSES: ReadonlySet<AdmissionStatus> = new Set([
-    AdmissionStatus.SEAT_ALLOTTED,
-    AdmissionStatus.ADMISSION_CONFIRMED,
-    AdmissionStatus.ENROLLED,
-]);
 
 export const assertScholarshipEditableForStudent = async (
-    studentId: string,
+    _studentId: string,
     callerRole?: string,
 ): Promise<void> => {
-
-    if (callerRole !== Role.STUDENT) return;
-
-    const admission = await prisma.studentAdmission.findUnique({
-        where: { studentId },
-        select: { status: true },
-    });
-
-    if (admission && SCHOLARSHIP_LOCKED_STATUSES.has(admission.status as AdmissionStatus)) {
-        throw new AppError('Scholarship cannot be modified after seat allotment', 403);
+    if (callerRole === Role.STUDENT) {
+        throw new AppError('Scholarship cannot be modified by students', 403);
     }
 };
 
