@@ -1582,7 +1582,7 @@ export const purgeStudentByApplicationId = catchAsync(async (req: Request, res: 
                     courseId:      admissionRecord.allottedCourseId,
                     academicYearId: admissionRecord.batchAcademicYearId
                 },
-                data: { filled: { decrement: 1 } }
+                data: { filledSeats: { decrement: 1 } }
             });
         }
 
