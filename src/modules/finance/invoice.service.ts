@@ -25,17 +25,23 @@ export const InvoiceService = {
 
         let allPayments = [payment];
 
-        const groupingId = payment.providerTxId || (payment.method !== 'ONLINE' ? payment.referenceNumber : null);
-        
+        const isOnlinePayment = payment.method === 'ONLINE' || payment.mode === 'ONLINE';
+        const groupingId = payment.providerTxId || (!isOnlinePayment ? payment.referenceNumber : null);
+
         if (groupingId) {
+            // For online payments match only by providerTxId (same PhonePe transaction).
+            // For offline payments match by providerTxId OR referenceNumber (same bank challan).
+            // Restricting online to providerTxId prevents an offline tuition payment whose
+            // referenceNumber equals the PhonePe UTR from bleeding into an online change-fee receipt.
+            const siblingWhere = isOnlinePayment
+                ? { providerTxId: groupingId }
+                : { OR: [{ providerTxId: groupingId }, { referenceNumber: groupingId }] };
+
              const siblings = await prisma.payment.findMany({
                  where: {
-                     OR: [
-                         { providerTxId: groupingId },
-                         { referenceNumber: groupingId }
-                     ],
+                     ...siblingWhere,
                      id: { not: paymentId },
-                     status: PaymentStatus.SUCCESS, 
+                     status: PaymentStatus.SUCCESS,
                      studentId: payment.studentId
                  },
                  include: { feeHead: true }
