@@ -1,5 +1,6 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
+import { resolveInstitutionCodeId } from '../../utils/institutionCodeCache';
 import { SystemSetting, DiscountStatus, PaymentMethod, PaymentComponent, PaymentMode, QuotaType, AccommodationType, LedgerTransactionType, AdmissionEntryType, FeeCorrectionType, FeeStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { Role, RoleType } from '../../constants/roles';
 import logger from '../../utils/logger';
@@ -156,6 +157,7 @@ export const FeeService = {
                 entryAcademicYearId,
                 entryType,
                 instituteCode,
+                institutionCodeId: await resolveInstitutionCodeId(instituteCode),
                 quotaType,
                 yearOfStudy,
                 createdBy: userId,
@@ -310,6 +312,7 @@ export const FeeService = {
                     entryAcademicYearId: params.entryAcademicYearId,
                     entryType:           params.entryType,
                     instituteCode:       params.instituteCode,
+                    institutionCodeId:   await resolveInstitutionCodeId(params.instituteCode),
                     quotaType:           params.quotaType,
                     yearOfStudy:         params.yearOfStudy,
                     createdBy:           params.userId,
@@ -496,6 +499,7 @@ export const FeeService = {
         const targetEntryYearId  = options?.entryAcademicYearId ?? null;
         const targetEntryType    = options?.entryType ?? null;
         const targetInstitute    = options?.instituteCode ?? null;
+        const targetInstituteId  = await resolveInstitutionCodeId(targetInstitute);
         const existingKey = (s: {
             courseId: string;
             feeHeadId: string;
@@ -534,6 +538,7 @@ export const FeeService = {
                 entryAcademicYearId: options?.entryAcademicYearId ?? s.entryAcademicYearId,
                 entryType:           options?.entryType           ?? s.entryType,
                 instituteCode:       options?.instituteCode       ?? s.instituteCode,
+                institutionCodeId:   targetInstituteId,
                 quotaType:           s.quotaType,
                 yearOfStudy:         s.yearOfStudy,
                 createdBy:           userId,

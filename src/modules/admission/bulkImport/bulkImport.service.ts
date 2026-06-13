@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import prisma from '../../../config/prisma';
+import { resolveInstitutionCodeId } from '../../../utils/institutionCodeCache';
 import {
     AdmissionStatus,
     AdmissionEntryType,
@@ -236,6 +237,7 @@ const registerSingleStudent = async (data: StudentImportRow, mode: ApplicationMo
                 feeCohortAcademicYearId: activeYear.id,
                 batchAcademicYearId: activeYear.id,
                 instituteCode: 'MGMT',
+                institutionCodeId: await resolveInstitutionCodeId('MGMT'),
             }
         });
 
@@ -322,6 +324,7 @@ const registerSeatBookingStudent = async (data: StudentImportRow, adminId: strin
                 feeCohortAcademicYearId: activeYear.id,
                 batchAcademicYearId: activeYear.id,
                 instituteCode: 'MGMT',
+                institutionCodeId: await resolveInstitutionCodeId('MGMT'),
             }
         });
 
@@ -667,6 +670,7 @@ export const processOfflineApplications = async (applications: OfflineApplicatio
                         feeCohortAcademicYearId: activeAcademicYear.id,
                         batchAcademicYearId: activeAcademicYear.id,
                         instituteCode: 'MGMT',
+                        institutionCodeId: await resolveInstitutionCodeId('MGMT'),
                     }
                 });
 

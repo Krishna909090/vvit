@@ -24,6 +24,8 @@ import invoiceRoutes from './modules/finance/invoice.routes';
 import feeRoutes from './modules/finance/fee.routes';
 import cancellationRoutes from './modules/finance/cancellation.routes';
 import proRoutes from './modules/pro/pro.routes';
+import institutionCodeRoutes from './modules/institutionCode/institutionCode.routes';
+import convenorQuotaRoutes from './modules/convenorQuota/convenorQuota.routes';
 import logger from './utils/logger';
 import { globalErrorHandler } from './middleware/errorMiddleware';
 import { generalRateLimiter } from './middleware/rateLimitMiddleware';
@@ -127,6 +129,8 @@ app.use('/admin/finance', invoiceRoutes);
 app.use('/admin/cancellation', cancellationRoutes);
 app.use('/finance', feeRoutes);
 app.use('/pro', proRoutes);
+app.use('/admin/institution-codes', institutionCodeRoutes);
+app.use('/admin/convenor-quota', convenorQuotaRoutes);
 
 app.use(globalErrorHandler);
 

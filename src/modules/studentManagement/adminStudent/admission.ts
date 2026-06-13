@@ -1,6 +1,7 @@
 
 
 import prisma from '../../../config/prisma';
+import { resolveInstitutionCodeId } from '../../../utils/institutionCodeCache';
 import {
     AdmissionStatus,
     CancellationStatus,
@@ -3161,6 +3162,7 @@ export const AdmissionService = {
                     feeCohortAcademicYearId,
                     batchAcademicYearId,
                     instituteCode: entry.instituteCode ?? 'MGMT',
+                    institutionCodeId: await resolveInstitutionCodeId(entry.instituteCode ?? 'MGMT'),
                     entryReason: entry.reason,
                     isBackdated: entry.isBackdated,
                     paidFee: 0,

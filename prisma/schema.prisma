@@ -101,6 +101,7 @@ model Course {
   capacities       CourseCapacity[]
   batches          Batch[]
   subjects         Subject[]
+  convenorQuotas   ConvenorQuota[]
 }
 
 model CourseCapacity {
@@ -196,6 +197,8 @@ model AcademicYear {
   cancellationRequests      CancellationRequest[]
   serviceChangeRequests     ServiceChangeRequest[]
   agentCommissions          AgentCommission[]
+  convenorAdmissions        ConvenorAdmission[]
+  convenorQuotas            ConvenorQuota[]
 }
 
 model StudentEnrollment {
@@ -298,19 +301,65 @@ model Student {
 }
 
 model ConvenorAdmission {
-  id             String    @id @default(dbgenerated("gen_random_uuid()"))
-  studentId      String    @unique
-  rank           String?
-  hallTicketNo   String?
-  allotmentOrder String?
-  councilId      String?
-  category       String?
-  joiningReport  String?
-  createdAt      DateTime? @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                String          @id @default(dbgenerated("gen_random_uuid()"))
+  studentId         String?         @unique
+  hallTicketNo      String?         @unique
+  rank              String?
+  applicantName     String?
+  gender            String?
+  category          String?
+  region            String?
+  alottedCategory   String?
+  phase             String?
+  institutionCodeId String?
+  degree            String?
+  course            String?
+  caste             String?
+  status            String?
+  omrId             Int?
+  academicYearId    String?
+  year              Int?
+  isDeleted         Boolean?        @default(false)
+  createdAt         DateTime?       @default(now())
+  updatedAt         DateTime        @updatedAt
+  createdBy         String?
+  updatedBy         String?
+  student           Student?        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear      AcademicYear?   @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  institutionCode   InstitutionCode? @relation(fields: [institutionCodeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model ConvenorQuota {
+  id             String       @id @default(dbgenerated("gen_random_uuid()"))
+  courseId       String
+  academicYearId String
+  totalSeats     Int          @default(0)
+  reportedSeats  Int          @default(0)
+  seatsConfirmed Int          @default(0)
+  isDeleted      Boolean?     @default(false)
+  createdAt      DateTime?    @default(now())
+  updatedAt      DateTime     @updatedAt
   createdBy      String?
   updatedBy      String?
-  student        Student   @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course         Course       @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([courseId, academicYearId])
+}
+
+model InstitutionCode {
+  id                 String              @id @default(dbgenerated("gen_random_uuid()"))
+  code               String              @unique
+  name               String
+  isActive           Boolean?            @default(true)
+  isDeleted          Boolean?            @default(false)
+  createdAt          DateTime?           @default(now())
+  updatedAt          DateTime            @updatedAt
+  createdBy          String?
+  updatedBy          String?
+  convenorAdmissions ConvenorAdmission[]
+  studentAdmissions  StudentAdmission[]  @relation("StudentAdmissionInstitution")
+  feeStructures      FeeStructure[]      @relation("FeeStructureInstitution")
 }
 
 model DataImportMapping {
@@ -376,6 +425,7 @@ model StudentAdmission {
   feeCohortAcademicYearId  String?                          // which cohort's fee schedule applies (for FRESH = entryAcademicYearId; for LATERAL = the batch they slot into)
   batchAcademicYearId      String?                          // the academic year the student's BATCH started 1st year. For REGULAR = academicYearId; for LATERAL = (yearOfStudy-1) years earlier. Drives the shared course-seat pool.
   instituteCode            String?                          // 'MGMT' (default for most batches) / 'VVITU' / 'VVITPU' (2025-26 batch only) — picks which institute's fee schedule applies
+  institutionCodeId        String?                          // FK to InstitutionCode — mirrors instituteCode for relational integrity
   entryReason              String?                          // free-text: e.g. "Diploma → BTech 2nd year"
   isBackdated              Boolean?            @default(false) // admin-flagged for back-entry
 
@@ -385,6 +435,7 @@ model StudentAdmission {
   batchAcademicYear        AcademicYear?      @relation("AdmissionBatchYear", fields: [batchAcademicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   allottedCourse    Course?            @relation("AllottedCourse", fields: [allottedCourseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   hostel            Hostel?            @relation(fields: [hostelId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  institutionCode   InstitutionCode?   @relation("StudentAdmissionInstitution", fields: [institutionCodeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student           Student            @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   transportRoute    TransportRoute?    @relation(fields: [transportRouteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -686,6 +737,7 @@ model FeeStructure {
   entryAcademicYearId String?
   entryType           AdmissionEntryType?
   instituteCode       String?
+  institutionCodeId   String?
   quotaType           QuotaType?
   yearOfStudy         Int?
   isDeleted           Boolean?            @default(false)
@@ -697,6 +749,7 @@ model FeeStructure {
   entryAcademicYear   AcademicYear?       @relation("FeeStructureEntryYear", fields: [entryAcademicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   course              Course              @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   feeHead             FeeHead             @relation(fields: [feeHeadId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  institutionCode     InstitutionCode?    @relation("FeeStructureInstitution", fields: [institutionCodeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   demands             StudentFeeDemand[]
 
   @@index([courseId, academicYearId, entryAcademicYearId, entryType, instituteCode, quotaType, yearOfStudy], map: "FeeStructure_resolution_idx")

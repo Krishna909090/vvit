@@ -1,4 +1,5 @@
 import prisma from '../../config/prisma';
+import { resolveInstitutionCodeId } from '../../utils/institutionCodeCache';
 import QRCode from 'qrcode';
 import {
     AdmissionStatus,
@@ -222,6 +223,7 @@ export const registerStudent = async (data: any, userId: string | null, _current
                 feeCohortAcademicYearId,
                 batchAcademicYearId,
                 instituteCode,
+                institutionCodeId: await resolveInstitutionCodeId(instituteCode),
             }
         });
 
