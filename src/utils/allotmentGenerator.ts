@@ -172,26 +172,28 @@ async function drawStudentDetailsSection(doc: PDFKit.PDFDocument, data: Allotmen
   const textEndY = startY + (fields.length * lineHeight);
 
   if (data.profilePhotoUrl) {
-    try {
-        const photoBuffer = await fetchImage(data.profilePhotoUrl);
-        if (photoBuffer) {
-            const photoWidth = 100;
-            const photoHeight = 120;
-            const photoX = 420;
-            const photoY = startY; 
-            
-            doc.save();
+    const photoBuffer = await fetchImage(data.profilePhotoUrl);
+    if (photoBuffer) {
+        const photoWidth = 100;
+        const photoHeight = 120;
+        const photoX = 420;
+        const photoY = startY;
 
+        doc.save();
+        try {
             doc.roundedRect(photoX, photoY, photoWidth, photoHeight, 8).clip();
             doc.image(photoBuffer, photoX, photoY, { fit: [photoWidth, photoHeight] });
+        } catch (e) {
+            console.error('Error drawing profile photo in allotment order', e);
+        } finally {
             doc.restore();
-
-            doc.roundedRect(photoX, photoY, photoWidth, photoHeight, 8).strokeColor('#000').lineWidth(1).stroke();
-
-            return Math.max(textEndY, photoY + photoHeight);
         }
-    } catch (e) {
-        console.error('Error drawing profile photo in new layout', e);
+
+        try {
+            doc.roundedRect(photoX, photoY, photoWidth, photoHeight, 8).strokeColor('#000').lineWidth(1).stroke();
+        } catch (_) {}
+
+        return Math.max(textEndY, photoY + photoHeight);
     }
   }
 
