@@ -101,7 +101,8 @@ model Course {
   capacities       CourseCapacity[]
   batches          Batch[]
   subjects         Subject[]
-  convenorQuotas   ConvenorQuota[]
+  convenorQuotas      ConvenorQuota[]
+  convenorAdmissions  ConvenorAdmission[] @relation("ConvenorAdmissionCourse")
 }
 
 model CourseCapacity {
@@ -313,12 +314,12 @@ model ConvenorAdmission {
   phase             String?
   institutionCodeId String?
   degree            String?
-  course            String?
-  caste             String?
-  status            String?
+  courseId          String?
+  status            String?         @default("NOT_REPORTED")
   omrId             Int?
+  entryYear         Int?
   academicYearId    String?
-  year              Int?
+  year              String?
   isDeleted         Boolean?        @default(false)
   createdAt         DateTime?       @default(now())
   updatedAt         DateTime        @updatedAt
@@ -327,12 +328,14 @@ model ConvenorAdmission {
   student           Student?        @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   academicYear      AcademicYear?   @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   institutionCode   InstitutionCode? @relation(fields: [institutionCodeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  courseRelation    Course?         @relation("ConvenorAdmissionCourse", fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model ConvenorQuota {
   id             String       @id @default(dbgenerated("gen_random_uuid()"))
   courseId       String
   academicYearId String
+  year           String?
   totalSeats     Int          @default(0)
   reportedSeats  Int          @default(0)
   seatsConfirmed Int          @default(0)

@@ -30,21 +30,25 @@ export const ConvenorQuotaService = {
 
   async create(
     courseId: string,
-    academicYearId: string,
     totalSeats: number,
     reportedSeats: number,
     seatsConfirmed: number,
     userId?: string,
   ) {
+    const activeYear = await prisma.academicYear.findFirstOrThrow({
+      where: { isActive: true, isDeleted: false },
+    });
+
     const existing = await prisma.convenorQuota.findFirst({
-      where: { courseId, academicYearId, isDeleted: false },
+      where: { courseId, academicYearId: activeYear.id, isDeleted: false },
     });
     if (existing) throw new AppError('Convenor quota already exists for this course and academic year', 409);
 
     return prisma.convenorQuota.create({
       data: {
         courseId,
-        academicYearId,
+        academicYearId: activeYear.id,
+        year:           activeYear.code,
         totalSeats,
         reportedSeats,
         seatsConfirmed,

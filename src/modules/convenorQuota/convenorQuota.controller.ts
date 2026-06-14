@@ -19,11 +19,10 @@ export const getById = catchAsync(async (req: Request, res: Response) => {
 });
 
 export const create = catchAsync(async (req: Request, res: Response) => {
-  const { courseId, academicYearId, totalSeats, reportedSeats, seatsConfirmed } = req.body;
-  if (!courseId || !academicYearId) throw new AppError('courseId and academicYearId are required', 400);
+  const { courseId, totalSeats, reportedSeats, seatsConfirmed } = req.body;
+  if (!courseId) throw new AppError('courseId is required', 400);
   const data = await ConvenorQuotaService.create(
     courseId,
-    academicYearId,
     Number(totalSeats ?? 0),
     Number(reportedSeats ?? 0),
     Number(seatsConfirmed ?? 0),

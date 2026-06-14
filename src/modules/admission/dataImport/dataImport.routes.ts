@@ -1,6 +1,6 @@
 import express from "express";
 import multer from "multer";
-import { importAdmissionData, createImportMapping } from './dataImport.controller';
+import { importAdmissionData } from './dataImport.controller';
 import { authenticate } from '../../../middleware/rbac.middleware';
 import { authorize } from '../../../middleware/authMiddleware';
 import { Role } from '../../../constants/roles';
@@ -18,13 +18,6 @@ router.post(
   authorize([Role.SUPER_ADMIN, Role.ADMIN]),
   upload.single("file"),
   importAdmissionData
-);
-
-router.post(
-  "/mapping",
-  authenticate,
-  authorize([Role.SUPER_ADMIN, Role.ADMIN]),
-  createImportMapping
 );
 
 export default router;
