@@ -315,7 +315,8 @@ model ConvenorAdmission {
   institutionCodeId String?
   degree            String?
   courseId          String?
-  status            String?         @default("NOT_REPORTED")
+  status               String?         @default("NOT_REPORTED")
+  feesReimbursement    Boolean?        @default(false)
   omrId             Int?
   entryYear         Int?
   academicYearId    String?
