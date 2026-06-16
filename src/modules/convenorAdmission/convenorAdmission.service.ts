@@ -1,5 +1,19 @@
 import prisma from '../../config/prisma';
-import { Prisma } from '@prisma/client';
+import {
+  Prisma, QuotaType, ApplicationMode, AdmissionStatus, AdmissionEntryType, AdmissionSource,
+  PaymentComponent, PaymentMode, PaymentStatus, FeeStatus, AccommodationType, HostelType,
+} from '@prisma/client';
+import { AppError } from '../../utils/AppError';
+import { Role } from '../../constants/roles';
+import { maskAadhaar } from '../../utils/mask';
+import { generateCustodianCertificate } from '../../utils/custodianCertificateGenerator';
+import { uploadFileToS3, getPresignedUrl } from '../../utils/s3Utils';
+import logger from '../../utils/logger';
+import { FeeService } from '../finance/fee.service';
+import { generateAndSaveAllotmentOrder } from '../finance/payment.service';
+import { AccommodationService } from '../studentManagement/adminStudent/accommodation';
+
+import { resolveFeeHeadsByComponent, recomputeStudentTotals } from '../../utils/studentContext';
 
 export const CONVENOR_STATUSES = ['NOT_REPORTED', 'REPORTED', 'SEAT_CONFIRMED'] as const;
 
@@ -10,10 +24,52 @@ interface ListFilters {
   search?: string;
   page?: number;
   limit?: number;
+  createdById?: string; // when set, restrict results to records created by this admin
+}
+
+interface AllotBody {
+  courseId: string;
+  accommodation: {
+    type: 'HOSTEL' | 'TRANSPORT' | 'NONE';
+    hostelId?: string;
+    hostelType?: string;
+    hostelPaymentMode?: 'YEARWISE' | 'SEMWISE';
+    transportRouteId?: string;
+  };
+  payment: {
+    amount: number;
+    method: string;
+    referenceNumber?: string;
+    date?: string;
+  };
+}
+
+interface ReportBody {
+  phone: string;
+  email?: string;
+  fatherName?: string;
+  motherName?: string;
+  aadharNumber?: string;
+  dob?: string;
+  address?: string;
+  address2?: string;
+  city?: string;
+  pinCode?: string;
+  state?: string;
+  country?: string;
+  degreeType?: string;
+  isOffline?: boolean;
+  isKycVerified?: boolean;
+  profilePhotoUrl?: string;
+  proNumber?: string | number;
+  feesReimbursement?: boolean;
+  documentsSubmitted?: { key: string; label: string; status: 'SUBMITTED' | 'PENDING' }[];
 }
 
 const buildWhere = (filters: ListFilters): Prisma.ConvenorAdmissionWhereInput => {
   const where: Prisma.ConvenorAdmissionWhereInput = { isDeleted: false };
+
+  if (filters.createdById) where.createdBy = filters.createdById;
 
   if (filters.status) where.status = filters.status;
 
@@ -40,6 +96,39 @@ const include = {
   academicYear:    { select: { id: true, code: true } },
 };
 
+const includeWithStudent = {
+  ...include,
+  student: { select: { id: true, name: true, phone: true, email: true, aadharNumber: true, fatherName: true, applicationId: true, createdBy: true } },
+};
+
+const maskStudent = (record: any) => {
+  if (!record) return record;
+  if (record.student?.aadharNumber) {
+    record.student.aadharNumber = maskAadhaar(record.student.aadharNumber);
+  }
+  return record;
+};
+
+async function generateVcoId(): Promise<string> {
+  const prefix = 'VCO';
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const last = await prisma.student.findFirst({
+      where: { applicationId: { startsWith: prefix } },
+      orderBy: { createdAt: 'desc' },
+      select: { applicationId: true },
+    });
+    let next = 2600001;
+    if (last?.applicationId) {
+      const n = parseInt(last.applicationId.replace(prefix, ''), 10);
+      if (!isNaN(n) && n >= 2600001) next = n + 1;
+    }
+    const id = `${prefix}${next}`;
+    const taken = await prisma.student.findUnique({ where: { applicationId: id }, select: { id: true } });
+    if (!taken) return id;
+  }
+  throw new AppError('Failed to generate unique application ID. Please try again.', 500);
+}
+
 export const ConvenorAdmissionService = {
   async list(filters: ListFilters) {
     const page  = Math.max(1, filters.page  ?? 1);
@@ -49,7 +138,7 @@ export const ConvenorAdmissionService = {
     const [data, total] = await Promise.all([
       prisma.convenorAdmission.findMany({
         where,
-        include,
+        include: includeWithStudent,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
@@ -57,13 +146,497 @@ export const ConvenorAdmissionService = {
       prisma.convenorAdmission.count({ where }),
     ]);
 
-    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    return {
+      records:    data.map(maskStudent),
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  },
+
+  async listWithAdmin(filters: ListFilters) {
+    const page  = Math.max(1, filters.page  ?? 1);
+    const limit = Math.min(200, filters.limit ?? 20);
+    const where = buildWhere(filters);
+
+    const [data, total] = await Promise.all([
+      prisma.convenorAdmission.findMany({
+        where,
+        include: includeWithStudent,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.convenorAdmission.count({ where }),
+    ]);
+
+    // Batch-fetch all admin users referenced by CA.createdBy or student.createdBy
+    const adminIds = [
+      ...new Set(
+        data.flatMap(r => [r.createdBy, (r.student as any)?.createdBy].filter(Boolean) as string[])
+      ),
+    ];
+    const admins = adminIds.length
+      ? await prisma.user.findMany({
+          where: { id: { in: adminIds } },
+          select: { id: true, name: true, email: true, phone: true, role: true },
+        })
+      : [];
+    const adminMap = new Map(admins.map(a => [a.id, a]));
+
+    const enriched = data.map(r => {
+      const masked = maskStudent(r);
+      return {
+        ...masked,
+        createdByAdmin: masked.createdBy ? (adminMap.get(masked.createdBy) ?? null) : null,
+        student: masked.student
+          ? {
+              ...masked.student,
+              createdByAdmin: (masked.student as any).createdBy
+                ? (adminMap.get((masked.student as any).createdBy) ?? null)
+                : null,
+            }
+          : masked.student,
+      };
+    });
+
+    return {
+      records:    enriched,
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  },
+
+  async getById(id: string) {
+    const record = await prisma.convenorAdmission.findFirst({
+      where: { id, isDeleted: false },
+      include: includeWithStudent,
+    });
+    if (!record) throw new AppError('Convenor admission not found', 404);
+    return maskStudent(record);
+  },
+
+  async getByHallTicket(hallTicketNo: string) {
+    const record = await prisma.convenorAdmission.findUnique({
+      where: { hallTicketNo },
+      include: includeWithStudent,
+    });
+    if (!record || record.isDeleted) throw new AppError('No admission found for this hall ticket', 404);
+    return maskStudent(record);
+  },
+
+  async report(id: string, body: ReportBody, adminId: string) {
+    // 1. Load admission record + StudentGroup in parallel (StudentGroup never changes)
+    const [ca, studentGroup] = await Promise.all([
+      prisma.convenorAdmission.findFirst({
+        where: { id, isDeleted: false },
+        include: { institutionCode: true, academicYear: true, courseRelation: { select: { name: true } } },
+      }),
+      prisma.group.findUnique({ where: { name: 'StudentGroup' }, select: { id: true } }),
+    ]);
+    if (!ca) throw new AppError('Convenor admission not found', 404);
+    if (ca.status !== 'NOT_REPORTED') throw new AppError('This admission has already been reported', 409);
+    if (!ca.academicYearId) throw new AppError('Admission has no academic year assigned', 422);
+
+    const entryYearOfStudy    = (ca.entryYear && ca.entryYear > 0) ? ca.entryYear : 1;
+    const activeAcademicYearId = ca.academicYearId;
+    const isLateral            = entryYearOfStudy > 1;
+
+    // Dedup submitted docs by key (Zod transform already does this but guard at service layer too)
+    const seenKeys = new Set<string>();
+    const documentsSubmitted = (body.documentsSubmitted ?? []).filter(d =>
+      seenKeys.has(d.key) ? false : (seenKeys.add(d.key), true)
+    );
+
+    // Aadhar masking — use consistent pattern for both uniqueness check and storage
+    const maskedAadhar  = body.aadharNumber ? maskAadhaar(body.aadharNumber) : null;
+    const hasProNumber  = body.proNumber !== undefined && body.proNumber !== null && body.proNumber !== '';
+
+    const dobDate  = body.dob ? new Date(body.dob) : null;
+    const dobStart = dobDate ? new Date(dobDate.getFullYear(), dobDate.getMonth(), dobDate.getDate()) : null;
+    const dobEnd   = dobDate ? new Date(dobDate.getFullYear(), dobDate.getMonth(), dobDate.getDate(), 23, 59, 59, 999) : null;
+
+    // 2. All pre-transaction work in parallel (pre-flight + appId + PRO lookup)
+    const [[existingPhone, existingAadhar, existingEmail], applicationId, proRecord] = await Promise.all([
+      Promise.all([
+        prisma.student.findFirst({ where: { phone: body.phone }, select: { id: true } }),
+        maskedAadhar && dobStart && dobEnd
+          ? prisma.student.findFirst({
+              where: { aadharNumber: maskedAadhar, dob: { gte: dobStart, lte: dobEnd } },
+              select: { id: true },
+            })
+          : Promise.resolve(null),
+        body.email
+          ? prisma.student.findFirst({ where: { email: body.email }, select: { id: true } })
+          : Promise.resolve(null),
+      ]),
+      generateVcoId(),
+      hasProNumber
+        ? prisma.pRO.findUnique({ where: { proNumber: String(body.proNumber) } })
+        : Promise.resolve(null),
+    ]);
+
+    if (existingPhone)  throw new AppError('A student with this phone number already exists', 409);
+    if (existingAadhar) throw new AppError('A student with matching Aadhar and date of birth already exists', 409);
+    if (existingEmail)  throw new AppError('A student with this email already exists', 409);
+    if (hasProNumber && !proRecord) throw new AppError('Invalid PRO number provided', 400);
+
+    const proIdToStore = proRecord?.id ?? null;
+
+    // batchAcademicYearId always matches the convenorAdmission's academicYearId
+    const batchAcademicYearId = activeAcademicYearId;
+
+    // 3. Transaction — StudentGroup already fetched outside, saves one round trip
+    const result = await prisma.$transaction(async (tx) => {
+      // Collision check + user lookup in parallel
+      const [collision, existingUser] = await Promise.all([
+        tx.student.findUnique({ where: { applicationId }, select: { id: true } }),
+        tx.user.findUnique({ where: { phone: body.phone } }),
+      ]);
+      if (collision) throw new AppError('Application ID conflict detected. Please try again.', 409);
+
+      let user = existingUser;
+      if (!user) {
+        user = await tx.user.create({
+          data: {
+            phone:     body.phone,
+            email:     body.email || undefined,
+            name:      ca.applicantName || body.phone,
+            role:      Role.STUDENT,
+            createdBy: adminId,
+          },
+        });
+        if (studentGroup) {
+          await tx.userGroup.create({ data: { userId: user.id, groupId: studentGroup.id } });
+        }
+      }
+
+      const student = await tx.student.create({
+        data: {
+          userId:          user.id,
+          applicationId,
+          name:            ca.applicantName || body.phone,
+          phone:           body.phone,
+          email:           body.email || `conv-${body.phone}@vvitu.in`,
+          fatherName:      body.fatherName || '',
+          motherName:      body.motherName || '',
+          gender:          ca.gender || 'O',
+          dob:             body.dob ? new Date(body.dob) : new Date('2000-01-01'),
+          aadharNumber:    maskedAadhar || 'PENDING',
+          category:        ca.category || 'NA',
+          country:         body.country || 'India',
+          address:         body.address || 'NA',
+          address2:        body.address2 || undefined,
+          city:            body.city || 'NA',
+          state:           body.state || 'NA',
+          pincode:         body.pinCode || '000000',
+          degreeType:      body.degreeType || undefined,
+          isOffline:       true,
+          isKycVerified:   body.isKycVerified ?? false,
+          profilePhotoUrl: body.profilePhotoUrl || undefined,
+          source:          AdmissionSource.COUNCIL,
+          quotaType:       QuotaType.CONVENOR,
+          applicationMode: ApplicationMode.OFFLINE,
+          pref1:           null,
+          pref2:           null,
+          pref3:           null,
+          proId:           proIdToStore,
+          createdBy:       adminId,
+        },
+      });
+
+      // studentAdmission create + convenorAdmission update + quota increment — all in parallel
+      const [, updated] = await Promise.all([
+        tx.studentAdmission.create({
+          data: {
+            studentId:               student.id,
+            academicYearId:          activeAcademicYearId,
+            status:                  AdmissionStatus.CONVENOR_REPORTED,
+            entryType:               isLateral ? AdmissionEntryType.LATERAL : AdmissionEntryType.REGULAR,
+            entryYearOfStudy,
+            entryAcademicYearId:     activeAcademicYearId,
+            feeCohortAcademicYearId: activeAcademicYearId,
+            batchAcademicYearId,
+            instituteCode:           ca.institutionCode?.code ?? 'MGMT',
+            institutionCodeId:       ca.institutionCodeId ?? undefined,
+          },
+        }),
+        tx.convenorAdmission.update({
+          where: { id },
+          data: {
+            studentId:          student.id,
+            status:             'REPORTED',
+            feesReimbursement:  body.feesReimbursement ?? false,
+            documentsSubmitted: documentsSubmitted,
+            updatedBy:          adminId,
+          },
+          include: includeWithStudent,
+        }),
+        // Increment reportedSeats on the matching quota row (no-op if quota row doesn't exist)
+        ...(ca.courseId && ca.academicYearId
+          ? [tx.convenorQuota.updateMany({
+              where: { courseId: ca.courseId, academicYearId: ca.academicYearId, isDeleted: false },
+              data:  { reportedSeats: { increment: 1 } },
+            })]
+          : []),
+        // Create StudentDocument rows for each submitted/pending doc with physicalCopy flag
+        ...documentsSubmitted.map(doc =>
+          tx.studentDocument.upsert({
+            where:  { studentId_documentKey: { studentId: student.id, documentKey: doc.key } },
+            create: {
+              studentId:     student.id,
+              documentKey:   doc.key,
+              url:           '',
+              status:        'PENDING' as any,
+              physicalCopy:  doc.status === 'SUBMITTED',
+              academicYearId: activeAcademicYearId,
+              createdBy:     adminId,
+            },
+            update: { physicalCopy: doc.status === 'SUBMITTED', updatedBy: adminId },
+          })
+        ),
+      ]);
+
+      return maskStudent(updated);
+    }, { timeout: 20000 });
+
+    // 4. Certificate generation after tx commits — stored in StudentDocument
+    const studentId = (result as any).studentId;
+    try {
+      const pdf = await generateCustodianCertificate({
+        admissionNo:        applicationId,
+        studentName:        ca.applicantName ?? '',
+        gender:             ca.gender ?? '',
+        fatherName:         body.fatherName,
+        branch:             (ca as any).courseRelation?.name ?? undefined,
+        hallTicketNo:       ca.hallTicketNo ?? '',
+        academicYear:       ca.academicYear?.code ?? '',
+        entryYear:          entryYearOfStudy,
+        documentsSubmitted: documentsSubmitted,
+        date:               new Date(),
+      });
+      const s3Key = `student/${studentId}/documents/custodian_certificate.pdf`;
+      const url = await uploadFileToS3(pdf, s3Key, 'application/pdf');
+      await prisma.studentDocument.upsert({
+        where:  { studentId_documentKey: { studentId, documentKey: 'CUSTODIAN_CERTIFICATE' } },
+        create: {
+          studentId,
+          documentKey:    'CUSTODIAN_CERTIFICATE',
+          url,
+          status:         'APPROVED' as any,
+          physicalCopy:   false,
+          academicYearId: activeAcademicYearId,
+          createdBy:      adminId,
+        },
+        update: { url, updatedBy: adminId },
+      });
+      (result as any).custodianCertificateUrl = await getPresignedUrl(s3Key);
+    } catch (err) {
+      logger.error(`[report] Custodian certificate generation failed for ${id}: ${err}`);
+    }
+
+    return result;
+  },
+
+  async allot(id: string, body: AllotBody, adminId: string) {
+    // 1. Load CA with student admission details
+    const ca = await prisma.convenorAdmission.findFirst({
+      where: { id, isDeleted: false },
+      include: {
+        student: {
+          select: {
+            id: true,
+            admissionDetails: { select: { id: true, status: true, academicYearId: true } },
+          },
+        },
+        academicYear: { select: { id: true, code: true } },
+        courseRelation: { select: { id: true, name: true } },
+      },
+    });
+    if (!ca)          throw new AppError('Convenor admission not found', 404);
+    if (!ca.studentId) throw new AppError('Student has not been reported yet — run report first', 409);
+    if (ca.status !== 'REPORTED') throw new AppError('Seat can only be allotted after student is reported', 409);
+
+    const studentId = ca.studentId;
+    const admission = ca.student?.admissionDetails;
+    if (!admission) throw new AppError('Student admission record missing', 500);
+    if (admission.status !== AdmissionStatus.CONVENOR_REPORTED) {
+      throw new AppError(`Cannot allot seat — current admission status is ${admission.status}`, 409);
+    }
+
+    // 2. Validate course
+    const course = await prisma.course.findUnique({ where: { id: body.courseId }, select: { id: true, name: true } });
+    if (!course) throw new AppError('Invalid course ID', 400);
+
+    const academicYearId = ca.academicYearId ?? admission.academicYearId;
+    if (!academicYearId) throw new AppError('No academic year linked to this admission', 422);
+
+    // 3. Main transaction — payment + admission state + quota counters
+    await prisma.$transaction(async (tx) => {
+      // Resolve ADMISSION fee head
+      const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.ADMISSION], tx);
+      const admissionFeeHead = feeHeadMap.get(PaymentComponent.ADMISSION);
+
+      const paymentDate = body.payment.date ? new Date(body.payment.date) : new Date();
+      const idempotencyKey = `CONVENOR_ALLOT_${id}_ADMISSION`;
+
+      // Guard: prevent duplicate allotment payment
+      const existingPayment = await tx.payment.findFirst({
+        where: { studentId, component: PaymentComponent.ADMISSION, status: PaymentStatus.SUCCESS, isDeleted: false },
+        select: { id: true },
+      });
+      if (existingPayment) throw new AppError('Registration fee has already been recorded for this student', 409);
+
+      // Create fee demand for registration fee (already settled — mark FULL)
+      const feeDemand = await tx.studentFeeDemand.create({
+        data: {
+          studentId,
+          feeHeadId:     admissionFeeHead?.id ?? undefined,
+          academicYearId,
+          yearOfStudy:   ca.entryYear ?? 1,
+          amount:        body.payment.amount,
+          netAmount:     body.payment.amount,
+          discountAmount: 0,
+          scholarshipAmount: 0,
+          status:        FeeStatus.FULL,
+          dueDate:       paymentDate,
+          remarks:       'Convenor registration fee — paid at seat allotment',
+          createdBy:     adminId,
+        },
+      });
+
+      // Create payment record (offline, success)
+      const payment = await tx.payment.create({
+        data: {
+          studentId,
+          amount:          body.payment.amount,
+          method:          body.payment.method as any,
+          mode:            PaymentMode.OFFLINE,
+          status:          PaymentStatus.SUCCESS,
+          component:       PaymentComponent.ADMISSION,
+          feeHeadId:       admissionFeeHead?.id ?? undefined,
+          feeDemandId:     feeDemand.id,
+          academicYearId,
+          yearOfStudy:     ca.entryYear ?? 1,
+          referenceNumber: body.payment.referenceNumber ?? `REF-${Date.now()}`,
+          instrumentDate:  paymentDate,
+          idempotencyKey,
+          collectedBy:     adminId,
+          createdBy:       adminId,
+        },
+      });
+
+      // Ledger CREDIT for the payment
+      await tx.studentLedger.create({
+        data: {
+          studentId,
+          type:          'CREDIT' as any,
+          amount:        body.payment.amount,
+          description:   `Convenor registration fee (${body.payment.method})`,
+          referenceId:   payment.id,
+          referenceType: 'PAYMENT',
+          feeHeadId:     admissionFeeHead?.id ?? undefined,
+          academicYearId,
+          yearOfStudy:   ca.entryYear ?? 1,
+          createdBy:     adminId,
+        },
+      });
+
+      // Update StudentAdmission → ADMISSION_CONFIRMED + allotted course
+      await tx.studentAdmission.update({
+        where: { studentId },
+        data: {
+          status:          AdmissionStatus.ADMISSION_CONFIRMED,
+          allottedCourseId: body.courseId,
+          seatAllottedAt:  new Date(),
+          seatAllotedBy:   adminId,
+          accommodationType: body.accommodation.type as AccommodationType,
+          ...(body.accommodation.type === 'HOSTEL' ? {
+            hostelId:         body.accommodation.hostelId ?? undefined,
+            hostelType:       (body.accommodation.hostelType as HostelType) ?? undefined,
+            hostelPaymentMode: body.accommodation.hostelPaymentMode ?? 'YEARWISE' as any,
+          } : {}),
+          ...(body.accommodation.type === 'TRANSPORT' ? {
+            transportRouteId: body.accommodation.transportRouteId ?? undefined,
+          } : {}),
+        },
+      });
+
+      // SeatAllocation record
+      await tx.seatAllocation.create({
+        data: {
+          studentId,
+          academicYearId,
+          newCourse:   course.name,
+          allocatedBy: adminId,
+          notes:       'Convenor quota seat allotment',
+          createdBy:   adminId,
+        },
+      });
+
+      // Mark ConvenorAdmission as SEAT_CONFIRMED
+      await tx.convenorAdmission.update({
+        where: { id },
+        data:  { status: 'SEAT_CONFIRMED', updatedBy: adminId },
+      });
+
+      // Quota counters: seatsConfirmed +1
+      if (ca.courseId && academicYearId) {
+        await tx.convenorQuota.updateMany({
+          where: { courseId: ca.courseId, academicYearId, isDeleted: false },
+          data:  { seatsConfirmed: { increment: 1 } },
+        });
+      }
+
+      await recomputeStudentTotals(studentId, tx);
+    }, { timeout: 20000 });
+
+    // 4. Fee demands (outside tx — FeeService manages its own transaction internally)
+    // feesReimbursement = true → tuition is 0 so skip demand generation
+    if (!ca.feesReimbursement) {
+      try {
+        await FeeService.generateFeeDemands(studentId, body.courseId, academicYearId, adminId, false, {
+          allowLegacyFallback: true,
+          requireEnrollment:   false,
+          dueDateFallbackDays: 30,
+        });
+      } catch (err) {
+        logger.error(`[allot] generateFeeDemands failed for student=${studentId}: ${err}`);
+      }
+    }
+
+    // 5. Accommodation assignment (outside tx — AccommodationService has own transaction)
+    if (body.accommodation.type === 'HOSTEL' && body.accommodation.hostelId && body.accommodation.hostelType) {
+      try {
+        await AccommodationService.assignHostel(
+          studentId,
+          body.accommodation.hostelId,
+          body.accommodation.hostelPaymentMode ?? 'YEARWISE',
+          body.accommodation.hostelType as HostelType,
+          adminId,
+        );
+      } catch (err) {
+        logger.error(`[allot] assignHostel failed for student=${studentId}: ${err}`);
+      }
+    } else if (body.accommodation.type === 'TRANSPORT' && body.accommodation.transportRouteId) {
+      try {
+        await AccommodationService.assignTransport(studentId, body.accommodation.transportRouteId, adminId);
+      } catch (err) {
+        logger.error(`[allot] assignTransport failed for student=${studentId}: ${err}`);
+      }
+    }
+
+    // 6. Allotment order PDF (non-fatal)
+    try {
+      await generateAndSaveAllotmentOrder(studentId);
+    } catch (err) {
+      logger.error(`[allot] generateAndSaveAllotmentOrder failed for student=${studentId}: ${err}`);
+    }
+
+    return this.getById(id);
   },
 
   async exportCsv(filters: ListFilters) {
     const records = await prisma.convenorAdmission.findMany({
       where: buildWhere(filters),
-      include,
+      include: includeWithStudent,
       orderBy: { createdAt: 'desc' },
     });
 
@@ -78,7 +651,8 @@ export const ConvenorAdmissionService = {
     const headers = [
       'HallTicket', 'ApplicantName', 'Gender', 'Category', 'Region',
       'AlottedCategory', 'Phase', 'Rank', 'Degree', 'Course', 'OmrId',
-      'InstitutionCode', 'EntryYear', 'AcademicYear', 'Status', 'FeesReimbursement', 'CreatedAt',
+      'InstitutionCode', 'EntryYear', 'AcademicYear', 'Status',
+      'FeesReimbursement', 'DocumentsSubmitted', 'CreatedAt',
     ];
 
     const rows = records.map(r => [
@@ -98,6 +672,7 @@ export const ConvenorAdmissionService = {
       r.year,
       r.status,
       r.feesReimbursement ? 'YES' : 'NO',
+      Array.isArray(r.documentsSubmitted) ? (r.documentsSubmitted as string[]).join('; ') : '',
       r.createdAt?.toISOString() ?? null,
     ].map(escape).join(','));
 
@@ -105,10 +680,80 @@ export const ConvenorAdmissionService = {
   },
 
   async updateStatus(id: string, status: string, userId?: string) {
-    return prisma.convenorAdmission.update({
+    const record = await prisma.convenorAdmission.update({
       where: { id },
       data: { status, updatedBy: userId },
-      include,
+      include: includeWithStudent,
     });
+    return maskStudent(record);
+  },
+
+  async updateDetails(id: string, body: { feesReimbursement?: boolean; documentsSubmitted?: string[] }, userId?: string) {
+    const record = await prisma.convenorAdmission.update({
+      where: { id },
+      data: {
+        ...(body.feesReimbursement !== undefined ? { feesReimbursement: body.feesReimbursement } : {}),
+        ...(body.documentsSubmitted !== undefined ? { documentsSubmitted: body.documentsSubmitted } : {}),
+        updatedBy: userId,
+      },
+      include: includeWithStudent,
+    });
+    return maskStudent(record);
+  },
+
+  async getOrGenerateCertificate(id: string, adminId: string, refresh = false): Promise<string> {
+    const ca = await prisma.convenorAdmission.findFirst({
+      where: { id, isDeleted: false },
+      include: includeWithStudent,
+    });
+    if (!ca) throw new AppError('Convenor admission not found', 404);
+    if (!ca.studentId) throw new AppError('Student not yet reported for this admission', 400);
+
+    const s3Key = `student/${ca.studentId}/documents/custodian_certificate.pdf`;
+
+    if (!refresh) {
+      const existing = await prisma.studentDocument.findUnique({
+        where: { studentId_documentKey: { studentId: ca.studentId, documentKey: 'CUSTODIAN_CERTIFICATE' } },
+        select: { url: true },
+      });
+      if (existing?.url) return getPresignedUrl(s3Key);
+    }
+
+    const activeAcademicYear = await prisma.academicYear.findFirst({ where: { isActive: true }, select: { id: true } });
+    const activeAcademicYearId = (activeAcademicYear?.id ?? ca.academicYearId) as string;
+
+    const entryYearOfStudy = (ca as any).entryYear ?? 1;
+    const documentsSubmitted: { key: string; label: string; status: 'SUBMITTED' | 'PENDING' }[] =
+      Array.isArray((ca as any).documentsSubmitted) ? (ca as any).documentsSubmitted : [];
+
+    const pdf = await generateCustodianCertificate({
+      admissionNo:        (ca.student as any)?.applicationId ?? id,
+      studentName:        ca.applicantName ?? (ca.student as any)?.name ?? '',
+      gender:             ca.gender ?? '',
+      fatherName:         (ca.student as any)?.fatherName ?? undefined,
+      branch:             (ca.courseRelation as any)?.name ?? undefined,
+      hallTicketNo:       ca.hallTicketNo ?? '',
+      academicYear:       (ca.academicYear as any)?.code ?? '',
+      entryYear:          entryYearOfStudy,
+      documentsSubmitted,
+      date:               new Date(),
+    });
+
+    const url = await uploadFileToS3(pdf, s3Key, 'application/pdf');
+    await prisma.studentDocument.upsert({
+      where:  { studentId_documentKey: { studentId: ca.studentId, documentKey: 'CUSTODIAN_CERTIFICATE' } },
+      create: {
+        studentId:      ca.studentId,
+        documentKey:    'CUSTODIAN_CERTIFICATE',
+        url,
+        status:         'APPROVED' as any,
+        physicalCopy:   false,
+        academicYearId: activeAcademicYearId,
+        createdBy:      adminId,
+      },
+      update: { url, updatedBy: adminId },
+    });
+
+    return getPresignedUrl(s3Key);
   },
 };

@@ -12,7 +12,8 @@ import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
 import axios from 'axios';
-import { convertToPresignedUrl } from '../../../utils/s3Utils';
+import { convertToPresignedUrl, uploadFileToS3, getPresignedUrl } from '../../../utils/s3Utils';
+import { generateCustodianCertificate, DOC_LABEL_MAP } from '../../../utils/custodianCertificateGenerator';
 import { maskAadhaar } from '../../../utils/mask';
 import { generateApplicationPDF } from '../../../utils/applicationPdfGenerator';
 import {
@@ -889,5 +890,112 @@ export const ApplicationsService = {
                 totalPages: Math.ceil(total / Number(limit))
             }
         };
+    },
+
+    async markPhysicalCopy(
+        studentId: string,
+        documentsSubmitted: { key: string; label: string; status: 'SUBMITTED' | 'PENDING' }[],
+        adminId: string,
+    ) {
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            select: { id: true, admissionDetails: { select: { academicYearId: true } } },
+        });
+        if (!student) throw new AppError('Student not found', 404);
+
+        const fallbackYear = student.admissionDetails?.academicYearId
+            ? null
+            : await prisma.academicYear.findFirst({ where: { isActive: true }, select: { id: true } });
+        const academicYearId = (student.admissionDetails?.academicYearId ?? fallbackYear?.id) as string;
+
+        const results = await Promise.all(
+            documentsSubmitted.map(doc =>
+                prisma.studentDocument.upsert({
+                    where:  { studentId_documentKey: { studentId, documentKey: doc.key } },
+                    create: {
+                        studentId,
+                        documentKey:   doc.key,
+                        url:           '',
+                        status:        'PENDING',
+                        physicalCopy:  doc.status === 'SUBMITTED',
+                        academicYearId,
+                        createdBy:     adminId,
+                    },
+                    update: { physicalCopy: doc.status === 'SUBMITTED', updatedBy: adminId },
+                })
+            )
+        );
+
+        return results;
+    },
+
+    async generateManagementCustodianCertificate(studentId: string, adminId: string, refresh = false) {
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: {
+                admissionDetails: {
+                    include: {
+                        allottedCourse: { select: { id: true, name: true } },
+                        academicYear:   { select: { id: true, code: true } },
+                    },
+                },
+                documents: {
+                    where: { isDeleted: false },
+                    select: { documentKey: true, physicalCopy: true },
+                },
+            },
+        });
+        if (!student) throw new AppError('Student not found', 404);
+        if (!student.admissionDetails) throw new AppError('Student has no admission record', 404);
+
+        // Only include the 14 known doc keys — exclude ALLOTMENT_ORDER, CUSTODIAN_CERTIFICATE, etc.
+        const CERT_DOC_KEYS = new Set(Object.keys(DOC_LABEL_MAP));
+        const documentsSubmitted = student.documents
+            .filter(doc => CERT_DOC_KEYS.has(doc.documentKey))
+            .map(doc => ({
+                key:    doc.documentKey,
+                label:  DOC_LABEL_MAP[doc.documentKey],
+                status: (doc.physicalCopy ? 'SUBMITTED' : 'PENDING') as 'SUBMITTED' | 'PENDING',
+            }));
+
+        const s3Key = `student/${student.phone}/documents/custodian_certificate.pdf`;
+
+        if (!refresh) {
+            const existing = await prisma.studentDocument.findUnique({
+                where: { studentId_documentKey: { studentId, documentKey: 'CUSTODIAN_CERTIFICATE' } },
+                select: { url: true },
+            });
+            if (existing) return { url: await getPresignedUrl(s3Key) };
+        }
+
+        const pdf = await generateCustodianCertificate({
+            admissionNo:  student.applicationId ?? studentId,
+            studentName:  student.name,
+            gender:       student.gender,
+            fatherName:   student.fatherName ?? undefined,
+            branch:       student.admissionDetails.allottedCourse?.name ?? undefined,
+            hallTicketNo: student.applicationId ?? '',
+            academicYear: student.admissionDetails.academicYear?.code ?? '',
+            entryYear:    student.admissionDetails.entryYearOfStudy ?? 1,
+            documentsSubmitted,
+            date:         new Date(),
+        });
+
+        const url = await uploadFileToS3(pdf, s3Key, 'application/pdf');
+
+        await prisma.studentDocument.upsert({
+            where:  { studentId_documentKey: { studentId, documentKey: 'CUSTODIAN_CERTIFICATE' } },
+            create: {
+                studentId,
+                documentKey:   'CUSTODIAN_CERTIFICATE',
+                url,
+                status:        'APPROVED',
+                academicYearId: student.admissionDetails.academicYearId,
+                createdBy:     adminId,
+            },
+            update: { url, updatedBy: adminId },
+        });
+
+        return { url: await getPresignedUrl(s3Key) };
     },
 };

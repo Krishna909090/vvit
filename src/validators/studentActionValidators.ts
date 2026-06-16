@@ -345,3 +345,22 @@ export const studentsByHostelSchema = z.object({
             }),
     }),
 });
+
+const VALID_DOC_KEYS = [
+    'DOC_SSC_MARKSHEET', 'DOC_INTER_MARKSHEET', 'DOC_EAPCET_HALL_TICKET',
+    'DOC_EAPCET_RANK_CARD', 'DOC_STUDY_CERTIFICATE', 'DOC_TRANSFER_CERTIFICATE',
+    'DOC_CASTE_CERTIFICATE', 'DOC_AADHAR_STUDENT', 'DOC_AADHAR_FATHER',
+    'DOC_AADHAR_MOTHER', 'DOC_PHOTO_STUDENT', 'DOC_PHOTO_FATHER',
+    'DOC_PHOTO_MOTHER', 'DOC_XEROX_COPIES',
+] as const;
+
+export const markPhysicalCopySchema = z.object({
+    params: z.object({ studentId: z.string().uuid('Invalid student ID') }),
+    body: z.object({
+        documentsSubmitted: z.array(z.object({
+            key:    z.enum(VALID_DOC_KEYS, { error: 'Invalid document key' }),
+            label:  z.string().min(1).max(200),
+            status: z.enum(['SUBMITTED', 'PENDING']),
+        })).min(1, 'At least one document is required'),
+    }),
+});

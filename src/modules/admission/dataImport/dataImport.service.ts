@@ -81,6 +81,20 @@ export const processExcelImport = async (fileBuffer: Buffer, adminId: string) =>
       results.errors.push({ row: i + 2, error: 'Missing HallTicket' });
       continue;
     }
+    const entryYear = toInt(r['EntryYear'] ?? r['entryYear']);
+    if (entryYear !== 1 && entryYear !== 2) {
+      results.failed++;
+      results.errors.push({ row: i + 2, hallTicketNo, error: `Invalid EntryYear "${entryYear ?? 'missing'}": must be 1 or 2` });
+      continue;
+    }
+
+    const omrId = toInt(r['OmrId'] ?? r['omrId'] ?? r['OMRId']);
+    if (omrId == null) {
+      results.failed++;
+      results.errors.push({ row: i + 2, hallTicketNo, error: 'Missing OmrId' });
+      continue;
+    }
+
     parsed.push({
       rowNum:          i + 2,
       hallTicketNo,
@@ -94,8 +108,8 @@ export const processExcelImport = async (fileBuffer: Buffer, adminId: string) =>
       institutionCode: str(r['InstituteCode']),
       degree:          str(r['Degree']),
       course:          str(r['AlottedCourse']),
-      omrId:           toInt(r['OmrId'] ?? r['omrId'] ?? r['OMRId']),
-      entryYear:       toInt(r['EntryYear'] ?? r['entryYear']),
+      omrId,
+      entryYear,
     });
   }
 
@@ -148,8 +162,21 @@ export const processExcelImport = async (fileBuffer: Buffer, adminId: string) =>
     orderBy: { startDate: 'desc' },
   });
 
-  const codeToId     = new Map(instCodeRecords.map(r => [r.code, r.id]));
+  const codeToId      = new Map(instCodeRecords.map(r => [r.code, r.id]));
   const omrToCourseId = new Map(courseByOmr.map(c => [c.omrId as number, c.id]));
+
+  // Validate omrId exists in DB — reject rows with unknown omrIds
+  const validToInsert: ConvenorRow[] = [];
+  for (const r of toInsert) {
+    if (!omrToCourseId.has(r.omrId!)) {
+      results.failed++;
+      results.errors.push({ row: r.rowNum, hallTicketNo: r.hallTicketNo, error: `OmrId ${r.omrId} not found in Course table` });
+    } else {
+      validToInsert.push(r);
+    }
+  }
+
+  if (validToInsert.length === 0) return results;
 
   // Precompute both year options once instead of resolving per row
   const year1 = { academicYearId: activeYear.id, year: activeYear.code };
@@ -180,8 +207,8 @@ export const processExcelImport = async (fileBuffer: Buffer, adminId: string) =>
   };
 
   const CHUNK = 200;
-  for (let c = 0; c < toInsert.length; c += CHUNK) {
-    const chunk = toInsert.slice(c, c + CHUNK);
+  for (let c = 0; c < validToInsert.length; c += CHUNK) {
+    const chunk = validToInsert.slice(c, c + CHUNK);
     try {
       await prisma.convenorAdmission.createMany({ data: chunk.map(buildRow), skipDuplicates: false });
       results.success += chunk.length;

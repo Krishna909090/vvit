@@ -66,6 +66,8 @@ import {
     reconcileStudentFees,
     purgeStudentByApplicationId,
     listPurgedStudents,
+    generateManagementCustodianCertificate,
+    markPhysicalCopy,
 } from './studentManagement.controller';
 import {
     getAllApplicationsSchema, requestCancellationSchema, approveCancellationSchema,
@@ -84,7 +86,7 @@ import {
     editProSchema,
     updateSeatAllotedBySchema
 } from '../../validators/adminValidators';
-import { assignHostelSchema, assignTransportSchema, allocateBedSchema, updateHostelIdSchema, availableBedsQuerySchema, bedAllocatedStudentsQuerySchema, cancelHostelSchema, cancelTransportSchema, hostelPaidStudentsQuerySchema, pendingHostelAllocationsQuerySchema, studentsByHostelSchema, switchHostelToTransportSchema, switchTransportToHostelSchema, transportAllocatedStudentsQuerySchema, transportPaidStudentsQuerySchema, reassignHostelSchema, reassignTransportSchema, bulkAllocateRoomSchema, reassignHostelPreviewSchema, cancelHostelPreviewSchema, cancelTransportPreviewSchema, switchHostelToTransportPreviewSchema, switchTransportToHostelPreviewSchema } from '../../validators/studentActionValidators';
+import { assignHostelSchema, assignTransportSchema, allocateBedSchema, updateHostelIdSchema, availableBedsQuerySchema, bedAllocatedStudentsQuerySchema, cancelHostelSchema, cancelTransportSchema, hostelPaidStudentsQuerySchema, pendingHostelAllocationsQuerySchema, studentsByHostelSchema, switchHostelToTransportSchema, switchTransportToHostelSchema, transportAllocatedStudentsQuerySchema, transportPaidStudentsQuerySchema, reassignHostelSchema, reassignTransportSchema, bulkAllocateRoomSchema, reassignHostelPreviewSchema, cancelHostelPreviewSchema, cancelTransportPreviewSchema, switchHostelToTransportPreviewSchema, switchTransportToHostelPreviewSchema, markPhysicalCopySchema } from '../../validators/studentActionValidators';
 
 import upload from '../../config/multer';
 import {
@@ -188,6 +190,8 @@ router.post('/verify-payment', authenticate, authorizePermission(['student.updat
 router.get('/admission-invoice/:studentId', authenticate, authorizePermission(['student.read.all']), validateRequest(studentIdParamSchema), getAdmissionInvoice);
 
 router.get('/certificates/:studentId', authenticate, authorizePermission(['document.read.all']), validateRequest(studentIdParamSchema), getStudentCertificates);
+router.patch('/:studentId/mark-physical-copy', authenticate, authorizePermission(['document.update.all']), validateRequest(markPhysicalCopySchema), markPhysicalCopy);
+router.post('/custodian-certificate/:studentId', authenticate, authorizePermission(['document.create.all']), validateRequest(studentIdParamSchema), generateManagementCustodianCertificate);
 
 router.get('/download-documents/:studentId', authenticate, authorizePermission(['document.read.all']), validateRequest(studentIdParamSchema), downloadStudentDocuments);
 

@@ -14,6 +14,13 @@ export type QualificationMode = 'EXAM' | 'DIRECT';
 
 export const VALID_STATUS_TRANSITIONS: Record<PrismaAdmissionStatus, PrismaAdmissionStatus[]> = {
 
+  CONVENOR_REPORTED: [
+    'DOCUMENTS_PENDING',
+    'SEAT_ALLOTTED',
+    'REJECTED',
+    'CANCELLED'
+  ] as PrismaAdmissionStatus[],
+
   REGISTERED: [
     'ENTRANCE_FEE_PAID',
     'REJECTED',
@@ -141,6 +148,7 @@ export function validateStatusTransition(
 
 export function getStatusLabel(status: PrismaAdmissionStatus): string {
   const labels: Record<PrismaAdmissionStatus, string> = {
+    CONVENOR_REPORTED: 'Convenor Reported',
     REGISTERED: 'Registered',
     ENTRANCE_FEE_PAID: 'Entrance Fee Paid',
     EXAM_SCHEDULED: 'Exam Scheduled',

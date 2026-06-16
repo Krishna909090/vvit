@@ -315,8 +315,10 @@ model ConvenorAdmission {
   institutionCodeId String?
   degree            String?
   courseId          String?
-  status               String?         @default("NOT_REPORTED")
-  feesReimbursement    Boolean?        @default(false)
+  status                    String?         @default("NOT_REPORTED")
+  feesReimbursement         Boolean?        @default(false)
+  documentsSubmitted        Json?
+  custodianCertificateUrl   String?
   omrId             Int?
   entryYear         Int?
   academicYearId    String?
@@ -456,6 +458,7 @@ model StudentDocument {
   remarks     String?
   verifiedBy  String?
   academicYearId String
+  physicalCopy Boolean?               @default(false)
   isDeleted   Boolean?               @default(false)
   createdAt   DateTime?              @default(now())
   updatedAt   DateTime               @updatedAt
@@ -1423,6 +1426,7 @@ model WaitingList {
 
 enum AdmissionStatus {
   REGISTERED
+  CONVENOR_REPORTED
   ENTRANCE_FEE_PAID
   EXAM_SCHEDULED
   EXAM_ATTENDED

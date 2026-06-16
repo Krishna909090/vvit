@@ -713,6 +713,23 @@ export const getStudentCertificates = catchAsync(async (req: Request, res: Respo
     });
 });
 
+export const markPhysicalCopy = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const { documentsSubmitted } = req.body;
+    const adminId = (req as any).user?.id || 'SYSTEM';
+    logger.info(`[markPhysicalCopy] studentId=${studentId} docs=${documentsSubmitted?.length} by=${adminId}`);
+    const data = await AdminStudentService.markPhysicalCopy(studentId, documentsSubmitted, adminId);
+    sendResponse({ res, statusCode: 200, success: true, message: 'Physical copy status updated', data });
+});
+
+export const generateManagementCustodianCertificate = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { studentId } = req.params;
+    const adminId = (req as any).user?.id || 'SYSTEM';
+    const refresh = req.query.refresh === 'true';
+    const data = await AdminStudentService.generateManagementCustodianCertificate(studentId, adminId, refresh);
+    sendResponse({ res, statusCode: 200, success: true, message: 'Custodian certificate generated', data });
+});
+
 export const downloadStudentDocuments = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
     
