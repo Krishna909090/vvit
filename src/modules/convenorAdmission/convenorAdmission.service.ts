@@ -98,7 +98,60 @@ const include = {
 
 const includeWithStudent = {
   ...include,
-  student: { select: { id: true, name: true, phone: true, email: true, aadharNumber: true, fatherName: true, applicationId: true, createdBy: true } },
+  student: {
+    select: {
+      id: true, name: true, phone: true, email: true, aadharNumber: true,
+      fatherName: true, motherName: true, gender: true, dob: true,
+      address: true, address2: true, city: true, state: true, pincode: true, country: true,
+      category: true, quotaType: true, applicationId: true, isKycVerified: true,
+      profilePhotoUrl: true, degreeType: true, createdBy: true, createdAt: true,
+      user: {
+        select: { id: true, name: true, phone: true, email: true, role: true },
+      },
+      admissionDetails: {
+        select: {
+          id: true, status: true, entryType: true, entryYearOfStudy: true,
+          allottedCourseId: true, accommodationType: true, hostelType: true,
+          hostelPaymentMode: true, seatAllottedAt: true, academicYearId: true,
+          instituteCode: true, feeCohortAcademicYearId: true,
+          allottedCourse: { select: { id: true, name: true, code: true, degree: true } },
+        },
+      },
+      payments: {
+        where: { isDeleted: false },
+        select: {
+          id: true, amount: true, method: true, mode: true, status: true,
+          component: true, referenceNumber: true, instrumentDate: true,
+          academicYearId: true, yearOfStudy: true, createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' as const },
+      },
+      feeDemands: {
+        where: { isDeleted: false },
+        select: {
+          id: true, amount: true, netAmount: true, discountAmount: true,
+          scholarshipAmount: true, status: true, dueDate: true, yearOfStudy: true,
+          academicYearId: true, remarks: true, createdAt: true,
+        },
+      },
+      ledgerEntries: {
+        where: { isDeleted: false },
+        select: {
+          id: true, type: true, amount: true, description: true,
+          referenceId: true, referenceType: true, academicYearId: true,
+          yearOfStudy: true, createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' as const },
+      },
+      documents: {
+        where: { isDeleted: false },
+        select: {
+          id: true, documentKey: true, url: true, status: true,
+          physicalCopy: true, remarks: true, createdAt: true,
+        },
+      },
+    },
+  },
 };
 
 const maskStudent = (record: any) => {
