@@ -24,7 +24,8 @@ interface ListFilters {
   search?: string;
   page?: number;
   limit?: number;
-  createdById?: string; // when set, restrict results to records created by this admin
+  createdById?: string;   // records created by this admin
+  allottedById?: string;  // records where seat was allotted by this admin
 }
 
 interface AllotBody {
@@ -69,7 +70,8 @@ interface ReportBody {
 const buildWhere = (filters: ListFilters): Prisma.ConvenorAdmissionWhereInput => {
   const where: Prisma.ConvenorAdmissionWhereInput = { isDeleted: false };
 
-  if (filters.createdById) where.createdBy = filters.createdById;
+  if (filters.createdById)  where.createdBy = filters.createdById;
+  if (filters.allottedById) where.student = { admissionDetails: { seatAllotedBy: filters.allottedById } };
 
   if (filters.status) where.status = filters.status;
 
@@ -203,6 +205,10 @@ export const ConvenorAdmissionService = {
       records:    data.map(maskStudent),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
+  },
+
+  async listMyAllotments(filters: ListFilters, adminId: string) {
+    return this.list({ ...filters, allottedById: adminId, status: filters.status ?? 'SEAT_CONFIRMED' });
   },
 
   async listWithAdmin(filters: ListFilters) {

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate, authorizePermission } from '../../middleware/rbac.middleware';
 import { validateRequest } from '../../middleware/validationMiddleware';
-import { list, listMine, listWithAdmin, getById, getByHallTicket, report, allot, exportCsv, updateStatus, custodianCertificate, updateDetails } from './convenorAdmission.controller';
+import { list, listMine, listMyAllotments, listWithAdmin, getById, getByHallTicket, report, allot, exportCsv, updateStatus, custodianCertificate, updateDetails } from './convenorAdmission.controller';
 import {
   listSchema,
   exportSchema,
@@ -17,6 +17,7 @@ const router = Router();
 
 router.get('/',                           authenticate, authorizePermission(['admission.read.all']),   validateRequest(listSchema),         list);
 router.get('/my',                         authenticate, authorizePermission(['admission.read.own']),   validateRequest(listSchema),         listMine);
+router.get('/my-allotments',              authenticate, authorizePermission(['admission.read.own']),   validateRequest(listSchema),         listMyAllotments);
 router.get('/with-admin',                 authenticate, authorizePermission(['admission.read.all']),   validateRequest(listSchema),         listWithAdmin);
 router.get('/export',                     authenticate, authorizePermission(['admission.read.all']),   validateRequest(exportSchema),       exportCsv);
 router.get('/by-hall-ticket/:hallTicket', authenticate, authorizePermission(['admission.read.all']),   validateRequest(byHallTicketSchema), getByHallTicket);
