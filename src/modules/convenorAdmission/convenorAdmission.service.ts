@@ -741,7 +741,13 @@ export const ConvenorAdmissionService = {
     return maskStudent(record);
   },
 
-  async updateDetails(id: string, body: { feesReimbursement?: boolean; documentsSubmitted?: string[] }, userId?: string) {
+  async updateDetails(id: string, body: { feesReimbursement?: boolean; documentsSubmitted?: { key: string; label: string; status: 'SUBMITTED' | 'PENDING' }[] }, userId?: string) {
+    const ca = await prisma.convenorAdmission.findFirst({
+      where: { id, isDeleted: false },
+      select: { studentId: true, academicYearId: true },
+    });
+    if (!ca) throw new AppError('Convenor admission not found', 404);
+
     const record = await prisma.convenorAdmission.update({
       where: { id },
       data: {
@@ -751,6 +757,28 @@ export const ConvenorAdmissionService = {
       },
       include: includeWithStudent,
     });
+
+    // Sync StudentDocument physicalCopy flags when docs are updated and student is linked
+    if (body.documentsSubmitted && ca.studentId) {
+      await Promise.all(
+        body.documentsSubmitted.map(doc =>
+          prisma.studentDocument.upsert({
+            where:  { studentId_documentKey: { studentId: ca.studentId!, documentKey: doc.key } },
+            create: {
+              studentId:     ca.studentId!,
+              documentKey:   doc.key,
+              url:           '',
+              status:        'PENDING',
+              physicalCopy:  doc.status === 'SUBMITTED',
+              academicYearId: (ca.academicYearId ?? undefined) as string,
+              createdBy:     userId,
+            },
+            update: { physicalCopy: doc.status === 'SUBMITTED', updatedBy: userId },
+          })
+        )
+      );
+    }
+
     return maskStudent(record);
   },
 

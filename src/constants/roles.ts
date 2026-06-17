@@ -7,6 +7,7 @@ export const Role = {
   STAFF: 'STAFF',
   VERIFICATION_OFFICER: 'VERIFICATION_OFFICER',
   PRO: 'PRO',
+  REPORTING_OFFICER_R1: 'REPORTING_OFFICER_R1',
 } as const;
 
 export type RoleType = keyof typeof Role;
