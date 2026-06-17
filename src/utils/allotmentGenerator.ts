@@ -17,6 +17,7 @@ export interface AllotmentData {
   scholarshipPercentage?: number
   scholarshipDiscount?: number
   tuitionFee?: number
+  feeReimbursement?: string
 }
 
 async function fetchImage(url: string): Promise<Buffer | null> {
@@ -212,7 +213,8 @@ function drawFeeTable(doc: PDFKit.PDFDocument, data: AllotmentData) {
     { label: 'Allotted Branch', value: data.allottedCourse, highlight: false },
     { label: 'Actual Tuition fee', value: `INR ${(data.tuitionFee || 0).toLocaleString('en-IN')}`, highlight: false },
     { label: 'Scholarship Approved', value: `INR ${(data.scholarshipDiscount || 0).toLocaleString('en-IN')} (${data.scholarshipPercentage || 0}%)`, highlight: false },
-    { label: 'Tuition fee payable per year', value: `INR ${((data.tuitionFee || 0) - (data.scholarshipDiscount || 0)).toLocaleString('en-IN')}`, highlight: true }
+    { label: 'Tuition fee payable per year', value: `INR ${((data.tuitionFee || 0) - (data.scholarshipDiscount || 0)).toLocaleString('en-IN')}`, highlight: true },
+    ...(data.feeReimbursement === 'YES' ? [{ label: 'Fee Reimbursement', value: 'YES — Tuition fee waived', highlight: false }] : []),
   ];
 
   doc.font('Helvetica').fontSize(10);

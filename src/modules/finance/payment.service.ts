@@ -1975,7 +1975,7 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                 allottedCategory: student.convenorDetails?.category || `${student.category}_GEN_AU`,
                 reportingDate: format(reportingDate, 'dd.MM.yyyy'),
                 phase: 'First Phase',
-                feeReimbursement: 'NO',
+                feeReimbursement: student.convenorDetails?.feesReimbursement === true ? 'YES' : undefined,
                 profilePhotoUrl: profilePhotoUrl,
                 totalPending: totalPending,
                 scholarshipPercentage,
