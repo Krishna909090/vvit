@@ -529,16 +529,16 @@ export const ConvenorAdmissionService = {
 
     // 3. Main transaction — payment + admission state + quota counters
     await prisma.$transaction(async (tx) => {
-      // Resolve ADMISSION fee head
-      const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.ADMISSION], tx);
-      const admissionFeeHead = feeHeadMap.get(PaymentComponent.ADMISSION);
+      // Resolve REGISTRATION fee head
+      const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.REGISTRATION], tx);
+      const registrationFeeHead = feeHeadMap.get(PaymentComponent.REGISTRATION);
 
       const paymentDate = body.payment.date ? new Date(body.payment.date) : new Date();
-      const idempotencyKey = `CONVENOR_ALLOT_${id}_ADMISSION`;
+      const idempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION`;
 
       // Guard: prevent duplicate allotment payment
       const existingPayment = await tx.payment.findFirst({
-        where: { studentId, component: PaymentComponent.ADMISSION, status: PaymentStatus.SUCCESS, isDeleted: false },
+        where: { studentId, component: PaymentComponent.REGISTRATION, status: PaymentStatus.SUCCESS, isDeleted: false },
         select: { id: true },
       });
       if (existingPayment) throw new AppError('Registration fee has already been recorded for this student', 409);
@@ -547,7 +547,7 @@ export const ConvenorAdmissionService = {
       const feeDemand = await tx.studentFeeDemand.create({
         data: {
           studentId,
-          feeHeadId:     admissionFeeHead?.id ?? undefined,
+          feeHeadId:     registrationFeeHead?.id ?? undefined,
           academicYearId,
           yearOfStudy:   ca.entryYear ?? 1,
           amount:        body.payment.amount,
@@ -569,8 +569,8 @@ export const ConvenorAdmissionService = {
           method:          body.payment.method as any,
           mode:            PaymentMode.OFFLINE,
           status:          PaymentStatus.SUCCESS,
-          component:       PaymentComponent.ADMISSION,
-          feeHeadId:       admissionFeeHead?.id ?? undefined,
+          component:       PaymentComponent.REGISTRATION,
+          feeHeadId:       registrationFeeHead?.id ?? undefined,
           feeDemandId:     feeDemand.id,
           academicYearId,
           yearOfStudy:     ca.entryYear ?? 1,
@@ -591,7 +591,7 @@ export const ConvenorAdmissionService = {
           description:   `Convenor registration fee (${body.payment.method})`,
           referenceId:   payment.id,
           referenceType: 'PAYMENT',
-          feeHeadId:     admissionFeeHead?.id ?? undefined,
+          feeHeadId:     registrationFeeHead?.id ?? undefined,
           academicYearId,
           yearOfStudy:   ca.entryYear ?? 1,
           createdBy:     adminId,
