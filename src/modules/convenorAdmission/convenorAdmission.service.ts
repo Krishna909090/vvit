@@ -84,8 +84,12 @@ const buildWhere = (filters: ListFilters): Prisma.ConvenorAdmissionWhereInput =>
 
   if (filters.search) {
     where.OR = [
-      { hallTicketNo: { contains: filters.search, mode: 'insensitive' } },
+      { hallTicketNo:  { contains: filters.search, mode: 'insensitive' } },
       { applicantName: { contains: filters.search, mode: 'insensitive' } },
+      { student: { name:          { contains: filters.search, mode: 'insensitive' } } },
+      { student: { phone:         { contains: filters.search, mode: 'insensitive' } } },
+      { student: { email:         { contains: filters.search, mode: 'insensitive' } } },
+      { student: { applicationId: { contains: filters.search, mode: 'insensitive' } } },
     ];
   }
 
