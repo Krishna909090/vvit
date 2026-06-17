@@ -995,6 +995,19 @@ export const FeeService = {
 
         const studentQuota         = student.quotaType;
         const studentDegreeType    = student.degreeType ?? null;
+
+        let isFeesReimbursement = false;
+        if (studentQuota === 'CONVENOR') {
+            const ca = await prisma.convenorAdmission.findFirst({
+                where: { studentId, isDeleted: false },
+                select: { feesReimbursement: true },
+            });
+            isFeesReimbursement = ca?.feesReimbursement === true;
+            if (isFeesReimbursement) {
+                logger.info(`[generateFeeDemands] CONVENOR feesReimbursement=true for student=${studentId} — tuition will be waived`);
+            }
+        }
+
         const cohortYearId =
             student.admissionDetails?.feeCohortAcademicYearId
             ?? student.admissionDetails?.entryAcademicYearId
@@ -1192,10 +1205,12 @@ export const FeeService = {
                 }
 
                 const isTuition = fee.feeHead.component === 'TUITION';
-                const scholarshipAmt = (isTuition && discountPct > 0)
-                    ? (fee.amount * discountPct) / 100
-                    : 0;
-                const netAmount = fee.amount - scholarshipAmt;
+                const reimbursementWaiver = (isTuition && isFeesReimbursement) ? fee.amount : 0;
+                const scholarshipAmt = reimbursementWaiver > 0
+                    ? 0
+                    : (isTuition && discountPct > 0 ? (fee.amount * discountPct) / 100 : 0);
+                const discountAmt = reimbursementWaiver > 0 ? reimbursementWaiver : scholarshipAmt;
+                const netAmount = fee.amount - discountAmt;
 
                 const demandYear = fee.yearOfStudy ?? currentYear;
 
@@ -1207,13 +1222,15 @@ export const FeeService = {
                         academicYearId: fee.academicYearId,
                         yearOfStudy: demandYear,
                         amount: fee.amount,
-                        discountAmount:    scholarshipAmt,
+                        discountAmount:    discountAmt,
                         scholarshipAmount: scholarshipAmt,
                         netAmount,
                         status: 'PENDING',
                         dueDate: fallbackDueDate,
                         createdBy: userId,
-                        remarks: scholarshipAmt > 0 ? `Scholarship Applied: ${discountPct}%` : undefined
+                        remarks: reimbursementWaiver > 0
+                            ? `Fees Reimbursement: Tuition waived (CONVENOR quota)`
+                            : scholarshipAmt > 0 ? `Scholarship Applied: ${discountPct}%` : undefined
                     } as any
                 });
 
@@ -1232,7 +1249,23 @@ export const FeeService = {
                     }
                 });
 
-                if (scholarshipAmt > 0) {
+                if (reimbursementWaiver > 0) {
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId,
+                            type: 'CREDIT',
+                            amount: reimbursementWaiver,
+                            description: `Fees Reimbursement: Tuition waived (CONVENOR quota)`,
+                            referenceId: demand.id,
+                            referenceType: 'SCHOLARSHIP',
+                            feeHeadId: fee.feeHeadId,
+                            createdBy: userId,
+                            academicYearId,
+                            yearOfStudy: demandYear
+                        }
+                    });
+                    scholarshipApplied++;
+                } else if (scholarshipAmt > 0) {
                     await tx.studentLedger.create({
                         data: {
                             studentId,
