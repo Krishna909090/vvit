@@ -68,32 +68,43 @@ interface ReportBody {
 }
 
 const buildWhere = (filters: ListFilters): Prisma.ConvenorAdmissionWhereInput => {
-  const where: Prisma.ConvenorAdmissionWhereInput = { isDeleted: false };
+  const and: Prisma.ConvenorAdmissionWhereInput[] = [{ isDeleted: false }];
 
-  if (filters.createdById)  where.createdBy = filters.createdById;
-  if (filters.allottedById) where.student = { admissionDetails: { seatAllotedBy: filters.allottedById } };
-
-  if (filters.status) where.status = filters.status;
+  if (filters.status)      and.push({ status: filters.status });
+  if (filters.allottedById) and.push({ student: { admissionDetails: { seatAllotedBy: filters.allottedById } } });
 
   if (filters.fromDate || filters.toDate) {
-    where.createdAt = {
-      ...(filters.fromDate ? { gte: new Date(filters.fromDate) } : {}),
-      ...(filters.toDate   ? { lte: new Date(new Date(filters.toDate).setHours(23, 59, 59, 999)) } : {}),
-    };
+    and.push({
+      createdAt: {
+        ...(filters.fromDate ? { gte: new Date(filters.fromDate) } : {}),
+        ...(filters.toDate   ? { lte: new Date(new Date(filters.toDate).setHours(23, 59, 59, 999)) } : {}),
+      },
+    });
+  }
+
+  if (filters.createdById) {
+    and.push({
+      student: {
+        createdBy: filters.createdById,
+        quotaType: 'CONVENOR',
+      },
+    });
   }
 
   if (filters.search) {
-    where.OR = [
-      { hallTicketNo:  { contains: filters.search, mode: 'insensitive' } },
-      { applicantName: { contains: filters.search, mode: 'insensitive' } },
-      { student: { name:          { contains: filters.search, mode: 'insensitive' } } },
-      { student: { phone:         { contains: filters.search, mode: 'insensitive' } } },
-      { student: { email:         { contains: filters.search, mode: 'insensitive' } } },
-      { student: { applicationId: { contains: filters.search, mode: 'insensitive' } } },
-    ];
+    and.push({
+      OR: [
+        { hallTicketNo:  { contains: filters.search, mode: 'insensitive' } },
+        { applicantName: { contains: filters.search, mode: 'insensitive' } },
+        { student: { name:          { contains: filters.search, mode: 'insensitive' } } },
+        { student: { phone:         { contains: filters.search, mode: 'insensitive' } } },
+        { student: { email:         { contains: filters.search, mode: 'insensitive' } } },
+        { student: { applicationId: { contains: filters.search, mode: 'insensitive' } } },
+      ],
+    });
   }
 
-  return where;
+  return { AND: and };
 };
 
 const include = {
