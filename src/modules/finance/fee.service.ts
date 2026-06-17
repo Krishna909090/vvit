@@ -1539,14 +1539,16 @@ export const FeeService = {
 
         const breakdown: any = {
             TUITION: { demand: 0, discount: 0, paid: 0, balance: 0 },
+            REGISTRATION: { demand: 0, discount: 0, paid: 0, balance: 0 },
             HOSTEL: { demand: 0, discount: 0, paid: 0, balance: 0 },
             TRANSPORT: { demand: 0, discount: 0, paid: 0, balance: 0 },
             OTHER: { demand: 0, discount: 0, paid: 0, balance: 0 }
         };
 
-        const componentToKey = (comp: string | null | undefined): 'TUITION' | 'HOSTEL' | 'TRANSPORT' | 'OTHER' => {
+        const componentToKey = (comp: string | null | undefined): 'TUITION' | 'REGISTRATION' | 'HOSTEL' | 'TRANSPORT' | 'OTHER' => {
             if (!comp) return 'OTHER';
             if (comp === 'TUITION' || comp === 'SCHOLARSHIP_TOKEN') return 'TUITION';
+            if (comp === 'REGISTRATION') return 'REGISTRATION';
             if (comp === 'TRANSPORT') return 'TRANSPORT';
             if (comp === 'HOSTEL'
                 || comp === 'HOSTEL_ACCOMMODATION'

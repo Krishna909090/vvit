@@ -1,7 +1,7 @@
 import prisma from '../../config/prisma';
 import {
   Prisma, QuotaType, ApplicationMode, AdmissionStatus, AdmissionEntryType, AdmissionSource,
-  PaymentComponent, PaymentMode, PaymentStatus, FeeStatus, AccommodationType, HostelType,
+  PaymentComponent, PaymentMode, PaymentStatus, FeeStatus, HostelType,
 } from '@prisma/client';
 import { AppError } from '../../utils/AppError';
 import { Role } from '../../constants/roles';
@@ -9,8 +9,8 @@ import { maskAadhaar } from '../../utils/mask';
 import { generateCustodianCertificate } from '../../utils/custodianCertificateGenerator';
 import { uploadFileToS3, getPresignedUrl } from '../../utils/s3Utils';
 import logger from '../../utils/logger';
-import { FeeService } from '../finance/fee.service';
 import { generateAndSaveAllotmentOrder } from '../finance/payment.service';
+import { InvoiceService } from '../finance/invoice.service';
 import { AccommodationService } from '../studentManagement/adminStudent/accommodation';
 
 import { resolveFeeHeadsByComponent, recomputeStudentTotals } from '../../utils/studentContext';
@@ -42,6 +42,7 @@ interface AllotBody {
     method: string;
     referenceNumber?: string;
     date?: string;
+    redirectUrl?: string;
   };
 }
 
@@ -524,7 +525,7 @@ export const ConvenorAdmissionService = {
         courseRelation: { select: { id: true, name: true } },
       },
     });
-    if (!ca)          throw new AppError('Convenor admission not found', 404);
+    if (!ca)           throw new AppError('Convenor admission not found', 404);
     if (!ca.studentId) throw new AppError('Student has not been reported yet — run report first', 409);
     if (ca.status !== 'REPORTED') throw new AppError('Seat can only be allotted after student is reported', 409);
 
@@ -542,41 +543,91 @@ export const ConvenorAdmissionService = {
     const academicYearId = ca.academicYearId ?? admission.academicYearId;
     if (!academicYearId) throw new AppError('No academic year linked to this admission', 422);
 
+    // Guard: prevent duplicate allotment payment
+    const existingPayment = await prisma.payment.findFirst({
+      where: { studentId, component: PaymentComponent.REGISTRATION, status: PaymentStatus.SUCCESS, isDeleted: false },
+      select: { id: true },
+    });
+    if (existingPayment) throw new AppError('Registration fee has already been recorded for this student', 409);
+
+    const ONLINE_METHODS = new Set(['UPI', 'NET_BANKING']);
+    const isOnline = ONLINE_METHODS.has(body.payment.method);
+
+    // ── ONLINE PATH (UPI / NET_BANKING) ─────────────────────────────────────
+    if (isOnline) {
+      const { initiatePhonePePayment } = await import('../finance/payment.service');
+
+      const merchantTransactionId = `TXN_CALLOT_${Date.now()}_${studentId.substring(0, 8)}`;
+      const idempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION`;
+
+      const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.REGISTRATION]);
+      const registrationFeeHead = feeHeadMap.get(PaymentComponent.REGISTRATION);
+
+      const existingDemand = registrationFeeHead?.id
+        ? await prisma.studentFeeDemand.findFirst({
+            where: { studentId, feeHeadId: registrationFeeHead.id, status: FeeStatus.PENDING, isDeleted: false },
+            orderBy: { createdAt: 'asc' },
+            select: { id: true },
+          })
+        : null;
+
+      const pendingPayment = await prisma.payment.create({
+        data: {
+          studentId,
+          amount:          body.payment.amount,
+          method:          body.payment.method as any,
+          mode:            PaymentMode.ONLINE,
+          status:          PaymentStatus.PENDING,
+          component:       PaymentComponent.REGISTRATION,
+          feeHeadId:       registrationFeeHead?.id ?? undefined,
+          feeDemandId:     existingDemand?.id ?? undefined,
+          academicYearId,
+          yearOfStudy:     ca.entryYear ?? 1,
+          providerTxId:    merchantTransactionId,
+          idempotencyKey,
+          collectedBy:     adminId,
+          createdBy:       adminId,
+          metadata: {
+            targetAction:         'CONVENOR_ALLOT',
+            convenorAdmissionId:  id,
+            courseId:             body.courseId,
+            accommodation:        body.accommodation,
+            feesReimbursement:    ca.feesReimbursement,
+            caEntryYear:          ca.entryYear,
+            caCourseId:           ca.courseId,
+            adminId,
+          },
+        },
+      });
+
+      if (!body.payment.redirectUrl) throw new AppError('redirectUrl is required for online payments', 400);
+      const result = await initiatePhonePePayment(studentId, body.payment.amount, merchantTransactionId, body.payment.redirectUrl, 'ADMISSION');
+
+      logger.info(`[allot][online] PhonePe initiated for student=${studentId} txn=${merchantTransactionId}`);
+      return { type: 'ONLINE_INITIATED', message: 'Payment link generated', paymentId: pendingPayment.id, redirectUrl: result.redirectUrl };
+    }
+
+    // ── OFFLINE PATH (CASH / CHEQUE / DD / NEFT / RTGS) ─────────────────────
     // 3. Main transaction — payment + admission state + quota counters
-    await prisma.$transaction(async (tx) => {
-      // Resolve REGISTRATION fee head
+    const paymentId = await prisma.$transaction(async (tx) => {
       const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.REGISTRATION], tx);
       const registrationFeeHead = feeHeadMap.get(PaymentComponent.REGISTRATION);
+      if (!registrationFeeHead) throw new AppError('Fee configuration missing: REGISTRATION fee head not found in the system', 500);
 
       const paymentDate = body.payment.date ? new Date(body.payment.date) : new Date();
       const idempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION`;
 
-      // Guard: prevent duplicate allotment payment
-      const existingPayment = await tx.payment.findFirst({
-        where: { studentId, component: PaymentComponent.REGISTRATION, status: PaymentStatus.SUCCESS, isDeleted: false },
-        select: { id: true },
+      const existingDemand = await tx.studentFeeDemand.findFirst({
+        where: { studentId, feeHeadId: registrationFeeHead.id, status: FeeStatus.PENDING, isDeleted: false },
+        orderBy: { createdAt: 'asc' },
       });
-      if (existingPayment) throw new AppError('Registration fee has already been recorded for this student', 409);
+      if (!existingDemand) throw new AppError('REGISTRATION fee demand not found — run generate-demands for this student first', 422);
 
-      // Create fee demand for registration fee (already settled — mark FULL)
-      const feeDemand = await tx.studentFeeDemand.create({
-        data: {
-          studentId,
-          feeHeadId:     registrationFeeHead?.id ?? undefined,
-          academicYearId,
-          yearOfStudy:   ca.entryYear ?? 1,
-          amount:        body.payment.amount,
-          netAmount:     body.payment.amount,
-          discountAmount: 0,
-          scholarshipAmount: 0,
-          status:        FeeStatus.FULL,
-          dueDate:       paymentDate,
-          remarks:       'Convenor registration fee — paid at seat allotment',
-          createdBy:     adminId,
-        },
+      const feeDemand = await tx.studentFeeDemand.update({
+        where: { id: existingDemand.id },
+        data:  { status: FeeStatus.FULL, updatedBy: adminId },
       });
 
-      // Create payment record (offline, success)
       const payment = await tx.payment.create({
         data: {
           studentId,
@@ -597,7 +648,6 @@ export const ConvenorAdmissionService = {
         },
       });
 
-      // Ledger CREDIT for the payment
       await tx.studentLedger.create({
         data: {
           studentId,
@@ -613,70 +663,59 @@ export const ConvenorAdmissionService = {
         },
       });
 
-      // Update StudentAdmission → ADMISSION_CONFIRMED + allotted course
-      await tx.studentAdmission.update({
-        where: { studentId },
-        data: {
-          status:          AdmissionStatus.ADMISSION_CONFIRMED,
-          allottedCourseId: body.courseId,
-          seatAllottedAt:  new Date(),
-          seatAllotedBy:   adminId,
-          accommodationType: body.accommodation.type as AccommodationType,
-          ...(body.accommodation.type === 'HOSTEL' ? {
-            hostelId:         body.accommodation.hostelId ?? undefined,
-            hostelType:       (body.accommodation.hostelType as HostelType) ?? undefined,
-            hostelPaymentMode: body.accommodation.hostelPaymentMode ?? 'YEARWISE' as any,
-          } : {}),
-          ...(body.accommodation.type === 'TRANSPORT' ? {
-            transportRouteId: body.accommodation.transportRouteId ?? undefined,
-          } : {}),
-        },
-      });
-
-      // SeatAllocation record
-      await tx.seatAllocation.create({
-        data: {
-          studentId,
-          academicYearId,
-          newCourse:   course.name,
-          allocatedBy: adminId,
-          notes:       'Convenor quota seat allotment',
-          createdBy:   adminId,
-        },
-      });
-
-      // Mark ConvenorAdmission as SEAT_CONFIRMED
-      await tx.convenorAdmission.update({
-        where: { id },
-        data:  { status: 'SEAT_CONFIRMED', updatedBy: adminId },
-      });
-
-      // Quota counters: seatsConfirmed +1
-      if (ca.courseId && academicYearId) {
-        await tx.convenorQuota.updateMany({
-          where: { courseId: ca.courseId, academicYearId, isDeleted: false },
-          data:  { seatsConfirmed: { increment: 1 } },
-        });
-      }
-
-      await recomputeStudentTotals(studentId, tx);
+      await this._completeAllotInTx(tx, { id, studentId, course, academicYearId, body, adminId, ca });
+      return payment.id;
     }, { timeout: 20000 });
 
-    // 4. Fee demands (outside tx — FeeService manages its own transaction internally)
-    // feesReimbursement = true → tuition is 0 so skip demand generation
-    if (!ca.feesReimbursement) {
-      try {
-        await FeeService.generateFeeDemands(studentId, body.courseId, academicYearId, adminId, false, {
-          allowLegacyFallback: true,
-          requireEnrollment:   false,
-          dueDateFallbackDays: 30,
-        });
-      } catch (err) {
-        logger.error(`[allot] generateFeeDemands failed for student=${studentId}: ${err}`);
-      }
+    await this._completeAllotPostTx({ id, studentId, body, courseId: body.courseId, academicYearId, adminId, feesReimbursement: ca.feesReimbursement ?? false, paymentId });
+
+    return this.getById(id);
+  },
+
+  // ── shared: admission-state + quota changes (runs inside a tx) ───────────
+  async _completeAllotInTx(tx: any, ctx: { id: string; studentId: string; course: { id: string; name: string }; academicYearId: string; body: AllotBody; adminId: string; ca: any }) {
+    const { id, studentId, course, academicYearId, body, adminId, ca } = ctx;
+
+    await tx.studentAdmission.update({
+      where: { studentId },
+      data: {
+        status:           AdmissionStatus.ADMISSION_CONFIRMED,
+        allottedCourseId: body.courseId,
+        seatAllottedAt:   new Date(),
+        seatAllotedBy:    adminId,
+      },
+    });
+
+    await tx.seatAllocation.create({
+      data: {
+        studentId,
+        academicYearId,
+        newCourse:   course.name,
+        allocatedBy: adminId,
+        notes:       'Convenor quota seat allotment',
+        createdBy:   adminId,
+      },
+    });
+
+    await tx.convenorAdmission.update({
+      where: { id },
+      data:  { status: 'SEAT_CONFIRMED', updatedBy: adminId },
+    });
+
+    if (ca.courseId && academicYearId) {
+      await tx.convenorQuota.updateMany({
+        where: { courseId: ca.courseId, academicYearId, isDeleted: false },
+        data:  { seatsConfirmed: { increment: 1 } },
+      });
     }
 
-    // 5. Accommodation assignment (outside tx — AccommodationService has own transaction)
+    await recomputeStudentTotals(studentId, tx);
+  },
+
+  // ── shared: fee demands + accommodation + allotment order (outside tx) ───
+  async _completeAllotPostTx(ctx: { id: string; studentId: string; body: AllotBody; courseId: string; academicYearId: string; adminId: string; feesReimbursement: boolean; paymentId?: string }) {
+    const { studentId, body, adminId, paymentId } = ctx;
+
     if (body.accommodation.type === 'HOSTEL' && body.accommodation.hostelId && body.accommodation.hostelType) {
       try {
         await AccommodationService.assignHostel(
@@ -697,14 +736,108 @@ export const ConvenorAdmissionService = {
       }
     }
 
-    // 6. Allotment order PDF (non-fatal)
     try {
       await generateAndSaveAllotmentOrder(studentId);
     } catch (err) {
       logger.error(`[allot] generateAndSaveAllotmentOrder failed for student=${studentId}: ${err}`);
     }
 
-    return this.getById(id);
+    if (paymentId) {
+      try {
+        await InvoiceService.generateInvoiceForPayment(paymentId);
+      } catch (err) {
+        logger.error(`[allot] invoice generation failed for payment=${paymentId}: ${err}`);
+      }
+    }
+  },
+
+  // ── called by PhonePe callback after online payment success ─────────────
+  async completeAllotAfterPayment(payment: any) {
+    const meta = payment.metadata;
+    if (!meta?.convenorAdmissionId) return;
+
+    const { convenorAdmissionId, courseId, accommodation, feesReimbursement, caCourseId, caEntryYear, adminId } = meta;
+
+    const ca = await prisma.convenorAdmission.findFirst({
+      where: { id: convenorAdmissionId, isDeleted: false },
+      select: { studentId: true, academicYearId: true, status: true },
+    });
+    if (!ca?.studentId) {
+      logger.error(`[completeAllotAfterPayment] CA not found or no student: ${convenorAdmissionId}`);
+      return;
+    }
+
+    if (ca.status === 'SEAT_CONFIRMED') {
+      logger.info(`[completeAllotAfterPayment] Already completed for CA=${convenorAdmissionId}`);
+      return;
+    }
+
+    const studentId = ca.studentId;
+    const academicYearId = ca.academicYearId ?? payment.academicYearId;
+    const course = await prisma.course.findUnique({ where: { id: courseId }, select: { id: true, name: true } });
+    if (!course) {
+      logger.error(`[completeAllotAfterPayment] Course not found: ${courseId}`);
+      return;
+    }
+
+    const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.REGISTRATION]);
+    const registrationFeeHead = feeHeadMap.get(PaymentComponent.REGISTRATION);
+    if (!registrationFeeHead) {
+      logger.error(`[completeAllotAfterPayment] Fee config missing: REGISTRATION fee head not defined for CONVENOR quota`);
+      return;
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // Find the PENDING demand created by generate-demands and mark it FULL
+      const pendingDemand = payment.feeDemandId
+        ? await tx.studentFeeDemand.findUnique({ where: { id: payment.feeDemandId } })
+        : await tx.studentFeeDemand.findFirst({
+            where: { studentId, feeHeadId: registrationFeeHead.id, status: FeeStatus.PENDING, isDeleted: false },
+            orderBy: { createdAt: 'asc' },
+          });
+      if (!pendingDemand) {
+        logger.error(`[completeAllotAfterPayment] REGISTRATION demand not found for student=${studentId} — generate-demands must be called first`);
+        return;
+      }
+      await tx.studentFeeDemand.update({
+        where: { id: pendingDemand.id },
+        data:  { status: FeeStatus.FULL, updatedBy: adminId },
+      });
+
+      const body: AllotBody = {
+        courseId,
+        accommodation,
+        payment: { amount: payment.amount, method: payment.method, referenceNumber: payment.referenceNumber ?? undefined, date: undefined },
+      };
+
+      await this._completeAllotInTx(tx, {
+        id: convenorAdmissionId,
+        studentId,
+        course,
+        academicYearId,
+        body,
+        adminId,
+        ca: { courseId: caCourseId, entryYear: caEntryYear },
+      });
+    }, { timeout: 20000 });
+
+    const body: AllotBody = {
+      courseId,
+      accommodation,
+      payment: { amount: payment.amount, method: payment.method },
+    };
+
+    await this._completeAllotPostTx({
+      id: convenorAdmissionId,
+      studentId,
+      body,
+      courseId,
+      academicYearId,
+      adminId,
+      feesReimbursement: feesReimbursement ?? false,
+    });
+
+    logger.info(`[completeAllotAfterPayment] Completed for CA=${convenorAdmissionId} student=${studentId}`);
   },
 
   async exportCsv(filters: ListFilters) {

@@ -476,10 +476,14 @@ export const getStudentFeeDemands = catchAsync(async (req: Request, res: Respons
 
     const demands = feeDetails.demands.map(d => ({
         id: d.id,
-        feeHeadName: d.feeStructure.feeHead.name,
+        feeHeadName: d.feeStructure?.feeHead?.name ?? (d as any).feeHead?.name ?? 'Unknown',
+        feeHeadComponent: d.feeStructure?.feeHead?.component ?? (d as any).feeHead?.component ?? null,
         amount: d.amount,
+        netAmount: d.netAmount,
+        discountAmount: d.discountAmount,
         dueDate: d.dueDate,
-        status: d.status
+        status: d.status,
+        remarks: d.remarks,
     }));
 
     sendResponse({

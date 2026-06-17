@@ -916,13 +916,23 @@ const _createPaymentLedger = async (payment: any, db: any = prisma) => {
 const _handleTriggers = async (payments: any[]) => {
     const finalizeTrigger = payments.find(p => p.metadata?.targetAction === 'FINALIZE_ADMISSION');
     if (finalizeTrigger) {
-         try {
+        try {
             const { AdminStudentService } = require('../studentManagement/adminStudent.service');
             await prisma.$transaction(async (tx) => {
-                 await AdminStudentService.executeAdmissionUpdates(finalizeTrigger.studentId, finalizeTrigger.metadata, finalizeTrigger.id, 'SYSTEM', tx);
+                await AdminStudentService.executeAdmissionUpdates(finalizeTrigger.studentId, finalizeTrigger.metadata, finalizeTrigger.id, 'SYSTEM', tx);
             });
         } catch (err) {
             logger.error(`Admission Finalization Error: ${err}`);
+        }
+    }
+
+    const convenorAllotTrigger = payments.find(p => p.metadata?.targetAction === 'CONVENOR_ALLOT');
+    if (convenorAllotTrigger) {
+        try {
+            const { ConvenorAdmissionService } = require('../convenorAdmission/convenorAdmission.service');
+            await ConvenorAdmissionService.completeAllotAfterPayment(convenorAllotTrigger);
+        } catch (err) {
+            logger.error(`[_handleTriggers] CONVENOR_ALLOT completion error: ${err}`);
         }
     }
 };
@@ -1949,16 +1959,18 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
              const { summary, breakdown } = financialHistory;
              const totalPending = summary.totalPending;
 
-             const tuitionFee = breakdown['TUITION']?.demanded || 0;
+             const isFeesReimbursement = student.convenorDetails?.feesReimbursement === true;
 
-             let scholarshipDiscount = breakdown['TUITION']?.scholarshipAmount || 0;
-             
+             const tuitionFee = isFeesReimbursement ? 0 : (breakdown['TUITION']?.demanded || 0);
+
+             let scholarshipDiscount = isFeesReimbursement ? 0 : (breakdown['TUITION']?.scholarshipAmount || 0);
+
              let scholarshipPercentage = 0;
-             if (student.studentScholarship?.scholarshipPercentage) {
+             if (!isFeesReimbursement && student.studentScholarship?.scholarshipPercentage) {
                 scholarshipPercentage = student.studentScholarship.scholarshipPercentage;
              }
 
-             if (scholarshipDiscount === 0 && scholarshipPercentage > 0 && tuitionFee > 0) {
+             if (!isFeesReimbursement && scholarshipDiscount === 0 && scholarshipPercentage > 0 && tuitionFee > 0) {
                 scholarshipDiscount = (tuitionFee * scholarshipPercentage) / 100;
              }
 
@@ -2399,6 +2411,7 @@ export const getStudentFinancialHistory = async (
         'HOSTEL_REGISTRATION',
         'TRANSPORT',
         'TUITION',
+        'REGISTRATION',
         'BOOK_BANK',
         'ADMISSION',
         'OTHER',
