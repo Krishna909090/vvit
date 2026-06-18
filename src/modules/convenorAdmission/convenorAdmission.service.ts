@@ -9,7 +9,6 @@ import { maskAadhaar } from '../../utils/mask';
 import { generateCustodianCertificate } from '../../utils/custodianCertificateGenerator';
 import { uploadFileToS3, getPresignedUrl } from '../../utils/s3Utils';
 import logger from '../../utils/logger';
-import { generateAndSaveAllotmentOrder } from '../finance/payment.service';
 import { InvoiceService } from '../finance/invoice.service';
 import { AccommodationService } from '../studentManagement/adminStudent/accommodation';
 
@@ -734,12 +733,6 @@ export const ConvenorAdmissionService = {
       } catch (err) {
         logger.error(`[allot] assignTransport failed for student=${studentId}: ${err}`);
       }
-    }
-
-    try {
-      await generateAndSaveAllotmentOrder(studentId);
-    } catch (err) {
-      logger.error(`[allot] generateAndSaveAllotmentOrder failed for student=${studentId}: ${err}`);
     }
 
     if (paymentId) {
