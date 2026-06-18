@@ -625,15 +625,16 @@ export const ConvenorAdmissionService = {
     }
 
     // ── OFFLINE PATH (CASH / CHEQUE / DD / NEFT / RTGS) ─────────────────────
-    // Guard: if payment already recorded for this allotment, return existing result
-    const offlineIdempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION`;
-    const existingOfflinePayment = await prisma.payment.findFirst({
-      where: { idempotencyKey: offlineIdempotencyKey, status: PaymentStatus.SUCCESS },
+    // Guard: block if an online payment is still PENDING for this allotment
+    const pendingOnlinePayment = await prisma.payment.findFirst({
+      where: { idempotencyKey: `CONVENOR_ALLOT_${id}_REGISTRATION`, status: PaymentStatus.PENDING },
       select: { id: true },
     });
-    if (existingOfflinePayment) {
-      return this.getById(id);
+    if (pendingOnlinePayment) {
+      throw new AppError('An online payment is already in progress for this allotment. Complete or cancel it before using offline payment.', 409);
     }
+    // Unique key per offline attempt — SUCCESS guard above already prevents double payment
+    const offlineIdempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION_OFF_${Date.now()}`;
 
     // 3. Main transaction — payment + admission state + quota counters
     const paymentId = await prisma.$transaction(async (tx) => {
