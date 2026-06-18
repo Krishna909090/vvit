@@ -110,15 +110,14 @@ export const allotSchema = z.object({
 
     accommodation: z.object({
       type: z.enum(['HOSTEL', 'TRANSPORT', 'NONE']),
-      hostelId:         z.string().uuid().optional(),
-      hostelType:       z.enum(['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10']).optional(),
+      hostelId:          z.string().uuid().optional(),
+      hostelType:        z.enum(['SHARING_2', 'SHARING_4', 'SHARING_6', 'SHARING_8', 'SHARING_10']).optional(),
       hostelPaymentMode: z.enum(['YEARWISE', 'SEMWISE']).optional(),
-      transportRouteId: z.string().uuid().optional(),
+      transportRouteId:  z.string().uuid().optional(),
     }).refine(a => {
-      if (a.type === 'HOSTEL')    return !!a.hostelId && !!a.hostelType;
       if (a.type === 'TRANSPORT') return !!a.transportRouteId;
       return true;
-    }, { message: 'HOSTEL requires hostelId + hostelType; TRANSPORT requires transportRouteId' }),
+    }, { message: 'TRANSPORT requires transportRouteId' }),
 
     payment: z.object({
       amount:          z.number().positive('Payment amount must be greater than 0'),
