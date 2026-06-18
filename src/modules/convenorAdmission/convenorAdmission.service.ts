@@ -556,8 +556,22 @@ export const ConvenorAdmissionService = {
     if (isOnline) {
       const { initiatePhonePePayment } = await import('../finance/payment.service');
 
-      const merchantTransactionId = `TXN_CALLOT_${Date.now()}_${studentId.substring(0, 8)}`;
+      if (!body.payment.redirectUrl) throw new AppError('redirectUrl is required for online payments', 400);
+
       const idempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION`;
+
+      // If a PENDING payment already exists for this allotment, re-initiate PhonePe with the same txn
+      const existingPending = await prisma.payment.findFirst({
+        where: { idempotencyKey, status: PaymentStatus.PENDING },
+        select: { id: true, providerTxId: true, amount: true },
+      });
+      if (existingPending?.providerTxId) {
+        const result = await initiatePhonePePayment(studentId, existingPending.amount, existingPending.providerTxId, body.payment.redirectUrl, 'ADMISSION');
+        logger.info(`[allot][online] Re-initiated PhonePe for student=${studentId} txn=${existingPending.providerTxId}`);
+        return { type: 'ONLINE_INITIATED', message: 'Payment link generated', paymentId: existingPending.id, redirectUrl: result.redirectUrl };
+      }
+
+      const merchantTransactionId = `TXN_CALLOT_${Date.now()}_${studentId.substring(0, 8)}`;
 
       const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.REGISTRATION]);
       const registrationFeeHead = feeHeadMap.get(PaymentComponent.REGISTRATION);
@@ -599,7 +613,6 @@ export const ConvenorAdmissionService = {
         },
       });
 
-      if (!body.payment.redirectUrl) throw new AppError('redirectUrl is required for online payments', 400);
       const result = await initiatePhonePePayment(studentId, body.payment.amount, merchantTransactionId, body.payment.redirectUrl, 'ADMISSION');
 
       logger.info(`[allot][online] PhonePe initiated for student=${studentId} txn=${merchantTransactionId}`);
@@ -607,6 +620,16 @@ export const ConvenorAdmissionService = {
     }
 
     // ── OFFLINE PATH (CASH / CHEQUE / DD / NEFT / RTGS) ─────────────────────
+    // Guard: if payment already recorded for this allotment, return existing result
+    const offlineIdempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION`;
+    const existingOfflinePayment = await prisma.payment.findFirst({
+      where: { idempotencyKey: offlineIdempotencyKey, status: PaymentStatus.SUCCESS },
+      select: { id: true },
+    });
+    if (existingOfflinePayment) {
+      return this.getById(id);
+    }
+
     // 3. Main transaction — payment + admission state + quota counters
     const paymentId = await prisma.$transaction(async (tx) => {
       const feeHeadMap = await resolveFeeHeadsByComponent([PaymentComponent.REGISTRATION], tx);
@@ -614,7 +637,7 @@ export const ConvenorAdmissionService = {
       if (!registrationFeeHead) throw new AppError('Fee configuration missing: REGISTRATION fee head not found in the system', 500);
 
       const paymentDate = body.payment.date ? new Date(body.payment.date) : new Date();
-      const idempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION`;
+      const idempotencyKey = offlineIdempotencyKey;
 
       const existingDemand = await tx.studentFeeDemand.findFirst({
         where: { studentId, feeHeadId: registrationFeeHead.id, status: FeeStatus.PENDING, isDeleted: false },
