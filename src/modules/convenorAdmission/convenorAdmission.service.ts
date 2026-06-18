@@ -561,9 +561,11 @@ export const ConvenorAdmissionService = {
       if (!rawRedirectUrl) throw new AppError('redirectUrl is required for online payments', 400);
 
       const buildRedirectUrl = (paymentId: string) => {
-        const base = rawRedirectUrl.endsWith('/') ? rawRedirectUrl : `${rawRedirectUrl}/`;
-        const path = `${base}${paymentId}`;
-        return path.startsWith('http') ? path : `${process.env.FRONTEND_URL_ADMISSION}${path}`;
+        const base = rawRedirectUrl.startsWith('http')
+          ? rawRedirectUrl
+          : `${process.env.FRONTEND_URL_ADMISSION}${rawRedirectUrl}`;
+        const separator = base.includes('?') ? '&' : '?';
+        return `${base}${separator}paymentId=${paymentId}`;
       };
 
       const idempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION`;
