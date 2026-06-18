@@ -642,6 +642,19 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     }
     payLog.info('SUCCESS', `${pendingPayments.length} payment(s) marked SUCCESS + settled + ledgered (atomic)`, { txnId, studentId, applicationId, amount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
 
+    // Preserve original trigger metadata for CONVENOR_ALLOT payments — updateMany above overwrites
+    // the entire metadata field with the PhonePe response, losing targetAction/convenorAdmissionId etc.
+    // Merge so the trigger is durable if completeAllotAfterPayment needs to retry.
+    for (const payment of pendingPayments) {
+        const origMeta = payment.metadata;
+        if (origMeta?.targetAction) {
+            await prisma.payment.update({
+                where: { id: payment.id },
+                data: { metadata: { ...(metadata as object), ...origMeta } as any },
+            }).catch(err => logger.warn(`[processMultiPaymentSuccess] Failed to merge trigger metadata for payment=${payment.id}: ${err}`));
+        }
+    }
+
     for (const payment of pendingPayments) {
         try {
             await _processComponentLogic(payment);

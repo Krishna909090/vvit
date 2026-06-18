@@ -706,8 +706,19 @@ export const ConvenorAdmissionService = {
   },
 
   // ── shared: admission-state + quota changes (runs inside a tx) ───────────
-  async _completeAllotInTx(tx: any, ctx: { id: string; studentId: string; course: { id: string; name: string }; academicYearId: string; body: AllotBody; adminId: string; ca: any }) {
+  async _completeAllotInTx(tx: any, ctx: { id: string; studentId: string; course: { id: string; name: string }; academicYearId: string; body: AllotBody; adminId: string; ca: any }): Promise<boolean> {
     const { id, studentId, course, academicYearId, body, adminId, ca } = ctx;
+
+    // Atomic idempotency guard — only one concurrent caller wins; others see count=0 and bail.
+    // Prevents duplicate seatAllocations and quota double-increments on concurrent webhook + heal.
+    const caUpdate = await tx.convenorAdmission.updateMany({
+      where: { id, status: { not: 'SEAT_CONFIRMED' } },
+      data:  { status: 'SEAT_CONFIRMED', updatedBy: adminId },
+    });
+    if (caUpdate.count === 0) {
+      logger.info(`[_completeAllotInTx] CA=${id} already SEAT_CONFIRMED — skipping concurrent duplicate`);
+      return false;
+    }
 
     await tx.studentAdmission.update({
       where: { studentId },
@@ -730,11 +741,6 @@ export const ConvenorAdmissionService = {
       },
     });
 
-    await tx.convenorAdmission.update({
-      where: { id },
-      data:  { status: 'SEAT_CONFIRMED', updatedBy: adminId },
-    });
-
     if (ca.courseId && academicYearId) {
       await tx.convenorQuota.updateMany({
         where: { courseId: ca.courseId, academicYearId, isDeleted: false },
@@ -743,6 +749,7 @@ export const ConvenorAdmissionService = {
     }
 
     await recomputeStudentTotals(studentId, tx);
+    return true;
   },
 
   // ── shared: fee demands + accommodation + allotment order (outside tx) ───
@@ -780,10 +787,40 @@ export const ConvenorAdmissionService = {
 
   // ── called by PhonePe callback after online payment success ─────────────
   async completeAllotAfterPayment(payment: any) {
-    const meta = payment.metadata;
-    if (!meta?.convenorAdmissionId) return;
+    // ── Validation ────────────────────────────────────────────────────────
+    if (!payment?.id) {
+      logger.error('[completeAllotAfterPayment] Called with null/undefined payment — skipping');
+      return;
+    }
 
-    const { convenorAdmissionId, courseId, accommodation, feesReimbursement, caCourseId, caEntryYear, adminId } = meta;
+    const meta = payment.metadata;
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+      logger.error(`[completeAllotAfterPayment] Payment ${payment.id} has no metadata — skipping`);
+      return;
+    }
+
+    const { convenorAdmissionId, courseId, feesReimbursement, caCourseId, caEntryYear } = meta as Record<string, any>;
+    const adminId: string = (meta as any).adminId ?? 'SYSTEM';
+    const accommodation = (meta as any).accommodation ?? { type: 'NONE' };
+
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!convenorAdmissionId || !UUID_RE.test(convenorAdmissionId)) {
+      logger.error(`[completeAllotAfterPayment] Payment ${payment.id} has invalid/missing convenorAdmissionId="${convenorAdmissionId}" — skipping`);
+      return;
+    }
+    if (!courseId || !UUID_RE.test(courseId)) {
+      logger.error(`[completeAllotAfterPayment] Payment ${payment.id} has invalid/missing courseId="${courseId}" — skipping`);
+      return;
+    }
+    if (!payment.studentId || !UUID_RE.test(payment.studentId)) {
+      logger.error(`[completeAllotAfterPayment] Payment ${payment.id} has invalid/missing studentId — skipping`);
+      return;
+    }
+    if (!['HOSTEL', 'TRANSPORT', 'NONE'].includes(accommodation?.type)) {
+      logger.warn(`[completeAllotAfterPayment] Payment ${payment.id} has invalid accommodation.type="${accommodation?.type}" — defaulting to NONE`);
+      accommodation.type = 'NONE';
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     const ca = await prisma.convenorAdmission.findFirst({
       where: { id: convenorAdmissionId, isDeleted: false },
@@ -801,6 +838,11 @@ export const ConvenorAdmissionService = {
 
     const studentId = ca.studentId;
     const academicYearId = ca.academicYearId ?? payment.academicYearId;
+    if (!academicYearId) {
+      logger.error(`[completeAllotAfterPayment] No academicYearId resolvable for CA=${convenorAdmissionId} — skipping`);
+      return;
+    }
+
     const course = await prisma.course.findUnique({ where: { id: courseId }, select: { id: true, name: true } });
     if (!course) {
       logger.error(`[completeAllotAfterPayment] Course not found: ${courseId}`);
@@ -814,22 +856,30 @@ export const ConvenorAdmissionService = {
       return;
     }
 
+    // Fix 5: track whether _completeAllotInTx actually ran so _completeAllotPostTx
+    // is not called when the transaction returned early (demand not found, etc.)
+    let txCompleted = false;
+
     await prisma.$transaction(async (tx) => {
-      // Find the PENDING demand created by generate-demands and mark it FULL
+      // Fix 3: prefer demand by feeDemandId (set at payment creation or by _settleFeeDemands).
+      // Fallback: match by feeHeadId without status filter (_settleFeeDemands may have already
+      // marked it FULL), ordered FULL first so we prefer the settled demand over a stale PENDING.
       const pendingDemand = payment.feeDemandId
         ? await tx.studentFeeDemand.findUnique({ where: { id: payment.feeDemandId } })
         : await tx.studentFeeDemand.findFirst({
-            where: { studentId, feeHeadId: registrationFeeHead.id, status: FeeStatus.PENDING, isDeleted: false },
-            orderBy: { createdAt: 'asc' },
+            where: { studentId, feeHeadId: registrationFeeHead.id, isDeleted: false },
+            orderBy: [{ status: 'desc' }, { createdAt: 'asc' }],  // PENDING > PARTIAL > FULL alphabetically desc; picks already-settled first
           });
       if (!pendingDemand) {
         logger.error(`[completeAllotAfterPayment] REGISTRATION demand not found for student=${studentId} — generate-demands must be called first`);
-        return;
+        return;  // tx commits empty; txCompleted stays false → _completeAllotPostTx is skipped
       }
-      await tx.studentFeeDemand.update({
-        where: { id: pendingDemand.id },
-        data:  { status: FeeStatus.FULL, updatedBy: adminId },
-      });
+      if (pendingDemand.status !== FeeStatus.FULL) {
+        await tx.studentFeeDemand.update({
+          where: { id: pendingDemand.id },
+          data:  { status: FeeStatus.FULL, updatedBy: adminId },
+        });
+      }
 
       const body: AllotBody = {
         courseId,
@@ -837,7 +887,7 @@ export const ConvenorAdmissionService = {
         payment: { amount: payment.amount, method: payment.method, referenceNumber: payment.referenceNumber ?? undefined, date: undefined },
       };
 
-      await this._completeAllotInTx(tx, {
+      const ran = await this._completeAllotInTx(tx, {
         id: convenorAdmissionId,
         studentId,
         course,
@@ -846,7 +896,11 @@ export const ConvenorAdmissionService = {
         adminId,
         ca: { courseId: caCourseId, entryYear: caEntryYear },
       });
+      txCompleted = ran;
     }, { timeout: 20000 });
+
+    // Fix 5: only run post-tx work if the transaction actually completed the allotment
+    if (!txCompleted) return;
 
     const body: AllotBody = {
       courseId,

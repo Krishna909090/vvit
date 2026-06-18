@@ -1,6 +1,6 @@
 import prisma from '../config/prisma';
 import logger from '../utils/logger';
-import { PaymentStatus, PaymentMode } from '@prisma/client';
+import { PaymentStatus, PaymentMode, PaymentComponent } from '@prisma/client';
 
 export const startScholarshipExpiryJob = () => {
     logger.info('[ScholarshipExpiryJob] Scholarship feature removed — job disabled.');
@@ -126,3 +126,79 @@ const reconcilePendingPayments = async () => {
     }
 };
 
+export const startConvenorAllotHealJob = () => {
+    try {
+        logger.info('[ConvenorAllotHeal] Starting (Interval: 10 minutes)');
+        healStuckConvenorAllotments();
+        setInterval(async () => {
+            await healStuckConvenorAllotments();
+        }, 10 * 60 * 1000);
+    } catch (err) {
+        logger.error(`[ConvenorAllotHeal] Failed to start: ${err}`);
+    }
+};
+
+// Track per-process failure counts so permanently broken payments don't loop forever.
+const _healFailureCount = new Map<string, number>();
+const HEAL_MAX_ATTEMPTS = 5;
+
+// Finds CONVENOR_ALLOT payments that are SUCCESS but whose CA is still REPORTED
+// (i.e. completeAllotAfterPayment failed or was never called) and retries completion.
+const healStuckConvenorAllotments = async () => {
+    try {
+        // Find REPORTED CAs that have a student with a successful REGISTRATION payment
+        const stuckCAs = await prisma.convenorAdmission.findMany({
+            where: { status: 'REPORTED', studentId: { not: null } },
+            select: { studentId: true },
+        });
+        const stuckStudentIds = stuckCAs.map(ca => ca.studentId as string);
+        if (stuckStudentIds.length === 0) return;
+
+        const stuckPayments = await prisma.payment.findMany({
+            where: {
+                status: PaymentStatus.SUCCESS,
+                component: PaymentComponent.REGISTRATION,
+                isDeleted: false,
+                studentId: { in: stuckStudentIds },
+            },
+            include: { student: true },
+            take: 20,
+        });
+
+        if (stuckPayments.length === 0) return;
+
+        logger.warn(`[ConvenorAllotHeal] Found ${stuckPayments.length} stuck CONVENOR_ALLOT payment(s) — retrying`);
+
+        const { ConvenorAdmissionService } = await import('../modules/convenorAdmission/convenorAdmission.service');
+
+        for (const payment of stuckPayments) {
+            // Fix 1: skip payments that have permanently failed to avoid infinite log spam
+            const failures = _healFailureCount.get(payment.id) ?? 0;
+            if (failures >= HEAL_MAX_ATTEMPTS) {
+                logger.error(`[ConvenorAllotHeal] Payment ${payment.id} has failed ${failures} times — manual intervention required`);
+                continue;
+            }
+
+            try {
+                const meta = (payment.metadata && typeof payment.metadata === 'object' && !Array.isArray(payment.metadata))
+                    ? payment.metadata as Record<string, unknown>
+                    : {};
+
+                if (!meta.convenorAdmissionId) {
+                    logger.warn(`[ConvenorAllotHeal] Payment ${payment.id} missing convenorAdmissionId in metadata — skipping`);
+                    _healFailureCount.set(payment.id, HEAL_MAX_ATTEMPTS); // no point retrying
+                    continue;
+                }
+
+                await ConvenorAdmissionService.completeAllotAfterPayment(payment);
+                _healFailureCount.delete(payment.id); // success — reset counter
+                logger.info(`[ConvenorAllotHeal] Healed payment=${payment.id} CA=${meta.convenorAdmissionId}`);
+            } catch (err) {
+                _healFailureCount.set(payment.id, failures + 1);
+                logger.error(`[ConvenorAllotHeal] Failed to heal payment=${payment.id} (attempt ${failures + 1}/${HEAL_MAX_ATTEMPTS}): ${err}`);
+            }
+        }
+    } catch (error) {
+        logger.error(`[ConvenorAllotHeal] Error: ${error}`);
+    }
+};

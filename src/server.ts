@@ -4,7 +4,7 @@ import app from './app';
 import logger from './utils/logger';
 import { getDatabaseSecret } from './config/awsConfig';
 import { version } from '../package.json';
-import { startStalePaymentCleanupJob, startPaymentReconciliationJob } from './jobs/scheduler';
+import { startStalePaymentCleanupJob, startPaymentReconciliationJob, startConvenorAllotHealJob } from './jobs/scheduler';
 
 const PORT = process.env.PORT || 3000;
 const SECRET_NAME = process.env.AWS_SECRET_NAME || "rds-secretname";
@@ -47,6 +47,7 @@ const startServer = async () => {
 
                 startStalePaymentCleanupJob();
                 startPaymentReconciliationJob();
+                startConvenorAllotHealJob();
             });
         } else {
             logger.info('🔕 Web Server disabled (Worker Mode active)');
