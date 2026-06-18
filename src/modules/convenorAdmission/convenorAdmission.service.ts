@@ -559,9 +559,12 @@ export const ConvenorAdmissionService = {
 
       const rawRedirectUrl = body.payment.redirectUrl ?? body.redirectUrl;
       if (!rawRedirectUrl) throw new AppError('redirectUrl is required for online payments', 400);
-      const redirectUrl = rawRedirectUrl.startsWith('http')
-        ? rawRedirectUrl
-        : `${process.env.FRONTEND_URL_ADMISSION}${rawRedirectUrl}`;
+
+      const buildRedirectUrl = (paymentId: string) => {
+        const base = rawRedirectUrl.endsWith('/') ? rawRedirectUrl : `${rawRedirectUrl}/`;
+        const path = `${base}${paymentId}`;
+        return path.startsWith('http') ? path : `${process.env.FRONTEND_URL_ADMISSION}${path}`;
+      };
 
       const idempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION`;
 
@@ -571,7 +574,7 @@ export const ConvenorAdmissionService = {
         select: { id: true, providerTxId: true, amount: true },
       });
       if (existingPending?.providerTxId) {
-        const result = await initiatePhonePePayment(studentId, existingPending.amount, existingPending.providerTxId, redirectUrl, 'ADMISSION');
+        const result = await initiatePhonePePayment(studentId, existingPending.amount, existingPending.providerTxId, buildRedirectUrl(existingPending.id), 'ADMISSION');
         logger.info(`[allot][online] Re-initiated PhonePe for student=${studentId} txn=${existingPending.providerTxId}`);
         return { type: 'ONLINE_INITIATED', message: 'Payment link generated', paymentId: existingPending.id, redirectUrl: result.redirectUrl };
       }
@@ -618,7 +621,7 @@ export const ConvenorAdmissionService = {
         },
       });
 
-      const result = await initiatePhonePePayment(studentId, body.payment.amount, merchantTransactionId, redirectUrl, 'ADMISSION');
+      const result = await initiatePhonePePayment(studentId, body.payment.amount, merchantTransactionId, buildRedirectUrl(pendingPayment.id), 'ADMISSION');
 
       logger.info(`[allot][online] PhonePe initiated for student=${studentId} txn=${merchantTransactionId}`);
       return { type: 'ONLINE_INITIATED', message: 'Payment link generated', paymentId: pendingPayment.id, redirectUrl: result.redirectUrl };
