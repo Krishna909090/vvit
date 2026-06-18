@@ -615,7 +615,6 @@ export const ConvenorAdmissionService = {
             convenorAdmissionId:  id,
             courseId:             body.courseId,
             accommodation:        body.accommodation,
-            feesReimbursement:    ca.feesReimbursement,
             caEntryYear:          ca.entryYear,
             caCourseId:           ca.courseId,
             adminId,
@@ -638,8 +637,7 @@ export const ConvenorAdmissionService = {
     if (pendingOnlinePayment) {
       throw new AppError('An online payment is already in progress for this allotment. Complete or cancel it before using offline payment.', 409);
     }
-    // Unique key per offline attempt — SUCCESS guard above already prevents double payment
-    const offlineIdempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION_OFF_${Date.now()}`;
+    const idempotencyKey = `CONVENOR_ALLOT_${id}_REGISTRATION_OFF_${Date.now()}`;
 
     // 3. Main transaction — payment + admission state + quota counters
     const paymentId = await prisma.$transaction(async (tx) => {
@@ -648,7 +646,6 @@ export const ConvenorAdmissionService = {
       if (!registrationFeeHead) throw new AppError('Fee configuration missing: REGISTRATION fee head not found in the system', 500);
 
       const paymentDate = body.payment.date ? new Date(body.payment.date) : new Date();
-      const idempotencyKey = offlineIdempotencyKey;
 
       const existingDemand = await tx.studentFeeDemand.findFirst({
         where: { studentId, feeHeadId: registrationFeeHead.id, status: FeeStatus.PENDING, isDeleted: false },
@@ -700,7 +697,7 @@ export const ConvenorAdmissionService = {
       return payment.id;
     }, { timeout: 20000 });
 
-    await this._completeAllotPostTx({ id, studentId, body, courseId: body.courseId, academicYearId, adminId, feesReimbursement: ca.feesReimbursement ?? false, paymentId });
+    await this._completeAllotPostTx({ id, studentId, body, courseId: body.courseId, academicYearId, adminId, paymentId });
 
     return this.getById(id);
   },
@@ -753,7 +750,7 @@ export const ConvenorAdmissionService = {
   },
 
   // ── shared: fee demands + accommodation + allotment order (outside tx) ───
-  async _completeAllotPostTx(ctx: { id: string; studentId: string; body: AllotBody; courseId: string; academicYearId: string; adminId: string; feesReimbursement: boolean; paymentId?: string }) {
+  async _completeAllotPostTx(ctx: { id: string; studentId: string; body: AllotBody; courseId: string; academicYearId: string; adminId: string; paymentId?: string }) {
     const { studentId, body, adminId, paymentId } = ctx;
 
     if (body.accommodation.type === 'HOSTEL' && body.accommodation.hostelId && body.accommodation.hostelType) {
@@ -785,7 +782,7 @@ export const ConvenorAdmissionService = {
     }
   },
 
-  // ── called by PhonePe callback after online payment success ─────────────
+  // ── called after verify-payment confirms success (and by heal job on retry) ─
   async completeAllotAfterPayment(payment: any) {
     // ── Validation ────────────────────────────────────────────────────────
     if (!payment?.id) {
@@ -799,7 +796,7 @@ export const ConvenorAdmissionService = {
       return;
     }
 
-    const { convenorAdmissionId, courseId, feesReimbursement, caCourseId, caEntryYear } = meta as Record<string, any>;
+    const { convenorAdmissionId, courseId, caCourseId, caEntryYear } = meta as Record<string, any>;
     const adminId: string = (meta as any).adminId ?? 'SYSTEM';
     const accommodation = (meta as any).accommodation ?? { type: 'NONE' };
 
@@ -856,23 +853,30 @@ export const ConvenorAdmissionService = {
       return;
     }
 
-    // Fix 5: track whether _completeAllotInTx actually ran so _completeAllotPostTx
-    // is not called when the transaction returned early (demand not found, etc.)
-    let txCompleted = false;
+    // Distributed lock via PostgreSQL advisory lock — prevents two server instances
+    // (webhook + heal job) from running this function concurrently for the same payment.
+    // pg_try_advisory_lock is session-level; released explicitly in finally.
+    const lockKey = `convenor_allot_${payment.id}`;
+    const lockResult = await prisma.$queryRaw<[{ acquired: boolean }]>`
+      SELECT pg_try_advisory_lock(hashtext(${lockKey})) AS acquired
+    `;
+    if (!lockResult[0]?.acquired) {
+      logger.info(`[completeAllotAfterPayment] Lock not acquired for payment=${payment.id} — another instance is processing it`);
+      return;
+    }
 
+    let txCompleted = false;
+    try {
     await prisma.$transaction(async (tx) => {
-      // Fix 3: prefer demand by feeDemandId (set at payment creation or by _settleFeeDemands).
-      // Fallback: match by feeHeadId without status filter (_settleFeeDemands may have already
-      // marked it FULL), ordered FULL first so we prefer the settled demand over a stale PENDING.
       const pendingDemand = payment.feeDemandId
         ? await tx.studentFeeDemand.findUnique({ where: { id: payment.feeDemandId } })
         : await tx.studentFeeDemand.findFirst({
             where: { studentId, feeHeadId: registrationFeeHead.id, isDeleted: false },
-            orderBy: [{ status: 'desc' }, { createdAt: 'asc' }],  // PENDING > PARTIAL > FULL alphabetically desc; picks already-settled first
+            orderBy: [{ status: 'desc' }, { createdAt: 'asc' }],
           });
       if (!pendingDemand) {
         logger.error(`[completeAllotAfterPayment] REGISTRATION demand not found for student=${studentId} — generate-demands must be called first`);
-        return;  // tx commits empty; txCompleted stays false → _completeAllotPostTx is skipped
+        return;
       }
       if (pendingDemand.status !== FeeStatus.FULL) {
         await tx.studentFeeDemand.update({
@@ -899,7 +903,7 @@ export const ConvenorAdmissionService = {
       txCompleted = ran;
     }, { timeout: 20000 });
 
-    // Fix 5: only run post-tx work if the transaction actually completed the allotment
+    // only run post-tx work if the transaction actually completed the allotment
     if (!txCompleted) return;
 
     const body: AllotBody = {
@@ -915,10 +919,13 @@ export const ConvenorAdmissionService = {
       courseId,
       academicYearId,
       adminId,
-      feesReimbursement: feesReimbursement ?? false,
     });
 
     logger.info(`[completeAllotAfterPayment] Completed for CA=${convenorAdmissionId} student=${studentId}`);
+    } finally {
+      // Always release the advisory lock so the connection isn't held indefinitely
+      await prisma.$queryRaw`SELECT pg_advisory_unlock(hashtext(${lockKey}))`.catch(() => {});
+    }
   },
 
   async exportCsv(filters: ListFilters) {

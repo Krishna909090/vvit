@@ -138,15 +138,14 @@ export const startConvenorAllotHealJob = () => {
     }
 };
 
-// Track per-process failure counts so permanently broken payments don't loop forever.
-const _healFailureCount = new Map<string, number>();
 const HEAL_MAX_ATTEMPTS = 5;
+const HEAL_BATCH_SIZE  = 100;
 
 // Finds CONVENOR_ALLOT payments that are SUCCESS but whose CA is still REPORTED
-// (i.e. completeAllotAfterPayment failed or was never called) and retries completion.
+// and retries completion. Failure counts are stored in payment.metadata._healAttempts
+// so they survive process restarts (no in-memory state).
 const healStuckConvenorAllotments = async () => {
     try {
-        // Find REPORTED CAs that have a student with a successful REGISTRATION payment
         const stuckCAs = await prisma.convenorAdmission.findMany({
             where: { status: 'REPORTED', studentId: { not: null } },
             select: { studentId: true },
@@ -162,41 +161,106 @@ const healStuckConvenorAllotments = async () => {
                 studentId: { in: stuckStudentIds },
             },
             include: { student: true },
-            take: 20,
+            take: HEAL_BATCH_SIZE,  // process up to 100 per cycle; next cycle picks up remainder
         });
 
         if (stuckPayments.length === 0) return;
 
-        logger.warn(`[ConvenorAllotHeal] Found ${stuckPayments.length} stuck CONVENOR_ALLOT payment(s) — retrying`);
+        logger.warn(`[ConvenorAllotHeal] Found ${stuckPayments.length} stuck payment(s) — retrying`);
 
         const { ConvenorAdmissionService } = await import('../modules/convenorAdmission/convenorAdmission.service');
 
         for (const payment of stuckPayments) {
-            // Fix 1: skip payments that have permanently failed to avoid infinite log spam
-            const failures = _healFailureCount.get(payment.id) ?? 0;
-            if (failures >= HEAL_MAX_ATTEMPTS) {
-                logger.error(`[ConvenorAllotHeal] Payment ${payment.id} has failed ${failures} times — manual intervention required`);
+            const meta = (payment.metadata && typeof payment.metadata === 'object' && !Array.isArray(payment.metadata))
+                ? payment.metadata as Record<string, any>
+                : {} as Record<string, any>;
+
+            // Persist failure count in DB so retries survive process restarts
+            const attempts: number = meta._healAttempts ?? 0;
+            if (attempts >= HEAL_MAX_ATTEMPTS) {
+                logger.error(`[ConvenorAllotHeal] Payment ${payment.id} exhausted ${HEAL_MAX_ATTEMPTS} attempts — manual intervention required`);
                 continue;
             }
 
             try {
-                const meta = (payment.metadata && typeof payment.metadata === 'object' && !Array.isArray(payment.metadata))
-                    ? payment.metadata as Record<string, unknown>
-                    : {};
-
+                // If metadata was overwritten by PhonePe response, convenorAdmissionId is gone.
+                // Recover by looking up the REPORTED CA for this student directly.
                 if (!meta.convenorAdmissionId) {
-                    logger.warn(`[ConvenorAllotHeal] Payment ${payment.id} missing convenorAdmissionId in metadata — skipping`);
-                    _healFailureCount.set(payment.id, HEAL_MAX_ATTEMPTS); // no point retrying
-                    continue;
+                    let ca: { id: string; courseId: string | null; entryYear: number | null; feesReimbursement: boolean | null } | null = null;
+                    try {
+                        ca = await prisma.convenorAdmission.findFirst({
+                            where: { studentId: payment.studentId, status: 'REPORTED', isDeleted: false },
+                            select: { id: true, courseId: true, entryYear: true, feesReimbursement: true },
+                        });
+                    } catch (lookupErr) {
+                        // DB error during CA lookup — treat as transient, will retry next cycle
+                        logger.error(`[ConvenorAllotHeal] CA lookup failed for payment=${payment.id}: ${lookupErr}`);
+                        await prisma.payment.update({
+                            where: { id: payment.id },
+                            data: { metadata: { ...meta, _healAttempts: attempts + 1 } as any },
+                        }).catch(() => {});
+                        continue;
+                    }
+
+                    if (!ca?.id || !ca.courseId) {
+                        // CA deleted or course missing — cannot recover, stop retrying
+                        logger.warn(`[ConvenorAllotHeal] No recoverable CA for payment=${payment.id} student=${payment.studentId} — giving up`);
+                        await prisma.payment.update({
+                            where: { id: payment.id },
+                            data: { metadata: { ...meta, _healAttempts: HEAL_MAX_ATTEMPTS, _healGiveUp: true } as any },
+                        }).catch(() => {});
+                        continue;
+                    }
+
+                    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+                    if (!UUID_RE.test(ca.id) || !UUID_RE.test(ca.courseId)) {
+                        logger.error(`[ConvenorAllotHeal] Recovered CA has invalid UUIDs id=${ca.id} courseId=${ca.courseId} — giving up`);
+                        await prisma.payment.update({
+                            where: { id: payment.id },
+                            data: { metadata: { ...meta, _healAttempts: HEAL_MAX_ATTEMPTS, _healGiveUp: true } as any },
+                        }).catch(() => {});
+                        continue;
+                    }
+
+                    // Accommodation intent was in the overwritten metadata — cannot recover.
+                    // Default to NONE; hostel/transport can be assigned via dedicated API.
+                    logger.warn(`[ConvenorAllotHeal] Payment ${payment.id}: accommodation metadata lost — defaulting to NONE. Manual hostel/transport assignment may be needed if student had accommodation.`);
+
+                    payment.metadata = {
+                        ...meta,
+                        targetAction:        'CONVENOR_ALLOT',
+                        convenorAdmissionId: ca.id,
+                        courseId:            ca.courseId,
+                        caCourseId:          ca.courseId,
+                        caEntryYear:         ca.entryYear ?? 1,
+                        feesReimbursement:   ca.feesReimbursement ?? false,
+                        accommodation:       { type: 'NONE' },
+                        adminId:             'SYSTEM',
+                    };
+                    logger.info(`[ConvenorAllotHeal] Recovered metadata for payment=${payment.id} from CA=${ca.id}`);
                 }
 
                 await ConvenorAdmissionService.completeAllotAfterPayment(payment);
-                _healFailureCount.delete(payment.id); // success — reset counter
-                logger.info(`[ConvenorAllotHeal] Healed payment=${payment.id} CA=${meta.convenorAdmissionId}`);
+
+                // Clear heal counter on success
+                await prisma.payment.update({
+                    where: { id: payment.id },
+                    data: { metadata: { ...(payment.metadata as object), _healAttempts: 0 } as any },
+                }).catch(() => {});
+                logger.info(`[ConvenorAllotHeal] Healed payment=${payment.id} CA=${(payment.metadata as any).convenorAdmissionId}`);
+
             } catch (err) {
-                _healFailureCount.set(payment.id, failures + 1);
-                logger.error(`[ConvenorAllotHeal] Failed to heal payment=${payment.id} (attempt ${failures + 1}/${HEAL_MAX_ATTEMPTS}): ${err}`);
+                // Increment persistent counter so retries survive restart
+                await prisma.payment.update({
+                    where: { id: payment.id },
+                    data: { metadata: { ...meta, _healAttempts: attempts + 1 } as any },
+                }).catch(() => {});
+                logger.error(`[ConvenorAllotHeal] Failed to heal payment=${payment.id} (attempt ${attempts + 1}/${HEAL_MAX_ATTEMPTS}): ${err}`);
             }
+        }
+
+        if (stuckPayments.length === HEAL_BATCH_SIZE) {
+            logger.warn(`[ConvenorAllotHeal] Batch full (${HEAL_BATCH_SIZE}) — more may remain, will process next cycle`);
         }
     } catch (error) {
         logger.error(`[ConvenorAllotHeal] Error: ${error}`);

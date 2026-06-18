@@ -2504,9 +2504,31 @@ export const AdmissionService = {
         const isSuccess = payment.status === PaymentStatus.SUCCESS;
         if (isSuccess) {
              logger.info(`[verifyAndCompletePayment] Payment ${paymentId} already processed.`);
-             return { 
-                success: true, 
-                message: "Payment successfully processed", 
+
+             // Even though payment is SUCCESS, the CONVENOR_ALLOT trigger may not have run
+             // (e.g. cash payment where allot() transaction failed after payment creation,
+             // or UPI where PhonePe callback's completeAllotAfterPayment failed and admin is
+             // manually retrying via verify-payment). Check and complete if CA still stuck.
+             const meta = payment.metadata as any;
+             if (meta?.targetAction === 'CONVENOR_ALLOT') {
+                 const stuckCA = await prisma.convenorAdmission.findFirst({
+                     where: { id: meta.convenorAdmissionId, status: { not: 'SEAT_CONFIRMED' }, isDeleted: false },
+                     select: { id: true },
+                 });
+                 if (stuckCA) {
+                     logger.warn(`[verifyAndCompletePayment] Payment ${paymentId} is SUCCESS but CA=${meta.convenorAdmissionId} still not SEAT_CONFIRMED — completing now`);
+                     try {
+                         const { ConvenorAdmissionService } = await import('../../convenorAdmission/convenorAdmission.service');
+                         await ConvenorAdmissionService.completeAllotAfterPayment(payment);
+                     } catch (err) {
+                         logger.error(`[verifyAndCompletePayment] CONVENOR_ALLOT completion failed for payment=${paymentId}: ${err}`);
+                     }
+                 }
+             }
+
+             return {
+                success: true,
+                message: "Payment successfully processed",
                 status: PaymentStatus.SUCCESS,
                 data: {
                     paymentId: payment.id,
@@ -2600,6 +2622,26 @@ export const AdmissionService = {
                      logger.info(`[verifyAndFinalizePayment] Allotment Order generated for student=${primaryPayment.studentId}`);
                  }
              } catch (err) { logger.warn(`Failed to generate allotment order: ${err}`); }
+         }
+
+         // Handle CONVENOR_ALLOT trigger — the transaction above overwrites payment.metadata
+         // with gatewayResponse, but the in-memory payments array still carries the original metadata.
+         const convenorAllotPayment = payments.find((p: any) => p.metadata?.targetAction === 'CONVENOR_ALLOT');
+         if (convenorAllotPayment) {
+             // Persist merged metadata to DB so the heal job can recover on any retry
+             await prisma.payment.update({
+                 where: { id: convenorAllotPayment.id },
+                 data: { metadata: { ...(gatewayResponse || {}), ...convenorAllotPayment.metadata } as any },
+             }).catch((err: any) => logger.warn(`[_completeAdmissionTransaction] Metadata merge failed for ${convenorAllotPayment.id}: ${err}`));
+
+             try {
+                 const { ConvenorAdmissionService } = await import('../../convenorAdmission/convenorAdmission.service');
+                 await ConvenorAdmissionService.completeAllotAfterPayment(convenorAllotPayment);
+                 logger.info(`[_completeAdmissionTransaction] CONVENOR_ALLOT completed for payment=${convenorAllotPayment.id}`);
+             } catch (err) {
+                 logger.error(`[_completeAdmissionTransaction] CONVENOR_ALLOT completion failed for payment=${convenorAllotPayment.id}: ${err}`);
+                 // Heal job will retry within 10 minutes
+             }
          }
 
          try {
