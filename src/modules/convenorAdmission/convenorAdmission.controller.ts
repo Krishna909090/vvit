@@ -6,14 +6,16 @@ import logger from '../../utils/logger';
 
 export const list = catchAsync(async (req: Request, res: Response) => {
   logger.info(`[convenorAdmission.list] by=${(req as any).user?.userId || 'anonymous'}`);
-  const { status, fromDate, toDate, search, page, limit } = req.query;
+  const { status, fromDate, toDate, reportedFrom, reportedTo, search, page, limit } = req.query;
   const { records, pagination } = await ConvenorAdmissionService.list({
-    status:   status   as string | undefined,
-    fromDate: fromDate as string | undefined,
-    toDate:   toDate   as string | undefined,
-    search:   search   as string | undefined,
-    page:     page     ? Number(page)  : undefined,
-    limit:    limit    ? Number(limit) : undefined,
+    status:       status       as string | undefined,
+    fromDate:     fromDate     as string | undefined,
+    toDate:       toDate       as string | undefined,
+    reportedFrom: reportedFrom as string | undefined,
+    reportedTo:   reportedTo   as string | undefined,
+    search:       search       as string | undefined,
+    page:         page         ? Number(page)  : undefined,
+    limit:        limit        ? Number(limit) : undefined,
   });
   sendResponse({ res, statusCode: 200, success: true, data: records, pagination });
 });
@@ -21,15 +23,17 @@ export const list = catchAsync(async (req: Request, res: Response) => {
 export const listMine = catchAsync(async (req: Request, res: Response) => {
   const adminId = (req as any).user?.userId;
   logger.info(`[convenorAdmission.listMine] by=${adminId || 'anonymous'}`);
-  const { status, fromDate, toDate, search, page, limit } = req.query;
+  const { status, fromDate, toDate, reportedFrom, reportedTo, search, page, limit } = req.query;
   const { records, pagination } = await ConvenorAdmissionService.list({
-    status:      status   as string | undefined,
-    fromDate:    fromDate as string | undefined,
-    toDate:      toDate   as string | undefined,
-    search:      search   as string | undefined,
-    page:        page     ? Number(page)  : undefined,
-    limit:       limit    ? Number(limit) : undefined,
-    createdById: adminId,
+    status:       status       as string | undefined,
+    fromDate:     fromDate     as string | undefined,
+    toDate:       toDate       as string | undefined,
+    reportedFrom: reportedFrom as string | undefined,
+    reportedTo:   reportedTo   as string | undefined,
+    search:       search       as string | undefined,
+    page:         page         ? Number(page)  : undefined,
+    limit:        limit        ? Number(limit) : undefined,
+    createdById:  adminId,
   });
   sendResponse({ res, statusCode: 200, success: true, data: records, pagination });
 });
@@ -37,28 +41,32 @@ export const listMine = catchAsync(async (req: Request, res: Response) => {
 export const listMyAllotments = catchAsync(async (req: Request, res: Response) => {
   const adminId = (req as any).user?.userId;
   logger.info(`[convenorAdmission.listMyAllotments] by=${adminId || 'anonymous'}`);
-  const { status, fromDate, toDate, search, page, limit } = req.query;
+  const { status, fromDate, toDate, reportedFrom, reportedTo, search, page, limit } = req.query;
   const { records, pagination } = await ConvenorAdmissionService.listMyAllotments({
-    status:   status   as string | undefined,
-    fromDate: fromDate as string | undefined,
-    toDate:   toDate   as string | undefined,
-    search:   search   as string | undefined,
-    page:     page     ? Number(page)  : undefined,
-    limit:    limit    ? Number(limit) : undefined,
+    status:       status       as string | undefined,
+    fromDate:     fromDate     as string | undefined,
+    toDate:       toDate       as string | undefined,
+    reportedFrom: reportedFrom as string | undefined,
+    reportedTo:   reportedTo   as string | undefined,
+    search:       search       as string | undefined,
+    page:         page         ? Number(page)  : undefined,
+    limit:        limit        ? Number(limit) : undefined,
   }, adminId);
   sendResponse({ res, statusCode: 200, success: true, data: records, pagination });
 });
 
 export const listWithAdmin = catchAsync(async (req: Request, res: Response) => {
   logger.info(`[convenorAdmission.listWithAdmin] by=${(req as any).user?.userId || 'anonymous'}`);
-  const { status, fromDate, toDate, search, page, limit } = req.query;
+  const { status, fromDate, toDate, reportedFrom, reportedTo, search, page, limit } = req.query;
   const { records, pagination } = await ConvenorAdmissionService.listWithAdmin({
-    status:   status   as string | undefined,
-    fromDate: fromDate as string | undefined,
-    toDate:   toDate   as string | undefined,
-    search:   search   as string | undefined,
-    page:     page     ? Number(page)  : undefined,
-    limit:    limit    ? Number(limit) : undefined,
+    status:       status       as string | undefined,
+    fromDate:     fromDate     as string | undefined,
+    toDate:       toDate       as string | undefined,
+    reportedFrom: reportedFrom as string | undefined,
+    reportedTo:   reportedTo   as string | undefined,
+    search:       search       as string | undefined,
+    page:         page         ? Number(page)  : undefined,
+    limit:        limit        ? Number(limit) : undefined,
   });
   sendResponse({ res, statusCode: 200, success: true, data: records, pagination });
 });
@@ -81,12 +89,14 @@ export const report = catchAsync(async (req: Request, res: Response) => {
 });
 
 export const exportCsv = catchAsync(async (req: Request, res: Response) => {
-  const { status, fromDate, toDate, search } = req.query;
+  const { status, fromDate, toDate, reportedFrom, reportedTo, search } = req.query;
   const csv = await ConvenorAdmissionService.exportCsv({
-    status:   status   as string | undefined,
-    fromDate: fromDate as string | undefined,
-    toDate:   toDate   as string | undefined,
-    search:   search   as string | undefined,
+    status:       status       as string | undefined,
+    fromDate:     fromDate     as string | undefined,
+    toDate:       toDate       as string | undefined,
+    reportedFrom: reportedFrom as string | undefined,
+    reportedTo:   reportedTo   as string | undefined,
+    search:       search       as string | undefined,
   });
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename="convenor-admissions.csv"');

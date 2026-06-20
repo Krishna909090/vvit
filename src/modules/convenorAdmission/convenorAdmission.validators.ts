@@ -13,13 +13,17 @@ const uuidParam = z.object({ id: z.string().uuid('Invalid ID') });
 
 const statusEnum = z.enum(CONVENOR_STATUSES);
 
+const dateField = z.string().datetime({ offset: true }).optional().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional());
+
 const listQuery = z.object({
-  status:    statusEnum.optional(),
-  fromDate:  z.string().datetime({ offset: true }).optional().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'fromDate must be YYYY-MM-DD').optional()),
-  toDate:    z.string().datetime({ offset: true }).optional().or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'toDate must be YYYY-MM-DD').optional()),
-  search:    z.string().max(100).optional(),
-  page:      z.coerce.number().int().min(1).optional(),
-  limit:     z.coerce.number().int().min(1).max(200).optional(),
+  status:       statusEnum.optional(),
+  fromDate:     dateField,
+  toDate:       dateField,
+  reportedFrom: dateField,
+  reportedTo:   dateField,
+  search:       z.string().max(100).optional(),
+  page:         z.coerce.number().int().min(1).optional(),
+  limit:        z.coerce.number().int().min(1).max(200).optional(),
 });
 
 export const listSchema   = z.object({ query: listQuery });

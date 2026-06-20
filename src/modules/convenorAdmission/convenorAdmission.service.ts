@@ -20,6 +20,8 @@ interface ListFilters {
   status?: string;
   fromDate?: string;
   toDate?: string;
+  reportedFrom?: string;  // filter by student reporting date (student.createdAt)
+  reportedTo?: string;
   search?: string;
   page?: number;
   limit?: number;
@@ -79,6 +81,17 @@ const buildWhere = (filters: ListFilters): Prisma.ConvenorAdmissionWhereInput =>
       createdAt: {
         ...(filters.fromDate ? { gte: new Date(filters.fromDate) } : {}),
         ...(filters.toDate   ? { lte: new Date(new Date(filters.toDate).setHours(23, 59, 59, 999)) } : {}),
+      },
+    });
+  }
+
+  if (filters.reportedFrom || filters.reportedTo) {
+    and.push({
+      student: {
+        createdAt: {
+          ...(filters.reportedFrom ? { gte: new Date(filters.reportedFrom) } : {}),
+          ...(filters.reportedTo   ? { lte: new Date(new Date(filters.reportedTo).setHours(23, 59, 59, 999)) } : {}),
+        },
       },
     });
   }
