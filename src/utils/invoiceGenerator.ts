@@ -172,10 +172,14 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
     doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, detailY)
     doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, detailY + 12)
 
+    const isCash = (data.paymentMethod || '').toUpperCase() === 'CASH';
     const utrOffset = (detailY - y) + 24
-    const payOffset = (detailY - y) + 36
-    const utrDisplay = (data.referenceId && data.referenceId !== data.transactionId) ? data.referenceId : 'N/A';
-    doc.text(`UTR: ${utrDisplay}`, rightX, y + utrOffset)
+    const payOffset = isCash ? utrOffset : (detailY - y) + 36
+
+    if (!isCash) {
+      const utrDisplay = (data.referenceId && data.referenceId !== data.transactionId) ? data.referenceId : 'N/A';
+      doc.text(`UTR: ${utrDisplay}`, rightX, y + utrOffset)
+    }
 
     doc.text(`Payment: ${data.paymentMethod}`, rightX, y + payOffset)
   }

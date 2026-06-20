@@ -144,15 +144,15 @@ export const generateCustodianCertificate = (data: CustodianCertData): Promise<B
 
       // Single flowing paragraph — bold values inline, wraps naturally
       doc.font('Helvetica').fontSize(10.5).fillColor('#000000')
-        .text(`Received from ${genderPrefix}/Ms. `, ML, y, { continued: true, width: cW });
+        .text(`Received from ${genderPrefix} `, ML, y, { continued: true, width: cW });
       doc.font('Helvetica-Bold')
         .text((data.studentName || '') + ' ', { continued: true, width: cW });
       doc.font('Helvetica')
-        .text('bearing Application No. ', { continued: true, width: cW });
+        .text('bearing Hall Ticket No. ', { continued: true, width: cW });
       doc.font('Helvetica-Bold')
-        .text((data.admissionNo || '') + ' ', { continued: true, width: cW });
+        .text((data.hallTicketNo || '') + ' ', { continued: true, width: cW });
       doc.font('Helvetica')
-        .text(`${soLabel}, D/o `, { continued: true, width: cW });
+        .text(`${soLabel} `, { continued: true, width: cW });
       doc.font('Helvetica-Bold')
         .text((data.fatherName || '') + ' ', { continued: true, width: cW });
       doc.font('Helvetica')
@@ -178,9 +178,9 @@ export const generateCustodianCertificate = (data: CustodianCertData): Promise<B
       const rDescX  = rNumX + rNumW, rDescW = halfW - rNumW;
       const divX    = ML + halfW + colGap / 2;
 
-      // Single centred header — no # symbols, just the label centred across full table
+      // ── SUBMITTED DOCUMENTS heading ───────────────────────────────────────
       doc.font('Helvetica-Bold').fontSize(11).fillColor('#444444')
-        .text('CERTIFICATE DESCRIPTION', ML, y, { width: cW, align: 'center', lineBreak: false });
+        .text('SUBMITTED DOCUMENTS', ML, y, { width: cW, align: 'center', lineBreak: false });
       y += 14;
 
       doc.strokeColor('#000000').lineWidth(0.8)
@@ -191,20 +191,19 @@ export const generateCustodianCertificate = (data: CustodianCertData): Promise<B
       const rowTextY = 5;
       const rowCount = Math.max(leftDocs.length, rightDocs.length);
 
-      // Vertical divider spanning full table
       const tableTopY = y;
 
       for (let i = 0; i < rowCount; i++) {
         const rowY = y + rowTextY;
 
         if (leftDocs[i]) {
-          doc.font('Helvetica').fontSize(9.5).fillColor('#000000')
+          doc.font('Helvetica').fontSize(10).fillColor('#000000')
             .text(`${i + 1}.`, lNumX, rowY, { width: lNumW, lineBreak: false });
           doc.text(leftDocs[i].label, lDescX, rowY, { width: lDescW, lineBreak: false });
         }
 
         if (rightDocs[i]) {
-          doc.font('Helvetica').fontSize(9.5).fillColor('#000000')
+          doc.font('Helvetica').fontSize(10).fillColor('#000000')
             .text(`${leftDocs.length + i + 1}.`, rNumX, rowY, { width: rNumW, lineBreak: false });
           doc.text(rightDocs[i].label, rDescX, rowY, { width: rDescW, lineBreak: false });
         }
@@ -214,70 +213,70 @@ export const generateCustodianCertificate = (data: CustodianCertData): Promise<B
           .moveTo(ML, y).lineTo(pageW - MR, y).stroke();
       }
 
-      // Vertical divider line between columns
       doc.strokeColor('#CCCCCC').lineWidth(0.6)
-        .moveTo(divX, tableTopY - 5).lineTo(divX, y).stroke();
+        .moveTo(divX, tableTopY - 6).lineTo(divX, y).stroke();
 
       doc.fillColor('#000000');
-      y += 16;
+      y += 12;
 
-      // ── PENDING CERTIFICATES ───────────────────────────────────────────────
-      // Header — centred, same style as CERTIFICATE DESCRIPTION above
-      doc.font('Helvetica-Bold').fontSize(11).fillColor('#444444')
-        .text('PENDING CERTIFICATES', ML, y, { width: cW, align: 'center', lineBreak: false });
-      y += 14;
+      // ── PENDING CERTIFICATES (omitted when none) ──────────────────────────
+      if (pendingDocs.length > 0) {
+        doc.font('Helvetica-Bold').fontSize(11).fillColor('#444444')
+          .text('PENDING CERTIFICATES', ML, y, { width: cW, align: 'center', lineBreak: false });
+        y += 14;
 
-      doc.strokeColor('#000000').lineWidth(0.8)
-        .moveTo(ML, y).lineTo(pageW - MR, y).stroke();
-      y += 6;
+        doc.strokeColor('#000000').lineWidth(0.8)
+          .moveTo(ML, y).lineTo(pageW - MR, y).stroke();
+        y += 6;
 
-      // Items aligned with the table's number + description columns
-      const pendNumW = lNumW;          // same as table # col
-      const pendTxtX = ML + pendNumW;
-      const pendTxtW = cW - pendNumW;
-      const romanH = 24;
+        const romanH        = 22;
+        const pendSplitAt   = Math.ceil(pendingDocs.length / 2);
+        const pendLeftDocs  = pendingDocs.slice(0, pendSplitAt);
+        const pendRightDocs = pendingDocs.slice(pendSplitAt);
+        const pendRowCount  = Math.max(pendLeftDocs.length, pendRightDocs.length);
+        const pendDivX      = divX;
 
-      const pendRows = Math.max(pendingDocs.length, 1);
-      for (let p = 0; p < pendRows; p++) {
-        const iy = y + p * romanH + 5;
-        doc.font('Helvetica').fontSize(10).fillColor('#000000')
-          .text(`${p + 1}.`, ML, iy, { width: pendNumW + 10, lineBreak: false });
-        if (pendingDocs[p]) {
-          doc.font('Helvetica').fontSize(10).fillColor('#000000')
-            .text(pendingDocs[p], pendTxtX + 12, iy, { width: pendTxtW - 12, lineBreak: false });
+        const pendTableTopY = y;
+
+        for (let p = 0; p < pendRowCount; p++) {
+          const iy = y + p * romanH + 5;
+
+          if (pendLeftDocs[p]) {
+            doc.font('Helvetica').fontSize(10).fillColor('#000000')
+              .text(`${p + 1}.`, lNumX, iy, { width: lNumW, lineBreak: false });
+            doc.text(pendLeftDocs[p], lDescX, iy, { width: lDescW, lineBreak: false });
+          }
+
+          if (pendRightDocs[p]) {
+            doc.font('Helvetica').fontSize(10).fillColor('#000000')
+              .text(`${pendLeftDocs.length + p + 1}.`, rNumX, iy, { width: rNumW, lineBreak: false });
+            doc.text(pendRightDocs[p], rDescX, iy, { width: rDescW, lineBreak: false });
+          }
+
+          doc.strokeColor('#000000').lineWidth(0.4)
+            .moveTo(ML, y + (p + 1) * romanH).lineTo(pageW - MR, y + (p + 1) * romanH).stroke();
         }
-        doc.strokeColor('#000000').lineWidth(0.4)
-          .moveTo(ML, y + (p + 1) * romanH).lineTo(pageW - MR, y + (p + 1) * romanH).stroke();
+
+        doc.strokeColor('#CCCCCC').lineWidth(0.6)
+          .moveTo(pendDivX, pendTableTopY - 6).lineTo(pendDivX, y + pendRowCount * romanH).stroke();
+
+        y += pendRowCount * romanH + 24;
       }
 
-      y += pendRows * romanH + 30;
-
-      // ── SIGNATURE BLOCK 1 ─────────────────────────────────────────────────
       const sigW  = 185;
       const sigLX = ML;
       const sigRX = pageW - MR - sigW;
 
-      doc.strokeColor('#000000').lineWidth(0.7)
-        .moveTo(sigLX, y).lineTo(sigLX + sigW, y).stroke()
-        .moveTo(sigRX, y).lineTo(sigRX + sigW, y).stroke();
-      y += 9;
-
-      doc.font('Helvetica').fontSize(9.5).fillColor('#000000')
-        .text('Signature of the Candidate', sigLX, y, { width: sigW, align: 'center', lineBreak: false });
-      doc.text('Authorized Signatory',       sigRX, y, { width: sigW, align: 'center', lineBreak: false });
-      y += 50;
-
       // ── CONSENT / UNDERTAKING ─────────────────────────────────────────────
-      // Section header
       doc.font('Helvetica-Bold').fontSize(11).fillColor('#444444')
         .text('Consent', ML, y, { width: cW, align: 'center', lineBreak: false });
-      y += 14;
+      y += 12;
 
       doc.strokeColor('#000000').lineWidth(0.8)
         .moveTo(ML, y).lineTo(pageW - MR, y).stroke();
-      y += 10;
+      y += 8;
 
-      const uSize = 10.5;
+      const uSize = 9.5;
 
       // Single flowing paragraph — bold name inline, date gap as underscored blank
       doc.font('Helvetica').fontSize(uSize).fillColor('#000000')

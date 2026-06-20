@@ -926,6 +926,21 @@ export const ApplicationsService = {
             )
         );
 
+        // Sync documentsSubmitted on the linked ConvenorAdmission record
+        const ca = await prisma.convenorAdmission.findUnique({
+            where: { studentId },
+            select: { id: true },
+        });
+        if (ca) {
+            await prisma.convenorAdmission.update({
+                where: { id: ca.id },
+                data: {
+                    documentsSubmitted: documentsSubmitted as any,
+                    updatedBy: adminId,
+                },
+            });
+        }
+
         return results;
     },
 

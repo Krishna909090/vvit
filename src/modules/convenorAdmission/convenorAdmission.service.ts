@@ -6,7 +6,7 @@ import {
 import { AppError } from '../../utils/AppError';
 import { Role } from '../../constants/roles';
 import { maskAadhaar } from '../../utils/mask';
-import { generateCustodianCertificate } from '../../utils/custodianCertificateGenerator';
+import { generateCustodianCertificate, DOC_LABEL_MAP } from '../../utils/custodianCertificateGenerator';
 import { uploadFileToS3, getPresignedUrl } from '../../utils/s3Utils';
 import logger from '../../utils/logger';
 import { InvoiceService } from '../finance/invoice.service';
@@ -475,6 +475,13 @@ export const ConvenorAdmissionService = {
     // 4. Certificate generation after tx commits — stored in StudentDocument
     const studentId = (result as any).studentId;
     try {
+      const eapcetQual = studentId
+        ? await prisma.academicQualification.findFirst({
+            where: { studentId, level: 'EAPCET' },
+            select: { hallTicketNumber: true },
+          })
+        : null;
+
       const pdf = await generateCustodianCertificate({
         admissionNo:        applicationId,
         studentName:        ca.applicantName ?? '',
@@ -943,35 +950,48 @@ export const ConvenorAdmissionService = {
         : s;
     };
 
+    const docKeys = Object.keys(DOC_LABEL_MAP);
+    const docHeaders = docKeys.map(k => DOC_LABEL_MAP[k]);
+
     const headers = [
       'HallTicket', 'ApplicantName', 'Gender', 'Category', 'Region',
       'AlottedCategory', 'Phase', 'Rank', 'Degree', 'Course', 'OmrId',
       'InstitutionCode', 'EntryYear', 'AcademicYear', 'Status',
-      'FeesReimbursement', 'DocumentsSubmitted', 'CreatedAt',
+      'FeesReimbursement', ...docHeaders, 'CreatedAt',
     ];
 
-    const rows = records.map(r => [
-      r.hallTicketNo,
-      r.applicantName,
-      r.gender,
-      r.category,
-      r.region,
-      r.alottedCategory,
-      r.phase,
-      r.rank,
-      r.degree,
-      r.courseRelation?.name ?? null,
-      r.omrId,
-      r.institutionCode?.code ?? null,
-      r.entryYear,
-      r.year,
-      r.status,
-      r.feesReimbursement ? 'YES' : 'NO',
-      Array.isArray(r.documentsSubmitted) ? (r.documentsSubmitted as string[]).join('; ') : '',
-      r.createdAt?.toISOString() ?? null,
-    ].map(escape).join(','));
+    const rows = records.map(r => {
+      const submittedKeys = new Set(
+        Array.isArray(r.documentsSubmitted)
+          ? (r.documentsSubmitted as { key: string; status: string }[])
+              .filter(d => d.status === 'SUBMITTED').map(d => d.key)
+          : []
+      );
+      const docValues = docKeys.map(k => submittedKeys.has(k) ? 'Submitted' : 'Pending');
 
-    return [headers.join(','), ...rows].join('\n');
+      return [
+        r.hallTicketNo,
+        r.applicantName,
+        r.gender,
+        r.category,
+        r.region,
+        r.alottedCategory,
+        r.phase,
+        r.rank,
+        r.degree,
+        r.courseRelation?.name ?? null,
+        r.omrId,
+        r.institutionCode?.code ?? null,
+        r.entryYear,
+        r.year,
+        r.status,
+        r.feesReimbursement ? 'YES' : 'NO',
+        ...docValues,
+        r.createdAt?.toISOString() ?? null,
+      ].map(escape).join(',');
+    });
+
+    return [headers.map(escape).join(','), ...rows].join('\n');
   },
 
   async updateStatus(id: string, status: string, userId?: string) {
@@ -1048,6 +1068,13 @@ export const ConvenorAdmissionService = {
     const entryYearOfStudy = (ca as any).entryYear ?? 1;
     const documentsSubmitted: { key: string; label: string; status: 'SUBMITTED' | 'PENDING' }[] =
       Array.isArray((ca as any).documentsSubmitted) ? (ca as any).documentsSubmitted : [];
+
+    const eapcetQual = ca.studentId
+      ? await prisma.academicQualification.findFirst({
+          where: { studentId: ca.studentId, level: 'EAPCET' },
+          select: { hallTicketNumber: true },
+        })
+      : null;
 
     const pdf = await generateCustodianCertificate({
       admissionNo:        (ca.student as any)?.applicationId ?? id,
