@@ -301,6 +301,12 @@ export const previewExcelImport = async (fileBuffer: Buffer, mimetype = 'applica
 export const submitImport = async (validRows: ValidatedRow[], adminId: string) => {
   if (!validRows || validRows.length === 0) throw new AppError('No valid rows to import', 400);
 
+  // Always resolve academicYear fresh at submit time — preview result may be stale
+  const activeYear = await prisma.academicYear.findFirstOrThrow({
+    where: { isActive: true, isDeleted: false },
+    select: { id: true, code: true },
+  });
+
   // Final duplicate guard in case preview was stale
   const existing = await prisma.convenorAdmission.findMany({
     where: { hallTicketNo: { in: validRows.map(r => r.hallTicketNo) } },
@@ -334,9 +340,9 @@ export const submitImport = async (validRows: ValidatedRow[], adminId: string) =
     degree:            r.degree,
     courseId:          r.courseId,
     omrId:             r.omrId,
-    entryYear:         r.entryYear,
-    academicYearId:    r.academicYearId,
-    year:              r.year,
+    entryYear:         1,
+    academicYearId:    activeYear.id,
+    year:              activeYear.code,
     status:            'NOT_REPORTED',
     isDeleted:         false,
     createdBy:         adminId,
