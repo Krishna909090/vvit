@@ -715,10 +715,10 @@ export const getStudentCertificates = catchAsync(async (req: Request, res: Respo
 
 export const markPhysicalCopy = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const { studentId } = req.params;
-    const { documentsSubmitted } = req.body;
+    const { type, documentsSubmitted } = req.body;
     const adminId = (req as any).user?.id || 'SYSTEM';
-    logger.info(`[markPhysicalCopy] studentId=${studentId} docs=${documentsSubmitted?.length} by=${adminId}`);
-    const data = await AdminStudentService.markPhysicalCopy(studentId, documentsSubmitted, adminId);
+    logger.info(`[markPhysicalCopy] studentId=${studentId} type=${type} docs=${documentsSubmitted?.length} by=${adminId}`);
+    const data = await AdminStudentService.markPhysicalCopy(studentId, documentsSubmitted, adminId, type);
     sendResponse({ res, statusCode: 200, success: true, message: 'Physical copy status updated', data });
 });
 

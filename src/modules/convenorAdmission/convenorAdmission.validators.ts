@@ -142,7 +142,18 @@ export const updateStatusSchema = z.object({
 export const updateDetailsSchema = z.object({
   params: uuidParam,
   body: z.object({
-    feesReimbursement:  z.boolean().optional(),
+    // ConvenorAdmission fields (hallTicketNo excluded)
+    applicantName:    z.string().trim().min(1).max(200).optional(),
+    gender:           z.enum(['male', 'female', 'other']).transform(v => v.toUpperCase()).optional(),
+    category:         z.string().trim().max(50).optional(),
+    region:           z.string().trim().max(50).optional(),
+    alottedCategory:  z.string().trim().max(50).optional(),
+    phase:            z.string().trim().max(50).optional(),
+    rank:             z.string().trim().max(50).optional(),
+    degree:           z.string().trim().max(100).optional(),
+    courseId:         z.string().uuid('Invalid course ID').optional(),
+    entryYear:        z.coerce.number().int().min(1).max(4).optional(),
+    feesReimbursement: z.boolean().optional(),
     documentsSubmitted: z
       .array(z.object({
         key:    z.enum(VALID_DOC_KEYS, { error: 'Invalid document key' }),
@@ -155,7 +166,23 @@ export const updateDetailsSchema = z.object({
         return arr.filter(d => seen.has(d.key) ? false : (seen.add(d.key), true));
       })
       .optional(),
-  }).refine(b => b.feesReimbursement !== undefined || b.documentsSubmitted !== undefined, {
-    message: 'At least one of feesReimbursement or documentsSubmitted must be provided',
+
+    // Student fields
+    student: z.object({
+      name:         z.string().trim().min(1).max(200).optional(),
+      phone:        z.string().regex(/^[6-9]\d{9}$/, 'Invalid phone').optional(),
+      email:        z.string().email('Invalid email').optional().or(z.literal('')).transform(v => v || undefined),
+      fatherName:   z.string().trim().max(100).optional().or(z.literal('')).transform(v => v || undefined),
+      motherName:   z.string().trim().max(100).optional().or(z.literal('')).transform(v => v || undefined),
+      aadharNumber: z.string().regex(/^\d{12}$/, 'Aadhar must be 12 digits').optional().or(z.literal('')).transform(v => v || undefined),
+      dob:          z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'dob must be YYYY-MM-DD').optional(),
+      address:      z.string().trim().max(255).optional().or(z.literal('')).transform(v => v || undefined),
+      address2:     z.string().trim().max(255).optional().or(z.literal('')).transform(v => v || undefined),
+      city:         z.string().trim().max(100).optional().or(z.literal('')).transform(v => v || undefined),
+      pinCode:      z.string().regex(/^\d{6}$/, 'Pin code must be 6 digits').optional().or(z.literal('')).transform(v => v || undefined),
+      state:        z.string().trim().max(100).optional().or(z.literal('')).transform(v => v || undefined),
+    }).optional(),
+  }).refine(b => Object.keys(b).some(k => b[k as keyof typeof b] !== undefined), {
+    message: 'At least one field must be provided',
   }),
 });

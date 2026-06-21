@@ -357,6 +357,7 @@ const VALID_DOC_KEYS = [
 export const markPhysicalCopySchema = z.object({
     params: z.object({ studentId: z.string().uuid('Invalid student ID') }),
     body: z.object({
+        type: z.enum(['MANAGEMENT', 'CONVENOR'], { error: 'type must be MANAGEMENT or CONVENOR' }).default('MANAGEMENT'),
         documentsSubmitted: z.array(z.object({
             key:    z.enum(VALID_DOC_KEYS, { error: 'Invalid document key' }),
             label:  z.string().min(1).max(200),

@@ -896,6 +896,7 @@ export const ApplicationsService = {
         studentId: string,
         documentsSubmitted: { key: string; label: string; status: 'SUBMITTED' | 'PENDING' }[],
         adminId: string,
+        type: 'MANAGEMENT' | 'CONVENOR' = 'MANAGEMENT',
     ) {
         const student = await prisma.student.findUnique({
             where: { id: studentId },
@@ -926,19 +927,21 @@ export const ApplicationsService = {
             )
         );
 
-        // Sync documentsSubmitted on the linked ConvenorAdmission record
-        const ca = await prisma.convenorAdmission.findUnique({
-            where: { studentId },
-            select: { id: true },
-        });
-        if (ca) {
-            await prisma.convenorAdmission.update({
-                where: { id: ca.id },
-                data: {
-                    documentsSubmitted: documentsSubmitted as any,
-                    updatedBy: adminId,
-                },
+        // Sync convenorAdmission.documentsSubmitted only for CONVENOR type
+        if (type === 'CONVENOR') {
+            const ca = await prisma.convenorAdmission.findUnique({
+                where: { studentId },
+                select: { id: true },
             });
+            if (ca) {
+                await prisma.convenorAdmission.update({
+                    where: { id: ca.id },
+                    data: {
+                        documentsSubmitted: documentsSubmitted as any,
+                        updatedBy: adminId,
+                    },
+                });
+            }
         }
 
         return results;

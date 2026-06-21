@@ -1016,27 +1016,93 @@ export const ConvenorAdmissionService = {
     return maskStudent(record);
   },
 
-  async updateDetails(id: string, body: { feesReimbursement?: boolean; documentsSubmitted?: { key: string; label: string; status: 'SUBMITTED' | 'PENDING' }[] }, userId?: string) {
+  async updateDetails(id: string, body: {
+    // CA fields
+    applicantName?: string;
+    gender?: string;
+    category?: string;
+    region?: string;
+    alottedCategory?: string;
+    phase?: string;
+    rank?: string;
+    degree?: string;
+    courseId?: string;
+    entryYear?: number;
+    feesReimbursement?: boolean;
+    documentsSubmitted?: { key: string; label: string; status: 'SUBMITTED' | 'PENDING' }[];
+    // Student fields
+    student?: {
+      name?: string;
+      phone?: string;
+      email?: string;
+      fatherName?: string;
+      motherName?: string;
+      aadharNumber?: string;
+      dob?: string;
+      address?: string;
+      address2?: string;
+      city?: string;
+      pinCode?: string;
+      state?: string;
+    };
+  }, userId?: string) {
     const ca = await prisma.convenorAdmission.findFirst({
       where: { id, isDeleted: false },
       select: { studentId: true, academicYearId: true },
     });
     if (!ca) throw new AppError('Convenor admission not found', 404);
 
-    const record = await prisma.convenorAdmission.update({
-      where: { id },
-      data: {
-        ...(body.feesReimbursement !== undefined ? { feesReimbursement: body.feesReimbursement } : {}),
-        ...(body.documentsSubmitted !== undefined ? { documentsSubmitted: body.documentsSubmitted } : {}),
-        updatedBy: userId,
-      },
-      include: includeWithStudent,
+    const { student: studentBody, ...caFields } = body;
+
+    const record = await prisma.$transaction(async (tx) => {
+      const updated = await tx.convenorAdmission.update({
+        where: { id },
+        data: {
+          ...(caFields.applicantName    !== undefined ? { applicantName:   caFields.applicantName }   : {}),
+          ...(caFields.gender           !== undefined ? { gender:          caFields.gender }           : {}),
+          ...(caFields.category         !== undefined ? { category:        caFields.category }         : {}),
+          ...(caFields.region           !== undefined ? { region:          caFields.region }           : {}),
+          ...(caFields.alottedCategory  !== undefined ? { alottedCategory: caFields.alottedCategory }  : {}),
+          ...(caFields.phase            !== undefined ? { phase:           caFields.phase }            : {}),
+          ...(caFields.rank             !== undefined ? { rank:            caFields.rank }             : {}),
+          ...(caFields.degree           !== undefined ? { degree:          caFields.degree }           : {}),
+          ...(caFields.courseId         !== undefined ? { courseId:        caFields.courseId }         : {}),
+          ...(caFields.entryYear        !== undefined ? { entryYear:       caFields.entryYear }        : {}),
+          ...(caFields.feesReimbursement !== undefined ? { feesReimbursement: caFields.feesReimbursement } : {}),
+          ...(caFields.documentsSubmitted !== undefined ? { documentsSubmitted: caFields.documentsSubmitted } : {}),
+          updatedBy: userId,
+        },
+        include: includeWithStudent,
+      });
+
+      if (studentBody && ca.studentId && Object.keys(studentBody).length > 0) {
+        await tx.student.update({
+          where: { id: ca.studentId },
+          data: {
+            ...(studentBody.name         !== undefined ? { name:         studentBody.name }         : {}),
+            ...(studentBody.phone        !== undefined ? { phone:        studentBody.phone }        : {}),
+            ...(studentBody.email        !== undefined ? { email:        studentBody.email }        : {}),
+            ...(studentBody.fatherName   !== undefined ? { fatherName:   studentBody.fatherName }   : {}),
+            ...(studentBody.motherName   !== undefined ? { motherName:   studentBody.motherName }   : {}),
+            ...(studentBody.aadharNumber !== undefined ? { aadharNumber: studentBody.aadharNumber } : {}),
+            ...(studentBody.dob          !== undefined ? { dob:          new Date(studentBody.dob) } : {}),
+            ...(studentBody.address      !== undefined ? { address:      studentBody.address }      : {}),
+            ...(studentBody.address2     !== undefined ? { address2:     studentBody.address2 }     : {}),
+            ...(studentBody.city         !== undefined ? { city:         studentBody.city }         : {}),
+            ...(studentBody.pinCode      !== undefined ? { pinCode:      studentBody.pinCode }      : {}),
+            ...(studentBody.state        !== undefined ? { state:        studentBody.state }        : {}),
+            updatedBy: userId,
+          },
+        });
+      }
+
+      return updated;
     });
 
     // Sync StudentDocument physicalCopy flags when docs are updated and student is linked
-    if (body.documentsSubmitted && ca.studentId) {
+    if (caFields.documentsSubmitted && ca.studentId) {
       await Promise.all(
-        body.documentsSubmitted.map(doc =>
+        caFields.documentsSubmitted.map(doc =>
           prisma.studentDocument.upsert({
             where:  { studentId_documentKey: { studentId: ca.studentId!, documentKey: doc.key } },
             create: {
