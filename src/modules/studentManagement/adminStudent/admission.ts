@@ -2793,7 +2793,8 @@ export const AdmissionService = {
 
         const where = {
             ...(status ? { status } : {}),
-            ...(resolvedStudentId ? { studentId: resolvedStudentId } : {})
+            ...(resolvedStudentId ? { studentId: resolvedStudentId } : {}),
+            student: { quotaType: 'MANAGEMENT' },
         } as any;
 
         const [requests, total] = await Promise.all([
@@ -2815,49 +2816,68 @@ export const AdmissionService = {
 
         const courseIds = [...new Set(requests.flatMap((r: any) => [r.fromCourse, r.toCourse].filter(Boolean)))];
 
-        // Course names only — capacity is fetched per-student using their batchAcademicYearId
-        const courses = await prisma.course.findMany({
-            where: { id: { in: courseIds } },
-            select: { id: true, name: true }
-        });
+        // Collect all batchAcademicYearIds used across requests for accurate filled-seat counts
+        const batchAyIds = [...new Set(
+            (requests as any[]).map((r: any) =>
+                r.student?.admissionDetails?.batchAcademicYearId ||
+                r.student?.admissionDetails?.academicYearId
+            ).filter(Boolean)
+        )];
+
+        const [courses, liveFilledRows] = await Promise.all([
+            // Course names + totalSeats from CourseCapacity
+            prisma.course.findMany({
+                where: { id: { in: courseIds } },
+                select: {
+                    id: true,
+                    name: true,
+                    capacities: {
+                        where: batchAyIds.length > 0 ? { academicYearId: { in: batchAyIds } } : undefined,
+                        select: { academicYearId: true, totalSeats: true },
+                    },
+                },
+            }),
+            // Live filled-seat count per (courseId, batchAcademicYearId) — same method as dashboard
+            courseIds.length > 0
+                ? prisma.studentAdmission.groupBy({
+                    by: ['allottedCourseId', 'batchAcademicYearId'],
+                    where: {
+                        allottedCourseId: { in: courseIds },
+                        batchAcademicYearId: batchAyIds.length > 0 ? { in: batchAyIds } : undefined,
+                        status: { not: 'CANCELLED' },
+                    },
+                    _count: { studentId: true },
+                  })
+                : Promise.resolve([]),
+        ]);
+
         const courseNameMap = Object.fromEntries(courses.map((c: any) => [c.id, c.name]));
-
-        // Build unique (courseId, batchAcademicYearId) pairs across all requests
-        const capacityPairs: { courseId: string; academicYearId: string }[] = [];
-        for (const r of requests as any[]) {
-            const batchAyId = r.student?.admissionDetails?.batchAcademicYearId
-                           || r.student?.admissionDetails?.academicYearId;
-            if (batchAyId) {
-                if (r.fromCourse) capacityPairs.push({ courseId: r.fromCourse, academicYearId: batchAyId });
-                if (r.toCourse)   capacityPairs.push({ courseId: r.toCourse,   academicYearId: batchAyId });
-            }
-        }
-
-        const capacityRows = capacityPairs.length > 0
-            ? await prisma.courseCapacity.findMany({
-                where: { OR: capacityPairs },
-                select: { courseId: true, academicYearId: true, totalSeats: true, filledSeats: true }
-              })
-            : [];
-
-        // Map key: "courseId:batchAcademicYearId"
-        const capacityMap = Object.fromEntries(
-            capacityRows.map((c: any) => [`${c.courseId}:${c.academicYearId}`, c])
+        const courseTotalMap = Object.fromEntries(
+            courses.flatMap((c: any) =>
+                (c.capacities ?? []).map((cap: any) => [`${c.id}:${cap.academicYearId}`, cap.totalSeats])
+            )
+        );
+        // Live count map: "courseId:batchAcademicYearId" → count
+        const liveFilledMap = Object.fromEntries(
+            (liveFilledRows as any[]).map((row: any) =>
+                [`${row.allottedCourseId}:${row.batchAcademicYearId}`, row._count.studentId]
+            )
         );
 
         const data = (requests as any[]).map((r: any) => {
             const batchAyId = r.student?.admissionDetails?.batchAcademicYearId
-                           || r.student?.admissionDetails?.academicYearId;
-            const fromCap = batchAyId ? (capacityMap[`${r.fromCourse}:${batchAyId}`] ?? null) : null;
-            const toCap   = batchAyId ? (capacityMap[`${r.toCourse}:${batchAyId}`]   ?? null) : null;
+                           || r.student?.admissionDetails?.academicYearId
+                           || null;
+            const fromKey = r.fromCourse && batchAyId ? `${r.fromCourse}:${batchAyId}` : null;
+            const toKey   = r.toCourse   && batchAyId ? `${r.toCourse}:${batchAyId}`   : null;
             return {
                 ...r,
-                fromCourseName:       courseNameMap[r.fromCourse] ?? null,
-                toCourseName:         courseNameMap[r.toCourse]   ?? null,
-                fromCourseFilledSeats: fromCap?.filledSeats ?? null,
-                fromCourseTotalSeats:  fromCap?.totalSeats  ?? null,
-                toCourseFilledSeats:   toCap?.filledSeats   ?? null,
-                toCourseTotalSeats:    toCap?.totalSeats    ?? null,
+                fromCourseName:        courseNameMap[r.fromCourse] ?? null,
+                toCourseName:          courseNameMap[r.toCourse]   ?? null,
+                fromCourseFilledSeats: fromKey != null ? (liveFilledMap[fromKey] ?? 0) : null,
+                fromCourseTotalSeats:  fromKey != null ? (courseTotalMap[fromKey] ?? null) : null,
+                toCourseFilledSeats:   toKey   != null ? (liveFilledMap[toKey]   ?? 0) : null,
+                toCourseTotalSeats:    toKey   != null ? (courseTotalMap[toKey]   ?? null) : null,
             };
         });
 
