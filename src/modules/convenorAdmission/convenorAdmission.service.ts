@@ -7,7 +7,7 @@ import { AppError } from '../../utils/AppError';
 import { Role } from '../../constants/roles';
 import { maskAadhaar } from '../../utils/mask';
 import { generateCustodianCertificate, DOC_LABEL_MAP } from '../../utils/custodianCertificateGenerator';
-import { uploadFileToS3, getPresignedUrl } from '../../utils/s3Utils';
+import { uploadFileToS3, getPresignedUrl, convertToPresignedUrl } from '../../utils/s3Utils';
 import logger from '../../utils/logger';
 import { InvoiceService } from '../finance/invoice.service';
 import { AccommodationService } from '../studentManagement/adminStudent/accommodation';
@@ -717,9 +717,11 @@ export const ConvenorAdmissionService = {
       return payment.id;
     }, { timeout: 20000 });
 
-    await this._completeAllotPostTx({ id, studentId, body, courseId: body.courseId, academicYearId, adminId, paymentId });
+    const rawInvoiceUrl = await this._completeAllotPostTx({ id, studentId, body, courseId: body.courseId, academicYearId, adminId, paymentId });
+    const invoiceUrl = rawInvoiceUrl ? await convertToPresignedUrl(rawInvoiceUrl) : null;
 
-    return this.getById(id);
+    const record = await this.getById(id);
+    return { ...record, invoiceUrl };
   },
 
   // ── shared: admission-state + quota changes (runs inside a tx) ───────────
@@ -770,7 +772,7 @@ export const ConvenorAdmissionService = {
   },
 
   // ── shared: fee demands + accommodation + allotment order (outside tx) ───
-  async _completeAllotPostTx(ctx: { id: string; studentId: string; body: AllotBody; courseId: string; academicYearId: string; adminId: string; paymentId?: string }) {
+  async _completeAllotPostTx(ctx: { id: string; studentId: string; body: AllotBody; courseId: string; academicYearId: string; adminId: string; paymentId?: string }): Promise<string | null> {
     const { studentId, body, adminId, paymentId } = ctx;
 
     if (body.accommodation.type === 'HOSTEL' && body.accommodation.hostelId && body.accommodation.hostelType) {
@@ -795,11 +797,13 @@ export const ConvenorAdmissionService = {
 
     if (paymentId) {
       try {
-        await InvoiceService.generateInvoiceForPayment(paymentId);
+        const invoice = await InvoiceService.generateInvoiceForPayment(paymentId);
+        return invoice?.invoiceUrl ?? null;
       } catch (err) {
         logger.error(`[allot] invoice generation failed for payment=${paymentId}: ${err}`);
       }
     }
+    return null;
   },
 
   // ── called after verify-payment confirms success (and by heal job on retry) ─

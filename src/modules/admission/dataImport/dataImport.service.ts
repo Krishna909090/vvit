@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import Papa from "papaparse";
 import prisma from '../../../config/prisma';
 import { AppError } from '../../../utils/AppError';
 import logger from '../../../utils/logger';
@@ -48,6 +49,18 @@ const str = (v: any): string | null =>
 const toInt = (v: any): number | null =>
   v != null && !isNaN(Number(v)) ? Number(v) : null;
 
+const readCsvRows = (fileBuffer: Buffer): ExcelRow[] => {
+  const csv = fileBuffer.toString('utf8');
+  const result = Papa.parse(csv, { header: true, skipEmptyLines: true }) as Papa.ParseResult<ExcelRow>;
+  if (!result.data || result.data.length === 0) throw new AppError("CSV file is empty", 400);
+  // Trim header keys in case CSV has spaces around column names
+  return result.data.map((row: ExcelRow) => {
+    const cleaned: ExcelRow = {};
+    for (const key of Object.keys(row)) cleaned[key.trim()] = row[key];
+    return cleaned;
+  });
+};
+
 const readExcelRows = async (fileBuffer: Buffer): Promise<ExcelRow[]> => {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(fileBuffer as any);
@@ -80,6 +93,11 @@ const readExcelRows = async (fileBuffer: Buffer): Promise<ExcelRow[]> => {
 
   if (rows.length === 0) throw new AppError("Excel file is empty", 400);
   return rows;
+};
+
+const readFileRows = async (fileBuffer: Buffer, mimetype: string, originalname: string): Promise<ExcelRow[]> => {
+  const isCsv = mimetype === 'text/csv' || originalname.toLowerCase().endsWith('.csv');
+  return isCsv ? readCsvRows(fileBuffer) : readExcelRows(fileBuffer);
 };
 
 const ALLOWED_INST_CODES = new Set(['VVITU', 'VVITPU', 'VVIT']);
@@ -247,9 +265,25 @@ const resolveAndValidate = async (parsed: ParsedRow[], fieldErrors: RowError[]) 
   return { valid, errors: [...fieldErrors, ...dbErrors], duplicates };
 };
 
-// ── PREVIEW — parse + validate, no DB writes ──────────────────────────────────
-export const previewExcelImport = async (fileBuffer: Buffer) => {
-  const rows = await readExcelRows(fileBuffer);
+// ── PREVIEW (array of JSON objects from request body) ─────────────────────────
+export const previewJsonImport = async (rows: ExcelRow[]) => {
+  if (!Array.isArray(rows) || rows.length === 0) throw new AppError('Request body must be a non-empty array', 400);
+  const { parsed, fieldErrors } = parseRows(rows);
+  const { valid, errors, duplicates } = await resolveAndValidate(parsed, fieldErrors);
+
+  return {
+    total:      rows.length,
+    valid:      valid.length,
+    invalid:    errors.length,
+    duplicates: duplicates.length,
+    validRows:  valid,
+    errors,
+  };
+};
+
+// ── PREVIEW (file buffer) — kept for legacy callers ───────────────────────────
+export const previewExcelImport = async (fileBuffer: Buffer, mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', originalname = 'file.xlsx') => {
+  const rows = await readFileRows(fileBuffer, mimetype, originalname);
   const { parsed, fieldErrors } = parseRows(rows);
   const { valid, errors, duplicates } = await resolveAndValidate(parsed, fieldErrors);
 
@@ -332,8 +366,8 @@ export const submitImport = async (validRows: ValidatedRow[], adminId: string) =
 };
 
 // Legacy — kept for backward compatibility
-export const processExcelImport = async (fileBuffer: Buffer, adminId: string) => {
-  const rows = await readExcelRows(fileBuffer);
+export const processExcelImport = async (fileBuffer: Buffer, adminId: string, mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', originalname = 'file.xlsx') => {
+  const rows = await readFileRows(fileBuffer, mimetype, originalname);
   const { parsed, fieldErrors } = parseRows(rows);
   const { valid, errors, duplicates } = await resolveAndValidate(parsed, fieldErrors);
 

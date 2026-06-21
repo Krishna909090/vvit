@@ -13,8 +13,8 @@ const upload = multer({
 // Legacy — parses + inserts in one shot
 router.post("/import",         authenticate, authorizePermission(['admission.create.all']), upload.single("file"), importAdmissionData);
 
-// Step 1: upload file, get preview (valid/invalid counts + resolved rows)
-router.post("/import/preview", authenticate, authorizePermission(['admission.create.all']), upload.single("file"), previewImport);
+// Step 1: send JSON body, get preview (valid/invalid counts + resolved rows)
+router.post("/import/preview", authenticate, authorizePermission(['admission.create.all']), express.json({ limit: '10mb' }), previewImport);
 
 // Step 2: send validRows from preview response to actually insert
 router.post("/import/submit",  authenticate, authorizePermission(['admission.create.all']), submitImportData);

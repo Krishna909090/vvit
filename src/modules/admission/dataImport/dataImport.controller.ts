@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { processExcelImport, previewExcelImport, submitImport } from './dataImport.service';
+import { processExcelImport, previewJsonImport, submitImport } from './dataImport.service';
 import { ImportType } from "@prisma/client";
 import { AppError } from '../../../utils/AppError';
 import { z } from 'zod';
@@ -41,7 +41,7 @@ export const importAdmissionData = async (
       throw new AppError("This endpoint only supports CONVENOR_ADMISSION imports", 400);
 
     const adminId = (req as any).user?.id || "SYSTEM";
-    const results = await processExcelImport(file.buffer, adminId);
+    const results = await processExcelImport(file.buffer, adminId, file.mimetype, file.originalname);
 
     res.status(200).json({ success: true, message: "Data import processing completed", data: results });
   } catch (error) {
@@ -55,10 +55,11 @@ export const previewImport = async (
   next: NextFunction
 ) => {
   try {
-    const file = req.file;
-    if (!file) throw new AppError("No file uploaded", 400);
+    const rows = req.body;
+    if (!Array.isArray(rows) || rows.length === 0)
+      throw new AppError("Request body must be a non-empty array of row objects", 400);
 
-    const results = await previewExcelImport(file.buffer);
+    const results = await previewJsonImport(rows);
 
     res.status(200).json({
       success: true,
