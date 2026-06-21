@@ -5,6 +5,16 @@ import { uploadFileToS3, downloadFileFromS3, convertToPresignedUrl } from '../..
 import { sendEntranceFeeReceipt } from '../../utils/emailService';
 import { PaymentStatus, PaymentComponent } from '@prisma/client';
 
+const resolvePaymentMethodLabel = (method: string | null | undefined): string => {
+    switch ((method || '').toUpperCase()) {
+        case 'NEFT_RTGS':
+        case 'NEFT':    return 'NEFT';
+        case 'RTGS':    return 'RTGS';
+        case 'IMPS':    return 'IMPS';
+        default:        return method || 'ONLINE';
+    }
+};
+
 export const InvoiceService = {
 
     async generateInvoiceForPayment(paymentId: string, _forceRegenerate = false) {
@@ -125,15 +135,22 @@ export const InvoiceService = {
         let invoiceItems: { description: string, amount: number }[] = [];
         let totalAmount = 0;
 
+        const hostelSharingLabel = (() => {
+            const ht: string | null | undefined = payment.student?.admissionDetails?.hostelType;
+            if (!ht) return '';
+            const match = ht.match(/SHARING_(\d+)/i);
+            return match ? ` (${match[1]} Sharing)` : '';
+        })();
+
         const getPaymentDescription = (p: any) => {
              if (p.feeHead) return p.feeHead.name;
-             
+
              const c = p.component;
              if (c === PaymentComponent.APPLICATION_FEE) return 'Application Fee';
              if (c === PaymentComponent.SCHOLARSHIP_TOKEN) return 'Admission Fee (Token)';
              if (c === PaymentComponent.TUITION) return 'Tuition Fee';
-             if (c === PaymentComponent.HOSTEL) return 'Hostel Fee';
-             if (c === PaymentComponent.HOSTEL_ACCOMMODATION) return 'Hostel Accommodation Fee';
+             if (c === PaymentComponent.HOSTEL) return `Hostel Fee${hostelSharingLabel}`;
+             if (c === PaymentComponent.HOSTEL_ACCOMMODATION) return `Hostel Accommodation Fee${hostelSharingLabel}`;
              if (c === PaymentComponent.HOSTEL_MESS) return 'Mess Fee';
              if (c === PaymentComponent.TRANSPORT) return 'Transport Fee';
              if (c === PaymentComponent.BOOK_BANK) return 'Book Bank Fee';
@@ -159,8 +176,8 @@ export const InvoiceService = {
                      let label = c.component;
                      if (label === PaymentComponent.TUITION) label = 'Tuition Fee';
                      else if (label === PaymentComponent.TRANSPORT) label = 'Transport Fee';
-                     else if (label === PaymentComponent.HOSTEL) label = 'Hostel Fee'; 
-                     else if (label === PaymentComponent.HOSTEL_ACCOMMODATION) label = 'Hostel Accommodation Fee';
+                     else if (label === PaymentComponent.HOSTEL) label = `Hostel Fee${hostelSharingLabel}`;
+                     else if (label === PaymentComponent.HOSTEL_ACCOMMODATION) label = `Hostel Accommodation Fee${hostelSharingLabel}`;
                      else if (label === PaymentComponent.HOSTEL_MESS) label = 'Mess Fee';
                      else if (label === PaymentComponent.APPLICATION_FEE) label = 'Application Fee';
                      else if (label === PaymentComponent.OTHER) label = 'Other Fee';
@@ -241,7 +258,7 @@ export const InvoiceService = {
                 studentId: primaryPayment.student.applicationId || primaryPayment.studentId,
                 applicationId: primaryPayment.student.applicationId || primaryPayment.studentId,
                 courseName,
-                paymentMethod: (primaryPayment.method === 'NEFT_RTGS') ? 'Bank Transfer' : (primaryPayment.method || 'ONLINE'),
+                paymentMethod: resolvePaymentMethodLabel(primaryPayment.method),
                 transactionId: internalTxId,
                 referenceId: realTransactionId,
                 amount: totalAmount,
@@ -280,7 +297,7 @@ export const InvoiceService = {
             studentId: primaryPayment.student.applicationId || primaryPayment.studentId,
             applicationId: primaryPayment.student.applicationId || primaryPayment.studentId,
             courseName,
-            paymentMethod: (primaryPayment.method === 'NEFT_RTGS') ? 'Bank Transfer' : (primaryPayment.method || 'ONLINE'),
+            paymentMethod: resolvePaymentMethodLabel(primaryPayment.method),
             transactionId: internalTxId,
             referenceId: realTransactionId,
             amount: totalAmount,
