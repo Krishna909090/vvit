@@ -1480,6 +1480,7 @@ export const AdmissionService = {
              if (updateProps.scholarshipPercentage !== undefined) {
                  updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
                  if (updateProps.scholarshipPercentage > 0) updateProps.isEligible = 'YES';
+                 else updateProps.isEligible = 'NO';
              }
 
              if (updateProps.qualificationId) {

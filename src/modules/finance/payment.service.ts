@@ -2612,6 +2612,11 @@ export const getStudentFinancialHistory = async (
         settledTotal: settledRefunds.reduce((s: number, fc: any) => s + (fc.amount ?? 0), 0),
     };
 
+    // Management quota students don't pay the Convener REGISTRATION fee
+    if ((student as any)?.quotaType === 'MANAGEMENT') {
+        delete breakdown['REGISTRATION'];
+    }
+
     return {
         summary,
         breakdown,
