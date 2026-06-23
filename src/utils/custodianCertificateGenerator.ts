@@ -267,6 +267,16 @@ export const generateCustodianCertificate = (data: CustodianCertData): Promise<B
       const sigLX = ML;
       const sigRX = pageW - MR - sigW;
 
+      // ── AUTHORIZED SIGNATURE (above Consent) ──────────────────────────────
+      const authSigW = 200;
+      const authSigX = (pageW - authSigW) / 2;
+      doc.strokeColor('#000000').lineWidth(0.7)
+        .moveTo(authSigX, y).lineTo(authSigX + authSigW, y).stroke();
+      y += 9;
+      doc.font('Helvetica').fontSize(9.5).fillColor('#000000')
+        .text('Authorized Signature', authSigX, y, { width: authSigW, align: 'center' });
+      y = doc.y + 20;
+
       // ── CONSENT / UNDERTAKING ─────────────────────────────────────────────
       doc.font('Helvetica-Bold').fontSize(11).fillColor('#444444')
         .text('Consent', ML, y, { width: cW, align: 'center', lineBreak: false });
@@ -292,7 +302,7 @@ export const generateCustodianCertificate = (data: CustodianCertData): Promise<B
         );
       y = doc.y + 40;
 
-      // ── SIGNATURE BLOCK 2 ─────────────────────────────────────────────────
+      // ── SIGNATURE BLOCK ───────────────────────────────────────────────────
       doc.strokeColor('#000000').lineWidth(0.7)
         .moveTo(sigLX, y).lineTo(sigLX + sigW, y).stroke()
         .moveTo(sigRX, y).lineTo(sigRX + sigW, y).stroke();

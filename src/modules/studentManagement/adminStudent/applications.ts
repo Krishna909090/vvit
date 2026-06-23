@@ -966,25 +966,22 @@ export const ApplicationsService = {
         if (!student) throw new AppError('Student not found', 404);
         if (!student.admissionDetails) throw new AppError('Student has no admission record', 404);
 
-        // Only include the 14 known doc keys — exclude ALLOTMENT_ORDER, CUSTODIAN_CERTIFICATE, etc.
-        const CERT_DOC_KEYS = new Set(Object.keys(DOC_LABEL_MAP));
-        const documentsSubmitted = student.documents
-            .filter(doc => CERT_DOC_KEYS.has(doc.documentKey))
-            .map(doc => ({
-                key:    doc.documentKey,
-                label:  DOC_LABEL_MAP[doc.documentKey],
-                status: (doc.physicalCopy ? 'SUBMITTED' : 'PENDING') as 'SUBMITTED' | 'PENDING',
-            }));
+        // Build the full document list from DOC_LABEL_MAP so that docs the student
+        // hasn't uploaded yet still appear in the Pending section.
+        const submittedKeys = new Set(
+            student.documents
+                .filter(doc => doc.physicalCopy)
+                .map(doc => doc.documentKey)
+        );
+        const documentsSubmitted = Object.entries(DOC_LABEL_MAP).map(([key, label]) => ({
+            key,
+            label,
+            status: (submittedKeys.has(key) ? 'SUBMITTED' : 'PENDING') as 'SUBMITTED' | 'PENDING',
+        }));
 
         const s3Key = `student/${student.phone}/documents/custodian_certificate.pdf`;
 
-        if (!refresh) {
-            const existing = await prisma.studentDocument.findUnique({
-                where: { studentId_documentKey: { studentId, documentKey: 'CUSTODIAN_CERTIFICATE' } },
-                select: { url: true },
-            });
-            if (existing) return { url: await getPresignedUrl(s3Key) };
-        }
+        // Always regenerate — certificate must reflect latest physicalCopy status
 
         const pdf = await generateCustodianCertificate({
             admissionNo:  student.applicationId ?? studentId,
