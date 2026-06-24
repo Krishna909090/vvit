@@ -1533,7 +1533,7 @@ export const exportSuccessPaymentsCsv = async (query: any) => {
     const rows = result.data;
 
     const headers = [
-        'UTR No', 'Application No', 'Full Name', 'Phone',
+        'Txn ID', 'Reference No (UTR)', 'Application No', 'Full Name', 'Phone',
         'Fee Type', 'Mode', 'Method', 'Amount',
         'Date & Time', 'Created By', 'Remarks'
     ];
@@ -1545,7 +1545,8 @@ export const exportSuccessPaymentsCsv = async (query: any) => {
     };
 
     const csvRows = rows.map((p: any) => [
-        p.referenceNumber || p.providerTxId || '',
+        p.providerTxId || '',
+        p.referenceNumber || '',
         p.student?.applicationId || '',
         p.student?.name || '',
         p.student?.phone || '',

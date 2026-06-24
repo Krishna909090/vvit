@@ -81,12 +81,16 @@ export const InvoiceService = {
         let receiptPrefix: string;
         let receiptCategory: string;
 
+        let issuerName: string | undefined;
+
         if (messComponents.includes(component)) {
             receiptPrefix = 'LLP/SET';
             receiptCategory = 'MESS';
+            issuerName = 'SOCIAL COMPUTERS LLP';
         } else if (hostelComponents.includes(component)) {
             receiptPrefix = 'SET';
             receiptCategory = 'HOSTEL';
+            issuerName = 'SOCIAL EDUCATIONAL TRUST';
         } else {
             receiptPrefix = 'VVITU';
             receiptCategory = 'ADMISSION';
@@ -135,12 +139,20 @@ export const InvoiceService = {
         let invoiceItems: { description: string, amount: number }[] = [];
         let totalAmount = 0;
 
-        const hostelSharingLabel = (() => {
-            const ht: string | null | undefined = payment.student?.admissionDetails?.hostelType;
-            if (!ht) return '';
-            const match = ht.match(/SHARING_(\d+)/i);
-            return match ? ` (${match[1]} Sharing)` : '';
-        })();
+        let accommodationSharing: number | null = null;
+        const hostelTypeMatch = payment.student?.admissionDetails?.hostelType?.match(/SHARING_(\d+)/i);
+        if (hostelTypeMatch) {
+            accommodationSharing = parseInt(hostelTypeMatch[1], 10);
+        } else {
+            // hostelType on admissionDetails is frequently null; the authoritative
+            // sharing the student selected lives on the active accommodation pricing snapshot.
+            const pricingSnap = await prisma.studentAccommodationPricing.findFirst({
+                where: { studentId: primaryPayment.studentId, isActive: true },
+                select: { sharing: true }
+            });
+            if (pricingSnap?.sharing) accommodationSharing = pricingSnap.sharing;
+        }
+        const hostelSharingLabel = accommodationSharing ? ` (${accommodationSharing}-Sharing)` : '';
 
         const getPaymentDescription = (p: any) => {
              if (p.feeHead) return p.feeHead.name;
@@ -252,6 +264,7 @@ export const InvoiceService = {
 
             const txInvoiceData: any = {
                 receiptNumber: txReceiptNumber,
+                issuerName,
                 invoiceNumber: txInvoiceNumber,
                 date: primaryPayment.createdAt || new Date(),
                 studentName: primaryPayment.student.name,
@@ -291,6 +304,7 @@ export const InvoiceService = {
 
         const invoiceData: any = {
             receiptNumber,
+            issuerName,
             invoiceNumber,
             date: primaryPayment.createdAt || new Date(),
             studentName: primaryPayment.student.name,

@@ -10,6 +10,7 @@ export interface InvoiceItem {
 
 export interface InvoiceData {
   receiptNumber?: string
+  issuerName?: string
   invoiceNumber: string
   date: Date
   studentName: string
@@ -72,7 +73,7 @@ export const generateInvoicePDF = async (
 }
 
 function drawInvoiceInstance(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number, copyLabel: string) {
-    drawHeader(doc, offsetY)
+    drawHeader(doc, offsetY, data.issuerName)
     drawWatermark(doc, copyLabel, offsetY)
     drawInfoGrid(doc, data, offsetY)
     const subjectBarHeight = drawSubjectBar(doc, data, offsetY)
@@ -92,7 +93,7 @@ function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) 
     doc.restore()
 }
 
-function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
+function drawHeader(doc: PDFKit.PDFDocument, topY: number, issuerName?: string) {
   const logoPath = path.join(process.cwd(), 'src/assets/logo.png')
 
   doc
@@ -100,7 +101,7 @@ function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
     .fontSize(11)
     .fillColor('#C0392B')
     .text(
-      'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
+      issuerName || 'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
       0,
       topY + 20,
       { align: 'center', width: doc.page.width }
