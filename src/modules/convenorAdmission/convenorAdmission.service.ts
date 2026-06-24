@@ -1122,6 +1122,11 @@ export const ConvenorAdmissionService = {
           })
         )
       );
+
+      // Auto-regenerate Custodian Certificate
+      ConvenorAdmissionService.getOrGenerateCertificate(id, userId ?? 'SYSTEM', true).catch(err =>
+        logger.error(`[updateDetails] Cert auto-regen failed for CA ${id}: ${err}`)
+      );
     }
 
     return maskStudent(record);

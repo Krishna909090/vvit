@@ -892,6 +892,53 @@ export const ApplicationsService = {
         };
     },
 
+    async regenerateConvenorCustodianCert(
+        studentId: string,
+        documentsSubmitted: { key: string; label: string; status: 'SUBMITTED' | 'PENDING' }[],
+        adminId: string,
+        academicYearId: string,
+    ) {
+        const student = await prisma.student.findUnique({
+            where: { id: studentId },
+            include: {
+                admissionDetails: {
+                    include: {
+                        allottedCourse: { select: { name: true } },
+                        academicYear:   { select: { code: true } },
+                    },
+                },
+            },
+        });
+        if (!student?.admissionDetails) return;
+
+        const s3Key = `student/${studentId}/documents/custodian_certificate.pdf`;
+        const pdf = await generateCustodianCertificate({
+            admissionNo:        student.applicationId ?? studentId,
+            studentName:        student.name,
+            gender:             student.gender,
+            fatherName:         student.fatherName ?? undefined,
+            branch:             student.admissionDetails.allottedCourse?.name ?? undefined,
+            hallTicketNo:       student.applicationId ?? '',
+            academicYear:       student.admissionDetails.academicYear?.code ?? '',
+            entryYear:          student.admissionDetails.entryYearOfStudy ?? 1,
+            documentsSubmitted,
+            date:               new Date(),
+        });
+        const url = await uploadFileToS3(pdf, s3Key, 'application/pdf');
+        await prisma.studentDocument.upsert({
+            where:  { studentId_documentKey: { studentId, documentKey: 'CUSTODIAN_CERTIFICATE' } },
+            create: {
+                studentId,
+                documentKey:    'CUSTODIAN_CERTIFICATE',
+                url,
+                status:         'APPROVED',
+                academicYearId,
+                createdBy:      adminId,
+            },
+            update: { url, updatedBy: adminId },
+        });
+    },
+
     async markPhysicalCopy(
         studentId: string,
         documentsSubmitted: { key: string; label: string; status: 'SUBMITTED' | 'PENDING' }[],
@@ -942,6 +989,18 @@ export const ApplicationsService = {
                     },
                 });
             }
+        }
+
+        // Auto-regenerate Custodian Certificate to reflect updated physicalCopy status
+        if (type === 'MANAGEMENT') {
+            ApplicationsService.generateManagementCustodianCertificate(studentId, adminId).catch(err =>
+                logger.error(`[markPhysicalCopy] Mgmt cert auto-regen failed for ${studentId}: ${err}`)
+            );
+        } else {
+            // Convener: regenerate using the studentId-based S3 key (matches getOrGenerateCertificate)
+            ApplicationsService.regenerateConvenorCustodianCert(studentId, documentsSubmitted, adminId, academicYearId).catch(err =>
+                logger.error(`[markPhysicalCopy] Convenor cert auto-regen failed for ${studentId}: ${err}`)
+            );
         }
 
         return results;
