@@ -155,8 +155,9 @@ export const InvoiceService = {
         const hostelSharingLabel = accommodationSharing ? ` (${accommodationSharing}-Sharing)` : '';
 
         const getPaymentDescription = (p: any) => {
-             if (p.feeHead) return p.feeHead.name;
-
+             // Known components get a friendly label (and sharing suffix for
+             // accommodation) even when the linked feeHead is named with the raw
+             // enum (e.g. "HOSTEL_ACCOMMODATION"); feeHead.name is only a fallback.
              const c = p.component;
              if (c === PaymentComponent.APPLICATION_FEE) return 'Application Fee';
              if (c === PaymentComponent.SCHOLARSHIP_TOKEN) return 'Admission Fee (Token)';
@@ -167,6 +168,7 @@ export const InvoiceService = {
              if (c === PaymentComponent.TRANSPORT) return 'Transport Fee';
              if (c === PaymentComponent.BOOK_BANK) return 'Book Bank Fee';
 
+             if (p.feeHead) return p.feeHead.name;
              return c ? c.replace(/_/g, ' ') : 'Fee Component';
         };
 
