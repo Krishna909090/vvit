@@ -1,8 +1,30 @@
 import { Request, Response, NextFunction } from "express";
-import { processExcelImport } from './dataImport.service';
+import { processExcelImport, previewJsonImport, submitImport } from './dataImport.service';
 import { ImportType } from "@prisma/client";
 import { AppError } from '../../../utils/AppError';
-import prisma from '../../../config/prisma';
+import { z } from 'zod';
+
+const validatedRowSchema = z.object({
+  hallTicketNo:      z.string().min(1).max(50),
+  rank:              z.string().max(50).nullable(),
+  applicantName:     z.string().max(200).nullable(),
+  gender:            z.enum(['MALE', 'FEMALE']).nullable(),
+  category:          z.string().max(50).nullable(),
+  region:            z.string().max(50).nullable(),
+  alottedCategory:   z.string().max(50).nullable(),
+  phase:             z.string().max(50).nullable(),
+  institutionCodeId: z.string().uuid().nullable(),
+  degree:            z.string().max(100).nullable(),
+  courseId:          z.string().uuid().nullable(),
+  omrId:             z.number().int().positive(),
+  entryYear:         z.literal(1),
+  academicYearId:    z.string().uuid(),
+  year:              z.string().max(20),
+});
+
+const submitBodySchema = z.object({
+  validRows: z.array(validatedRowSchema).min(1, 'validRows must not be empty'),
+});
 
 export const importAdmissionData = async (
   req: Request,
@@ -11,32 +33,37 @@ export const importAdmissionData = async (
 ) => {
   try {
     const file = req.file;
-    const { mappingId, importType } = req.body;
+    const { importType } = req.body;
 
-    if (!file) {
-      throw new AppError("No file uploaded", 400);
-    }
+    if (!file) throw new AppError("No file uploaded", 400);
+    if (!importType) throw new AppError("Import Type is required", 400);
+    if (importType !== ImportType.CONVENOR_ADMISSION)
+      throw new AppError("This endpoint only supports CONVENOR_ADMISSION imports", 400);
 
-    if (!mappingId || !importType) {
-      throw new AppError("Mapping ID and Import Type are required", 400);
-    }
+    const adminId = (req as any).user?.id || "SYSTEM";
+    const results = await processExcelImport(file.buffer, adminId, file.mimetype, file.originalname);
 
-    if (!Object.values(ImportType).includes(importType as ImportType)) {
-       throw new AppError("Invalid Import Type", 400);
-    }
+    res.status(200).json({ success: true, message: "Data import processing completed", data: results });
+  } catch (error) {
+    next(error);
+  }
+};
 
-    const adminId = (req as any).user?.id || "SYSTEM"; 
+export const previewImport = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const rows = req.body;
+    if (!Array.isArray(rows) || rows.length === 0)
+      throw new AppError("Request body must be a non-empty array of row objects", 400);
 
-    const results = await processExcelImport(
-      file.buffer,
-      mappingId,
-      importType as ImportType,
-      adminId
-    );
+    const results = await previewJsonImport(rows);
 
     res.status(200).json({
       success: true,
-      message: "Data import processing completed",
+      message: "Preview complete",
       data: results,
     });
   } catch (error) {
@@ -44,31 +71,24 @@ export const importAdmissionData = async (
   }
 };
 
-export const createImportMapping = async (
+export const submitImportData = async (
   req: Request,
   res: Response,
   next: NextFunction
 ) => {
   try {
-    const { name, type, mapping } = req.body;
-
-    if (!name || !type || !mapping) {
-      throw new AppError("Name, Type, and Mapping JSON are required", 400);
+    const parsed = submitBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new AppError(`Invalid submit payload: ${parsed.error.issues.map(i => i.message).join(', ')}`, 400);
     }
 
-    const newMapping = await prisma.dataImportMapping.create({
-      data: {
-        name,
-        type,
-        mapping,
-        createdBy: (req as any).user?.userId || "SYSTEM",
-      },
-    });
+    const adminId = (req as any).user?.id || "SYSTEM";
+    const results = await submitImport(parsed.data.validRows, adminId);
 
-    res.status(201).json({
+    res.status(200).json({
       success: true,
-      message: "Import mapping created successfully",
-      data: newMapping,
+      message: `Import complete: ${results.success} inserted, ${results.failed} failed`,
+      data: results,
     });
   } catch (error) {
     next(error);

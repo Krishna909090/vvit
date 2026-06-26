@@ -1,5 +1,6 @@
 import prisma from '../../config/prisma';
 import { AppError } from '../../utils/AppError';
+import { resolveInstitutionCodeId } from '../../utils/institutionCodeCache';
 import { SystemSetting, DiscountStatus, PaymentMethod, PaymentComponent, PaymentMode, QuotaType, AccommodationType, LedgerTransactionType, AdmissionEntryType, FeeCorrectionType, FeeStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { Role, RoleType } from '../../constants/roles';
 import logger from '../../utils/logger';
@@ -156,6 +157,7 @@ export const FeeService = {
                 entryAcademicYearId,
                 entryType,
                 instituteCode,
+                institutionCodeId: await resolveInstitutionCodeId(instituteCode),
                 quotaType,
                 yearOfStudy,
                 createdBy: userId,
@@ -310,6 +312,7 @@ export const FeeService = {
                     entryAcademicYearId: params.entryAcademicYearId,
                     entryType:           params.entryType,
                     instituteCode:       params.instituteCode,
+                    institutionCodeId:   await resolveInstitutionCodeId(params.instituteCode),
                     quotaType:           params.quotaType,
                     yearOfStudy:         params.yearOfStudy,
                     createdBy:           params.userId,
@@ -496,6 +499,7 @@ export const FeeService = {
         const targetEntryYearId  = options?.entryAcademicYearId ?? null;
         const targetEntryType    = options?.entryType ?? null;
         const targetInstitute    = options?.instituteCode ?? null;
+        const targetInstituteId  = await resolveInstitutionCodeId(targetInstitute);
         const existingKey = (s: {
             courseId: string;
             feeHeadId: string;
@@ -534,6 +538,7 @@ export const FeeService = {
                 entryAcademicYearId: options?.entryAcademicYearId ?? s.entryAcademicYearId,
                 entryType:           options?.entryType           ?? s.entryType,
                 instituteCode:       options?.instituteCode       ?? s.instituteCode,
+                institutionCodeId:   targetInstituteId,
                 quotaType:           s.quotaType,
                 yearOfStudy:         s.yearOfStudy,
                 createdBy:           userId,
@@ -990,6 +995,19 @@ export const FeeService = {
 
         const studentQuota         = student.quotaType;
         const studentDegreeType    = student.degreeType ?? null;
+
+        let isFeesReimbursement = false;
+        if (studentQuota === 'CONVENOR') {
+            const ca = await prisma.convenorAdmission.findFirst({
+                where: { studentId, isDeleted: false },
+                select: { feesReimbursement: true },
+            });
+            isFeesReimbursement = ca?.feesReimbursement === true;
+            if (isFeesReimbursement) {
+                logger.info(`[generateFeeDemands] CONVENOR feesReimbursement=true for student=${studentId} — tuition will be waived`);
+            }
+        }
+
         const cohortYearId =
             student.admissionDetails?.feeCohortAcademicYearId
             ?? student.admissionDetails?.entryAcademicYearId
@@ -1187,10 +1205,12 @@ export const FeeService = {
                 }
 
                 const isTuition = fee.feeHead.component === 'TUITION';
-                const scholarshipAmt = (isTuition && discountPct > 0)
-                    ? (fee.amount * discountPct) / 100
-                    : 0;
-                const netAmount = fee.amount - scholarshipAmt;
+                const reimbursementWaiver = (isTuition && isFeesReimbursement) ? fee.amount : 0;
+                const scholarshipAmt = reimbursementWaiver > 0
+                    ? 0
+                    : (isTuition && discountPct > 0 ? (fee.amount * discountPct) / 100 : 0);
+                const discountAmt = reimbursementWaiver > 0 ? reimbursementWaiver : scholarshipAmt;
+                const netAmount = fee.amount - discountAmt;
 
                 const demandYear = fee.yearOfStudy ?? currentYear;
 
@@ -1202,13 +1222,15 @@ export const FeeService = {
                         academicYearId: fee.academicYearId,
                         yearOfStudy: demandYear,
                         amount: fee.amount,
-                        discountAmount:    scholarshipAmt,
+                        discountAmount:    discountAmt,
                         scholarshipAmount: scholarshipAmt,
                         netAmount,
                         status: 'PENDING',
                         dueDate: fallbackDueDate,
                         createdBy: userId,
-                        remarks: scholarshipAmt > 0 ? `Scholarship Applied: ${discountPct}%` : undefined
+                        remarks: reimbursementWaiver > 0
+                            ? `Fees Reimbursement: Tuition waived (CONVENOR quota)`
+                            : scholarshipAmt > 0 ? `Scholarship Applied: ${discountPct}%` : undefined
                     } as any
                 });
 
@@ -1227,7 +1249,23 @@ export const FeeService = {
                     }
                 });
 
-                if (scholarshipAmt > 0) {
+                if (reimbursementWaiver > 0) {
+                    await tx.studentLedger.create({
+                        data: {
+                            studentId,
+                            type: 'CREDIT',
+                            amount: reimbursementWaiver,
+                            description: `Fees Reimbursement: Tuition waived (CONVENOR quota)`,
+                            referenceId: demand.id,
+                            referenceType: 'SCHOLARSHIP',
+                            feeHeadId: fee.feeHeadId,
+                            createdBy: userId,
+                            academicYearId,
+                            yearOfStudy: demandYear
+                        }
+                    });
+                    scholarshipApplied++;
+                } else if (scholarshipAmt > 0) {
                     await tx.studentLedger.create({
                         data: {
                             studentId,
@@ -1501,14 +1539,16 @@ export const FeeService = {
 
         const breakdown: any = {
             TUITION: { demand: 0, discount: 0, paid: 0, balance: 0 },
+            REGISTRATION: { demand: 0, discount: 0, paid: 0, balance: 0 },
             HOSTEL: { demand: 0, discount: 0, paid: 0, balance: 0 },
             TRANSPORT: { demand: 0, discount: 0, paid: 0, balance: 0 },
             OTHER: { demand: 0, discount: 0, paid: 0, balance: 0 }
         };
 
-        const componentToKey = (comp: string | null | undefined): 'TUITION' | 'HOSTEL' | 'TRANSPORT' | 'OTHER' => {
+        const componentToKey = (comp: string | null | undefined): 'TUITION' | 'REGISTRATION' | 'HOSTEL' | 'TRANSPORT' | 'OTHER' => {
             if (!comp) return 'OTHER';
             if (comp === 'TUITION' || comp === 'SCHOLARSHIP_TOKEN') return 'TUITION';
+            if (comp === 'REGISTRATION') return 'REGISTRATION';
             if (comp === 'TRANSPORT') return 'TRANSPORT';
             if (comp === 'HOSTEL'
                 || comp === 'HOSTEL_ACCOMMODATION'

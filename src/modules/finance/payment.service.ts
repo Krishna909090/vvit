@@ -642,6 +642,19 @@ const processMultiPaymentSuccess = async (payments: any[], metadata: any) => {
     }
     payLog.info('SUCCESS', `${pendingPayments.length} payment(s) marked SUCCESS + settled + ledgered (atomic)`, { txnId, studentId, applicationId, amount: payments.reduce((s: number, p: any) => s + p.amount, 0) });
 
+    // Preserve original trigger metadata for CONVENOR_ALLOT payments — updateMany above overwrites
+    // the entire metadata field with the PhonePe response, losing targetAction/convenorAdmissionId etc.
+    // Merge so the trigger is durable if completeAllotAfterPayment needs to retry.
+    for (const payment of pendingPayments) {
+        const origMeta = payment.metadata;
+        if (origMeta?.targetAction) {
+            await prisma.payment.update({
+                where: { id: payment.id },
+                data: { metadata: { ...(metadata as object), ...origMeta } as any },
+            }).catch(err => logger.warn(`[processMultiPaymentSuccess] Failed to merge trigger metadata for payment=${payment.id}: ${err}`));
+        }
+    }
+
     for (const payment of pendingPayments) {
         try {
             await _processComponentLogic(payment);
@@ -916,13 +929,23 @@ const _createPaymentLedger = async (payment: any, db: any = prisma) => {
 const _handleTriggers = async (payments: any[]) => {
     const finalizeTrigger = payments.find(p => p.metadata?.targetAction === 'FINALIZE_ADMISSION');
     if (finalizeTrigger) {
-         try {
+        try {
             const { AdminStudentService } = require('../studentManagement/adminStudent.service');
             await prisma.$transaction(async (tx) => {
-                 await AdminStudentService.executeAdmissionUpdates(finalizeTrigger.studentId, finalizeTrigger.metadata, finalizeTrigger.id, 'SYSTEM', tx);
+                await AdminStudentService.executeAdmissionUpdates(finalizeTrigger.studentId, finalizeTrigger.metadata, finalizeTrigger.id, 'SYSTEM', tx);
             });
         } catch (err) {
             logger.error(`Admission Finalization Error: ${err}`);
+        }
+    }
+
+    const convenorAllotTrigger = payments.find(p => p.metadata?.targetAction === 'CONVENOR_ALLOT');
+    if (convenorAllotTrigger) {
+        try {
+            const { ConvenorAdmissionService } = require('../convenorAdmission/convenorAdmission.service');
+            await ConvenorAdmissionService.completeAllotAfterPayment(convenorAllotTrigger);
+        } catch (err) {
+            logger.error(`[_handleTriggers] CONVENOR_ALLOT completion error: ${err}`);
         }
     }
 };
@@ -1510,7 +1533,7 @@ export const exportSuccessPaymentsCsv = async (query: any) => {
     const rows = result.data;
 
     const headers = [
-        'UTR No', 'Application No', 'Full Name', 'Phone',
+        'Txn ID', 'Reference No (UTR)', 'Application No', 'Full Name', 'Phone',
         'Fee Type', 'Mode', 'Method', 'Amount',
         'Date & Time', 'Created By', 'Remarks'
     ];
@@ -1522,7 +1545,8 @@ export const exportSuccessPaymentsCsv = async (query: any) => {
     };
 
     const csvRows = rows.map((p: any) => [
-        p.referenceNumber || p.providerTxId || '',
+        p.providerTxId || '',
+        p.referenceNumber || '',
         p.student?.applicationId || '',
         p.student?.name || '',
         p.student?.phone || '',
@@ -1949,16 +1973,18 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
              const { summary, breakdown } = financialHistory;
              const totalPending = summary.totalPending;
 
-             const tuitionFee = breakdown['TUITION']?.demanded || 0;
+             const isFeesReimbursement = student.convenorDetails?.feesReimbursement === true;
 
-             let scholarshipDiscount = breakdown['TUITION']?.scholarshipAmount || 0;
-             
+             const tuitionFee = isFeesReimbursement ? 0 : (breakdown['TUITION']?.demanded || 0);
+
+             let scholarshipDiscount = isFeesReimbursement ? 0 : (breakdown['TUITION']?.scholarshipAmount || 0);
+
              let scholarshipPercentage = 0;
-             if (student.studentScholarship?.scholarshipPercentage) {
+             if (!isFeesReimbursement && student.studentScholarship?.scholarshipPercentage) {
                 scholarshipPercentage = student.studentScholarship.scholarshipPercentage;
              }
 
-             if (scholarshipDiscount === 0 && scholarshipPercentage > 0 && tuitionFee > 0) {
+             if (!isFeesReimbursement && scholarshipDiscount === 0 && scholarshipPercentage > 0 && tuitionFee > 0) {
                 scholarshipDiscount = (tuitionFee * scholarshipPercentage) / 100;
              }
 
@@ -1975,7 +2001,7 @@ export async function generateAndSaveAllotmentOrder(studentId: string) {
                 allottedCategory: student.convenorDetails?.category || `${student.category}_GEN_AU`,
                 reportingDate: format(reportingDate, 'dd.MM.yyyy'),
                 phase: 'First Phase',
-                feeReimbursement: 'NO',
+                feeReimbursement: student.convenorDetails?.feesReimbursement === true ? 'YES' : undefined,
                 profilePhotoUrl: profilePhotoUrl,
                 totalPending: totalPending,
                 scholarshipPercentage,
@@ -2399,6 +2425,7 @@ export const getStudentFinancialHistory = async (
         'HOSTEL_REGISTRATION',
         'TRANSPORT',
         'TUITION',
+        'REGISTRATION',
         'BOOK_BANK',
         'ADMISSION',
         'OTHER',
@@ -2585,6 +2612,11 @@ export const getStudentFinancialHistory = async (
         settledCount: settledRefunds.length,
         settledTotal: settledRefunds.reduce((s: number, fc: any) => s + (fc.amount ?? 0), 0),
     };
+
+    // Management quota students don't pay the Convener REGISTRATION fee
+    if ((student as any)?.quotaType === 'MANAGEMENT') {
+        delete breakdown['REGISTRATION'];
+    }
 
     return {
         summary,

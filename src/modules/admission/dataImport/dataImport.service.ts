@@ -1,257 +1,396 @@
 import ExcelJS from "exceljs";
+import Papa from "papaparse";
 import prisma from '../../../config/prisma';
 import { AppError } from '../../../utils/AppError';
 import logger from '../../../utils/logger';
-import { ImportType, QuotaType, ApplicationMode, AdmissionStatus, AdmissionEntryType } from "@prisma/client";
-import { Role } from '../../../constants/roles';
 
 interface ExcelRow {
   [key: string]: any;
 }
 
-export const processExcelImport = async (
-  fileBuffer: Buffer,
-  mappingId: string,
-  importType: ImportType,
-  adminId: string
-) => {
+interface ParsedRow {
+  rowNum: number;
+  hallTicketNo: string;
+  rank: string | null;
+  applicantName: string | null;
+  gender: string | null;
+  category: string | null;
+  region: string | null;
+  alottedCategory: string | null;
+  phase: string | null;
+  institutionCode: string | null;
+  degree: string | null;
+  omrId: number;
+  entryYear: number;
+}
 
-  const mappingRecord = await prisma.dataImportMapping.findUnique({
-    where: { id: mappingId },
+// Fully resolved row ready to insert — returned from preview, accepted by submit
+export interface ValidatedRow {
+  hallTicketNo: string;
+  rank: string | null;
+  applicantName: string | null;
+  gender: string | null;
+  category: string | null;
+  region: string | null;
+  alottedCategory: string | null;
+  phase: string | null;
+  institutionCodeId: string | null;
+  degree: string | null;
+  courseId: string | null;
+  omrId: number;
+  entryYear: number;
+  academicYearId: string;
+  year: string;
+}
+
+const str = (v: any): string | null =>
+  v != null && String(v).trim() !== '' ? String(v).trim() : null;
+
+const toInt = (v: any): number | null =>
+  v != null && !isNaN(Number(v)) ? Number(v) : null;
+
+const readCsvRows = (fileBuffer: Buffer): ExcelRow[] => {
+  const csv = fileBuffer.toString('utf8');
+  const result = Papa.parse(csv, { header: true, skipEmptyLines: true }) as Papa.ParseResult<ExcelRow>;
+  if (!result.data || result.data.length === 0) throw new AppError("CSV file is empty", 400);
+  // Trim header keys in case CSV has spaces around column names
+  return result.data.map((row: ExcelRow) => {
+    const cleaned: ExcelRow = {};
+    for (const key of Object.keys(row)) cleaned[key.trim()] = row[key];
+    return cleaned;
   });
+};
 
-  if (!mappingRecord) {
-    throw new AppError("Invalid Data Import Mapping ID", 400);
-  }
-
-  if (mappingRecord.type !== importType) {
-    throw new AppError("Mapping type does not match requested import type", 400);
-  }
-
-  const mapping = mappingRecord.mapping as Record<string, string>;
-
+const readExcelRows = async (fileBuffer: Buffer): Promise<ExcelRow[]> => {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(fileBuffer as any);
-
   const worksheet = workbook.worksheets[0];
-  if (!worksheet) {
-      throw new AppError("Excel file has no worksheets", 400);
-  }
+  if (!worksheet) throw new AppError("Excel file has no worksheets", 400);
 
   const rows: ExcelRow[] = [];
   const headers: string[] = [];
-  
+
   worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) {
-
-          row.eachCell((cell, colNumber) => {
-              headers[colNumber] = cell.value ? String(cell.value) : '';
-          });
-      } else {
-
-          const rowData: ExcelRow = {};
-
-          headers.forEach((header, index) => {
-              if (index === 0) return;
-
-              const cell = row.getCell(index);
-              let cellValue = cell.value;
-
-              if (cellValue && typeof cellValue === 'object') {
-                  if ('text' in cellValue) {
-                      cellValue = (cellValue as any).text; 
-                  } else if ('result' in cellValue) {
-                      cellValue = (cellValue as any).result;
-                  }
-              }
-
-              if (header) {
-                  rowData[header] = cellValue;
-              }
-          });
-
-          if (Object.keys(rowData).length > 0) {
-              rows.push(rowData);
-          }
-      }
+    if (rowNumber === 1) {
+      row.eachCell((cell, colNumber) => {
+        headers[colNumber] = cell.value ? String(cell.value) : '';
+      });
+    } else {
+      const rowData: ExcelRow = {};
+      headers.forEach((header, index) => {
+        if (index === 0) return;
+        const cell = row.getCell(index);
+        let cellValue = cell.value;
+        if (cellValue && typeof cellValue === 'object') {
+          if ('text' in cellValue) cellValue = (cellValue as any).text;
+          else if ('result' in cellValue) cellValue = (cellValue as any).result;
+        }
+        if (header) rowData[header] = cellValue;
+      });
+      if (Object.keys(rowData).length > 0) rows.push(rowData);
+    }
   });
 
-  if (rows.length === 0) {
-    throw new AppError("Excel file is empty", 400);
-  }
+  if (rows.length === 0) throw new AppError("Excel file is empty", 400);
+  return rows;
+};
 
-  const results = {
-    total: rows.length,
-    success: 0,
-    failed: 0,
-    errors: [] as any[],
-  };
+const readFileRows = async (fileBuffer: Buffer, mimetype: string, originalname: string): Promise<ExcelRow[]> => {
+  const isCsv = mimetype === 'text/csv' || originalname.toLowerCase().endsWith('.csv');
+  return isCsv ? readCsvRows(fileBuffer) : readExcelRows(fileBuffer);
+};
+
+const ALLOWED_INST_CODES = new Set(['VVITU', 'VVITPU', 'VVIT']);
+const VALID_GENDERS      = new Set(['MALE', 'FEMALE']);
+
+export interface RowError {
+  row: number;
+  hallTicketNo?: string;
+  errors: string[];
+}
+
+// Shared: parse + field-validate rows (no DB writes)
+// Collects ALL validation errors per row — gender, entryYear, institution code, omrId, hallTicket
+const parseRows = (rows: ExcelRow[]) => {
+  const parsed: ParsedRow[]  = [];
+  const fieldErrors: RowError[] = [];
 
   for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const rowData: Record<string, any> = {};
+    const r            = rows[i];
+    const rowNum       = i + 2;
+    const hallTicketNo = str(r['HallTicket']);
+    const rowErrors: string[] = [];
 
-    for (const [excelKey, dbField] of Object.entries(mapping)) {
-      if (row[excelKey] !== undefined) {
-        rowData[dbField] = row[excelKey];
-      }
+    if (!hallTicketNo) {
+      fieldErrors.push({ row: rowNum, errors: ['Missing HallTicket'] });
+      continue; // can't identify the row without a hall ticket
     }
 
-    const phone = rowData["phone"] ? String(rowData["phone"]).trim() : null;
-    const name = rowData["name"] || "Unknown Student";
-    const email = rowData["email"] ? String(rowData["email"]).toLowerCase() : null;
+    // Entry year — must always be 1 (1st year only)
+    const entryYear = toInt(r['EntryYear'] ?? r['entryYear']);
+    if (entryYear !== 1) {
+      rowErrors.push(`Invalid EntryYear "${entryYear ?? 'missing'}": only 1st year (value 1) is allowed`);
+    }
 
-    if (!phone) {
-      results.failed++;
-      results.errors.push({ row: i + 2, error: "Missing Phone Number" });
+    // OmrId — must be present (DB existence checked later in resolveAndValidate)
+    const omrId = toInt(r['OmrId'] ?? r['omrId'] ?? r['OMRId']);
+    if (omrId == null) rowErrors.push('Missing OmrId');
+
+    // Gender — must be MALE or FEMALE
+    const genderRaw = str(r['Gender']);
+    const gender    = genderRaw ? genderRaw.toUpperCase() : null;
+    if (!gender || !VALID_GENDERS.has(gender)) {
+      rowErrors.push(`Invalid Gender "${genderRaw ?? 'missing'}": must be MALE or FEMALE`);
+    }
+
+    // Institution code — must be VVITU, VVITPU, or VVIT
+    const instCode = str(r['InstituteCode']);
+    if (!instCode || !ALLOWED_INST_CODES.has(instCode.toUpperCase())) {
+      rowErrors.push(`Invalid InstituteCode "${instCode ?? 'missing'}": must be one of VVITU, VVITPU, VVIT`);
+    }
+
+    if (rowErrors.length > 0) {
+      fieldErrors.push({ row: rowNum, hallTicketNo, errors: rowErrors });
       continue;
     }
 
-    try {
-      await prisma.$transaction(async (tx) => {
+    parsed.push({
+      rowNum,
+      hallTicketNo,
+      rank:            str(r['Rank']),
+      applicantName:   str(r['ApplicantName']),
+      gender:          gender!,
+      category:        str(r['Category']),
+      region:          str(r['Region']),
+      alottedCategory: str(r['AlottedCategory']),
+      phase:           str(r['Phase']),
+      institutionCode: instCode!.toUpperCase(),
+      degree:          str(r['Degree']),
+      omrId:           omrId!,
+      entryYear:       entryYear!,
+    });
+  }
 
-        const activeYear = await tx.academicYear.findFirstOrThrow({
-            where: { isActive: true, isDeleted: false }
-        });
+  return { parsed, fieldErrors };
+};
 
-        let user = await tx.user.findUnique({ where: { phone } });
-        if (!user) {
-          user = await tx.user.create({
-            data: {
-              phone,
-              email: email || undefined,
-              name,
-              role: Role.STUDENT,
-              createdBy: adminId,
-            },
-          });
-        }
+// Shared: resolve DB lookups + duplicate checks → returns valid resolved rows + all errors
+const resolveAndValidate = async (parsed: ParsedRow[], fieldErrors: RowError[]) => {
+  const dbErrors: RowError[] = [];
+  const duplicates: string[] = [];
 
-        const applicationId = rowData["applicationId"] || `OFF-${phone}-${Date.now()}`;
-        
-        let quotaType: QuotaType = QuotaType.MANAGEMENT;
-        let appMode: ApplicationMode = ApplicationMode.OFFLINE;
+  // Duplicate check — DB + within file
+  const existing = await prisma.convenorAdmission.findMany({
+    where: { hallTicketNo: { in: parsed.map(r => r.hallTicketNo) } },
+    select: { hallTicketNo: true },
+  });
+  const existingSet = new Set(existing.map(e => e.hallTicketNo));
 
-        if (importType === ImportType.CONVENOR_ADMISSION) {
-           quotaType = QuotaType.CONVENOR;
+  const seenInFile = new Set<string>();
+  const deduped = parsed.filter(r => {
+    if (existingSet.has(r.hallTicketNo)) {
+      duplicates.push(r.hallTicketNo);
+      dbErrors.push({ row: r.rowNum, hallTicketNo: r.hallTicketNo, errors: ['Duplicate HallTicket: already exists in DB'] });
+      return false;
+    }
+    if (seenInFile.has(r.hallTicketNo)) {
+      duplicates.push(r.hallTicketNo);
+      dbErrors.push({ row: r.rowNum, hallTicketNo: r.hallTicketNo, errors: ['Duplicate HallTicket: repeated in this file'] });
+      return false;
+    }
+    seenInFile.add(r.hallTicketNo);
+    return true;
+  });
 
-        }
+  if (deduped.length === 0) {
+    return { valid: [], errors: [...fieldErrors, ...dbErrors], duplicates };
+  }
 
-        const student = await tx.student.upsert({
-          where: { userId: user.id },
-          create: {
-            userId: user.id,
-            applicationId,
-            name,
-            phone,
-            email: email || `temp-${phone}@vvitu.in`,
+  const uniqueCodes  = [...new Set(deduped.map(r => r.institutionCode).filter(Boolean))] as string[];
+  const uniqueOmrIds = [...new Set(deduped.map(r => r.omrId))];
 
-            fatherName: rowData["fatherName"] || "",
-            motherName: rowData["motherName"] || "",
-            gender: rowData["gender"] || "O",
-            dob: rowData["dob"] ? new Date(rowData["dob"]) : new Date(),
-            aadharNumber: rowData["aadharNumber"] ? String(rowData["aadharNumber"]) : "PENDING",
-            category: rowData["category"] || "NA",
-            country: rowData["country"] || "India",
-            address: rowData["address"] || "NA",
-            city: rowData["city"] || "NA",
-            state: rowData["state"] || "NA",
-            pincode: rowData["pincode"] ? String(rowData["pincode"]) : "000000",
-            
-            quotaType,
-            applicationMode: appMode,
-            isOffline: true,
+  const [activeYear, instCodeRecords, courseByOmr] = await Promise.all([
+    prisma.academicYear.findFirstOrThrow({ where: { isActive: true, isDeleted: false } }),
+    uniqueCodes.length > 0
+      ? prisma.institutionCode.findMany({
+          where: { code: { in: uniqueCodes }, isDeleted: false },
+          select: { id: true, code: true },
+        })
+      : Promise.resolve([] as { id: string; code: string }[]),
+    uniqueOmrIds.length > 0
+      ? prisma.course.findMany({
+          where: { omrId: { in: uniqueOmrIds }, isDeleted: false },
+          select: { id: true, omrId: true },
+        })
+      : Promise.resolve([] as { id: string; omrId: number | null }[]),
+  ]);
 
-            createdBy: adminId,
-          },
-          update: {
+  const codeToId      = new Map(instCodeRecords.map(r => [r.code, r.id]));
+  const omrToCourseId = new Map(courseByOmr.map(c => [c.omrId as number, c.id]));
+  const year1 = { academicYearId: activeYear.id, year: activeYear.code };
 
-            name,
-            fatherName: rowData["fatherName"] || undefined,
-            admissionDetails: {
+  const valid: ValidatedRow[] = [];
+  for (const r of deduped) {
+    const rowErrors: string[] = [];
 
-               upsert: {
-                  create: {
-                     status: AdmissionStatus.REGISTERED,
-                     academicYear: { connect: { id: activeYear.id } },
-                     entryType: AdmissionEntryType.REGULAR,
-                     entryYearOfStudy: 1,
-                     entryAcademicYear: { connect: { id: activeYear.id } },
-                     feeCohortAcademicYear: { connect: { id: activeYear.id } },
-                     batchAcademicYear: { connect: { id: activeYear.id } },
-                     instituteCode: 'MGMT',
-                  },
-                  update: {}
-               }
-            }
-          }
-        });
+    // OMR ID must exist in Course table
+    if (!omrToCourseId.has(r.omrId)) {
+      rowErrors.push(`OmrId ${r.omrId} not found in Course table`);
+    }
 
-        if (importType === ImportType.OFFLINE_ADMISSION) {
+    if (rowErrors.length > 0) {
+      dbErrors.push({ row: r.rowNum, hallTicketNo: r.hallTicketNo, errors: rowErrors });
+      continue;
+    }
 
-             const existingAdm = await tx.studentAdmission.findUnique({ where: { studentId: student.id }});
-             if (!existingAdm) {
-                await tx.studentAdmission.create({
-                    data: {
-                        studentId: student.id,
-                        academicYearId: activeYear.id,
-                        status: AdmissionStatus.REGISTERED,
+    valid.push({
+      hallTicketNo:      r.hallTicketNo,
+      rank:              r.rank,
+      applicantName:     r.applicantName,
+      gender:            r.gender,
+      category:          r.category,
+      region:            r.region,
+      alottedCategory:   r.alottedCategory,
+      phase:             r.phase,
+      institutionCodeId: r.institutionCode ? (codeToId.get(r.institutionCode) ?? null) : null,
+      degree:            r.degree,
+      courseId:          omrToCourseId.get(r.omrId) ?? null,
+      omrId:             r.omrId,
+      entryYear:         r.entryYear,
+      academicYearId:    year1.academicYearId,
+      year:              year1.year,
+    });
+  }
 
-                        entryType: AdmissionEntryType.REGULAR,
-                        entryYearOfStudy: 1,
-                        entryAcademicYearId: activeYear.id,
-                        feeCohortAcademicYearId: activeYear.id,
-                        batchAcademicYearId: activeYear.id,
-                        instituteCode: 'MGMT',
-                    }
-                })
-             }
-        }
+  return { valid, errors: [...fieldErrors, ...dbErrors], duplicates };
+};
 
-        if (importType === ImportType.CONVENOR_ADMISSION) {
-            await tx.convenorAdmission.upsert({
-                where: { studentId: student.id },
-                create: {
-                    studentId: student.id,
-                    rank: rowData["rank"] ? String(rowData["rank"]) : null,
-                    hallTicketNo: rowData["hallTicketNo"] ? String(rowData["hallTicketNo"]) : null,
-                    allotmentOrder: rowData["allotmentOrder"],
+// ── PREVIEW (array of JSON objects from request body) ─────────────────────────
+export const previewJsonImport = async (rows: ExcelRow[]) => {
+  if (!Array.isArray(rows) || rows.length === 0) throw new AppError('Request body must be a non-empty array', 400);
+  const { parsed, fieldErrors } = parseRows(rows);
+  const { valid, errors, duplicates } = await resolveAndValidate(parsed, fieldErrors);
 
-                },
-                update: {
-                     rank: rowData["rank"] ? String(rowData["rank"]) : undefined,
-                     hallTicketNo: rowData["hallTicketNo"] ? String(rowData["hallTicketNo"]) : undefined,
-                }
-            });
+  return {
+    total:      rows.length,
+    valid:      valid.length,
+    invalid:    errors.length,
+    duplicates: duplicates.length,
+    validRows:  valid,
+    errors,
+  };
+};
 
-            await tx.studentAdmission.upsert({
-                where: { studentId: student.id },
-                create: {
-                    studentId: student.id,
-                    academicYearId: activeYear.id,
-                    status: AdmissionStatus.SEAT_ALLOTTED,
-                    entryType: AdmissionEntryType.REGULAR,
-                    entryYearOfStudy: 1,
-                    entryAcademicYearId: activeYear.id,
-                    feeCohortAcademicYearId: activeYear.id,
-                    batchAcademicYearId: activeYear.id,
-                    instituteCode: 'MGMT',
-                },
-                update: {
-                    status: AdmissionStatus.SEAT_ALLOTTED
-                }
-            });
-        }
+// ── PREVIEW (file buffer) — kept for legacy callers ───────────────────────────
+export const previewExcelImport = async (fileBuffer: Buffer, mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', originalname = 'file.xlsx') => {
+  const rows = await readFileRows(fileBuffer, mimetype, originalname);
+  const { parsed, fieldErrors } = parseRows(rows);
+  const { valid, errors, duplicates } = await resolveAndValidate(parsed, fieldErrors);
 
-      });
+  return {
+    total:      rows.length,
+    valid:      valid.length,
+    invalid:    errors.length,
+    duplicates: duplicates.length,
+    validRows:  valid,
+    errors,
+  };
+};
 
-      results.success++;
-    } catch (error: any) {
-      logger.error(`Import failed for row ${i + 2}: ${error.message}`);
+// ── SUBMIT — insert pre-validated rows ────────────────────────────────────────
+export const submitImport = async (validRows: ValidatedRow[], adminId: string) => {
+  if (!validRows || validRows.length === 0) throw new AppError('No valid rows to import', 400);
+
+  // Always resolve academicYear fresh at submit time — preview result may be stale
+  const activeYear = await prisma.academicYear.findFirstOrThrow({
+    where: { isActive: true, isDeleted: false },
+    select: { id: true, code: true },
+  });
+
+  // Final duplicate guard in case preview was stale
+  const existing = await prisma.convenorAdmission.findMany({
+    where: { hallTicketNo: { in: validRows.map(r => r.hallTicketNo) } },
+    select: { hallTicketNo: true },
+  });
+  const existingSet = new Set(existing.map(e => e.hallTicketNo));
+
+  const results = { total: validRows.length, success: 0, failed: 0, errors: [] as { hallTicketNo: string; error: string }[] };
+
+  const toInsert = validRows.filter(r => {
+    if (existingSet.has(r.hallTicketNo)) {
       results.failed++;
-      results.errors.push({ row: i + 2, error: error.message });
+      results.errors.push({ hallTicketNo: r.hallTicketNo, error: 'Already exists (duplicate)' });
+      return false;
+    }
+    return true;
+  });
+
+  if (toInsert.length === 0) return results;
+
+  const buildRow = (r: ValidatedRow) => ({
+    hallTicketNo:      r.hallTicketNo,
+    rank:              r.rank,
+    applicantName:     r.applicantName,
+    gender:            r.gender,
+    category:          r.category,
+    region:            r.region,
+    alottedCategory:   r.alottedCategory,
+    phase:             r.phase,
+    institutionCodeId: r.institutionCodeId,
+    degree:            r.degree,
+    courseId:          r.courseId,
+    omrId:             r.omrId,
+    entryYear:         1,
+    academicYearId:    activeYear.id,
+    year:              activeYear.code,
+    status:            'NOT_REPORTED',
+    isDeleted:         false,
+    createdBy:         adminId,
+  });
+
+  const CHUNK = 200;
+  for (let c = 0; c < toInsert.length; c += CHUNK) {
+    const chunk = toInsert.slice(c, c + CHUNK);
+    try {
+      await prisma.convenorAdmission.createMany({ data: chunk.map(buildRow), skipDuplicates: false });
+      results.success += chunk.length;
+    } catch {
+      for (const r of chunk) {
+        try {
+          await prisma.convenorAdmission.create({ data: buildRow(r) });
+          results.success++;
+        } catch (rowErr: any) {
+          logger.error(`Convener import submit row ${r.hallTicketNo}: ${rowErr.message}`);
+          results.failed++;
+          results.errors.push({ hallTicketNo: r.hallTicketNo, error: rowErr.message });
+        }
+      }
     }
   }
+
+  return results;
+};
+
+// Legacy — kept for backward compatibility
+export const processExcelImport = async (fileBuffer: Buffer, adminId: string, mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', originalname = 'file.xlsx') => {
+  const rows = await readFileRows(fileBuffer, mimetype, originalname);
+  const { parsed, fieldErrors } = parseRows(rows);
+  const { valid, errors, duplicates } = await resolveAndValidate(parsed, fieldErrors);
+
+  const results = {
+    total:      rows.length,
+    success:    0,
+    failed:     errors.length,
+    duplicates: duplicates,
+    errors,
+  };
+
+  if (valid.length === 0) return results;
+
+  const submitted = await submitImport(valid, adminId);
+  results.success = submitted.success;
+  results.failed += submitted.failed;
+  results.errors.push(...submitted.errors.map(e => ({ row: 0, hallTicketNo: e.hallTicketNo, errors: [e.error] })));
 
   return results;
 };

@@ -164,7 +164,9 @@ export const DashboardService = {
             totalScholarshipNotEligible,
             discountStats,
             totalSeatCancellationsApproved,
-            totalBranchChangeApproved
+            totalBranchChangeApproved,
+            totalRegular,
+            totalLateral,
         ] = await Promise.all([
             prisma.student.count({
                 where: {
@@ -188,13 +190,14 @@ export const DashboardService = {
                     }
                 }
             }),
-            prisma.student.count({
+            prisma.convenorAdmission.count({
                 where: {
-                    quotaType: QuotaType.CONVENOR,
-                    admissionDetails: {
-                        allottedCourseId: { not: null },
-                        status: { not: 'CANCELLED' },
-                        ...(dateFilter ? { seatAllottedAt: dateFilter } : {})
+                    studentId: { not: null },
+                    student: {
+                        admissionDetails: {
+                            status: 'ADMISSION_CONFIRMED',
+                            ...(dateFilter ? { seatAllottedAt: dateFilter } : {})
+                        }
                     }
                 }
             }),
@@ -262,7 +265,21 @@ export const DashboardService = {
                   AND UPPER(TRIM("fromDegree")) = UPPER(TRIM("toDegree"))
                   ${dateFilter?.gte ? Prisma.sql`AND "actionedAt" >= ${dateFilter.gte}` : Prisma.empty}
                   ${dateFilter?.lte ? Prisma.sql`AND "actionedAt" <= ${dateFilter.lte}` : Prisma.empty}
-            `
+            `,
+            prisma.studentAdmission.count({
+                where: {
+                    status: 'ADMISSION_CONFIRMED',
+                    entryType: 'REGULAR',
+                    ...(dateFilter ? { seatAllottedAt: dateFilter } : {})
+                }
+            }),
+            prisma.studentAdmission.count({
+                where: {
+                    status: 'ADMISSION_CONFIRMED',
+                    entryType: 'LATERAL',
+                    ...(dateFilter ? { seatAllottedAt: dateFilter } : {})
+                }
+            }),
         ]);
 
         const approvedDiscountStudents = await prisma.discountRequest.findMany({
@@ -285,7 +302,9 @@ export const DashboardService = {
             totalApprovedDiscountStudents: approvedDiscountStudents.length,
             totalApprovedDiscountAmount: discountStats._sum.approvedAmount || 0,
             totalSeatCancellationsApproved,
-            totalBranchChangeApproved: Number(totalBranchChangeApproved?.[0]?.count ?? 0)
+            totalBranchChangeApproved: Number(totalBranchChangeApproved?.[0]?.count ?? 0),
+            totalRegular,
+            totalLateral,
         };
     },
 
@@ -495,7 +514,8 @@ export const DashboardService = {
         const stats: Record<string, number> = {};
         result.forEach(item => {
             if (item.gender) {
-                stats[item.gender] = item._count.id;
+                const key = item.gender.toUpperCase();
+                stats[key] = (stats[key] ?? 0) + item._count.id;
             }
         });
 

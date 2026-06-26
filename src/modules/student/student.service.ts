@@ -1,4 +1,5 @@
 import prisma from '../../config/prisma';
+import { resolveInstitutionCodeId } from '../../utils/institutionCodeCache';
 import QRCode from 'qrcode';
 import {
     AdmissionStatus,
@@ -53,8 +54,8 @@ export const registerStudent = async (data: any, userId: string | null, _current
     }
 
     const orConditions: any[] = [
-        { email: data.email }
-
+        { email: data.email },
+        { phone: data.phone },
     ];
 
     if (userId) {
@@ -62,16 +63,15 @@ export const registerStudent = async (data: any, userId: string | null, _current
     }
 
     const existingStudent = await prisma.student.findFirst({
-        where: {
-            OR: orConditions    
-        }
+        where: { OR: orConditions }
     });
 
     if (existingStudent) {
         let conflict = 'details';
         if (existingStudent.email === data.email) conflict = 'Email';
+        else if (existingStudent.phone === data.phone) conflict = 'Phone number';
         else if (userId && existingStudent.userId === userId) conflict = 'User Account';
-        
+
         throw new AppError(`Student conflict: A student is already registered with this ${conflict}`, 400);
     }
 
@@ -222,6 +222,7 @@ export const registerStudent = async (data: any, userId: string | null, _current
                 feeCohortAcademicYearId,
                 batchAcademicYearId,
                 instituteCode,
+                institutionCodeId: await resolveInstitutionCodeId(instituteCode),
             }
         });
 

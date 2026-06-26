@@ -10,6 +10,7 @@ export interface InvoiceItem {
 
 export interface InvoiceData {
   receiptNumber?: string
+  issuerName?: string
   invoiceNumber: string
   date: Date
   studentName: string
@@ -72,7 +73,7 @@ export const generateInvoicePDF = async (
 }
 
 function drawInvoiceInstance(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: number, copyLabel: string) {
-    drawHeader(doc, offsetY)
+    drawHeader(doc, offsetY, data.issuerName)
     drawWatermark(doc, copyLabel, offsetY)
     drawInfoGrid(doc, data, offsetY)
     const subjectBarHeight = drawSubjectBar(doc, data, offsetY)
@@ -92,7 +93,7 @@ function drawWatermark(doc: PDFKit.PDFDocument, label: string, offsetY: number) 
     doc.restore()
 }
 
-function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
+function drawHeader(doc: PDFKit.PDFDocument, topY: number, issuerName?: string) {
   const logoPath = path.join(process.cwd(), 'src/assets/logo.png')
 
   doc
@@ -100,7 +101,7 @@ function drawHeader(doc: PDFKit.PDFDocument, topY: number) {
     .fontSize(11)
     .fillColor('#C0392B')
     .text(
-      'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
+      issuerName || 'VASIREDDY VENKATADRI INTERNATIONAL TECHNOLOGICAL UNIVERSITY',
       0,
       topY + 20,
       { align: 'center', width: doc.page.width }
@@ -172,10 +173,18 @@ function drawInfoGrid(doc: PDFKit.PDFDocument, data: InvoiceData, offsetY: numbe
     doc.text(`Invoice No: ${data.invoiceNumber}`, rightX, detailY)
     doc.text(`Date: ${format(data.date, 'dd/MM/yyyy')}`, rightX, detailY + 12)
 
+    const method = (data.paymentMethod || '').toUpperCase();
+    const isCash = method === 'CASH';
+    const isBankTransfer = ['IMPS', 'RTGS', 'NEFT', 'NEFT_RTGS', 'BANK TRANSFER'].includes(method);
     const utrOffset = (detailY - y) + 24
-    const payOffset = (detailY - y) + 36
-    const utrDisplay = (data.referenceId && data.referenceId !== data.transactionId) ? data.referenceId : 'N/A';
-    doc.text(`UTR: ${utrDisplay}`, rightX, y + utrOffset)
+    const payOffset = isCash ? utrOffset : (detailY - y) + 36
+
+    if (!isCash) {
+      const utrDisplay = isBankTransfer
+        ? (data.referenceId || 'N/A')
+        : (data.referenceId && data.referenceId !== data.transactionId ? data.referenceId : 'N/A');
+      doc.text(`UTR: ${utrDisplay}`, rightX, y + utrOffset)
+    }
 
     doc.text(`Payment: ${data.paymentMethod}`, rightX, y + payOffset)
   }

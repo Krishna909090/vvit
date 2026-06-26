@@ -88,6 +88,8 @@ interface EmailData extends PaymentEmailData {
     };
     additionalAttachments?: any[];
     skipInvoiceAttachment?: boolean;
+    issuerName?: string;
+    receiptNumber?: string;
 }
 
 const escapeHtml = (s: string) =>
@@ -178,6 +180,8 @@ export const sendPaymentReceipt = async (
         
         const invoiceData: InvoiceData = {
             invoiceNumber: data.invoiceNumber,
+            receiptNumber: data.receiptNumber,
+            issuerName: data.issuerName,
             date: data.date,
             studentName: data.studentName,
             studentId: data.applicationId,

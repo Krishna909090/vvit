@@ -1,6 +1,7 @@
 
 
 import prisma from '../../../config/prisma';
+import { resolveInstitutionCodeId } from '../../../utils/institutionCodeCache';
 import {
     AdmissionStatus,
     CancellationStatus,
@@ -1479,6 +1480,7 @@ export const AdmissionService = {
              if (updateProps.scholarshipPercentage !== undefined) {
                  updateProps.scholarshipPercentage = Number(updateProps.scholarshipPercentage);
                  if (updateProps.scholarshipPercentage > 0) updateProps.isEligible = 'YES';
+                 else updateProps.isEligible = 'NO';
              }
 
              if (updateProps.qualificationId) {
@@ -2503,9 +2505,31 @@ export const AdmissionService = {
         const isSuccess = payment.status === PaymentStatus.SUCCESS;
         if (isSuccess) {
              logger.info(`[verifyAndCompletePayment] Payment ${paymentId} already processed.`);
-             return { 
-                success: true, 
-                message: "Payment successfully processed", 
+
+             // Even though payment is SUCCESS, the CONVENOR_ALLOT trigger may not have run
+             // (e.g. cash payment where allot() transaction failed after payment creation,
+             // or UPI where PhonePe callback's completeAllotAfterPayment failed and admin is
+             // manually retrying via verify-payment). Check and complete if CA still stuck.
+             const meta = payment.metadata as any;
+             if (meta?.targetAction === 'CONVENOR_ALLOT') {
+                 const stuckCA = await prisma.convenorAdmission.findFirst({
+                     where: { id: meta.convenorAdmissionId, status: { not: 'SEAT_CONFIRMED' }, isDeleted: false },
+                     select: { id: true },
+                 });
+                 if (stuckCA) {
+                     logger.warn(`[verifyAndCompletePayment] Payment ${paymentId} is SUCCESS but CA=${meta.convenorAdmissionId} still not SEAT_CONFIRMED — completing now`);
+                     try {
+                         const { ConvenorAdmissionService } = await import('../../convenorAdmission/convenorAdmission.service');
+                         await ConvenorAdmissionService.completeAllotAfterPayment(payment);
+                     } catch (err) {
+                         logger.error(`[verifyAndCompletePayment] CONVENOR_ALLOT completion failed for payment=${paymentId}: ${err}`);
+                     }
+                 }
+             }
+
+             return {
+                success: true,
+                message: "Payment successfully processed",
                 status: PaymentStatus.SUCCESS,
                 data: {
                     paymentId: payment.id,
@@ -2599,6 +2623,26 @@ export const AdmissionService = {
                      logger.info(`[verifyAndFinalizePayment] Allotment Order generated for student=${primaryPayment.studentId}`);
                  }
              } catch (err) { logger.warn(`Failed to generate allotment order: ${err}`); }
+         }
+
+         // Handle CONVENOR_ALLOT trigger — the transaction above overwrites payment.metadata
+         // with gatewayResponse, but the in-memory payments array still carries the original metadata.
+         const convenorAllotPayment = payments.find((p: any) => p.metadata?.targetAction === 'CONVENOR_ALLOT');
+         if (convenorAllotPayment) {
+             // Persist merged metadata to DB so the heal job can recover on any retry
+             await prisma.payment.update({
+                 where: { id: convenorAllotPayment.id },
+                 data: { metadata: { ...(gatewayResponse || {}), ...convenorAllotPayment.metadata } as any },
+             }).catch((err: any) => logger.warn(`[_completeAdmissionTransaction] Metadata merge failed for ${convenorAllotPayment.id}: ${err}`));
+
+             try {
+                 const { ConvenorAdmissionService } = await import('../../convenorAdmission/convenorAdmission.service');
+                 await ConvenorAdmissionService.completeAllotAfterPayment(convenorAllotPayment);
+                 logger.info(`[_completeAdmissionTransaction] CONVENOR_ALLOT completed for payment=${convenorAllotPayment.id}`);
+             } catch (err) {
+                 logger.error(`[_completeAdmissionTransaction] CONVENOR_ALLOT completion failed for payment=${convenorAllotPayment.id}: ${err}`);
+                 // Heal job will retry within 10 minutes
+             }
          }
 
          try {
@@ -2750,7 +2794,8 @@ export const AdmissionService = {
 
         const where = {
             ...(status ? { status } : {}),
-            ...(resolvedStudentId ? { studentId: resolvedStudentId } : {})
+            ...(resolvedStudentId ? { studentId: resolvedStudentId } : {}),
+            student: { quotaType: 'MANAGEMENT' },
         } as any;
 
         const [requests, total] = await Promise.all([
@@ -2772,49 +2817,68 @@ export const AdmissionService = {
 
         const courseIds = [...new Set(requests.flatMap((r: any) => [r.fromCourse, r.toCourse].filter(Boolean)))];
 
-        // Course names only — capacity is fetched per-student using their batchAcademicYearId
-        const courses = await prisma.course.findMany({
-            where: { id: { in: courseIds } },
-            select: { id: true, name: true }
-        });
+        // Collect all batchAcademicYearIds used across requests for accurate filled-seat counts
+        const batchAyIds = [...new Set(
+            (requests as any[]).map((r: any) =>
+                r.student?.admissionDetails?.batchAcademicYearId ||
+                r.student?.admissionDetails?.academicYearId
+            ).filter(Boolean)
+        )];
+
+        const [courses, liveFilledRows] = await Promise.all([
+            // Course names + totalSeats from CourseCapacity
+            prisma.course.findMany({
+                where: { id: { in: courseIds } },
+                select: {
+                    id: true,
+                    name: true,
+                    capacities: {
+                        where: batchAyIds.length > 0 ? { academicYearId: { in: batchAyIds } } : undefined,
+                        select: { academicYearId: true, totalSeats: true },
+                    },
+                },
+            }),
+            // Live filled-seat count per (courseId, batchAcademicYearId) — same method as dashboard
+            courseIds.length > 0
+                ? prisma.studentAdmission.groupBy({
+                    by: ['allottedCourseId', 'batchAcademicYearId'],
+                    where: {
+                        allottedCourseId: { in: courseIds },
+                        batchAcademicYearId: batchAyIds.length > 0 ? { in: batchAyIds } : undefined,
+                        status: { not: 'CANCELLED' },
+                    },
+                    _count: { studentId: true },
+                  })
+                : Promise.resolve([]),
+        ]);
+
         const courseNameMap = Object.fromEntries(courses.map((c: any) => [c.id, c.name]));
-
-        // Build unique (courseId, batchAcademicYearId) pairs across all requests
-        const capacityPairs: { courseId: string; academicYearId: string }[] = [];
-        for (const r of requests as any[]) {
-            const batchAyId = r.student?.admissionDetails?.batchAcademicYearId
-                           || r.student?.admissionDetails?.academicYearId;
-            if (batchAyId) {
-                if (r.fromCourse) capacityPairs.push({ courseId: r.fromCourse, academicYearId: batchAyId });
-                if (r.toCourse)   capacityPairs.push({ courseId: r.toCourse,   academicYearId: batchAyId });
-            }
-        }
-
-        const capacityRows = capacityPairs.length > 0
-            ? await prisma.courseCapacity.findMany({
-                where: { OR: capacityPairs },
-                select: { courseId: true, academicYearId: true, totalSeats: true, filledSeats: true }
-              })
-            : [];
-
-        // Map key: "courseId:batchAcademicYearId"
-        const capacityMap = Object.fromEntries(
-            capacityRows.map((c: any) => [`${c.courseId}:${c.academicYearId}`, c])
+        const courseTotalMap = Object.fromEntries(
+            courses.flatMap((c: any) =>
+                (c.capacities ?? []).map((cap: any) => [`${c.id}:${cap.academicYearId}`, cap.totalSeats])
+            )
+        );
+        // Live count map: "courseId:batchAcademicYearId" → count
+        const liveFilledMap = Object.fromEntries(
+            (liveFilledRows as any[]).map((row: any) =>
+                [`${row.allottedCourseId}:${row.batchAcademicYearId}`, row._count.studentId]
+            )
         );
 
         const data = (requests as any[]).map((r: any) => {
             const batchAyId = r.student?.admissionDetails?.batchAcademicYearId
-                           || r.student?.admissionDetails?.academicYearId;
-            const fromCap = batchAyId ? (capacityMap[`${r.fromCourse}:${batchAyId}`] ?? null) : null;
-            const toCap   = batchAyId ? (capacityMap[`${r.toCourse}:${batchAyId}`]   ?? null) : null;
+                           || r.student?.admissionDetails?.academicYearId
+                           || null;
+            const fromKey = r.fromCourse && batchAyId ? `${r.fromCourse}:${batchAyId}` : null;
+            const toKey   = r.toCourse   && batchAyId ? `${r.toCourse}:${batchAyId}`   : null;
             return {
                 ...r,
-                fromCourseName:       courseNameMap[r.fromCourse] ?? null,
-                toCourseName:         courseNameMap[r.toCourse]   ?? null,
-                fromCourseFilledSeats: fromCap?.filledSeats ?? null,
-                fromCourseTotalSeats:  fromCap?.totalSeats  ?? null,
-                toCourseFilledSeats:   toCap?.filledSeats   ?? null,
-                toCourseTotalSeats:    toCap?.totalSeats    ?? null,
+                fromCourseName:        courseNameMap[r.fromCourse] ?? null,
+                toCourseName:          courseNameMap[r.toCourse]   ?? null,
+                fromCourseFilledSeats: fromKey != null ? (liveFilledMap[fromKey] ?? 0) : null,
+                fromCourseTotalSeats:  fromKey != null ? (courseTotalMap[fromKey] ?? null) : null,
+                toCourseFilledSeats:   toKey   != null ? (liveFilledMap[toKey]   ?? 0) : null,
+                toCourseTotalSeats:    toKey   != null ? (courseTotalMap[toKey]   ?? null) : null,
             };
         });
 
@@ -3161,6 +3225,7 @@ export const AdmissionService = {
                     feeCohortAcademicYearId,
                     batchAcademicYearId,
                     instituteCode: entry.instituteCode ?? 'MGMT',
+                    institutionCodeId: await resolveInstitutionCodeId(entry.instituteCode ?? 'MGMT'),
                     entryReason: entry.reason,
                     isBackdated: entry.isBackdated,
                     paidFee: 0,

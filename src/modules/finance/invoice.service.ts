@@ -5,6 +5,16 @@ import { uploadFileToS3, downloadFileFromS3, convertToPresignedUrl } from '../..
 import { sendEntranceFeeReceipt } from '../../utils/emailService';
 import { PaymentStatus, PaymentComponent } from '@prisma/client';
 
+const resolvePaymentMethodLabel = (method: string | null | undefined): string => {
+    switch ((method || '').toUpperCase()) {
+        case 'NEFT_RTGS':
+        case 'NEFT':    return 'NEFT';
+        case 'RTGS':    return 'RTGS';
+        case 'IMPS':    return 'IMPS';
+        default:        return method || 'ONLINE';
+    }
+};
+
 export const InvoiceService = {
 
     async generateInvoiceForPayment(paymentId: string, _forceRegenerate = false) {
@@ -71,12 +81,16 @@ export const InvoiceService = {
         let receiptPrefix: string;
         let receiptCategory: string;
 
+        let issuerName: string | undefined;
+
         if (messComponents.includes(component)) {
             receiptPrefix = 'LLP/SET';
             receiptCategory = 'MESS';
+            issuerName = 'SOCIAL COMPUTERS LLP';
         } else if (hostelComponents.includes(component)) {
             receiptPrefix = 'SET';
             receiptCategory = 'HOSTEL';
+            issuerName = 'SOCIAL EDUCATIONAL TRUST';
         } else {
             receiptPrefix = 'VVITU';
             receiptCategory = 'ADMISSION';
@@ -125,19 +139,36 @@ export const InvoiceService = {
         let invoiceItems: { description: string, amount: number }[] = [];
         let totalAmount = 0;
 
+        let accommodationSharing: number | null = null;
+        const hostelTypeMatch = payment.student?.admissionDetails?.hostelType?.match(/SHARING_(\d+)/i);
+        if (hostelTypeMatch) {
+            accommodationSharing = parseInt(hostelTypeMatch[1], 10);
+        } else {
+            // hostelType on admissionDetails is frequently null; the authoritative
+            // sharing the student selected lives on the active accommodation pricing snapshot.
+            const pricingSnap = await prisma.studentAccommodationPricing.findFirst({
+                where: { studentId: primaryPayment.studentId, isActive: true },
+                select: { sharing: true }
+            });
+            if (pricingSnap?.sharing) accommodationSharing = pricingSnap.sharing;
+        }
+        const hostelSharingLabel = accommodationSharing ? ` (${accommodationSharing}-Sharing)` : '';
+
         const getPaymentDescription = (p: any) => {
-             if (p.feeHead) return p.feeHead.name;
-             
+             // Known components get a friendly label (and sharing suffix for
+             // accommodation) even when the linked feeHead is named with the raw
+             // enum (e.g. "HOSTEL_ACCOMMODATION"); feeHead.name is only a fallback.
              const c = p.component;
              if (c === PaymentComponent.APPLICATION_FEE) return 'Application Fee';
              if (c === PaymentComponent.SCHOLARSHIP_TOKEN) return 'Admission Fee (Token)';
              if (c === PaymentComponent.TUITION) return 'Tuition Fee';
-             if (c === PaymentComponent.HOSTEL) return 'Hostel Fee';
-             if (c === PaymentComponent.HOSTEL_ACCOMMODATION) return 'Hostel Accommodation Fee';
+             if (c === PaymentComponent.HOSTEL) return `Hostel Fee${hostelSharingLabel}`;
+             if (c === PaymentComponent.HOSTEL_ACCOMMODATION) return `Hostel Accommodation Fee${hostelSharingLabel}`;
              if (c === PaymentComponent.HOSTEL_MESS) return 'Mess Fee';
              if (c === PaymentComponent.TRANSPORT) return 'Transport Fee';
              if (c === PaymentComponent.BOOK_BANK) return 'Book Bank Fee';
 
+             if (p.feeHead) return p.feeHead.name;
              return c ? c.replace(/_/g, ' ') : 'Fee Component';
         };
 
@@ -159,8 +190,8 @@ export const InvoiceService = {
                      let label = c.component;
                      if (label === PaymentComponent.TUITION) label = 'Tuition Fee';
                      else if (label === PaymentComponent.TRANSPORT) label = 'Transport Fee';
-                     else if (label === PaymentComponent.HOSTEL) label = 'Hostel Fee'; 
-                     else if (label === PaymentComponent.HOSTEL_ACCOMMODATION) label = 'Hostel Accommodation Fee';
+                     else if (label === PaymentComponent.HOSTEL) label = `Hostel Fee${hostelSharingLabel}`;
+                     else if (label === PaymentComponent.HOSTEL_ACCOMMODATION) label = `Hostel Accommodation Fee${hostelSharingLabel}`;
                      else if (label === PaymentComponent.HOSTEL_MESS) label = 'Mess Fee';
                      else if (label === PaymentComponent.APPLICATION_FEE) label = 'Application Fee';
                      else if (label === PaymentComponent.OTHER) label = 'Other Fee';
@@ -235,13 +266,14 @@ export const InvoiceService = {
 
             const txInvoiceData: any = {
                 receiptNumber: txReceiptNumber,
+                issuerName,
                 invoiceNumber: txInvoiceNumber,
                 date: primaryPayment.createdAt || new Date(),
                 studentName: primaryPayment.student.name,
                 studentId: primaryPayment.student.applicationId || primaryPayment.studentId,
                 applicationId: primaryPayment.student.applicationId || primaryPayment.studentId,
                 courseName,
-                paymentMethod: (primaryPayment.method === 'NEFT_RTGS') ? 'Bank Transfer' : (primaryPayment.method || 'ONLINE'),
+                paymentMethod: resolvePaymentMethodLabel(primaryPayment.method),
                 transactionId: internalTxId,
                 referenceId: realTransactionId,
                 amount: totalAmount,
@@ -274,13 +306,14 @@ export const InvoiceService = {
 
         const invoiceData: any = {
             receiptNumber,
+            issuerName,
             invoiceNumber,
             date: primaryPayment.createdAt || new Date(),
             studentName: primaryPayment.student.name,
             studentId: primaryPayment.student.applicationId || primaryPayment.studentId,
             applicationId: primaryPayment.student.applicationId || primaryPayment.studentId,
             courseName,
-            paymentMethod: (primaryPayment.method === 'NEFT_RTGS') ? 'Bank Transfer' : (primaryPayment.method || 'ONLINE'),
+            paymentMethod: resolvePaymentMethodLabel(primaryPayment.method),
             transactionId: internalTxId,
             referenceId: realTransactionId,
             amount: totalAmount,
